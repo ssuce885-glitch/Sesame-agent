@@ -1,5 +1,5 @@
-agentd.exe
-agentd
+/agentd.exe
+/agentd
 data/
 tmp/
 *.db
