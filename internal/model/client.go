@@ -20,3 +20,13 @@ type Request struct {
 	UserMessage string
 	ToolResults []string
 }
+
+type StreamEvent struct {
+	TextDelta string
+	ToolCall  *ToolCall
+	Done      bool
+}
+
+type StreamingClient interface {
+	Stream(context.Context, Request) (<-chan StreamEvent, <-chan error)
+}

@@ -2,17 +2,14 @@ package engine
 
 import "go-agent/internal/types"
 
-func appendAssistantDelta(events []types.Event, sessionID, turnID, text string) ([]types.Event, error) {
+func appendAssistantDelta(events []types.Event, sessionID, turnID, text string) []types.Event {
 	if text == "" {
-		return events, nil
+		return events
 	}
 
-	delta, err := types.NewEvent(sessionID, turnID, types.EventAssistantDelta, types.AssistantDeltaPayload{
+	delta, _ := types.NewEvent(sessionID, turnID, types.EventAssistantDelta, types.AssistantDeltaPayload{
 		Text: text,
 	})
-	if err != nil {
-		return nil, err
-	}
 
-	return append(events, delta), nil
+	return append(events, delta)
 }

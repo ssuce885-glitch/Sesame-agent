@@ -40,10 +40,7 @@ func runLoop(ctx context.Context, modelClient model.Client, registry *tools.Regi
 			return nil, err
 		}
 
-		events, err = appendAssistantDelta(events, in.Session.ID, in.Turn.ID, resp.AssistantText)
-		if err != nil {
-			return nil, err
-		}
+		events = appendAssistantDelta(events, in.Session.ID, in.Turn.ID, resp.AssistantText)
 
 		if ShouldStop(len(resp.ToolCalls) > 0) {
 			done, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventTurnCompleted, map[string]string{"result": resp.AssistantText})
