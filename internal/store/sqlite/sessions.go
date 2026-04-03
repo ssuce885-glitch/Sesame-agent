@@ -39,3 +39,13 @@ func (s *Store) InsertTurn(ctx context.Context, turn types.Turn) error {
 
 	return err
 }
+
+func (s *Store) DeleteTurn(ctx context.Context, turnID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		delete from turns
+		where id = ?`,
+		turnID,
+	)
+
+	return err
+}

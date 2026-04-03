@@ -27,6 +27,10 @@ func (s *fakeStore) InsertTurn(ctx context.Context, turn types.Turn) error {
 	return nil
 }
 
+func (s *fakeStore) DeleteTurn(ctx context.Context, turnID string) error {
+	return nil
+}
+
 func (s *fakeStore) ListSessionEvents(ctx context.Context, sessionID string, afterSeq int64) ([]types.Event, error) {
 	return nil, nil
 }
