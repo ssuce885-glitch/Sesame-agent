@@ -1,8 +1,31 @@
 # go-agent
 
-## Local Run
+## Start the daemon
 
 ```bash
 set AGENTD_DATA_DIR=%CD%\data
+set ANTHROPIC_API_KEY=your-key
 go run ./cmd/agentd
+```
+
+## Create a session
+
+```bash
+curl -X POST http://127.0.0.1:4317/v1/sessions ^
+  -H "Content-Type: application/json" ^
+  -d "{\"workspace_root\":\"D:/work/demo\"}"
+```
+
+## Submit a turn
+
+```bash
+curl -X POST http://127.0.0.1:4317/v1/sessions/<session-id>/turns ^
+  -H "Content-Type: application/json" ^
+  -d "{\"client_turn_id\":\"turn-1\",\"message\":\"inspect this workspace\"}"
+```
+
+## Subscribe to SSE
+
+```bash
+curl -N http://127.0.0.1:4317/v1/sessions/<session-id>/events
 ```
