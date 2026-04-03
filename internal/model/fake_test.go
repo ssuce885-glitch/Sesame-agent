@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestFakeStreamingClientEmitsEventsInOrder(t *testing.T) {
@@ -60,5 +61,55 @@ func TestFakeStreamingClientEmitsEventsInOrder(t *testing.T) {
 
 	if _, ok := <-errs; ok {
 		t.Fatal("expected errors channel to be closed after the nil error")
+	}
+}
+
+func TestFakeStreamingClientReturnsErrWhenExhausted(t *testing.T) {
+	client := NewFakeStreaming(nil)
+
+	events, errs := client.Stream(context.Background(), Request{UserMessage: "hello"})
+
+	for range events {
+		t.Fatal("expected no events when the fake streaming client is exhausted")
+	}
+
+	select {
+	case err := <-errs:
+		if err != errNoMoreResponses {
+			t.Fatalf("expected errNoMoreResponses, got %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected exhaustion error from errs channel")
+	}
+}
+
+func TestFakeStreamingClientReturnsContextErrorWhenCancelled(t *testing.T) {
+	client := NewFakeStreaming([][]StreamEvent{
+		{
+			{Kind: StreamEventTextDelta, TextDelta: "blocked"},
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	events, errs := client.Stream(ctx, Request{UserMessage: "hello"})
+
+	select {
+	case event, ok := <-events:
+		if ok {
+			t.Fatalf("expected no events when context is cancelled, got %+v", event)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected events channel to close promptly on cancellation")
+	}
+
+	select {
+	case err := <-errs:
+		if err != context.Canceled {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected context error from errs channel")
 	}
 }
