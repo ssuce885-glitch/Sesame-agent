@@ -8,6 +8,16 @@ set ANTHROPIC_API_KEY=your-key
 go run ./cmd/agentd
 ```
 
+If you want to use an OpenAI-compatible streaming backend, set:
+
+```bash
+set AGENTD_MODEL_PROVIDER=openai_compatible
+set OPENAI_API_KEY=your-key
+set OPENAI_BASE_URL=https://your-provider.example.com
+set AGENTD_MODEL=gpt-4.1-mini
+go run ./cmd/agentd
+```
+
 ## Create a session
 
 ```bash
