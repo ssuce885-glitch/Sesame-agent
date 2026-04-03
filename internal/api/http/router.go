@@ -47,8 +47,7 @@ func NewRouter(deps Dependencies) http.Handler {
 	mux := http.NewServeMux()
 	registerStatusRoutes(mux)
 	registerSessionRoutes(mux, deps)
-	registerTurnRoutes(mux, deps)
-	registerEventRoutes(mux, deps)
+	registerSessionScopedRoutes(mux, deps)
 	registerPermissionRoutes(mux, deps)
 	registerMemoryRoutes(mux, deps)
 
