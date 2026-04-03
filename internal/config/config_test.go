@@ -2,7 +2,7 @@ package config
 
 import "testing"
 
-func TestLoadUsesDefaultsAndReadsRequiredDataDir(t *testing.T) {
+func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 	t.Setenv("AGENTD_ADDR", "")
 	dataDir := t.TempDir()
 	t.Setenv("AGENTD_DATA_DIR", dataDir)
