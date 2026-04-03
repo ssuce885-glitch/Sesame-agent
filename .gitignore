@@ -1,0 +1,6 @@
+agentd.exe
+agentd
+data/
+tmp/
+*.db
+*.log
