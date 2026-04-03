@@ -2,9 +2,7 @@
 
 ## Local Run
 
-Set the data directory and start the daemon:
-
-```cmd
+```bash
 set AGENTD_DATA_DIR=%CD%\data
 go run ./cmd/agentd
 ```

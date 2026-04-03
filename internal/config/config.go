@@ -8,22 +8,22 @@ import (
 type Config struct {
 	Addr            string
 	DataDir         string
+	AnthropicAPIKey string
 	Model           string
 	LogLevel        string
-	AnthropicAPIKey string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
 		Addr:            envOrDefault("AGENTD_ADDR", "127.0.0.1:4317"),
-		DataDir:         os.Getenv("AGENTD_DATA_DIR"),
+		DataDir:         envOrDefault("AGENTD_DATA_DIR", ""),
+		AnthropicAPIKey: envOrDefault("ANTHROPIC_API_KEY", ""),
 		Model:           envOrDefault("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
 		LogLevel:        envOrDefault("AGENTD_LOG_LEVEL", "info"),
-		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
 	}
 
 	if cfg.DataDir == "" {
-		return cfg, errors.New("AGENTD_DATA_DIR is required")
+		return Config{}, errors.New("AGENTD_DATA_DIR is required")
 	}
 
 	return cfg, nil
