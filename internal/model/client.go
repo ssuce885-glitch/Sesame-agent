@@ -18,7 +18,8 @@ type Client interface {
 
 type Request struct {
 	UserMessage string
-	ToolResults []string
+	Model       string
+	ToolResults []ToolResult
 }
 
 type StreamEventKind string

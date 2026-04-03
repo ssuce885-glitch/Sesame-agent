@@ -42,63 +42,103 @@ func runLoop(ctx context.Context, modelClient model.StreamingClient, registry *t
 		return err
 	}
 
-	stream, errs := modelClient.Stream(ctx, model.Request{
+	req := model.Request{
 		UserMessage: in.Turn.UserMessage,
-	})
+	}
 
 	assistantStarted := false
-	messageEnded := false
-	for event := range stream {
-		switch event.Kind {
-		case model.StreamEventTextDelta:
-			if !assistantStarted {
-				if err := emit(types.EventAssistantStarted, struct{}{}); err != nil {
+	for {
+		stream, errs := modelClient.Stream(ctx, req)
+		messageEnded := false
+		var toolCalls []model.ToolCallChunk
+
+		for event := range stream {
+			switch event.Kind {
+			case model.StreamEventTextDelta:
+				if !assistantStarted {
+					if err := emit(types.EventAssistantStarted, struct{}{}); err != nil {
+						return err
+					}
+					assistantStarted = true
+				}
+				if err := emit(types.EventAssistantDelta, types.AssistantDeltaPayload{Text: event.TextDelta}); err != nil {
 					return err
 				}
-				assistantStarted = true
-			}
-			if err := emit(types.EventAssistantDelta, types.AssistantDeltaPayload{Text: event.TextDelta}); err != nil {
+			case model.StreamEventToolCallStart, model.StreamEventToolCallDelta:
+				continue
+			case model.StreamEventToolCallEnd:
+				toolCalls = append(toolCalls, event.ToolCall)
+			case model.StreamEventMessageEnd:
+				messageEnded = true
+			case model.StreamEventUsage:
+				continue
+			default:
+				err := fmt.Errorf("unsupported stream event kind: %s", event.Kind)
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
 				return err
 			}
-		case model.StreamEventMessageEnd:
-			messageEnded = true
-		case model.StreamEventUsage:
-			continue
-		case model.StreamEventToolCallStart, model.StreamEventToolCallDelta, model.StreamEventToolCallEnd:
-			err := fmt.Errorf("tool call streaming events are not supported yet: %s", event.Kind)
-			if emitErr := emitFailed(err.Error()); emitErr != nil {
-				return errors.Join(err, emitErr)
+		}
+
+		if errs != nil {
+			err := <-errs
+			if err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
 			}
-			return err
-		default:
-			err := fmt.Errorf("unsupported stream event kind: %s", event.Kind)
-			if emitErr := emitFailed(err.Error()); emitErr != nil {
-				return errors.Join(err, emitErr)
+		}
+
+		if len(toolCalls) == 0 {
+			if messageEnded {
+				if err := emit(types.EventAssistantCompleted, struct{}{}); err != nil {
+					return err
+				}
+				if err := emit(types.EventTurnCompleted, struct{}{}); err != nil {
+					return err
+				}
 			}
-			return err
+			return nil
+		}
+
+		for _, call := range toolCalls {
+			payload := struct {
+				ToolCallID string `json:"tool_call_id"`
+				ToolName   string `json:"tool_name"`
+			}{
+				ToolCallID: call.ID,
+				ToolName:   call.Name,
+			}
+			if err := emit(types.EventToolStarted, payload); err != nil {
+				return err
+			}
+
+			result, err := registry.Execute(ctx, tools.Call{
+				Name:  call.Name,
+				Input: call.Input,
+			}, tools.ExecContext{
+				WorkspaceRoot:    in.Session.WorkspaceRoot,
+				PermissionEngine: permission,
+			})
+			if err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
+
+			if err := emit(types.EventToolCompleted, payload); err != nil {
+				return err
+			}
+
+			req.ToolResults = append(req.ToolResults, model.ToolResult{
+				ToolCallID: call.ID,
+				ToolName:   call.Name,
+				Content:    result.Text,
+				IsError:    false,
+			})
 		}
 	}
-
-	if errs == nil {
-		return nil
-	}
-
-	err := <-errs
-	if err != nil {
-		if emitErr := emitFailed(err.Error()); emitErr != nil {
-			return errors.Join(err, emitErr)
-		}
-		return err
-	}
-
-	if messageEnded {
-		if err := emit(types.EventAssistantCompleted, struct{}{}); err != nil {
-			return err
-		}
-		if err := emit(types.EventTurnCompleted, struct{}{}); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }

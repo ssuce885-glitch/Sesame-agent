@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"go-agent/internal/model"
@@ -72,11 +74,16 @@ func TestRunTurnEmitsFailedWithoutCompletedWhenStreamErrorsAfterMessageEnd(t *te
 	assertNoEventType(t, sink, types.EventTurnCompleted)
 }
 
-func TestRunTurnEmitsTurnFailedForToolCallStreamEvent(t *testing.T) {
+func TestRunTurnEmitsTurnFailedWhenToolExecutionFails(t *testing.T) {
 	sink := &recordingSink{}
 	runner := New(model.NewFakeStreaming([][]model.StreamEvent{
 		{
-			{Kind: model.StreamEventToolCallStart, ToolCall: model.ToolCallChunk{ID: "call_1", Name: "search"}},
+			{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+				ID:    "call_1",
+				Name:  "missing_tool",
+				Input: map[string]any{},
+			}},
+			{Kind: model.StreamEventMessageEnd},
 		},
 	}), tools.NewRegistry(), permissions.NewEngine())
 
@@ -91,10 +98,95 @@ func TestRunTurnEmitsTurnFailedForToolCallStreamEvent(t *testing.T) {
 
 	assertEventTypes(t, sink, []string{
 		types.EventTurnStarted,
+		types.EventToolStarted,
 		types.EventTurnFailed,
 	})
 	assertNoEventType(t, sink, types.EventTurnCompleted)
 	assertNoEventType(t, sink, types.EventAssistantCompleted)
+}
+
+func TestRunTurnExecutesToolAfterToolCallEnd(t *testing.T) {
+	workspace := t.TempDir()
+	readmePath := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(readmePath, []byte("hello from readme"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	modelClient := &recordingStreamingClient{
+		streams: [][]model.StreamEvent{
+			{
+				{Kind: model.StreamEventTextDelta, TextDelta: "Let me check the README."},
+				{Kind: model.StreamEventToolCallStart, ToolCall: model.ToolCallChunk{ID: "call_1", Name: "file_read"}},
+				{Kind: model.StreamEventToolCallDelta, ToolCall: model.ToolCallChunk{ID: "call_1", Name: "file_read", InputChunk: `{"path":"`}},
+				{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+					ID:    "call_1",
+					Name:  "file_read",
+					Input: map[string]any{"path": readmePath},
+				}},
+				{Kind: model.StreamEventMessageEnd},
+			},
+			{
+				{Kind: model.StreamEventTextDelta, TextDelta: "README says hello from readme"},
+				{Kind: model.StreamEventMessageEnd},
+			},
+		},
+	}
+	sink := &recordingSink{}
+	runner := New(modelClient, tools.NewRegistry(), permissions.NewEngine())
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_1", WorkspaceRoot: workspace},
+		Turn:    types.Turn{ID: "turn_1", UserMessage: "inspect the readme"},
+		Sink:    sink,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	assertEventTypes(t, sink, []string{
+		types.EventTurnStarted,
+		types.EventAssistantStarted,
+		types.EventAssistantDelta,
+		types.EventToolStarted,
+		types.EventToolCompleted,
+		types.EventAssistantDelta,
+		types.EventAssistantCompleted,
+		types.EventTurnCompleted,
+	})
+
+	if len(modelClient.requests) != 2 {
+		t.Fatalf("len(requests) = %d, want 2", len(modelClient.requests))
+	}
+
+	first := modelClient.requests[0]
+	if first.UserMessage != "inspect the readme" {
+		t.Fatalf("first request message = %q, want %q", first.UserMessage, "inspect the readme")
+	}
+	if len(first.ToolResults) != 0 {
+		t.Fatalf("len(first request tool results) = %d, want 0", len(first.ToolResults))
+	}
+
+	second := modelClient.requests[1]
+	if second.UserMessage != "inspect the readme" {
+		t.Fatalf("second request message = %q, want %q", second.UserMessage, "inspect the readme")
+	}
+	if len(second.ToolResults) != 1 {
+		t.Fatalf("len(second request tool results) = %d, want 1", len(second.ToolResults))
+	}
+
+	got := second.ToolResults[0]
+	if got.ToolCallID != "call_1" {
+		t.Fatalf("tool result call id = %q, want %q", got.ToolCallID, "call_1")
+	}
+	if got.ToolName != "file_read" {
+		t.Fatalf("tool result name = %q, want %q", got.ToolName, "file_read")
+	}
+	if got.Content != "hello from readme" {
+		t.Fatalf("tool result content = %q, want %q", got.Content, "hello from readme")
+	}
+	if got.IsError {
+		t.Fatal("tool result is_error = true, want false")
+	}
 }
 
 type scriptedStreamingClient struct {
@@ -112,6 +204,34 @@ func (c scriptedStreamingClient) Stream(_ context.Context, _ model.Request) (<-c
 	close(events)
 
 	errs <- c.err
+	close(errs)
+
+	return events, errs
+}
+
+type recordingStreamingClient struct {
+	streams  [][]model.StreamEvent
+	requests []model.Request
+}
+
+func (c *recordingStreamingClient) Stream(_ context.Context, req model.Request) (<-chan model.StreamEvent, <-chan error) {
+	c.requests = append(c.requests, req)
+
+	var batch []model.StreamEvent
+	if len(c.streams) > 0 {
+		batch = c.streams[0]
+		c.streams = c.streams[1:]
+	}
+
+	events := make(chan model.StreamEvent, len(batch))
+	errs := make(chan error, 1)
+
+	for _, event := range batch {
+		events <- event
+	}
+	close(events)
+
+	errs <- nil
 	close(errs)
 
 	return events, errs
