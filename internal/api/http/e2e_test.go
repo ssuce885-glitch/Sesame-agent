@@ -1,16 +1,27 @@
 package httpapi
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"go-agent/internal/engine"
+	"go-agent/internal/model"
+	"go-agent/internal/permissions"
 	"go-agent/internal/session"
+	"go-agent/internal/store/sqlite"
+	"go-agent/internal/stream"
+	"go-agent/internal/tools"
 	"go-agent/internal/types"
 )
 
@@ -24,6 +35,247 @@ func TestCreateSessionThenStreamEvents(t *testing.T) {
 
 	if createRec.Code != http.StatusCreated {
 		t.Fatalf("create session status = %d, want %d", createRec.Code, http.StatusCreated)
+	}
+}
+
+type e2eStoreAndBusSink struct {
+	store *sqlite.Store
+	bus   interface {
+		Publish(types.Event)
+	}
+}
+
+func (s e2eStoreAndBusSink) Emit(ctx context.Context, event types.Event) error {
+	seq, err := s.store.AppendEvent(ctx, event)
+	if err != nil {
+		return err
+	}
+	event.Seq = seq
+	s.bus.Publish(event)
+	return nil
+}
+
+type signalingBus struct {
+	inner      *stream.Bus
+	subscribed chan struct{}
+	once       sync.Once
+}
+
+func newSignalingBus() *signalingBus {
+	return &signalingBus{
+		inner:      stream.NewBus(),
+		subscribed: make(chan struct{}),
+	}
+}
+
+func (b *signalingBus) Publish(event types.Event) {
+	b.inner.Publish(event)
+}
+
+func (b *signalingBus) Subscribe(sessionID string) <-chan types.Event {
+	ch := b.inner.Subscribe(sessionID)
+	b.once.Do(func() {
+		close(b.subscribed)
+	})
+	return ch
+}
+
+type e2eSessionRunner struct {
+	engine *engine.Engine
+	sink   engine.EventSink
+}
+
+func (r e2eSessionRunner) RunTurn(ctx context.Context, in session.RunInput) error {
+	return r.engine.RunTurn(ctx, engine.Input{
+		Session: in.Session,
+		Turn: types.Turn{
+			ID:         in.TurnID,
+			SessionID:  in.Session.ID,
+			UserMessage: in.Message,
+		},
+		Sink: r.sink,
+	})
+}
+
+func readSSEUntil(body io.ReadCloser, needle string, cancel context.CancelFunc) (string, error) {
+	defer body.Close()
+
+	got := make(chan string, 1)
+	errs := make(chan error, 1)
+
+	go func() {
+		reader := bufio.NewReader(body)
+		var builder strings.Builder
+		for {
+			line, err := reader.ReadString('\n')
+			if line != "" {
+				builder.WriteString(line)
+				if strings.Contains(builder.String(), needle) {
+					got <- builder.String()
+					return
+				}
+			}
+			if err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+
+	select {
+	case output := <-got:
+		cancel()
+		return output, nil
+	case err := <-errs:
+		cancel()
+		return "", err
+	case <-time.After(2 * time.Second):
+		cancel()
+		return "", fmt.Errorf("timed out waiting for %q in SSE stream", needle)
+	}
+}
+
+func TestCreateSessionSubmitTurnAndStreamEvents(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "agentd.db")
+	store, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	bus := newSignalingBus()
+	modelClient := model.NewFakeStreaming([][]model.StreamEvent{
+		{
+			{Kind: model.StreamEventTextDelta, TextDelta: "hello"},
+			{Kind: model.StreamEventMessageEnd},
+		},
+	})
+	runner := engine.New(modelClient, tools.NewRegistry(), permissions.NewEngine())
+	manager := session.NewManager(e2eSessionRunner{
+		engine: runner,
+		sink: e2eStoreAndBusSink{
+			store: store,
+			bus:   bus,
+		},
+	})
+
+	server := httptest.NewServer(NewRouter(Dependencies{
+		Store:   store,
+		Bus:     bus,
+		Manager: manager,
+	}))
+	defer server.Close()
+
+	createReq, err := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", strings.NewReader(`{"workspace_root":"D:/work/demo"}`))
+	if err != nil {
+		t.Fatalf("NewRequest(create) error = %v", err)
+	}
+	createReq.Header.Set("Content-Type", "application/json")
+
+	createResp, err := http.DefaultClient.Do(createReq)
+	if err != nil {
+		t.Fatalf("Do(create) error = %v", err)
+	}
+	defer createResp.Body.Close()
+
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want %d", createResp.StatusCode, http.StatusCreated)
+	}
+
+	var created types.Session
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("Decode(create session) error = %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("created session ID is empty")
+	}
+
+	streamCtx, cancel := context.WithCancel(context.Background())
+	streamBody := make(chan string, 1)
+	streamErrs := make(chan error, 1)
+	go func() {
+		streamReq, err := http.NewRequestWithContext(streamCtx, http.MethodGet, server.URL+"/v1/sessions/"+created.ID+"/events?after=0", nil)
+		if err != nil {
+			streamErrs <- fmt.Errorf("NewRequest(stream): %w", err)
+			return
+		}
+
+		streamResp, err := http.DefaultClient.Do(streamReq)
+		if err != nil {
+			streamErrs <- fmt.Errorf("Do(stream): %w", err)
+			return
+		}
+		if streamResp.StatusCode != http.StatusOK {
+			defer streamResp.Body.Close()
+			streamErrs <- fmt.Errorf("stream events status = %d, want %d", streamResp.StatusCode, http.StatusOK)
+			return
+		}
+
+		body, err := readSSEUntil(streamResp.Body, "event: turn.completed", cancel)
+		if err != nil {
+			streamErrs <- err
+			return
+		}
+		streamBody <- body
+	}()
+
+	select {
+	case <-bus.subscribed:
+	case err := <-streamErrs:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("timed out waiting for SSE subscription")
+	}
+
+	submitReq, err := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions/"+created.ID+"/turns", strings.NewReader(`{"client_turn_id":"turn-1","message":"say hello"}`))
+	if err != nil {
+		t.Fatalf("NewRequest(submit) error = %v", err)
+	}
+	submitReq.Header.Set("Content-Type", "application/json")
+
+	submitResp, err := http.DefaultClient.Do(submitReq)
+	if err != nil {
+		t.Fatalf("Do(submit) error = %v", err)
+	}
+	defer submitResp.Body.Close()
+
+	if submitResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("submit turn status = %d, want %d", submitResp.StatusCode, http.StatusAccepted)
+	}
+
+	var submitted types.Turn
+	if err := json.NewDecoder(submitResp.Body).Decode(&submitted); err != nil {
+		t.Fatalf("Decode(submit turn) error = %v", err)
+	}
+	if submitted.ID == "" {
+		t.Fatal("submitted turn ID is empty")
+	}
+
+	var body string
+	select {
+	case body = <-streamBody:
+	case err := <-streamErrs:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("timed out waiting for SSE body")
+	}
+
+	if !strings.Contains(body, "event: turn.started") {
+		t.Fatalf("SSE body = %q, want turn.started", body)
+	}
+	if !strings.Contains(body, "event: assistant.delta") {
+		t.Fatalf("SSE body = %q, want assistant.delta", body)
+	}
+	if !strings.Contains(body, "event: assistant.completed") {
+		t.Fatalf("SSE body = %q, want assistant.completed", body)
+	}
+	if !strings.Contains(body, "event: turn.completed") {
+		t.Fatalf("SSE body = %q, want turn.completed", body)
+	}
+	if !strings.Contains(body, "\"text\":\"hello\"") {
+		t.Fatalf("SSE body = %q, want assistant text payload", body)
 	}
 }
 
