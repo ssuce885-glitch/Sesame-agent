@@ -53,10 +53,19 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	return err
 }
 
+func ensureDataDir(path string) error {
+	return os.MkdirAll(path, 0o755)
+}
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("load config", "err", err)
+		os.Exit(1)
+	}
+
+	if err := ensureDataDir(cfg.DataDir); err != nil {
+		slog.Error("prepare data dir", "err", err, "path", cfg.DataDir)
 		os.Exit(1)
 	}
 
