@@ -22,16 +22,33 @@ import (
 
 type sessionRunnerAdapter struct {
 	engine *engine.Engine
+	sink   engine.EventSink
+}
+
+type storeAndBusSink struct {
+	store *sqlite.Store
+	bus   *stream.Bus
+}
+
+func (s storeAndBusSink) Emit(ctx context.Context, event types.Event) error {
+	seq, err := s.store.AppendEvent(ctx, event)
+	if err != nil {
+		return err
+	}
+	event.Seq = seq
+	s.bus.Publish(event)
+	return nil
 }
 
 func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) error {
-	_, err := a.engine.RunTurn(ctx, engine.Input{
+	err := a.engine.RunTurn(ctx, engine.Input{
 		Session: in.Session,
 		Turn: types.Turn{
 			ID:           in.TurnID,
 			ClientTurnID: "",
 			UserMessage:  in.Message,
 		},
+		Sink: a.sink,
 	})
 	return err
 }
@@ -59,9 +76,15 @@ func main() {
 	bus := stream.NewBus()
 	registry := tools.NewRegistry()
 	permissionEngine := permissions.NewEngine()
-	fakeModel := model.NewFake(nil)
+	fakeModel := model.NewFakeStreaming(nil)
 	runner := engine.New(fakeModel, registry, permissionEngine)
-	manager := session.NewManager(sessionRunnerAdapter{engine: runner})
+	manager := session.NewManager(sessionRunnerAdapter{
+		engine: runner,
+		sink: storeAndBusSink{
+			store: store,
+			bus:   bus,
+		},
+	})
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
 		Bus:     bus,

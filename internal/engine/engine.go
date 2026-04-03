@@ -12,18 +12,19 @@ import (
 type Input struct {
 	Session types.Session
 	Turn    types.Turn
+	Sink    EventSink
 }
 
 type Engine struct {
-	model      model.Client
+	model      model.StreamingClient
 	registry   *tools.Registry
 	permission *permissions.Engine
 }
 
-func New(modelClient model.Client, registry *tools.Registry, permission *permissions.Engine) *Engine {
+func New(modelClient model.StreamingClient, registry *tools.Registry, permission *permissions.Engine) *Engine {
 	return &Engine{model: modelClient, registry: registry, permission: permission}
 }
 
-func (e *Engine) RunTurn(ctx context.Context, in Input) ([]types.Event, error) {
+func (e *Engine) RunTurn(ctx context.Context, in Input) error {
 	return runLoop(ctx, e.model, e.registry, e.permission, in)
 }
