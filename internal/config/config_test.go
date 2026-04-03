@@ -7,6 +7,7 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 		t.Setenv("AGENTD_ADDR", "")
 		dataDir := t.TempDir()
 		t.Setenv("AGENTD_DATA_DIR", dataDir)
+		t.Setenv("AGENTD_MODEL_PROVIDER", "")
 		t.Setenv("ANTHROPIC_MODEL", "")
 		t.Setenv("AGENTD_LOG_LEVEL", "")
 		t.Setenv("ANTHROPIC_API_KEY", "")
@@ -24,6 +25,9 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 		}
 		if cfg.Model != "claude-sonnet-4-5" {
 			t.Fatalf("Model = %q, want %q", cfg.Model, "claude-sonnet-4-5")
+		}
+		if cfg.ModelProvider != "anthropic" {
+			t.Fatalf("ModelProvider = %q, want %q", cfg.ModelProvider, "anthropic")
 		}
 	})
 

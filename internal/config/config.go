@@ -26,7 +26,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		Addr:             envOrDefault("AGENTD_ADDR", "127.0.0.1:4317"),
 		DataDir:          envOrDefault("AGENTD_DATA_DIR", ""),
-		ModelProvider:    envOrDefault("AGENTD_MODEL_PROVIDER", "fake"),
+		ModelProvider:    envOrDefault("AGENTD_MODEL_PROVIDER", "anthropic"),
 		Model:            model,
 		AnthropicAPIKey:  envOrDefault("ANTHROPIC_API_KEY", ""),
 		AnthropicBaseURL: envOrDefault("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),

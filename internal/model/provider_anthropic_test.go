@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -124,5 +125,52 @@ func TestAnthropicProviderStreamNormalizesTextAndMessageEnd(t *testing.T) {
 	}
 	if gotRequest.Messages[0].Content != "hello" {
 		t.Fatalf("request message content = %q, want %q", gotRequest.Messages[0].Content, "hello")
+	}
+}
+
+func TestAnthropicProviderStreamFailsWhenEOFBeforeMessageStop(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("event: content_block_delta\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}\n\n"))
+	}))
+	defer server.Close()
+
+	provider, err := NewAnthropicProvider(Config{
+		APIKey:  "test-key",
+		Model:   "claude-sonnet-4-5",
+		BaseURL: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewAnthropicProvider() error = %v", err)
+	}
+
+	events, errs := provider.Stream(context.Background(), Request{
+		UserMessage: "hello",
+	})
+
+	var got []StreamEvent
+	for event := range events {
+		got = append(got, event)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(got))
+	}
+	if got[0].Kind != StreamEventTextDelta || got[0].TextDelta != "Hel" {
+		t.Fatalf("first event = %+v, want text delta Hel", got[0])
+	}
+
+	select {
+	case err := <-errs:
+		if err == nil {
+			t.Fatal("stream error = nil, want error")
+		}
+		if !strings.Contains(err.Error(), "message_stop") {
+			t.Fatalf("stream error = %q, want mention of message_stop", err.Error())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for stream error result")
 	}
 }

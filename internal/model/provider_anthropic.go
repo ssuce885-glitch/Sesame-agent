@@ -68,6 +68,8 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request) (<-chan Str
 }
 
 func (p *AnthropicProvider) stream(ctx context.Context, req Request, events chan<- StreamEvent) error {
+	sawMessageStop := false
+
 	body := struct {
 		Model     string `json:"model"`
 		MaxTokens int    `json:"max_tokens"`
@@ -122,7 +124,10 @@ func (p *AnthropicProvider) stream(ctx context.Context, req Request, events chan
 	for {
 		frame, err := reader.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			if sawMessageStop {
+				return nil
+			}
+			return errors.New("anthropic stream ended before message_stop")
 		}
 		if err != nil {
 			return err
@@ -159,6 +164,7 @@ func (p *AnthropicProvider) stream(ctx context.Context, req Request, events chan
 				return err
 			}
 		case "message_stop":
+			sawMessageStop = true
 			if err := sendStreamEvent(ctx, events, StreamEvent{
 				Kind: StreamEventMessageEnd,
 			}); err != nil {
