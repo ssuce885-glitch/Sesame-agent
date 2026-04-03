@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
@@ -10,70 +11,94 @@ import (
 	"go-agent/internal/types"
 )
 
-func runLoop(ctx context.Context, modelClient model.Client, registry *tools.Registry, permission *permissions.Engine, in Input) ([]types.Event, error) {
+func runLoop(ctx context.Context, modelClient model.StreamingClient, registry *tools.Registry, permission *permissions.Engine, in Input) error {
 	if modelClient == nil {
-		return nil, errors.New("model client is required")
+		return errors.New("model client is required")
 	}
 	if registry == nil {
-		return nil, errors.New("tool registry is required")
+		return errors.New("tool registry is required")
 	}
 	if permission == nil {
-		return nil, errors.New("permission engine is required")
+		return errors.New("permission engine is required")
+	}
+	if in.Sink == nil {
+		return errors.New("event sink is required")
 	}
 
-	var events []types.Event
-	started, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventTurnStarted, types.TurnStartedPayload{
-		WorkspaceRoot: in.Session.WorkspaceRoot,
-	})
-	if err != nil {
-		return nil, err
-	}
-	events = append(events, started)
-
-	var toolResults []string
-	for {
-		resp, err := modelClient.Next(ctx, model.Request{
-			UserMessage: in.Turn.UserMessage,
-			ToolResults: toolResults,
-		})
+	emit := func(eventType string, payload any) error {
+		event, err := types.NewEvent(in.Session.ID, in.Turn.ID, eventType, payload)
 		if err != nil {
-			return nil, err
+			return err
 		}
+		return in.Sink.Emit(ctx, event)
+	}
+	emitFailed := func(message string) error {
+		return emit(types.EventTurnFailed, types.TurnFailedPayload{Message: message})
+	}
 
-		events = appendAssistantDelta(events, in.Session.ID, in.Turn.ID, resp.AssistantText)
+	if err := emit(types.EventTurnStarted, types.TurnStartedPayload{
+		WorkspaceRoot: in.Session.WorkspaceRoot,
+	}); err != nil {
+		return err
+	}
 
-		if ShouldStop(len(resp.ToolCalls) > 0) {
-			done, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventTurnCompleted, map[string]string{"result": resp.AssistantText})
-			if err != nil {
-				return nil, err
+	stream, errs := modelClient.Stream(ctx, model.Request{
+		UserMessage: in.Turn.UserMessage,
+	})
+
+	assistantStarted := false
+	messageEnded := false
+	for event := range stream {
+		switch event.Kind {
+		case model.StreamEventTextDelta:
+			if !assistantStarted {
+				if err := emit(types.EventAssistantStarted, struct{}{}); err != nil {
+					return err
+				}
+				assistantStarted = true
 			}
-			events = append(events, done)
-			return events, nil
-		}
-
-		for _, call := range resp.ToolCalls {
-			if permission.Decide(call.Name) == permissions.DecisionDeny {
-				return nil, context.Canceled
+			if err := emit(types.EventAssistantDelta, types.AssistantDeltaPayload{Text: event.TextDelta}); err != nil {
+				return err
 			}
-
-			result, err := registry.Execute(ctx, tools.Call{Name: call.Name, Input: call.Input}, tools.ExecContext{
-				WorkspaceRoot:    in.Session.WorkspaceRoot,
-				PermissionEngine: permission,
-			})
-			if err != nil {
-				return nil, err
+		case model.StreamEventMessageEnd:
+			messageEnded = true
+		case model.StreamEventUsage:
+			continue
+		case model.StreamEventToolCallStart, model.StreamEventToolCallDelta, model.StreamEventToolCallEnd:
+			err := fmt.Errorf("tool call streaming events are not supported yet: %s", event.Kind)
+			if emitErr := emitFailed(err.Error()); emitErr != nil {
+				return errors.Join(err, emitErr)
 			}
-
-			toolResults = append(toolResults, result.Text)
-
-			completed, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventToolCompleted, map[string]string{
-				"tool_name": call.Name,
-				"result":    result.Text,
-			})
-			if err != nil {
-				return nil, err
+			return err
+		default:
+			err := fmt.Errorf("unsupported stream event kind: %s", event.Kind)
+			if emitErr := emitFailed(err.Error()); emitErr != nil {
+				return errors.Join(err, emitErr)
 			}
-			events = append(events, completed)
+			return err
 		}
 	}
+
+	if errs == nil {
+		return nil
+	}
+
+	err := <-errs
+	if err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
+
+	if messageEnded {
+		if err := emit(types.EventAssistantCompleted, struct{}{}); err != nil {
+			return err
+		}
+		if err := emit(types.EventTurnCompleted, struct{}{}); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
