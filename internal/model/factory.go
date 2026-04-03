@@ -8,7 +8,7 @@ import (
 
 func NewFromConfig(cfg config.Config) (StreamingClient, error) {
 	switch cfg.ModelProvider {
-	case "", "fake":
+	case "fake":
 		return NewFakeStreaming(nil), nil
 	case "anthropic":
 		return NewAnthropicProvider(Config{
