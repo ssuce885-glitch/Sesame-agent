@@ -76,8 +76,12 @@ func main() {
 	bus := stream.NewBus()
 	registry := tools.NewRegistry()
 	permissionEngine := permissions.NewEngine()
-	fakeModel := model.NewFakeStreaming(nil)
-	runner := engine.New(fakeModel, registry, permissionEngine)
+	modelClient, err := model.NewFromConfig(cfg)
+	if err != nil {
+		slog.Error("build model client", "err", err)
+		os.Exit(1)
+	}
+	runner := engine.New(modelClient, registry, permissionEngine)
 	manager := session.NewManager(sessionRunnerAdapter{
 		engine: runner,
 		sink: storeAndBusSink{
