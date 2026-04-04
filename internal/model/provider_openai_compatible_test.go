@@ -79,14 +79,27 @@ func TestOpenAICompatibleProviderStreamUsesResponsesAPIAndNormalizesToolCalls(t 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		writeEvent("response.output_text.delta", map[string]any{"delta": "Hel"})
+		writeEvent("response.output_item.added", map[string]any{
+			"item": map[string]any{
+				"id":      "fc_1",
+				"call_id": "call_1",
+				"type":    "function_call",
+				"name":    "file_read",
+			},
+		})
+		writeEvent("response.output_item.done", map[string]any{
+			"item": map[string]any{
+				"id":      "fc_1",
+				"call_id": "call_1",
+				"type":    "function_call",
+			},
+		})
 		writeEvent("response.function_call_arguments.delta", map[string]any{
-			"item_id": "call_1",
-			"name":    "file_read",
+			"item_id": "fc_1",
 			"delta":   `{"path":"README.`,
 		})
 		writeEvent("response.function_call_arguments.done", map[string]any{
-			"item_id":   "call_1",
-			"name":      "file_read",
+			"item_id":   "fc_1",
 			"arguments": `{"path":"README.md"}`,
 		})
 		writeEvent("response.completed", map[string]any{"status": "completed"})
@@ -191,6 +204,9 @@ func TestOpenAICompatibleProviderStreamUsesResponsesAPIAndNormalizesToolCalls(t 
 	if gotRequest.Input[1]["role"] != "assistant" {
 		t.Fatalf("input[1].role = %v, want assistant", gotRequest.Input[1]["role"])
 	}
+	if gotRequest.Input[1]["type"] != "message" {
+		t.Fatalf("input[1].type = %v, want message", gotRequest.Input[1]["type"])
+	}
 	if content, ok := gotRequest.Input[1]["content"].([]any); !ok || len(content) != 1 || content[0].(map[string]any)["type"] != "output_text" || content[0].(map[string]any)["text"] != "done" {
 		t.Fatalf("input[1].content = %#v, want assistant output_text done", gotRequest.Input[1]["content"])
 	}
@@ -203,11 +219,11 @@ func TestOpenAICompatibleProviderStreamUsesResponsesAPIAndNormalizesToolCalls(t 
 	if gotRequest.Input[2]["output"] != "README contents" {
 		t.Fatalf("input[2].output = %v, want README contents", gotRequest.Input[2]["output"])
 	}
-	if gotRequest.Input[2]["is_error"] != true {
-		t.Fatalf("input[2].is_error = %v, want true", gotRequest.Input[2]["is_error"])
+	if _, ok := gotRequest.Input[2]["is_error"]; ok {
+		t.Fatalf("input[2].is_error = %v, want omitted", gotRequest.Input[2]["is_error"])
 	}
-	if gotRequest.Input[2]["name_hint"] != "file_read" {
-		t.Fatalf("input[2].name_hint = %v, want file_read", gotRequest.Input[2]["name_hint"])
+	if _, ok := gotRequest.Input[2]["name_hint"]; ok {
+		t.Fatalf("input[2].name_hint = %v, want omitted", gotRequest.Input[2]["name_hint"])
 	}
 	if len(gotRequest.Tools) != 1 {
 		t.Fatalf("len(request tools) = %d, want 1", len(gotRequest.Tools))
