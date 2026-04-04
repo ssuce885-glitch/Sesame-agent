@@ -73,6 +73,8 @@ func TestStorePersistsRuntimeGraph(t *testing.T) {
 	defer store.Close()
 
 	now := time.Date(2026, 4, 5, 10, 30, 0, 0, time.UTC)
+	startedAt := now.Add(2 * time.Minute)
+	completedAt := now.Add(5 * time.Minute)
 
 	run := types.Run{
 		ID:        "run_1",
@@ -115,15 +117,17 @@ func TestStorePersistsRuntimeGraph(t *testing.T) {
 	}
 
 	toolRun := types.ToolRun{
-		ID:         "tool_run_1",
-		RunID:      run.ID,
-		TaskID:     task.ID,
-		State:      types.ToolRunStateCompleted,
-		ToolName:   "Bash",
-		InputJSON:  `{"command":"go test ./internal/store/sqlite"}`,
-		OutputJSON: `{"exit_code":0}`,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:          "tool_run_1",
+		RunID:       run.ID,
+		TaskID:      task.ID,
+		State:       types.ToolRunStateCompleted,
+		ToolName:    "Bash",
+		InputJSON:   `{"command":"go test ./internal/store/sqlite"}`,
+		OutputJSON:  `{"exit_code":0}`,
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	if err := store.UpsertToolRun(context.Background(), toolRun); err != nil {
 		t.Fatalf("UpsertToolRun() error = %v", err)
@@ -151,35 +155,35 @@ func TestStorePersistsRuntimeGraph(t *testing.T) {
 	if len(graph.Runs) != 1 {
 		t.Fatalf("len(graph.Runs) = %d, want 1", len(graph.Runs))
 	}
-	if got := graph.Runs[0]; got.ID != run.ID || got.SessionID != run.SessionID || got.TurnID != run.TurnID || got.State != run.State || got.Objective != run.Objective {
+	if got := graph.Runs[0]; got.ID != run.ID || got.SessionID != run.SessionID || got.TurnID != run.TurnID || got.State != run.State || got.Objective != run.Objective || !got.CreatedAt.Equal(run.CreatedAt.UTC()) || !got.UpdatedAt.Equal(run.UpdatedAt.UTC()) {
 		t.Fatalf("graph.Runs[0] = %#v, want %#v", got, run)
 	}
 
 	if len(graph.Plans) != 1 {
 		t.Fatalf("len(graph.Plans) = %d, want 1", len(graph.Plans))
 	}
-	if got := graph.Plans[0]; got.ID != plan.ID || got.RunID != plan.RunID || got.State != plan.State || got.Title != plan.Title || got.Summary != plan.Summary {
+	if got := graph.Plans[0]; got.ID != plan.ID || got.RunID != plan.RunID || got.State != plan.State || got.Title != plan.Title || got.Summary != plan.Summary || !got.CreatedAt.Equal(plan.CreatedAt.UTC()) || !got.UpdatedAt.Equal(plan.UpdatedAt.UTC()) {
 		t.Fatalf("graph.Plans[0] = %#v, want %#v", got, plan)
 	}
 
 	if len(graph.Tasks) != 1 {
 		t.Fatalf("len(graph.Tasks) = %d, want 1", len(graph.Tasks))
 	}
-	if got := graph.Tasks[0]; got.ID != task.ID || got.RunID != task.RunID || got.PlanID != task.PlanID || got.State != task.State || got.Title != task.Title || got.Description != task.Description {
+	if got := graph.Tasks[0]; got.ID != task.ID || got.RunID != task.RunID || got.PlanID != task.PlanID || got.State != task.State || got.Title != task.Title || got.Description != task.Description || !got.CreatedAt.Equal(task.CreatedAt.UTC()) || !got.UpdatedAt.Equal(task.UpdatedAt.UTC()) {
 		t.Fatalf("graph.Tasks[0] = %#v, want %#v", got, task)
 	}
 
 	if len(graph.ToolRuns) != 1 {
 		t.Fatalf("len(graph.ToolRuns) = %d, want 1", len(graph.ToolRuns))
 	}
-	if got := graph.ToolRuns[0]; got.ID != toolRun.ID || got.RunID != toolRun.RunID || got.TaskID != toolRun.TaskID || got.ToolName != toolRun.ToolName || got.State != toolRun.State || got.InputJSON != toolRun.InputJSON || got.OutputJSON != toolRun.OutputJSON {
+	if got := graph.ToolRuns[0]; got.ID != toolRun.ID || got.RunID != toolRun.RunID || got.TaskID != toolRun.TaskID || got.ToolName != toolRun.ToolName || got.State != toolRun.State || got.InputJSON != toolRun.InputJSON || got.OutputJSON != toolRun.OutputJSON || !got.StartedAt.Equal(toolRun.StartedAt.UTC()) || !got.CompletedAt.Equal(toolRun.CompletedAt.UTC()) || !got.CreatedAt.Equal(toolRun.CreatedAt.UTC()) || !got.UpdatedAt.Equal(toolRun.UpdatedAt.UTC()) {
 		t.Fatalf("graph.ToolRuns[0] = %#v, want %#v", got, toolRun)
 	}
 
 	if len(graph.Worktrees) != 1 {
 		t.Fatalf("len(graph.Worktrees) = %d, want 1", len(graph.Worktrees))
 	}
-	if got := graph.Worktrees[0]; got.ID != worktree.ID || got.RunID != worktree.RunID || got.TaskID != worktree.TaskID || got.State != worktree.State || got.WorktreePath != worktree.WorktreePath || got.WorktreeBranch != worktree.WorktreeBranch {
+	if got := graph.Worktrees[0]; got.ID != worktree.ID || got.RunID != worktree.RunID || got.TaskID != worktree.TaskID || got.State != worktree.State || got.WorktreePath != worktree.WorktreePath || got.WorktreeBranch != worktree.WorktreeBranch || !got.CreatedAt.Equal(worktree.CreatedAt.UTC()) || !got.UpdatedAt.Equal(worktree.UpdatedAt.UTC()) {
 		t.Fatalf("graph.Worktrees[0] = %#v, want %#v", got, worktree)
 	}
 }
