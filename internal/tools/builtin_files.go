@@ -2,12 +2,15 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"go-agent/internal/runtime"
 )
+
+const fileWriteMaxBytes = 1 << 20
 
 type fileReadTool struct{}
 
@@ -66,6 +69,9 @@ func (fileWriteTool) Execute(_ context.Context, call Call, execCtx ExecContext) 
 	content := call.Input["content"].(string)
 	if err := runtime.WithinWorkspace(execCtx.WorkspaceRoot, path); err != nil {
 		return Result{}, err
+	}
+	if len(content) > fileWriteMaxBytes {
+		return Result{}, fmt.Errorf("file_write content exceeds max size (%d bytes)", fileWriteMaxBytes)
 	}
 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

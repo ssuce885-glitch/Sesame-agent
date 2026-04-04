@@ -146,16 +146,16 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			return nil
 		}
 
-		if e.maxToolSteps > 0 && toolSteps+len(toolCalls) > e.maxToolSteps {
-			err := fmt.Errorf("tool step limit exceeded")
-			if emitErr := emitFailed(err.Error()); emitErr != nil {
-				return errors.Join(err, emitErr)
-			}
-			return err
-		}
-
 		for _, call := range toolCalls {
 			toolSteps++
+			if e.maxToolSteps > 0 && toolSteps > e.maxToolSteps {
+				err := fmt.Errorf("turn exceeded max tool steps (%d)", e.maxToolSteps)
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
+
 			payload := struct {
 				ToolCallID string `json:"tool_call_id"`
 				ToolName   string `json:"tool_name"`
