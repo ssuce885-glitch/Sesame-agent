@@ -151,35 +151,35 @@ func TestStorePersistsRuntimeGraph(t *testing.T) {
 	if len(graph.Runs) != 1 {
 		t.Fatalf("len(graph.Runs) = %d, want 1", len(graph.Runs))
 	}
-	if got := graph.Runs[0]; got.ID != run.ID || got.SessionID != run.SessionID || got.State != run.State || got.Objective != run.Objective {
+	if got := graph.Runs[0]; got.ID != run.ID || got.SessionID != run.SessionID || got.TurnID != run.TurnID || got.State != run.State || got.Objective != run.Objective {
 		t.Fatalf("graph.Runs[0] = %#v, want %#v", got, run)
 	}
 
 	if len(graph.Plans) != 1 {
 		t.Fatalf("len(graph.Plans) = %d, want 1", len(graph.Plans))
 	}
-	if got := graph.Plans[0]; got.ID != plan.ID || got.RunID != plan.RunID || got.State != plan.State || got.Title != plan.Title {
+	if got := graph.Plans[0]; got.ID != plan.ID || got.RunID != plan.RunID || got.State != plan.State || got.Title != plan.Title || got.Summary != plan.Summary {
 		t.Fatalf("graph.Plans[0] = %#v, want %#v", got, plan)
 	}
 
 	if len(graph.Tasks) != 1 {
 		t.Fatalf("len(graph.Tasks) = %d, want 1", len(graph.Tasks))
 	}
-	if got := graph.Tasks[0]; got.ID != task.ID || got.RunID != task.RunID || got.PlanID != task.PlanID || got.State != task.State || got.Description != task.Description {
+	if got := graph.Tasks[0]; got.ID != task.ID || got.RunID != task.RunID || got.PlanID != task.PlanID || got.State != task.State || got.Title != task.Title || got.Description != task.Description {
 		t.Fatalf("graph.Tasks[0] = %#v, want %#v", got, task)
 	}
 
 	if len(graph.ToolRuns) != 1 {
 		t.Fatalf("len(graph.ToolRuns) = %d, want 1", len(graph.ToolRuns))
 	}
-	if got := graph.ToolRuns[0]; got.ID != toolRun.ID || got.RunID != toolRun.RunID || got.TaskID != toolRun.TaskID || got.ToolName != toolRun.ToolName || got.State != toolRun.State {
+	if got := graph.ToolRuns[0]; got.ID != toolRun.ID || got.RunID != toolRun.RunID || got.TaskID != toolRun.TaskID || got.ToolName != toolRun.ToolName || got.State != toolRun.State || got.InputJSON != toolRun.InputJSON || got.OutputJSON != toolRun.OutputJSON {
 		t.Fatalf("graph.ToolRuns[0] = %#v, want %#v", got, toolRun)
 	}
 
 	if len(graph.Worktrees) != 1 {
 		t.Fatalf("len(graph.Worktrees) = %d, want 1", len(graph.Worktrees))
 	}
-	if got := graph.Worktrees[0]; got.ID != worktree.ID || got.RunID != worktree.RunID || got.TaskID != worktree.TaskID || got.State != worktree.State || got.WorktreePath != worktree.WorktreePath {
+	if got := graph.Worktrees[0]; got.ID != worktree.ID || got.RunID != worktree.RunID || got.TaskID != worktree.TaskID || got.State != worktree.State || got.WorktreePath != worktree.WorktreePath || got.WorktreeBranch != worktree.WorktreeBranch {
 		t.Fatalf("graph.Worktrees[0] = %#v, want %#v", got, worktree)
 	}
 }
