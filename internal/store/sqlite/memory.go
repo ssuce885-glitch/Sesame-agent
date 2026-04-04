@@ -23,8 +23,8 @@ func (s *Store) InsertMemoryEntry(ctx context.Context, entry types.MemoryEntry) 
 		entry.Content,
 		string(rawRefs),
 		entry.Confidence,
-		entry.CreatedAt.Format(timeLayout),
-		entry.UpdatedAt.Format(timeLayout),
+		entry.CreatedAt.UTC().Format(timeLayout),
+		entry.UpdatedAt.UTC().Format(timeLayout),
 	)
 
 	return err

@@ -59,6 +59,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			payload text not null,
 			created_at text not null
 		);`,
+		`create unique index if not exists conversation_items_session_position_idx
+			on conversation_items(session_id, position);`,
 		`create table if not exists conversation_summaries (
 			id integer primary key autoincrement,
 			session_id text not null,
