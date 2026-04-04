@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"go-agent/internal/permissions"
@@ -186,5 +187,111 @@ func TestGlobToolRejectsEscapeOutsideWorkspace(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("Execute() error = nil, want escape rejection")
+	}
+}
+
+func TestPermissionProfilesControlLocalTools(t *testing.T) {
+	root := t.TempDir()
+	registry := NewRegistry()
+
+	t.Run("default profile denies write and shell", func(t *testing.T) {
+		_, err := registry.Execute(context.Background(), Call{
+			Name:  "file_write",
+			Input: map[string]any{"path": filepath.Join(root, "blocked.txt"), "content": "blocked"},
+		}, ExecContext{
+			WorkspaceRoot:    root,
+			PermissionEngine: permissions.NewEngine(),
+		})
+		if err == nil || !strings.Contains(err.Error(), "denied") {
+			t.Fatalf("file_write error = %v, want denied", err)
+		}
+
+		_, err = registry.Execute(context.Background(), Call{
+			Name:  "shell_command",
+			Input: map[string]any{"command": "echo blocked"},
+		}, ExecContext{
+			WorkspaceRoot:    root,
+			PermissionEngine: permissions.NewEngine(),
+		})
+		if err == nil || !strings.Contains(err.Error(), "denied") {
+			t.Fatalf("shell_command error = %v, want denied", err)
+		}
+	})
+
+	t.Run("trusted_local allows write and shell", func(t *testing.T) {
+		writePath := filepath.Join(root, "allowed.txt")
+		result, err := registry.Execute(context.Background(), Call{
+			Name:  "file_write",
+			Input: map[string]any{"path": writePath, "content": "hello"},
+		}, ExecContext{
+			WorkspaceRoot:    root,
+			PermissionEngine: permissions.NewEngine("trusted_local"),
+		})
+		if err != nil {
+			t.Fatalf("file_write error = %v", err)
+		}
+		if result.Text != writePath {
+			t.Fatalf("file_write result.Text = %q, want %q", result.Text, writePath)
+		}
+		data, err := os.ReadFile(writePath)
+		if err != nil {
+			t.Fatalf("ReadFile() error = %v", err)
+		}
+		if string(data) != "hello" {
+			t.Fatalf("written file = %q, want %q", string(data), "hello")
+		}
+
+		shellResult, err := registry.Execute(context.Background(), Call{
+			Name:  "shell_command",
+			Input: map[string]any{"command": "echo ok"},
+		}, ExecContext{
+			WorkspaceRoot:    root,
+			PermissionEngine: permissions.NewEngine("trusted_local"),
+		})
+		if err != nil {
+			t.Fatalf("shell_command error = %v", err)
+		}
+		if !strings.Contains(shellResult.Text, "ok") {
+			t.Fatalf("shell_command result.Text = %q, want output", shellResult.Text)
+		}
+	})
+}
+
+func TestShellCommandTruncatesOutputAndUsesWorkspaceDir(t *testing.T) {
+	workspace := t.TempDir()
+	registry := NewRegistry()
+
+	result, err := registry.Execute(context.Background(), Call{
+		Name:  "shell_command",
+		Input: map[string]any{"command": "echo %cd% && for /L %i in (1,1,200) do @echo x"},
+	}, ExecContext{
+		WorkspaceRoot:    workspace,
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(result.Text) != shellCommandMaxOutputBytes {
+		t.Fatalf("len(result.Text) = %d, want %d", len(result.Text), shellCommandMaxOutputBytes)
+	}
+	if !strings.Contains(result.Text, workspace) {
+		t.Fatalf("result.Text = %q, want workspace root %q", result.Text, workspace)
+	}
+}
+
+func TestFileWriteRejectsContentAboveLimit(t *testing.T) {
+	root := t.TempDir()
+	registry := NewRegistry()
+	content := strings.Repeat("x", fileWriteMaxBytes+1)
+
+	_, err := registry.Execute(context.Background(), Call{
+		Name:  "file_write",
+		Input: map[string]any{"path": filepath.Join(root, "too-big.txt"), "content": content},
+	}, ExecContext{
+		WorkspaceRoot:    root,
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Execute() error = %v, want size limit error", err)
 	}
 }

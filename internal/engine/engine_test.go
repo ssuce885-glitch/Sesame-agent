@@ -340,6 +340,57 @@ func TestRunTurnPersistsConversationItemsInStreamingOrderAcrossToolTurns(t *test
 	}
 }
 
+func TestRunTurnFailsWhenToolStepLimitIsExceeded(t *testing.T) {
+	workspace := t.TempDir()
+	readmePath := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(readmePath, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := &fakeConversationStore{}
+	client := &recordingStreamingClient{
+		streams: [][]model.StreamEvent{{
+			{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+				ID:    "call_1",
+				Name:  "file_read",
+				Input: map[string]any{"path": readmePath},
+			}},
+			{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+				ID:    "call_2",
+				Name:  "file_read",
+				Input: map[string]any{"path": readmePath},
+			}},
+			{Kind: model.StreamEventMessageEnd},
+		}},
+	}
+	sink := &recordingSink{}
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      8,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 16,
+	})
+	runner := New(client, tools.NewRegistry(), permissions.NewEngine(), store, manager, nil, 1)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_1", WorkspaceRoot: workspace},
+		Turn:    types.Turn{ID: "turn_1", SessionID: "sess_1", UserMessage: "inspect the readme"},
+		Sink:    sink,
+	})
+	if err == nil || err.Error() != "turn exceeded max tool steps (1)" {
+		t.Fatalf("RunTurn() error = %v, want max tool step error", err)
+	}
+
+	assertEventTypes(t, sink, []string{
+		types.EventTurnStarted,
+		types.EventToolStarted,
+		types.EventToolCompleted,
+		types.EventTurnFailed,
+	})
+	if len(client.requests) != 1 {
+		t.Fatalf("len(requests) = %d, want 1", len(client.requests))
+	}
+}
+
 type scriptedStreamingClient struct {
 	events []model.StreamEvent
 	err    error

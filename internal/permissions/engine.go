@@ -1,5 +1,7 @@
 package permissions
 
+import "strings"
+
 type Decision string
 
 const (
@@ -8,19 +10,47 @@ const (
 	DecisionDeny  Decision = "deny"
 )
 
-type Engine struct{}
+type Engine struct {
+	profile string
+}
 
-func NewEngine() *Engine {
-	return &Engine{}
+func NewEngine(profile ...string) *Engine {
+	selected := "read_only"
+	if len(profile) > 0 {
+		value := strings.TrimSpace(profile[0])
+		value = strings.NewReplacer("-", "_").Replace(strings.ToLower(value))
+		if value != "" {
+			selected = value
+		}
+	}
+
+	return &Engine{profile: selected}
 }
 
 func (e *Engine) Decide(toolName string) Decision {
-	switch toolName {
-	case "file_read", "glob", "grep":
-		return DecisionAllow
-	case "file_write", "shell_command":
-		return DecisionAsk
-	default:
+	if e == nil {
 		return DecisionDeny
 	}
+
+	allowed := map[string]struct{}{
+		"file_read": {},
+		"glob":      {},
+		"grep":      {},
+	}
+	switch e.profile {
+	case "workspace_write":
+		allowed["file_write"] = struct{}{}
+	case "trusted_local":
+		allowed["file_write"] = struct{}{}
+		allowed["shell_command"] = struct{}{}
+	case "", "read_only":
+		// Read-only profile intentionally keeps the base allow-list only.
+	default:
+		// Unknown profiles fall back to the safest profile.
+	}
+
+	if _, ok := allowed[toolName]; ok {
+		return DecisionAllow
+	}
+	return DecisionDeny
 }
