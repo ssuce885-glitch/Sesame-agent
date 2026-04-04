@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"go-agent/internal/types"
 )
@@ -18,13 +19,6 @@ func (s *Store) InsertRun(ctx context.Context, run types.Run) error {
 	_, err = s.db.ExecContext(ctx, `
 		insert into runs (id, session_id, turn_id, state, payload, created_at, updated_at)
 		values (?, ?, ?, ?, ?, ?, ?)
-		on conflict(id) do update set
-			session_id = excluded.session_id,
-			turn_id = excluded.turn_id,
-			state = excluded.state,
-			payload = excluded.payload,
-			created_at = excluded.created_at,
-			updated_at = excluded.updated_at
 	`,
 		run.ID,
 		run.SessionID,
@@ -51,7 +45,6 @@ func (s *Store) UpsertPlan(ctx context.Context, plan types.Plan) error {
 			run_id = excluded.run_id,
 			state = excluded.state,
 			payload = excluded.payload,
-			created_at = excluded.created_at,
 			updated_at = excluded.updated_at
 	`,
 		plan.ID,
@@ -79,7 +72,6 @@ func (s *Store) UpsertTaskRecord(ctx context.Context, task types.TaskRecord) err
 			plan_id = excluded.plan_id,
 			state = excluded.state,
 			payload = excluded.payload,
-			created_at = excluded.created_at,
 			updated_at = excluded.updated_at
 	`,
 		task.ID,
@@ -108,7 +100,6 @@ func (s *Store) UpsertToolRun(ctx context.Context, toolRun types.ToolRun) error 
 			task_id = excluded.task_id,
 			state = excluded.state,
 			payload = excluded.payload,
-			created_at = excluded.created_at,
 			updated_at = excluded.updated_at
 	`,
 		toolRun.ID,
@@ -137,7 +128,6 @@ func (s *Store) UpsertWorktree(ctx context.Context, worktree types.Worktree) err
 			task_id = excluded.task_id,
 			state = excluded.state,
 			payload = excluded.payload,
-			created_at = excluded.created_at,
 			updated_at = excluded.updated_at
 	`,
 		worktree.ID,
@@ -152,27 +142,27 @@ func (s *Store) UpsertWorktree(ctx context.Context, worktree types.Worktree) err
 }
 
 func (s *Store) ListRuntimeGraph(ctx context.Context) (types.RuntimeGraph, error) {
-	runs, err := listRuntimeObjects[types.Run](ctx, s.db, `select payload from runs order by created_at asc, id asc`)
+	runs, err := listRuntimeObjects[types.Run](ctx, s.db, `select payload, created_at, updated_at from runs order by created_at asc, id asc`)
 	if err != nil {
 		return types.RuntimeGraph{}, err
 	}
 
-	plans, err := listRuntimeObjects[types.Plan](ctx, s.db, `select payload from plans order by created_at asc, id asc`)
+	plans, err := listRuntimeObjects[types.Plan](ctx, s.db, `select payload, created_at, updated_at from plans order by created_at asc, id asc`)
 	if err != nil {
 		return types.RuntimeGraph{}, err
 	}
 
-	tasks, err := listRuntimeObjects[types.Task](ctx, s.db, `select payload from task_records order by created_at asc, id asc`)
+	tasks, err := listRuntimeObjects[types.Task](ctx, s.db, `select payload, created_at, updated_at from task_records order by created_at asc, id asc`)
 	if err != nil {
 		return types.RuntimeGraph{}, err
 	}
 
-	toolRuns, err := listRuntimeObjects[types.ToolRun](ctx, s.db, `select payload from tool_runs order by created_at asc, id asc`)
+	toolRuns, err := listRuntimeObjects[types.ToolRun](ctx, s.db, `select payload, created_at, updated_at from tool_runs order by created_at asc, id asc`)
 	if err != nil {
 		return types.RuntimeGraph{}, err
 	}
 
-	worktrees, err := listRuntimeObjects[types.Worktree](ctx, s.db, `select payload from worktrees order by created_at asc, id asc`)
+	worktrees, err := listRuntimeObjects[types.Worktree](ctx, s.db, `select payload, created_at, updated_at from worktrees order by created_at asc, id asc`)
 	if err != nil {
 		return types.RuntimeGraph{}, err
 	}
@@ -196,12 +186,17 @@ func listRuntimeObjects[T any](ctx context.Context, db *sql.DB, query string) ([
 	out := make([]T, 0)
 	for rows.Next() {
 		var payload string
-		if err := rows.Scan(&payload); err != nil {
+		var createdAt string
+		var updatedAt string
+		if err := rows.Scan(&payload, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 
 		var item T
 		if err := json.Unmarshal([]byte(payload), &item); err != nil {
+			return nil, err
+		}
+		if err := applyRuntimeTimestamps(&item, createdAt, updatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -219,6 +214,37 @@ func marshalRuntimePayload(v any) (string, error) {
 		return "", err
 	}
 	return string(raw), nil
+}
+
+func applyRuntimeTimestamps[T any](item *T, createdAt, updatedAt string) error {
+	created, err := time.Parse(timeLayout, createdAt)
+	if err != nil {
+		return err
+	}
+	updated, err := time.Parse(timeLayout, updatedAt)
+	if err != nil {
+		return err
+	}
+
+	switch v := any(item).(type) {
+	case *types.Run:
+		v.CreatedAt = created.UTC()
+		v.UpdatedAt = updated.UTC()
+	case *types.Plan:
+		v.CreatedAt = created.UTC()
+		v.UpdatedAt = updated.UTC()
+	case *types.Task:
+		v.CreatedAt = created.UTC()
+		v.UpdatedAt = updated.UTC()
+	case *types.ToolRun:
+		v.CreatedAt = created.UTC()
+		v.UpdatedAt = updated.UTC()
+	case *types.Worktree:
+		v.CreatedAt = created.UTC()
+		v.UpdatedAt = updated.UTC()
+	}
+
+	return nil
 }
 
 func normalizeRun(run types.Run) types.Run {
