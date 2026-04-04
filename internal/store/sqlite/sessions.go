@@ -41,7 +41,15 @@ func (s *Store) InsertTurn(ctx context.Context, turn types.Turn) error {
 }
 
 func (s *Store) DeleteTurn(ctx context.Context, turnID string) error {
-	if _, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if _, err := tx.ExecContext(ctx, `
 		delete from conversation_items
 		where turn_id = ?`,
 		turnID,
@@ -49,11 +57,13 @@ func (s *Store) DeleteTurn(ctx context.Context, turnID string) error {
 		return err
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		delete from turns
 		where id = ?`,
 		turnID,
-	)
+	); err != nil {
+		return err
+	}
 
-	return err
+	return tx.Commit()
 }
