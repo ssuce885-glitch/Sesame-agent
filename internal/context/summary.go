@@ -1,6 +1,7 @@
 package contextstate
 
 import (
+	"encoding/json"
 	"strings"
 
 	"go-agent/internal/model"
@@ -42,11 +43,9 @@ func cloneConversationItem(item model.ConversationItem) model.ConversationItem {
 		cloned.Result = &result
 	}
 	if item.ToolCall.Input != nil {
-		input := make(map[string]any, len(item.ToolCall.Input))
-		for key, value := range item.ToolCall.Input {
-			input[key] = value
+		if input, ok := cloneJSONValue(item.ToolCall.Input).(map[string]any); ok {
+			cloned.ToolCall.Input = input
 		}
-		cloned.ToolCall.Input = input
 	}
 	return cloned
 }
@@ -80,6 +79,51 @@ func cloneStrings(values []string) []string {
 	return append([]string(nil), values...)
 }
 
+func cloneJSONValue(value any) any {
+	if value == nil {
+		return nil
+	}
+
+	switch v := value.(type) {
+	case string, bool,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, uintptr,
+		float32, float64,
+		json.Number:
+		return v
+	case []any:
+		out := make([]any, len(v))
+		for i, elem := range v {
+			out[i] = cloneJSONValue(elem)
+		}
+		return out
+	case []string:
+		return append([]string(nil), v...)
+	case []map[string]any:
+		out := make([]map[string]any, len(v))
+		for i, elem := range v {
+			out[i] = cloneJSONMap(elem)
+		}
+		return out
+	case map[string]any:
+		return cloneJSONMap(v)
+	}
+
+	return value
+}
+
+func cloneJSONMap(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+
+	out := make(map[string]any, len(value))
+	for key, elem := range value {
+		out[key] = cloneJSONValue(elem)
+	}
+	return out
+}
+
 func messagesToConversationItems(messages []Message) []model.ConversationItem {
 	if len(messages) == 0 {
 		return nil
@@ -101,6 +145,11 @@ func messagesToConversationItems(messages []Message) []model.ConversationItem {
 				Result: &model.ToolResult{
 					Content: message.Content,
 				},
+			})
+		case "tool_call":
+			out = append(out, model.ConversationItem{
+				Kind: model.ConversationItemToolCall,
+				Text: message.Content,
 			})
 		case "summary":
 			out = append(out, model.ConversationItem{
@@ -138,6 +187,8 @@ func conversationItemsToMessages(items []model.ConversationItem) []Message {
 				content = item.Result.Content
 			}
 			out = append(out, Message{Role: "tool_result", Content: content})
+		case model.ConversationItemToolCall:
+			out = append(out, Message{Role: "tool_call", Content: toolCallMessageContent(item)})
 		case model.ConversationItemSummary:
 			content := item.Text
 			if item.Summary != nil {
@@ -150,4 +201,23 @@ func conversationItemsToMessages(items []model.ConversationItem) []Message {
 	}
 
 	return out
+}
+
+func toolCallMessageContent(item model.ConversationItem) string {
+	name := item.ToolCall.Name
+	if name == "" {
+		name = "tool"
+	}
+	payload := item.ToolCall.Input
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		body = []byte("{}")
+	}
+	if item.ToolCall.ID != "" {
+		return item.ToolCall.ID + ": " + name + " " + string(body)
+	}
+	return name + " " + string(body)
 }
