@@ -6,6 +6,14 @@ type Definition struct {
 	InputSchema map[string]any
 }
 
+func cloneDefinition(def Definition) Definition {
+	return Definition{
+		Name:        def.Name,
+		Description: def.Description,
+		InputSchema: cloneStringAnyMap(def.InputSchema),
+	}
+}
+
 func objectSchema(properties map[string]any, required ...string) map[string]any {
 	schema := map[string]any{
 		"type":                 "object",
@@ -16,4 +24,39 @@ func objectSchema(properties map[string]any, required ...string) map[string]any 
 		schema["required"] = required
 	}
 	return schema
+}
+
+func cloneStringAnyMap(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+
+	cloned := make(map[string]any, len(src))
+	for key, value := range src {
+		cloned[key] = cloneAny(value)
+	}
+	return cloned
+}
+
+func cloneAny(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneStringAnyMap(typed)
+	case []string:
+		return append([]string(nil), typed...)
+	case []map[string]any:
+		cloned := make([]map[string]any, len(typed))
+		for i, elem := range typed {
+			cloned[i] = cloneStringAnyMap(elem)
+		}
+		return cloned
+	case []any:
+		cloned := make([]any, len(typed))
+		for i, elem := range typed {
+			cloned[i] = cloneAny(elem)
+		}
+		return cloned
+	default:
+		return value
+	}
 }

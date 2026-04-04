@@ -141,6 +141,8 @@ func TestRegistryDefinitionsUseFrozenSnapshots(t *testing.T) {
 		t.Fatalf("Definition() calls after Register = %d, want 1", tool.calls)
 	}
 
+	tool.definition.InputSchema["properties"].(map[string]any)["value"].(map[string]any)["type"] = "number"
+
 	defs := registry.Definitions()
 	if tool.calls != 1 {
 		t.Fatalf("Definition() calls after Definitions() = %d, want 1", tool.calls)
@@ -148,10 +150,18 @@ func TestRegistryDefinitionsUseFrozenSnapshots(t *testing.T) {
 	if len(defs) != 1 || defs[0].Name != "snapshot_tool" {
 		t.Fatalf("Definitions() = %+v, want frozen snapshot", defs)
 	}
+	if got := defs[0].InputSchema["properties"].(map[string]any)["value"].(map[string]any)["type"]; got != "string" {
+		t.Fatalf("registry definition mutated from original tool change: got %v, want string", got)
+	}
 
-	_ = registry.Definitions()
+	defs[0].InputSchema["properties"].(map[string]any)["value"].(map[string]any)["type"] = "boolean"
+
+	defsAgain := registry.Definitions()
 	if tool.calls != 1 {
 		t.Fatalf("Definition() calls after repeated Definitions() = %d, want 1", tool.calls)
+	}
+	if got := defsAgain[0].InputSchema["properties"].(map[string]any)["value"].(map[string]any)["type"]; got != "string" {
+		t.Fatalf("registry definition mutated from returned Definitions() change: got %v, want string", got)
 	}
 }
 
