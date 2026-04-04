@@ -10,6 +10,7 @@ const (
 	EventTurnCompleted       = "turn.completed"
 	EventTurnFailed          = "turn.failed"
 	EventTurnInterrupted     = "turn.interrupted"
+	EventTurnUsage           = "turn.usage"
 	EventAssistantStarted    = "assistant.started"
 	EventAssistantDelta      = "assistant.delta"
 	EventAssistantCompleted  = "assistant.completed"
@@ -40,6 +41,13 @@ type TurnFailedPayload struct {
 
 type AssistantDeltaPayload struct {
 	Text string `json:"text"`
+}
+
+type ToolEventPayload struct {
+	ToolCallID    string `json:"tool_call_id"`
+	ToolName      string `json:"tool_name"`
+	Arguments     string `json:"arguments,omitempty"`
+	ResultPreview string `json:"result_preview,omitempty"`
 }
 
 func NewEvent(sessionID, turnID, eventType string, payload any) (Event, error) {

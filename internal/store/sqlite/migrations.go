@@ -59,6 +59,18 @@ func (s *Store) migrate(ctx context.Context) error {
 			payload text not null,
 			created_at text not null
 		);`,
+		`create table if not exists turn_usage (
+			turn_id text primary key,
+			session_id text not null,
+			provider text not null default '',
+			model text not null default '',
+			input_tokens integer not null default 0,
+			output_tokens integer not null default 0,
+			cached_tokens integer not null default 0,
+			cache_hit_rate real not null default 0,
+			created_at text not null,
+			updated_at text not null
+		);`,
 		`create unique index if not exists conversation_items_session_position_idx
 			on conversation_items(session_id, position);`,
 		`create table if not exists conversation_summaries (

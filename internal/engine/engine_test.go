@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -241,7 +242,20 @@ func TestRunTurnBuildsProviderRequestFromStoredConversation(t *testing.T) {
 		MaxEstimatedTokens:  6000,
 		CompactionThreshold: 16,
 	})
-	runner := New(client, tools.NewRegistry(), permissions.NewEngine(), store, manager, nil, 8)
+	runner := NewWithRuntime(
+		client,
+		tools.NewRegistry(),
+		permissions.NewEngine(),
+		store,
+		manager,
+		contextstate.NewRuntime(86400, 3),
+		nil,
+		RuntimeMetadata{
+			Provider: "openai_compatible",
+			Model:    "glm-4.5",
+		},
+		8,
+	)
 
 	err := runner.RunTurn(context.Background(), Input{
 		Session: types.Session{ID: "sess_1", WorkspaceRoot: t.TempDir()},
@@ -310,7 +324,20 @@ func TestRunTurnPersistsConversationItemsInStreamingOrderAcrossToolTurns(t *test
 		MaxEstimatedTokens:  6000,
 		CompactionThreshold: 16,
 	})
-	runner := New(client, tools.NewRegistry(), permissions.NewEngine(), store, manager, nil, 8)
+	runner := NewWithRuntime(
+		client,
+		tools.NewRegistry(),
+		permissions.NewEngine(),
+		store,
+		manager,
+		contextstate.NewRuntime(86400, 3),
+		nil,
+		RuntimeMetadata{
+			Provider: "openai_compatible",
+			Model:    "glm-4.5",
+		},
+		8,
+	)
 
 	err := runner.RunTurn(context.Background(), Input{
 		Session: types.Session{ID: "sess_1", WorkspaceRoot: workspace},
@@ -321,16 +348,17 @@ func TestRunTurnPersistsConversationItemsInStreamingOrderAcrossToolTurns(t *test
 		t.Fatalf("RunTurn() error = %v", err)
 	}
 
-	if len(store.insertedItems) != 4 {
-		t.Fatalf("len(inserted items) = %d, want 4", len(store.insertedItems))
+	if len(store.insertedItems) != 5 {
+		t.Fatalf("len(inserted items) = %d, want 5", len(store.insertedItems))
 	}
 	wantKinds := []model.ConversationItemKind{
 		model.ConversationItemUserMessage,
 		model.ConversationItemAssistantText,
+		model.ConversationItemToolCall,
 		model.ConversationItemToolResult,
 		model.ConversationItemAssistantText,
 	}
-	wantPositions := []int{1, 2, 3, 4}
+	wantPositions := []int{1, 2, 3, 4, 5}
 	for i := range wantKinds {
 		if store.insertedItems[i].Kind != wantKinds[i] {
 			t.Fatalf("inserted item kinds = %#v, want %#v", conversationItemKinds(store.insertedItems), wantKinds)
@@ -427,7 +455,20 @@ func TestRunTurnUsesStoredProviderCacheHeadAndPersistsNextHead(t *testing.T) {
 		MaxEstimatedTokens:  6000,
 		CompactionThreshold: 16,
 	})
-	runner := New(client, tools.NewRegistry(), permissions.NewEngine(), store, manager, nil, 8)
+	runner := NewWithRuntime(
+		client,
+		tools.NewRegistry(),
+		permissions.NewEngine(),
+		store,
+		manager,
+		contextstate.NewRuntime(86400, 3),
+		nil,
+		RuntimeMetadata{
+			Provider: "openai_compatible",
+			Model:    "glm-4.5",
+		},
+		8,
+	)
 
 	err := runner.RunTurn(context.Background(), Input{
 		Session: types.Session{ID: "sess_1", WorkspaceRoot: t.TempDir()},
@@ -620,11 +661,14 @@ func TestRunTurnUsesIncrementalNativeContinuationAfterPrefixRotation(t *testing.
 	if client.requests[1].UserMessage != "" {
 		t.Fatalf("second request user message = %q, want empty native continuation", client.requests[1].UserMessage)
 	}
-	if len(client.requests[1].Items) != 1 {
-		t.Fatalf("len(second request items) = %d, want 1 incremental item", len(client.requests[1].Items))
+	if len(client.requests[1].Items) != 2 {
+		t.Fatalf("len(second request items) = %d, want 2 incremental items", len(client.requests[1].Items))
 	}
-	if client.requests[1].Items[0].Kind != model.ConversationItemToolResult || client.requests[1].Items[0].Result == nil || client.requests[1].Items[0].Result.ToolCallID != "call_1" {
-		t.Fatalf("second request items = %#v, want tool result delta", client.requests[1].Items)
+	if client.requests[1].Items[0].Kind != model.ConversationItemToolCall || client.requests[1].Items[0].ToolCall.ID != "call_1" {
+		t.Fatalf("second request items[0] = %#v, want tool call delta", client.requests[1].Items[0])
+	}
+	if client.requests[1].Items[1].Kind != model.ConversationItemToolResult || client.requests[1].Items[1].Result == nil || client.requests[1].Items[1].Result.ToolCallID != "call_1" {
+		t.Fatalf("second request items[1] = %#v, want tool result delta", client.requests[1].Items[1])
 	}
 }
 
@@ -677,6 +721,119 @@ func TestRunTurnCompactsEvenWhenSummariesAlreadyExist(t *testing.T) {
 	}
 	if store.insertedSummaries[0].RangeLabel != "turns 1-4" {
 		t.Fatalf("inserted summary = %#v, want rolling compaction summary", store.insertedSummaries[0])
+	}
+}
+
+func TestRunTurnPersistsToolCallAndEmitsTurnUsage(t *testing.T) {
+	workspace := t.TempDir()
+	readmePath := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(readmePath, []byte("hello from readme"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := &fakeConversationStore{}
+	client := model.NewFakeStreaming([][]model.StreamEvent{
+		{
+			{Kind: model.StreamEventResponseMetadata, ResponseMetadata: &model.ResponseMetadata{
+				ResponseID:   "resp_1",
+				InputTokens:  120,
+				OutputTokens: 30,
+				CachedTokens: 24,
+			}},
+			{Kind: model.StreamEventTextDelta, TextDelta: "checking readme"},
+			{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+				ID:    "call_1",
+				Name:  "file_read",
+				Input: map[string]any{"path": readmePath},
+			}},
+			{Kind: model.StreamEventMessageEnd},
+		},
+		{
+			{Kind: model.StreamEventMessageEnd},
+		},
+	})
+	sink := &recordingSink{}
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      8,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 16,
+	})
+	runner := NewWithRuntime(
+		client,
+		tools.NewRegistry(),
+		permissions.NewEngine(),
+		store,
+		manager,
+		contextstate.NewRuntime(86400, 3),
+		nil,
+		RuntimeMetadata{
+			Provider: "openai_compatible",
+			Model:    "glm-4.5",
+		},
+		8,
+	)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_1", WorkspaceRoot: workspace},
+		Turn:    types.Turn{ID: "turn_1", SessionID: "sess_1", UserMessage: "inspect readme"},
+		Sink:    sink,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	foundToolCall := false
+	for _, item := range store.insertedItems {
+		if item.Kind != model.ConversationItemToolCall {
+			continue
+		}
+		foundToolCall = true
+		if item.ToolCall.ID != "call_1" || item.ToolCall.Name != "file_read" {
+			t.Fatalf("tool call item = %#v, want call_1/file_read", item)
+		}
+		if item.ToolCall.Input["path"] != readmePath {
+			t.Fatalf("tool call input path = %v, want %q", item.ToolCall.Input["path"], readmePath)
+		}
+	}
+	if !foundToolCall {
+		t.Fatalf("inserted items = %#v, want tool_call item", store.insertedItems)
+	}
+
+	if store.upsertedUsage == nil {
+		t.Fatal("upserted usage = nil, want persisted turn usage")
+	}
+	if store.upsertedUsage.TurnID != "turn_1" || store.upsertedUsage.SessionID != "sess_1" {
+		t.Fatalf("upserted usage identity = %#v, want turn_1/sess_1", *store.upsertedUsage)
+	}
+	if store.upsertedUsage.InputTokens != 120 || store.upsertedUsage.OutputTokens != 30 || store.upsertedUsage.CachedTokens != 24 {
+		t.Fatalf("upserted usage tokens = %#v, want 120/30/24", *store.upsertedUsage)
+	}
+	if store.upsertedUsage.CacheHitRate != 0.2 {
+		t.Fatalf("upserted usage cache hit rate = %v, want %v", store.upsertedUsage.CacheHitRate, 0.2)
+	}
+	if store.upsertedUsage.Provider != "openai_compatible" || store.upsertedUsage.Model != "glm-4.5" {
+		t.Fatalf("upserted usage provider/model = %#v, want openai_compatible/glm-4.5", *store.upsertedUsage)
+	}
+
+	var usagePayload types.TurnUsagePayload
+	foundUsageEvent := false
+	for _, event := range sink.events {
+		if event.Type != types.EventTurnUsage {
+			continue
+		}
+		foundUsageEvent = true
+		if err := json.Unmarshal(event.Payload, &usagePayload); err != nil {
+			t.Fatalf("turn.usage payload unmarshal error = %v", err)
+		}
+	}
+	if !foundUsageEvent {
+		t.Fatalf("events = %v, want %q", sink.eventTypes(), types.EventTurnUsage)
+	}
+	if usagePayload.Provider != "openai_compatible" || usagePayload.Model != "glm-4.5" {
+		t.Fatalf("turn.usage payload provider/model = %#v, want openai_compatible/glm-4.5", usagePayload)
+	}
+	if usagePayload.InputTokens != 120 || usagePayload.OutputTokens != 30 || usagePayload.CachedTokens != 24 || usagePayload.CacheHitRate != 0.2 {
+		t.Fatalf("turn.usage payload tokens = %#v, want 120/30/24/0.2", usagePayload)
 	}
 }
 
@@ -784,11 +941,12 @@ type fakeConversationStore struct {
 	summaries          []model.Summary
 	memories           []types.MemoryEntry
 	cacheHead          *types.ProviderCacheHead
+	upsertedUsage      *types.TurnUsage
 	upsertedHead       *types.ProviderCacheHead
 	insertedItems      []model.ConversationItem
-	insertedPositions   []int
-	insertedSummaries   []model.Summary
-	insertedSummaryPos  []int
+	insertedPositions  []int
+	insertedSummaries  []model.Summary
+	insertedSummaryPos []int
 }
 
 func (s *fakeConversationStore) ListConversationItems(context.Context, string) ([]model.ConversationItem, error) {
@@ -825,6 +983,12 @@ func (s *fakeConversationStore) GetProviderCacheHead(context.Context, string, st
 func (s *fakeConversationStore) UpsertProviderCacheHead(_ context.Context, head types.ProviderCacheHead) error {
 	cloned := head
 	s.upsertedHead = &cloned
+	return nil
+}
+
+func (s *fakeConversationStore) UpsertTurnUsage(_ context.Context, usage types.TurnUsage) error {
+	cloned := usage
+	s.upsertedUsage = &cloned
 	return nil
 }
 

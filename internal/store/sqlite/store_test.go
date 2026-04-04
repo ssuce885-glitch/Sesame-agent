@@ -551,3 +551,84 @@ func TestStoreProviderCacheHeadsAreScopedByCapabilityProfile(t *testing.T) {
 		t.Fatalf("provider_cache_heads count = %d, want 2", count)
 	}
 }
+
+func TestStorePersistsTurnUsage(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	first := types.TurnUsage{
+		TurnID:       "turn_usage_1",
+		SessionID:    "sess_usage_1",
+		Model:        "glm-4.5",
+		Provider:     "openai_compatible",
+		InputTokens:  120,
+		OutputTokens: 45,
+		CachedTokens: 30,
+		CacheHitRate: 0.25,
+		CreatedAt:    time.Date(2026, 4, 4, 9, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 4, 4, 9, 0, 0, 0, time.UTC),
+	}
+	if err := store.UpsertTurnUsage(context.Background(), first); err != nil {
+		t.Fatalf("UpsertTurnUsage(first) error = %v", err)
+	}
+
+	got, ok, err := store.GetTurnUsage(context.Background(), first.TurnID)
+	if err != nil {
+		t.Fatalf("GetTurnUsage(first) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("GetTurnUsage(first) ok = false, want true")
+	}
+	if got.TurnID != first.TurnID || got.SessionID != first.SessionID || got.Provider != first.Provider || got.Model != first.Model {
+		t.Fatalf("GetTurnUsage(first) identity = %#v, want %#v", got, first)
+	}
+	if got.InputTokens != first.InputTokens || got.OutputTokens != first.OutputTokens || got.CachedTokens != first.CachedTokens {
+		t.Fatalf("GetTurnUsage(first) tokens = %#v, want %#v", got, first)
+	}
+	if got.CacheHitRate != first.CacheHitRate {
+		t.Fatalf("GetTurnUsage(first) cache_hit_rate = %v, want %v", got.CacheHitRate, first.CacheHitRate)
+	}
+
+	second := first
+	second.Provider = "anthropic"
+	second.Model = "claude-4"
+	second.InputTokens = 300
+	second.OutputTokens = 80
+	second.CachedTokens = 90
+	second.CacheHitRate = 0.3
+	second.UpdatedAt = first.UpdatedAt.Add(2 * time.Minute)
+	if err := store.UpsertTurnUsage(context.Background(), second); err != nil {
+		t.Fatalf("UpsertTurnUsage(second) error = %v", err)
+	}
+
+	got, ok, err = store.GetTurnUsage(context.Background(), first.TurnID)
+	if err != nil {
+		t.Fatalf("GetTurnUsage(second) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("GetTurnUsage(second) ok = false, want true")
+	}
+	if got.Provider != second.Provider || got.Model != second.Model {
+		t.Fatalf("GetTurnUsage(second) provider/model = %#v, want %#v", got, second)
+	}
+	if got.InputTokens != second.InputTokens || got.OutputTokens != second.OutputTokens || got.CachedTokens != second.CachedTokens {
+		t.Fatalf("GetTurnUsage(second) tokens = %#v, want %#v", got, second)
+	}
+	if got.CacheHitRate != second.CacheHitRate {
+		t.Fatalf("GetTurnUsage(second) cache_hit_rate = %v, want %v", got.CacheHitRate, second.CacheHitRate)
+	}
+	if !got.UpdatedAt.Equal(second.UpdatedAt.UTC()) {
+		t.Fatalf("GetTurnUsage(second) updated_at = %s, want %s", got.UpdatedAt, second.UpdatedAt.UTC())
+	}
+
+	_, ok, err = store.GetTurnUsage(context.Background(), "turn_usage_missing")
+	if err != nil {
+		t.Fatalf("GetTurnUsage(missing) error = %v", err)
+	}
+	if ok {
+		t.Fatal("GetTurnUsage(missing) ok = true, want false")
+	}
+}

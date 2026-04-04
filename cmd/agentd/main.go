@@ -108,6 +108,10 @@ func main() {
 		contextstate.NewManager(wiring.contextManagerConfig),
 		wiring.runtime,
 		wiring.compactor,
+		engine.RuntimeMetadata{
+			Provider: cfg.ModelProvider,
+			Model:    cfg.Model,
+		},
 		buildMaxToolSteps(cfg),
 	)
 	manager := session.NewManager(sessionRunnerAdapter{
