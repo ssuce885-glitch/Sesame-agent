@@ -57,27 +57,18 @@ func (p *OpenAICompatibleProvider) Stream(ctx context.Context, req Request) (<-c
 }
 
 func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, events chan<- StreamEvent) error {
-	sawMessageEnd := false
-
 	body := struct {
-		Model    string `json:"model"`
-		Stream   bool   `json:"stream"`
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
+		Model        string           `json:"model"`
+		Instructions string           `json:"instructions"`
+		Input        []map[string]any `json:"input"`
+		Tools        []map[string]any `json:"tools"`
+		Stream       bool             `json:"stream"`
 	}{
-		Model:  p.model,
-		Stream: true,
-		Messages: []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		}{
-			{
-				Role:    "user",
-				Content: req.UserMessage,
-			},
-		},
+		Model:        chooseModel(req, p.model),
+		Instructions: req.Instructions,
+		Input:        toResponsesInput(req.Items),
+		Tools:        toResponsesTools(req.Tools),
+		Stream:       req.Stream,
 	}
 
 	payload, err := json.Marshal(body)
@@ -85,7 +76,7 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 		return err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/chat/completions", bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/responses", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -102,73 +93,99 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if len(body) == 0 {
-			return fmt.Errorf("openai compatible chat completions request failed: %s", resp.Status)
+			return fmt.Errorf("openai compatible responses request failed: %s", resp.Status)
 		}
-		return fmt.Errorf("openai compatible chat completions request failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return fmt.Errorf("openai compatible responses request failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
 	reader := newSSEReader(resp.Body)
+	sawMessageEnd := false
 	for {
 		frame, err := reader.Next()
 		if errors.Is(err, io.EOF) {
 			if sawMessageEnd {
 				return nil
 			}
-			return errors.New("openai compatible stream ended before [DONE]")
+			return errors.New("openai compatible stream ended before response.completed")
 		}
 		if err != nil {
 			return err
 		}
-		if frame.Data == "" {
+		if frame.Event == "" && frame.Data == "" {
 			continue
 		}
-		if frame.Data == "[DONE]" {
-			if sawMessageEnd {
-				continue
+
+		if sawMessageEnd {
+			continue
+		}
+
+		switch frame.Event {
+		case "response.output_text.delta":
+			var payload struct {
+				Delta string `json:"delta"`
+				Text  string `json:"text"`
 			}
-			sawMessageEnd = true
-			if err := sendStreamEvent(ctx, events, StreamEvent{
-				Kind: StreamEventMessageEnd,
-			}); err != nil {
+			if err := json.Unmarshal([]byte(frame.Data), &payload); err != nil {
 				return err
 			}
-			continue
-		}
-
-		var payload struct {
-			Choices []struct {
-				Delta struct {
-					Content string `json:"content"`
-				} `json:"delta"`
-				FinishReason string `json:"finish_reason"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal([]byte(frame.Data), &payload); err != nil {
-			return err
-		}
-
-		for _, choice := range payload.Choices {
-			if choice.Delta.Content == "" {
-				if choice.FinishReason == "" || sawMessageEnd {
-					continue
-				}
-				sawMessageEnd = true
-				if err := sendStreamEvent(ctx, events, StreamEvent{
-					Kind: StreamEventMessageEnd,
-				}); err != nil {
-					return err
-				}
+			text := payload.Delta
+			if text == "" {
+				text = payload.Text
+			}
+			if text == "" {
 				continue
 			}
 			if err := sendStreamEvent(ctx, events, StreamEvent{
 				Kind:      StreamEventTextDelta,
-				TextDelta: choice.Delta.Content,
+				TextDelta: text,
 			}); err != nil {
 				return err
 			}
-			if choice.FinishReason == "" || sawMessageEnd {
-				continue
+		case "response.function_call_arguments.delta":
+			var payload struct {
+				ItemID string `json:"item_id"`
+				Name   string `json:"name"`
+				Delta  string `json:"delta"`
 			}
+			if err := json.Unmarshal([]byte(frame.Data), &payload); err != nil {
+				return err
+			}
+			if err := sendStreamEvent(ctx, events, StreamEvent{
+				Kind: StreamEventToolCallDelta,
+				ToolCall: ToolCallChunk{
+					ID:         payload.ItemID,
+					Name:       payload.Name,
+					InputChunk: payload.Delta,
+				},
+			}); err != nil {
+				return err
+			}
+		case "response.function_call_arguments.done":
+			var payload struct {
+				ItemID    string `json:"item_id"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}
+			if err := json.Unmarshal([]byte(frame.Data), &payload); err != nil {
+				return err
+			}
+			input := map[string]any{}
+			if payload.Arguments != "" {
+				if err := json.Unmarshal([]byte(payload.Arguments), &input); err != nil {
+					return fmt.Errorf("decode function call arguments: %w", err)
+				}
+			}
+			if err := sendStreamEvent(ctx, events, StreamEvent{
+				Kind: StreamEventToolCallEnd,
+				ToolCall: ToolCallChunk{
+					ID:    payload.ItemID,
+					Name:  payload.Name,
+					Input: input,
+				},
+			}); err != nil {
+				return err
+			}
+		case "response.completed":
 			sawMessageEnd = true
 			if err := sendStreamEvent(ctx, events, StreamEvent{
 				Kind: StreamEventMessageEnd,
@@ -177,4 +194,67 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			}
 		}
 	}
+}
+
+func chooseModel(req Request, fallback string) string {
+	if req.Model != "" {
+		return req.Model
+	}
+	return fallback
+}
+
+func toResponsesInput(items []ConversationItem) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		switch item.Kind {
+		case ConversationItemUserMessage:
+			out = append(out, map[string]any{
+				"role": "user",
+				"content": []map[string]any{
+					{
+						"type": "input_text",
+						"text": item.Text,
+					},
+				},
+			})
+		case ConversationItemAssistantText:
+			out = append(out, map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{
+						"type": "output_text",
+						"text": item.Text,
+					},
+				},
+			})
+		case ConversationItemToolResult:
+			if item.Result == nil {
+				continue
+			}
+			entry := map[string]any{
+				"type":     "function_call_output",
+				"call_id":  item.Result.ToolCallID,
+				"output":   item.Result.Content,
+				"is_error": item.Result.IsError,
+			}
+			if item.Result.ToolName != "" {
+				entry["name_hint"] = item.Result.ToolName
+			}
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func toResponsesTools(tools []ToolSchema) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, map[string]any{
+			"type":        "function",
+			"name":        tool.Name,
+			"description": tool.Description,
+			"parameters":  tool.InputSchema,
+		})
+	}
+	return out
 }
