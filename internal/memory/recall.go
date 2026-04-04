@@ -7,7 +7,10 @@ import (
 )
 
 func Recall(query string, entries []types.MemoryEntry, limit int) []types.MemoryEntry {
-	query = strings.ToLower(query)
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" || limit <= 0 {
+		return nil
+	}
 
 	var out []types.MemoryEntry
 	for _, entry := range entries {

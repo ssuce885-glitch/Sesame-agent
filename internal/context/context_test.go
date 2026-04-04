@@ -1,6 +1,10 @@
 package contextstate
 
-import "testing"
+import (
+	"testing"
+
+	"go-agent/internal/model"
+)
 
 func TestBuilderKeepsRecentTailAndSummaries(t *testing.T) {
 	builder := NewBuilder(3)
@@ -11,7 +15,7 @@ func TestBuilderKeepsRecentTailAndSummaries(t *testing.T) {
 		{Role: "assistant", Content: "a2"},
 		{Role: "user", Content: "u3"},
 	}
-	summary := Summary{Goal: "finish task"}
+	summary := model.Summary{RangeLabel: "finish task"}
 
 	ctx := builder.Build(messages, []Summary{summary}, nil)
 	if len(ctx.RecentMessages) != 3 {
