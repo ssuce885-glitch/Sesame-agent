@@ -197,6 +197,10 @@ func TestRunTurnBuildsProviderRequestFromStoredConversation(t *testing.T) {
 			model.UserMessageItem("first request"),
 			{Kind: model.ConversationItemAssistantText, Text: "first answer"},
 		},
+		summaries: []model.Summary{{
+			RangeLabel:       "turns 1-1",
+			ImportantChoices: []string{"used rg first"},
+		}},
 		memories: []types.MemoryEntry{{Content: "workspace prefers rg for searches"}},
 	}
 	client := model.NewFakeStreaming([][]model.StreamEvent{{
@@ -204,7 +208,7 @@ func TestRunTurnBuildsProviderRequestFromStoredConversation(t *testing.T) {
 		{Kind: model.StreamEventMessageEnd},
 	}})
 	manager := contextstate.NewManager(contextstate.Config{
-		MaxRecentItems:      8,
+		MaxRecentItems:      1,
 		MaxEstimatedTokens:  6000,
 		CompactionThreshold: 16,
 	})
@@ -212,7 +216,7 @@ func TestRunTurnBuildsProviderRequestFromStoredConversation(t *testing.T) {
 
 	err := runner.RunTurn(context.Background(), Input{
 		Session: types.Session{ID: "sess_1", WorkspaceRoot: t.TempDir()},
-		Turn:    types.Turn{ID: "turn_2", SessionID: "sess_1", UserMessage: "follow up"},
+		Turn:    types.Turn{ID: "turn_2", SessionID: "sess_1", UserMessage: "workspace prefers rg for searches"},
 		Sink:    &recordingSink{},
 	})
 	if err != nil {
@@ -225,6 +229,21 @@ func TestRunTurnBuildsProviderRequestFromStoredConversation(t *testing.T) {
 	}
 	if !strings.Contains(req.Instructions, "workspace prefers rg for searches") {
 		t.Fatalf("Instructions = %q, want recalled memory", req.Instructions)
+	}
+	var summaryItems int
+	for _, item := range req.Items {
+		if item.Kind == model.ConversationItemSummary {
+			summaryItems++
+			if item.Summary == nil || item.Summary.RangeLabel != "turns 1-1" {
+				t.Fatalf("summary item = %#v, want stored summary", item)
+			}
+		}
+	}
+	if summaryItems != 1 {
+		t.Fatalf("summary item count = %d, want 1", summaryItems)
+	}
+	if len(store.insertedPositions) != 1 || store.insertedPositions[0] != 3 {
+		t.Fatalf("inserted positions = %v, want [3]", store.insertedPositions)
 	}
 }
 
@@ -319,9 +338,10 @@ func assertNoEventType(t *testing.T, sink *recordingSink, unwanted string) {
 }
 
 type fakeConversationStore struct {
-	items     []model.ConversationItem
-	summaries []model.Summary
-	memories  []types.MemoryEntry
+	items             []model.ConversationItem
+	summaries         []model.Summary
+	memories          []types.MemoryEntry
+	insertedPositions []int
 }
 
 func (s *fakeConversationStore) ListConversationItems(context.Context, string) ([]model.ConversationItem, error) {
@@ -332,7 +352,8 @@ func (s *fakeConversationStore) ListConversationSummaries(context.Context, strin
 	return append([]model.Summary(nil), s.summaries...), nil
 }
 
-func (s *fakeConversationStore) InsertConversationItem(context.Context, string, string, int, model.ConversationItem) error {
+func (s *fakeConversationStore) InsertConversationItem(_ context.Context, _ string, _ string, position int, _ model.ConversationItem) error {
+	s.insertedPositions = append(s.insertedPositions, position)
 	return nil
 }
 

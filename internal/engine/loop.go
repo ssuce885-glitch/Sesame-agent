@@ -51,7 +51,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		sessionID = in.Session.ID
 	}
 
-	items, summaries, memoryRefs, err := loadConversationState(ctx, e, in, sessionID)
+	totalItems, items, summaries, memoryRefs, err := loadConversationState(ctx, e, in, sessionID)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
@@ -62,7 +62,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	req := buildRequest(e, in, items, summaries, memoryRefs)
 	assistantStarted := false
 	assistantText := strings.Builder{}
-	nextPosition := len(items) + 1
+	nextPosition := totalItems + 1
 	toolSteps := 0
 
 	for {
@@ -186,54 +186,47 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	}
 }
 
-func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string) ([]model.ConversationItem, []model.Summary, []string, error) {
+func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string) (int, []model.ConversationItem, []model.Summary, []string, error) {
 	if e.store == nil || e.ctxManager == nil {
-		return nil, nil, nil, nil
+		return 0, nil, nil, nil, nil
 	}
 
 	items, err := e.store.ListConversationItems(ctx, sessionID)
 	if err != nil {
-		return nil, nil, nil, err
+		return 0, nil, nil, nil, err
 	}
+	totalItems := len(items)
 
 	summaries, err := e.store.ListConversationSummaries(ctx, sessionID)
 	if err != nil {
-		return nil, nil, nil, err
+		return 0, nil, nil, nil, err
 	}
 
 	entries, err := e.store.ListMemoryEntriesByWorkspace(ctx, in.Session.WorkspaceRoot)
 	if err != nil {
-		return nil, nil, nil, err
+		return 0, nil, nil, nil, err
 	}
 
 	recalled := memory.Recall(in.Turn.UserMessage, entries, 3)
-	if len(recalled) == 0 && len(entries) > 0 {
-		limit := 3
-		if len(entries) < limit {
-			limit = len(entries)
-		}
-		recalled = append([]types.MemoryEntry(nil), entries[:limit]...)
-	}
-
 	memoryRefs := make([]string, 0, len(recalled))
 	for _, entry := range recalled {
 		memoryRefs = append(memoryRefs, entry.Content)
 	}
 
 	working := e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
-	if working.NeedsCompact && e.compactor != nil && working.CompactionStart > 0 {
+	if working.NeedsCompact && e.compactor != nil {
 		summary, err := e.compactor.Compact(ctx, items[:working.CompactionStart])
 		if err != nil {
-			return nil, nil, nil, err
+			return 0, nil, nil, nil, err
 		}
 		if err := e.store.InsertConversationSummary(ctx, sessionID, working.CompactionStart, summary); err != nil {
-			return nil, nil, nil, err
+			return 0, nil, nil, nil, err
 		}
 		summaries = append(summaries, summary)
 		working = e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
 	}
 
-	return working.RecentItems, working.Summaries, working.MemoryRefs, nil
+	return totalItems, working.RecentItems, working.Summaries, working.MemoryRefs, nil
 }
 
 func buildRequest(e *Engine, in Input, items []model.ConversationItem, summaries []model.Summary, memoryRefs []string) model.Request {
