@@ -212,9 +212,14 @@ func TestFakeStreamingClientSnapshotsNeutralRequest(t *testing.T) {
 			Name:        "file_read",
 			Description: "Read a file inside the workspace",
 			InputSchema: map[string]any{
-				"type": "object",
+				"type":     "object",
+				"required": []string{"path"},
 				"properties": map[string]any{
 					"path": map[string]any{"type": "string"},
+				},
+				"oneOf": []map[string]any{
+					{"type": "string"},
+					{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}},
 				},
 			},
 		}},
@@ -241,7 +246,9 @@ func TestFakeStreamingClientSnapshotsNeutralRequest(t *testing.T) {
 	req.Items[2].Result.Content = "mutated contents"
 	req.Tools[0].Description = "mutated description"
 	req.Tools[0].InputSchema["type"] = "mutated"
+	req.Tools[0].InputSchema["required"].([]string)[0] = "mutated-path"
 	req.Tools[0].InputSchema["properties"].(map[string]any)["path"].(map[string]any)["type"] = "mutated"
+	req.Tools[0].InputSchema["oneOf"].([]map[string]any)[0]["type"] = "mutated"
 	req.ToolResults[0].Content = "mutated legacy contents"
 
 	got := client.LastRequest()
@@ -272,8 +279,14 @@ func TestFakeStreamingClientSnapshotsNeutralRequest(t *testing.T) {
 	if got.Tools[0].InputSchema["type"] != "object" {
 		t.Fatalf("Tools[0].InputSchema[type] = %v, want object", got.Tools[0].InputSchema["type"])
 	}
+	if got.Tools[0].InputSchema["required"].([]string)[0] != "path" {
+		t.Fatalf("Tools[0].InputSchema[required][0] = %v, want path", got.Tools[0].InputSchema["required"].([]string)[0])
+	}
 	if got.Tools[0].InputSchema["properties"].(map[string]any)["path"].(map[string]any)["type"] != "string" {
 		t.Fatalf("Tools[0].InputSchema[properties][path][type] = %v, want string", got.Tools[0].InputSchema["properties"].(map[string]any)["path"].(map[string]any)["type"])
+	}
+	if got.Tools[0].InputSchema["oneOf"].([]map[string]any)[0]["type"] != "string" {
+		t.Fatalf("Tools[0].InputSchema[oneOf][0][type] = %v, want string", got.Tools[0].InputSchema["oneOf"].([]map[string]any)[0]["type"])
 	}
 	if got.ToolResults[0].Content != "legacy contents" {
 		t.Fatalf("ToolResults[0].Content = %q, want %q", got.ToolResults[0].Content, "legacy contents")
