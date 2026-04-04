@@ -95,6 +95,10 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	assistantStarted := false
 	nextPosition := totalItems + 1
 	toolSteps := 0
+	totalInputTokens := 0
+	totalOutputTokens := 0
+	totalCachedTokens := 0
+	hasUsage := false
 
 	userItem := model.UserMessageItem(in.Turn.UserMessage)
 	if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, userItem); err != nil {
@@ -180,38 +184,10 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 
 		if responseMeta != nil {
-			cacheHitRate := 0.0
-			if responseMeta.InputTokens > 0 {
-				cacheHitRate = float64(responseMeta.CachedTokens) / float64(responseMeta.InputTokens)
-			}
-			usage := types.TurnUsage{
-				TurnID:       in.Turn.ID,
-				SessionID:    sessionID,
-				Provider:     usageProvider,
-				Model:        usageModel,
-				InputTokens:  responseMeta.InputTokens,
-				OutputTokens: responseMeta.OutputTokens,
-				CachedTokens: responseMeta.CachedTokens,
-				CacheHitRate: cacheHitRate,
-				CreatedAt:    time.Now().UTC(),
-				UpdatedAt:    time.Now().UTC(),
-			}
-			if err := persistTurnUsage(ctx, e.store, usage); err != nil {
-				if emitErr := emitFailed(err.Error()); emitErr != nil {
-					return errors.Join(err, emitErr)
-				}
-				return err
-			}
-			if err := emit(types.EventTurnUsage, types.TurnUsagePayload{
-				Provider:     usage.Provider,
-				Model:        usage.Model,
-				InputTokens:  usage.InputTokens,
-				OutputTokens: usage.OutputTokens,
-				CachedTokens: usage.CachedTokens,
-				CacheHitRate: usage.CacheHitRate,
-			}); err != nil {
-				return err
-			}
+			totalInputTokens += responseMeta.InputTokens
+			totalOutputTokens += responseMeta.OutputTokens
+			totalCachedTokens += responseMeta.CachedTokens
+			hasUsage = true
 		}
 
 		if assistantText.Len() > 0 {
@@ -233,6 +209,40 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 
 		if len(toolCalls) == 0 {
 			if messageEnded {
+				if hasUsage {
+					cacheHitRate := 0.0
+					if totalInputTokens > 0 {
+						cacheHitRate = float64(totalCachedTokens) / float64(totalInputTokens)
+					}
+					usage := types.TurnUsage{
+						TurnID:       in.Turn.ID,
+						SessionID:    sessionID,
+						Provider:     usageProvider,
+						Model:        usageModel,
+						InputTokens:  totalInputTokens,
+						OutputTokens: totalOutputTokens,
+						CachedTokens: totalCachedTokens,
+						CacheHitRate: cacheHitRate,
+						CreatedAt:    time.Now().UTC(),
+						UpdatedAt:    time.Now().UTC(),
+					}
+					if err := persistTurnUsage(ctx, e.store, usage); err != nil {
+						if emitErr := emitFailed(err.Error()); emitErr != nil {
+							return errors.Join(err, emitErr)
+						}
+						return err
+					}
+					if err := emit(types.EventTurnUsage, types.TurnUsagePayload{
+						Provider:     usage.Provider,
+						Model:        usage.Model,
+						InputTokens:  usage.InputTokens,
+						OutputTokens: usage.OutputTokens,
+						CachedTokens: usage.CachedTokens,
+						CacheHitRate: usage.CacheHitRate,
+					}); err != nil {
+						return err
+					}
+				}
 				if err := emit(types.EventAssistantCompleted, struct{}{}); err != nil {
 					return err
 				}

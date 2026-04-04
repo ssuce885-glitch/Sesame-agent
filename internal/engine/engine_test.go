@@ -837,6 +837,101 @@ func TestRunTurnPersistsToolCallAndEmitsTurnUsage(t *testing.T) {
 	}
 }
 
+func TestRunTurnAggregatesUsageAcrossMultipleResponseMetadata(t *testing.T) {
+	workspace := t.TempDir()
+	readmePath := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(readmePath, []byte("hello from readme"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := &fakeConversationStore{}
+	client := model.NewFakeStreaming([][]model.StreamEvent{
+		{
+			{Kind: model.StreamEventResponseMetadata, ResponseMetadata: &model.ResponseMetadata{
+				ResponseID:   "resp_1",
+				InputTokens:  100,
+				OutputTokens: 20,
+				CachedTokens: 10,
+			}},
+			{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+				ID:    "call_1",
+				Name:  "file_read",
+				Input: map[string]any{"path": readmePath},
+			}},
+			{Kind: model.StreamEventMessageEnd},
+		},
+		{
+			{Kind: model.StreamEventResponseMetadata, ResponseMetadata: &model.ResponseMetadata{
+				ResponseID:   "resp_2",
+				InputTokens:  50,
+				OutputTokens: 10,
+				CachedTokens: 5,
+			}},
+			{Kind: model.StreamEventMessageEnd},
+		},
+	})
+	sink := &recordingSink{}
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      8,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 16,
+	})
+	runner := NewWithRuntime(
+		client,
+		tools.NewRegistry(),
+		permissions.NewEngine(),
+		store,
+		manager,
+		contextstate.NewRuntime(86400, 3),
+		nil,
+		RuntimeMetadata{
+			Provider: "openai_compatible",
+			Model:    "glm-4.5",
+		},
+		8,
+	)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_agg", WorkspaceRoot: workspace},
+		Turn:    types.Turn{ID: "turn_agg", SessionID: "sess_agg", UserMessage: "inspect readme"},
+		Sink:    sink,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if store.upsertUsageCalls != 1 {
+		t.Fatalf("upsert usage calls = %d, want 1", store.upsertUsageCalls)
+	}
+	if store.upsertedUsage == nil {
+		t.Fatal("upserted usage = nil, want aggregated usage")
+	}
+	if store.upsertedUsage.InputTokens != 150 || store.upsertedUsage.OutputTokens != 30 || store.upsertedUsage.CachedTokens != 15 {
+		t.Fatalf("aggregated usage tokens = %#v, want 150/30/15", *store.upsertedUsage)
+	}
+	if store.upsertedUsage.CacheHitRate != 0.1 {
+		t.Fatalf("aggregated cache hit rate = %v, want 0.1", store.upsertedUsage.CacheHitRate)
+	}
+
+	usageEvents := 0
+	var payload types.TurnUsagePayload
+	for _, event := range sink.events {
+		if event.Type != types.EventTurnUsage {
+			continue
+		}
+		usageEvents++
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("json.Unmarshal(turn.usage) error = %v", err)
+		}
+	}
+	if usageEvents != 1 {
+		t.Fatalf("turn.usage events = %d, want 1", usageEvents)
+	}
+	if payload.InputTokens != 150 || payload.OutputTokens != 30 || payload.CachedTokens != 15 || payload.CacheHitRate != 0.1 {
+		t.Fatalf("turn.usage payload = %#v, want 150/30/15/0.1", payload)
+	}
+}
+
 type scriptedStreamingClient struct {
 	events []model.StreamEvent
 	err    error
@@ -942,6 +1037,7 @@ type fakeConversationStore struct {
 	memories           []types.MemoryEntry
 	cacheHead          *types.ProviderCacheHead
 	upsertedUsage      *types.TurnUsage
+	upsertUsageCalls   int
 	upsertedHead       *types.ProviderCacheHead
 	insertedItems      []model.ConversationItem
 	insertedPositions  []int
@@ -989,6 +1085,7 @@ func (s *fakeConversationStore) UpsertProviderCacheHead(_ context.Context, head 
 func (s *fakeConversationStore) UpsertTurnUsage(_ context.Context, usage types.TurnUsage) error {
 	cloned := usage
 	s.upsertedUsage = &cloned
+	s.upsertUsageCalls++
 	return nil
 }
 
