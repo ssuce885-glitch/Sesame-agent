@@ -632,3 +632,90 @@ func TestStorePersistsTurnUsage(t *testing.T) {
 		t.Fatal("GetTurnUsage(missing) ok = true, want false")
 	}
 }
+
+func TestStoreFinalizeTurnPersistsUsageAndEventsAtomically(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	usage := &types.TurnUsage{
+		TurnID:       "turn_final_1",
+		SessionID:    "sess_final_1",
+		Provider:     "openai_compatible",
+		Model:        "glm-4.5",
+		InputTokens:  150,
+		OutputTokens: 40,
+		CachedTokens: 30,
+		CacheHitRate: 0.2,
+		CreatedAt:    time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC),
+	}
+
+	assistantCompleted, err := types.NewEvent("sess_final_1", "turn_final_1", types.EventAssistantCompleted, struct{}{})
+	if err != nil {
+		t.Fatalf("NewEvent(assistant.completed) error = %v", err)
+	}
+	turnUsage, err := types.NewEvent("sess_final_1", "turn_final_1", types.EventTurnUsage, types.TurnUsagePayload{
+		Provider:     usage.Provider,
+		Model:        usage.Model,
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+		CachedTokens: usage.CachedTokens,
+		CacheHitRate: usage.CacheHitRate,
+	})
+	if err != nil {
+		t.Fatalf("NewEvent(turn.usage) error = %v", err)
+	}
+	turnCompleted, err := types.NewEvent("sess_final_1", "turn_final_1", types.EventTurnCompleted, struct{}{})
+	if err != nil {
+		t.Fatalf("NewEvent(turn.completed) error = %v", err)
+	}
+
+	persisted, err := store.FinalizeTurn(context.Background(), usage, []types.Event{
+		assistantCompleted,
+		turnUsage,
+		turnCompleted,
+	})
+	if err != nil {
+		t.Fatalf("FinalizeTurn() error = %v", err)
+	}
+	if len(persisted) != 3 {
+		t.Fatalf("len(persisted events) = %d, want 3", len(persisted))
+	}
+	for i := range persisted {
+		wantSeq := int64(i + 1)
+		if persisted[i].Seq != wantSeq {
+			t.Fatalf("persisted[%d].Seq = %d, want %d", i, persisted[i].Seq, wantSeq)
+		}
+	}
+
+	gotUsage, ok, err := store.GetTurnUsage(context.Background(), "turn_final_1")
+	if err != nil {
+		t.Fatalf("GetTurnUsage() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("GetTurnUsage() ok = false, want true")
+	}
+	if gotUsage.InputTokens != 150 || gotUsage.OutputTokens != 40 || gotUsage.CachedTokens != 30 {
+		t.Fatalf("stored usage = %#v, want 150/40/30", gotUsage)
+	}
+
+	events, err := store.ListSessionEvents(context.Background(), "sess_final_1", 0)
+	if err != nil {
+		t.Fatalf("ListSessionEvents() error = %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("len(stored events) = %d, want 3", len(events))
+	}
+	wantTypes := []string{types.EventAssistantCompleted, types.EventTurnUsage, types.EventTurnCompleted}
+	for i := range wantTypes {
+		if events[i].Seq != int64(i+1) {
+			t.Fatalf("events[%d].Seq = %d, want %d", i, events[i].Seq, i+1)
+		}
+		if events[i].Type != wantTypes[i] {
+			t.Fatalf("events[%d].Type = %q, want %q", i, events[i].Type, wantTypes[i])
+		}
+	}
+}

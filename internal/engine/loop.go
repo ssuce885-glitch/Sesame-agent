@@ -209,44 +209,17 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 
 		if len(toolCalls) == 0 {
 			if messageEnded {
-				if hasUsage {
-					cacheHitRate := 0.0
-					if totalInputTokens > 0 {
-						cacheHitRate = float64(totalCachedTokens) / float64(totalInputTokens)
-					}
-					usage := types.TurnUsage{
-						TurnID:       in.Turn.ID,
-						SessionID:    sessionID,
-						Provider:     usageProvider,
-						Model:        usageModel,
-						InputTokens:  totalInputTokens,
-						OutputTokens: totalOutputTokens,
-						CachedTokens: totalCachedTokens,
-						CacheHitRate: cacheHitRate,
-						CreatedAt:    time.Now().UTC(),
-						UpdatedAt:    time.Now().UTC(),
-					}
-					if err := persistTurnUsage(ctx, e.store, usage); err != nil {
-						if emitErr := emitFailed(err.Error()); emitErr != nil {
-							return errors.Join(err, emitErr)
-						}
-						return err
-					}
-					if err := emit(types.EventTurnUsage, types.TurnUsagePayload{
-						Provider:     usage.Provider,
-						Model:        usage.Model,
-						InputTokens:  usage.InputTokens,
-						OutputTokens: usage.OutputTokens,
-						CachedTokens: usage.CachedTokens,
-						CacheHitRate: usage.CacheHitRate,
-					}); err != nil {
-						return err
-					}
-				}
-				if err := emit(types.EventAssistantCompleted, struct{}{}); err != nil {
-					return err
-				}
-				if err := emit(types.EventTurnCompleted, struct{}{}); err != nil {
+				usage := buildTurnUsage(
+					hasUsage,
+					in.Turn.ID,
+					sessionID,
+					usageProvider,
+					usageModel,
+					totalInputTokens,
+					totalOutputTokens,
+					totalCachedTokens,
+				)
+				if err := finalizeTurn(ctx, e, in, usage); err != nil {
 					return err
 				}
 			}
@@ -423,6 +396,76 @@ func persistTurnUsage(ctx context.Context, store ConversationStore, usage types.
 		return nil
 	}
 	return store.UpsertTurnUsage(ctx, usage)
+}
+
+func buildTurnUsage(hasUsage bool, turnID, sessionID, provider, model string, inputTokens, outputTokens, cachedTokens int) *types.TurnUsage {
+	if !hasUsage {
+		return nil
+	}
+	cacheHitRate := 0.0
+	if inputTokens > 0 {
+		cacheHitRate = float64(cachedTokens) / float64(inputTokens)
+	}
+	now := time.Now().UTC()
+	return &types.TurnUsage{
+		TurnID:       turnID,
+		SessionID:    sessionID,
+		Provider:     provider,
+		Model:        model,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		CachedTokens: cachedTokens,
+		CacheHitRate: cacheHitRate,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+}
+
+func finalizeTurn(ctx context.Context, e *Engine, in Input, usage *types.TurnUsage) error {
+	finalEvents := make([]types.Event, 0, 3)
+
+	assistantCompleted, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventAssistantCompleted, struct{}{})
+	if err != nil {
+		return err
+	}
+	finalEvents = append(finalEvents, assistantCompleted)
+
+	if usage != nil {
+		usageEvent, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventTurnUsage, types.TurnUsagePayload{
+			Provider:     usage.Provider,
+			Model:        usage.Model,
+			InputTokens:  usage.InputTokens,
+			OutputTokens: usage.OutputTokens,
+			CachedTokens: usage.CachedTokens,
+			CacheHitRate: usage.CacheHitRate,
+		})
+		if err != nil {
+			return err
+		}
+		finalEvents = append(finalEvents, usageEvent)
+	}
+
+	turnCompleted, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventTurnCompleted, struct{}{})
+	if err != nil {
+		return err
+	}
+	finalEvents = append(finalEvents, turnCompleted)
+
+	if sink, ok := in.Sink.(TurnFinalizingSink); ok {
+		return sink.FinalizeTurn(ctx, usage, finalEvents)
+	}
+
+	if usage != nil {
+		if err := persistTurnUsage(ctx, e.store, *usage); err != nil {
+			return err
+		}
+	}
+	for _, event := range finalEvents {
+		if err := in.Sink.Emit(ctx, event); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func marshalToolArguments(input map[string]any) string {

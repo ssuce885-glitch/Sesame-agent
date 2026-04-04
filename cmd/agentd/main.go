@@ -47,6 +47,17 @@ func (s storeAndBusSink) Emit(ctx context.Context, event types.Event) error {
 	return nil
 }
 
+func (s storeAndBusSink) FinalizeTurn(ctx context.Context, usage *types.TurnUsage, events []types.Event) error {
+	persisted, err := s.store.FinalizeTurn(ctx, usage, events)
+	if err != nil {
+		return err
+	}
+	for _, event := range persisted {
+		s.bus.Publish(event)
+	}
+	return nil
+}
+
 func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) error {
 	err := a.engine.RunTurn(ctx, engine.Input{
 		Session: in.Session,

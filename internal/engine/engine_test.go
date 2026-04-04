@@ -932,6 +932,134 @@ func TestRunTurnAggregatesUsageAcrossMultipleResponseMetadata(t *testing.T) {
 	}
 }
 
+func TestRunTurnUsesFinalizingSinkForTurnCompletion(t *testing.T) {
+	store := &fakeConversationStore{}
+	client := model.NewFakeStreaming([][]model.StreamEvent{
+		{
+			{Kind: model.StreamEventResponseMetadata, ResponseMetadata: &model.ResponseMetadata{
+				ResponseID:   "resp_1",
+				InputTokens:  80,
+				OutputTokens: 20,
+				CachedTokens: 8,
+			}},
+			{Kind: model.StreamEventTextDelta, TextDelta: "done"},
+			{Kind: model.StreamEventMessageEnd},
+		},
+	})
+	sink := &recordingFinalizingSink{}
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      8,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 16,
+	})
+	runner := NewWithRuntime(
+		client,
+		tools.NewRegistry(),
+		permissions.NewEngine(),
+		store,
+		manager,
+		contextstate.NewRuntime(86400, 3),
+		nil,
+		RuntimeMetadata{
+			Provider: "openai_compatible",
+			Model:    "glm-4.5",
+		},
+		8,
+	)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_final", WorkspaceRoot: t.TempDir()},
+		Turn:    types.Turn{ID: "turn_final", SessionID: "sess_final", UserMessage: "hello"},
+		Sink:    sink,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if sink.finalizeCalls != 1 {
+		t.Fatalf("finalize calls = %d, want 1", sink.finalizeCalls)
+	}
+	if sink.finalUsage == nil {
+		t.Fatal("final usage = nil, want aggregated usage")
+	}
+	if sink.finalUsage.InputTokens != 80 || sink.finalUsage.OutputTokens != 20 || sink.finalUsage.CachedTokens != 8 {
+		t.Fatalf("final usage tokens = %#v, want 80/20/8", *sink.finalUsage)
+	}
+	if store.upsertUsageCalls != 0 {
+		t.Fatalf("store upsert usage calls = %d, want 0 when finalizing sink is used", store.upsertUsageCalls)
+	}
+
+	finalTypes := make([]string, 0, len(sink.finalEvents))
+	for _, event := range sink.finalEvents {
+		finalTypes = append(finalTypes, event.Type)
+	}
+	wantFinal := []string{
+		types.EventAssistantCompleted,
+		types.EventTurnUsage,
+		types.EventTurnCompleted,
+	}
+	if len(finalTypes) != len(wantFinal) {
+		t.Fatalf("len(final events) = %d, want %d (%v)", len(finalTypes), len(wantFinal), finalTypes)
+	}
+	for i := range wantFinal {
+		if finalTypes[i] != wantFinal[i] {
+			t.Fatalf("final events = %v, want %v", finalTypes, wantFinal)
+		}
+	}
+
+	emittedTypes := sink.eventTypes()
+	assertNoEventType(t, sink.recordingSink, types.EventAssistantCompleted)
+	assertNoEventType(t, sink.recordingSink, types.EventTurnUsage)
+	assertNoEventType(t, sink.recordingSink, types.EventTurnCompleted)
+	if len(emittedTypes) == 0 || emittedTypes[0] != types.EventTurnStarted {
+		t.Fatalf("emitted events = %v, want non-final events through Emit", emittedTypes)
+	}
+}
+
+func TestRunTurnReturnsErrorWhenFinalizingSinkFails(t *testing.T) {
+	store := &fakeConversationStore{}
+	client := model.NewFakeStreaming([][]model.StreamEvent{
+		{
+			{Kind: model.StreamEventResponseMetadata, ResponseMetadata: &model.ResponseMetadata{
+				ResponseID:   "resp_1",
+				InputTokens:  10,
+				OutputTokens: 3,
+				CachedTokens: 1,
+			}},
+			{Kind: model.StreamEventMessageEnd},
+		},
+	})
+	sink := &recordingFinalizingSink{
+		finalizeErr: errors.New("finalize failed"),
+	}
+	runner := NewWithRuntime(
+		client,
+		tools.NewRegistry(),
+		permissions.NewEngine(),
+		store,
+		contextstate.NewManager(contextstate.Config{MaxRecentItems: 8, MaxEstimatedTokens: 6000, CompactionThreshold: 16}),
+		contextstate.NewRuntime(86400, 3),
+		nil,
+		RuntimeMetadata{Provider: "openai_compatible", Model: "glm-4.5"},
+		8,
+	)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_final_fail", WorkspaceRoot: t.TempDir()},
+		Turn:    types.Turn{ID: "turn_final_fail", SessionID: "sess_final_fail", UserMessage: "hello"},
+		Sink:    sink,
+	})
+	if err == nil || err.Error() != "finalize failed" {
+		t.Fatalf("RunTurn() error = %v, want finalize failed", err)
+	}
+	if sink.finalizeCalls != 1 {
+		t.Fatalf("finalize calls = %d, want 1", sink.finalizeCalls)
+	}
+	if store.upsertUsageCalls != 0 {
+		t.Fatalf("store upsert usage calls = %d, want 0 when finalization fails", store.upsertUsageCalls)
+	}
+}
+
 type scriptedStreamingClient struct {
 	events []model.StreamEvent
 	err    error
@@ -1004,6 +1132,31 @@ func (s *recordingSink) eventTypes() []string {
 		got = append(got, event.Type)
 	}
 	return got
+}
+
+type recordingFinalizingSink struct {
+	*recordingSink
+	finalizeCalls int
+	finalUsage    *types.TurnUsage
+	finalEvents   []types.Event
+	finalizeErr   error
+}
+
+func (s *recordingFinalizingSink) Emit(ctx context.Context, event types.Event) error {
+	if s.recordingSink == nil {
+		s.recordingSink = &recordingSink{}
+	}
+	return s.recordingSink.Emit(ctx, event)
+}
+
+func (s *recordingFinalizingSink) FinalizeTurn(_ context.Context, usage *types.TurnUsage, events []types.Event) error {
+	s.finalizeCalls++
+	if usage != nil {
+		cloned := *usage
+		s.finalUsage = &cloned
+	}
+	s.finalEvents = append([]types.Event(nil), events...)
+	return s.finalizeErr
 }
 
 func assertEventTypes(t *testing.T, sink *recordingSink, want []string) {
