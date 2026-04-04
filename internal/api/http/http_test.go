@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -444,5 +446,177 @@ func TestWorkspaceEndpointReturnsWorkspaceAndRuntimeMetadata(t *testing.T) {
 	}
 	if !strings.Contains(body, "\"permission_profile\":\"trusted_local\"") {
 		t.Fatalf("body = %s, want permission profile metadata", body)
+	}
+}
+
+func TestMetricsOverviewEndpointReturnsAggregates(t *testing.T) {
+	deps := NewTestDependencies(t)
+	store := deps.Store.(*sqlite.Store)
+	seedMetricsFixture(t, store)
+
+	handler := NewRouter(deps)
+	req := httptest.NewRequest(http.MethodGet, "/v1/metrics/overview?session_id=sess_metrics_1", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "\"input_tokens\":200") {
+		t.Fatalf("body = %s, want input token aggregate", body)
+	}
+	if !strings.Contains(body, "\"output_tokens\":50") {
+		t.Fatalf("body = %s, want output token aggregate", body)
+	}
+	if !strings.Contains(body, "\"cached_tokens\":40") {
+		t.Fatalf("body = %s, want cached token aggregate", body)
+	}
+	if !strings.Contains(body, "\"cache_hit_rate\":0.2") {
+		t.Fatalf("body = %s, want cache hit rate", body)
+	}
+}
+
+func TestMetricsTimeseriesEndpointReturnsBuckets(t *testing.T) {
+	deps := NewTestDependencies(t)
+	store := deps.Store.(*sqlite.Store)
+	seedMetricsFixture(t, store)
+
+	handler := NewRouter(deps)
+	req := httptest.NewRequest(http.MethodGet, "/v1/metrics/timeseries?bucket=day", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "\"bucket\":\"day\"") {
+		t.Fatalf("body = %s, want bucket marker", body)
+	}
+	if !strings.Contains(body, "\"input_tokens\":200") || !strings.Contains(body, "\"input_tokens\":30") {
+		t.Fatalf("body = %s, want grouped input tokens", body)
+	}
+}
+
+func TestMetricsTurnsEndpointReturnsPaginatedRows(t *testing.T) {
+	deps := NewTestDependencies(t)
+	store := deps.Store.(*sqlite.Store)
+	seedMetricsFixture(t, store)
+
+	handler := NewRouter(deps)
+	req := httptest.NewRequest(http.MethodGet, "/v1/metrics/turns?page=1&page_size=1", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "\"total_count\":2") {
+		t.Fatalf("body = %s, want total_count 2", body)
+	}
+	if !strings.Contains(body, "\"page\":1") || !strings.Contains(body, "\"page_size\":1") {
+		t.Fatalf("body = %s, want pagination metadata", body)
+	}
+	if !strings.Contains(body, "\"session_title\":\"检查 shell 输出限制\"") {
+		t.Fatalf("body = %s, want derived session title", body)
+	}
+	if !strings.Contains(body, "\"turn_id\":\"turn_metrics_2\"") {
+		t.Fatalf("body = %s, want newest turn row", body)
+	}
+}
+
+func TestConsoleRouteServesIndexWhenConfigured(t *testing.T) {
+	deps := NewTestDependencies(t)
+	consoleDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(consoleDir, "index.html"), []byte("<!doctype html><title>console</title>"), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.html) error = %v", err)
+	}
+	deps.ConsoleRoot = consoleDir
+
+	handler := NewRouter(deps)
+	req := httptest.NewRequest(http.MethodGet, "/chat", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !strings.Contains(rec.Body.String(), "<title>console</title>") {
+		t.Fatalf("body = %s, want embedded console html", rec.Body.String())
+	}
+}
+
+func seedMetricsFixture(t *testing.T, store *sqlite.Store) {
+	t.Helper()
+
+	firstTime := time.Date(2026, 4, 4, 8, 0, 0, 0, time.UTC)
+	secondTime := firstTime.Add(24 * time.Hour)
+	if err := store.InsertSession(context.Background(), types.Session{
+		ID:            "sess_metrics_1",
+		WorkspaceRoot: "E:/project/go-agent",
+		State:         types.SessionStateIdle,
+		CreatedAt:     firstTime,
+		UpdatedAt:     firstTime,
+	}); err != nil {
+		t.Fatalf("InsertSession(sess_metrics_1) error = %v", err)
+	}
+	if err := store.InsertSession(context.Background(), types.Session{
+		ID:            "sess_metrics_2",
+		WorkspaceRoot: "E:/project/go-agent",
+		State:         types.SessionStateIdle,
+		CreatedAt:     secondTime,
+		UpdatedAt:     secondTime,
+	}); err != nil {
+		t.Fatalf("InsertSession(sess_metrics_2) error = %v", err)
+	}
+	if err := store.InsertTurn(context.Background(), types.Turn{
+		ID:          "turn_metrics_1",
+		SessionID:   "sess_metrics_1",
+		State:       types.TurnStateCompleted,
+		UserMessage: "查看 README 结构",
+		CreatedAt:   firstTime,
+		UpdatedAt:   firstTime,
+	}); err != nil {
+		t.Fatalf("InsertTurn(turn_metrics_1) error = %v", err)
+	}
+	if err := store.InsertTurn(context.Background(), types.Turn{
+		ID:          "turn_metrics_2",
+		SessionID:   "sess_metrics_2",
+		State:       types.TurnStateCompleted,
+		UserMessage: "检查 shell 输出限制",
+		CreatedAt:   secondTime,
+		UpdatedAt:   secondTime,
+	}); err != nil {
+		t.Fatalf("InsertTurn(turn_metrics_2) error = %v", err)
+	}
+	if err := store.UpsertTurnUsage(context.Background(), types.TurnUsage{
+		TurnID:       "turn_metrics_1",
+		SessionID:    "sess_metrics_1",
+		Provider:     "openai_compatible",
+		Model:        "glm-4-7-251222",
+		InputTokens:  200,
+		OutputTokens: 50,
+		CachedTokens: 40,
+		CacheHitRate: 0.2,
+		CreatedAt:    firstTime,
+		UpdatedAt:    firstTime,
+	}); err != nil {
+		t.Fatalf("UpsertTurnUsage(turn_metrics_1) error = %v", err)
+	}
+	if err := store.UpsertTurnUsage(context.Background(), types.TurnUsage{
+		TurnID:       "turn_metrics_2",
+		SessionID:    "sess_metrics_2",
+		Provider:     "openai_compatible",
+		Model:        "glm-4-7-251222",
+		InputTokens:  30,
+		OutputTokens: 12,
+		CachedTokens: 6,
+		CacheHitRate: 0.2,
+		CreatedAt:    secondTime,
+		UpdatedAt:    secondTime,
+	}); err != nil {
+		t.Fatalf("UpsertTurnUsage(turn_metrics_2) error = %v", err)
 	}
 }

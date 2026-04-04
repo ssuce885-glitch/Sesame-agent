@@ -138,10 +138,11 @@ func main() {
 	}
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
-		Bus:     bus,
-		Store:   store,
-		Manager: manager,
-		Status:  buildStatusPayload(cfg),
+		Bus:         bus,
+		Store:       store,
+		Manager:     manager,
+		Status:      buildStatusPayload(cfg),
+		ConsoleRoot: filepath.Join("web", "console", "dist"),
 	})
 
 	slog.Info("agentd listening", "addr", cfg.Addr)
