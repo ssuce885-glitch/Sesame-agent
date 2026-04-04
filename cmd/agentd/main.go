@@ -86,7 +86,8 @@ func main() {
 
 	bus := stream.NewBus()
 	registry := tools.NewRegistry()
-	permissionEngine := permissions.NewEngine()
+	configureRuntimeGuardrails(cfg)
+	permissionEngine := buildPermissionEngine(cfg)
 	modelClient, err := model.NewFromConfig(cfg)
 	if err != nil {
 		slog.Error("build model client", "err", err)
@@ -97,13 +98,9 @@ func main() {
 		registry,
 		permissionEngine,
 		store,
-		contextstate.NewManager(contextstate.Config{
-			MaxRecentItems:      8,
-			MaxEstimatedTokens:  6000,
-			CompactionThreshold: 16,
-		}),
+		contextstate.NewManager(buildContextManagerConfig(cfg)),
 		nil,
-		8,
+		buildMaxToolSteps(cfg),
 	)
 	manager := session.NewManager(sessionRunnerAdapter{
 		engine: runner,
@@ -124,4 +121,25 @@ func main() {
 		slog.Error("listen", "err", err)
 		os.Exit(1)
 	}
+}
+
+func configureRuntimeGuardrails(cfg config.Config) {
+	tools.SetShellCommandGuardrails(cfg.MaxShellOutputBytes, cfg.ShellTimeoutSeconds)
+	tools.SetFileWriteMaxBytes(cfg.MaxFileWriteBytes)
+}
+
+func buildPermissionEngine(cfg config.Config) *permissions.Engine {
+	return permissions.NewEngine(cfg.PermissionProfile)
+}
+
+func buildContextManagerConfig(cfg config.Config) contextstate.Config {
+	return contextstate.Config{
+		MaxRecentItems:      cfg.MaxRecentItems,
+		MaxEstimatedTokens:  cfg.MaxEstimatedTokens,
+		CompactionThreshold: cfg.CompactionThreshold,
+	}
+}
+
+func buildMaxToolSteps(cfg config.Config) int {
+	return cfg.MaxToolSteps
 }
