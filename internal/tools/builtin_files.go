@@ -10,7 +10,13 @@ import (
 	"go-agent/internal/runtime"
 )
 
-const fileWriteMaxBytes = 1 << 20
+const defaultFileWriteMaxBytes = 1 << 20
+
+var fileWriteMaxBytes = defaultFileWriteMaxBytes
+
+func SetFileWriteMaxBytes(maxBytes int) {
+	fileWriteMaxBytes = maxBytes
+}
 
 type fileReadTool struct{}
 

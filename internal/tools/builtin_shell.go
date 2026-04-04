@@ -7,8 +7,18 @@ import (
 	"go-agent/internal/runtime"
 )
 
-const shellCommandMaxOutputBytes = 256
-const shellCommandTimeoutSeconds = 30
+const defaultShellCommandMaxOutputBytes = 256
+const defaultShellCommandTimeoutSeconds = 30
+
+var (
+	shellCommandMaxOutputBytes = defaultShellCommandMaxOutputBytes
+	shellCommandTimeoutSeconds = defaultShellCommandTimeoutSeconds
+)
+
+func SetShellCommandGuardrails(maxOutputBytes, timeoutSeconds int) {
+	shellCommandMaxOutputBytes = maxOutputBytes
+	shellCommandTimeoutSeconds = timeoutSeconds
+}
 
 type shellTool struct{}
 
@@ -29,7 +39,7 @@ func (shellTool) IsConcurrencySafe() bool { return false }
 
 func (shellTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
 	command := call.Input["command"].(string)
-	shellCtx, cancel := context.WithTimeout(ctx, shellCommandTimeoutSeconds*time.Second)
+	shellCtx, cancel := context.WithTimeout(ctx, time.Duration(shellCommandTimeoutSeconds)*time.Second)
 	defer cancel()
 
 	output, err := runtime.RunCommand(shellCtx, execCtx.WorkspaceRoot, command, shellCommandMaxOutputBytes)
