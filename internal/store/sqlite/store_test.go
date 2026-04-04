@@ -188,6 +188,129 @@ func TestStorePersistsRuntimeGraph(t *testing.T) {
 	}
 }
 
+func TestStorePreservesCreatedAtOnRuntimeObjectUpdate(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	createdAt := time.Date(2026, 4, 5, 11, 0, 0, 0, time.UTC)
+	initialUpdatedAt := createdAt
+	nextUpdatedAt := createdAt.Add(10 * time.Minute)
+
+	plan := types.Plan{
+		ID:        "plan_created_at",
+		RunID:     "run_created_at",
+		State:     types.PlanStateDraft,
+		Title:     "Keep created_at stable",
+		Summary:   "initial summary",
+		CreatedAt: createdAt,
+		UpdatedAt: initialUpdatedAt,
+	}
+	if err := store.UpsertPlan(context.Background(), plan); err != nil {
+		t.Fatalf("UpsertPlan(initial) error = %v", err)
+	}
+
+	plan.Summary = "updated summary"
+	plan.UpdatedAt = nextUpdatedAt
+	if err := store.UpsertPlan(context.Background(), plan); err != nil {
+		t.Fatalf("UpsertPlan(update) error = %v", err)
+	}
+
+	var createdAtRaw, updatedAtRaw string
+	if err := store.db.QueryRowContext(context.Background(), `
+		select created_at, updated_at
+		from plans
+		where id = ?
+	`, plan.ID).Scan(&createdAtRaw, &updatedAtRaw); err != nil {
+		t.Fatalf("plan timestamp query error = %v", err)
+	}
+
+	if got, err := time.Parse(timeLayout, createdAtRaw); err != nil {
+		t.Fatalf("Parse(created_at) error = %v", err)
+	} else if !got.Equal(createdAt) {
+		t.Fatalf("plan created_at = %s, want %s", got, createdAt)
+	}
+	if got, err := time.Parse(timeLayout, updatedAtRaw); err != nil {
+		t.Fatalf("Parse(updated_at) error = %v", err)
+	} else if !got.Equal(nextUpdatedAt) {
+		t.Fatalf("plan updated_at = %s, want %s", got, nextUpdatedAt)
+	}
+
+	graph, err := store.ListRuntimeGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ListRuntimeGraph() error = %v", err)
+	}
+	if len(graph.Plans) != 1 {
+		t.Fatalf("len(graph.Plans) = %d, want 1", len(graph.Plans))
+	}
+	got := graph.Plans[0]
+	if got.Summary != "updated summary" {
+		t.Fatalf("plan summary = %q, want %q", got.Summary, "updated summary")
+	}
+	if !got.CreatedAt.Equal(createdAt) {
+		t.Fatalf("plan created_at = %s, want %s", got.CreatedAt, createdAt)
+	}
+	if !got.UpdatedAt.Equal(nextUpdatedAt) {
+		t.Fatalf("plan updated_at = %s, want %s", got.UpdatedAt, nextUpdatedAt)
+	}
+}
+
+func TestInsertRunRejectsDuplicateID(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	first := types.Run{
+		ID:        "run_duplicate",
+		SessionID: "sess_duplicate",
+		TurnID:    "turn_duplicate",
+		State:     types.RunStateRunning,
+		Objective: "first insert wins",
+		CreatedAt: time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC),
+	}
+	if err := store.InsertRun(context.Background(), first); err != nil {
+		t.Fatalf("InsertRun(first) error = %v", err)
+	}
+
+	second := first
+	second.SessionID = "sess_other"
+	second.TurnID = "turn_other"
+	second.Objective = "duplicate should fail"
+	second.CreatedAt = first.CreatedAt.Add(5 * time.Minute)
+	second.UpdatedAt = first.UpdatedAt.Add(5 * time.Minute)
+	if err := store.InsertRun(context.Background(), second); err == nil {
+		t.Fatal("InsertRun(second) error = nil, want duplicate ID failure")
+	}
+
+	var count int
+	if err := store.db.QueryRowContext(context.Background(), `select count(*) from runs where id = ?`, first.ID).Scan(&count); err != nil {
+		t.Fatalf("count query error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+
+	graph, err := store.ListRuntimeGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ListRuntimeGraph() error = %v", err)
+	}
+	if len(graph.Runs) != 1 {
+		t.Fatalf("len(graph.Runs) = %d, want 1", len(graph.Runs))
+	}
+	got := graph.Runs[0]
+	if got.SessionID != first.SessionID || got.TurnID != first.TurnID || got.Objective != first.Objective {
+		t.Fatalf("run = %#v, want original first insert", got)
+	}
+	if !got.CreatedAt.Equal(first.CreatedAt) || !got.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("run timestamps = %s/%s, want %s/%s", got.CreatedAt, got.UpdatedAt, first.CreatedAt, first.UpdatedAt)
+	}
+}
+
 func TestStoreDeleteTurnRemovesRow(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "agentd.db")
