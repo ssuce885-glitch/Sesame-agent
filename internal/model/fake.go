@@ -177,6 +177,14 @@ func cloneAny(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
 		return cloneStringAnyMap(typed)
+	case []string:
+		return append([]string(nil), typed...)
+	case []map[string]any:
+		cloned := make([]map[string]any, len(typed))
+		for i, elem := range typed {
+			cloned[i] = cloneStringAnyMap(elem)
+		}
+		return cloned
 	case []any:
 		cloned := make([]any, len(typed))
 		for i, elem := range typed {
