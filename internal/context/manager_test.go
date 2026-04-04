@@ -1,6 +1,7 @@
 package contextstate
 
 import (
+	"strings"
 	"testing"
 
 	"go-agent/internal/model"
@@ -88,6 +89,30 @@ func TestManagerBuildMarksCompactWhenThresholdExceeded(t *testing.T) {
 	}
 }
 
+func TestManagerBuildDoesNotCompactAtThresholdBoundary(t *testing.T) {
+	manager := NewManager(Config{
+		MaxRecentItems:      4,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 8,
+	})
+
+	items := []model.ConversationItem{
+		model.UserMessageItem("turn 1"),
+		model.UserMessageItem("turn 2"),
+		model.UserMessageItem("turn 3"),
+		model.UserMessageItem("turn 4"),
+		model.UserMessageItem("turn 5"),
+		model.UserMessageItem("turn 6"),
+		model.UserMessageItem("turn 7"),
+		model.UserMessageItem("turn 8"),
+	}
+
+	got := manager.Build("follow up", items, nil, nil)
+	if got.NeedsCompact {
+		t.Fatal("NeedsCompact = true, want false at threshold boundary")
+	}
+}
+
 func TestManagerBuildSnapshotsWorkingSet(t *testing.T) {
 	manager := NewManager(Config{
 		MaxRecentItems:      4,
@@ -143,6 +168,96 @@ func TestManagerBuildSnapshotsWorkingSet(t *testing.T) {
 	}
 	if got.MemoryRefs[0] != "memory-1" {
 		t.Fatalf("MemoryRefs[0] = %q, want memory-1", got.MemoryRefs[0])
+	}
+}
+
+func TestManagerBuildDeepClonesNestedToolCallInput(t *testing.T) {
+	manager := NewManager(Config{
+		MaxRecentItems:      4,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 8,
+	})
+
+	nested := map[string]any{
+		"query": "alpha",
+		"filters": map[string]any{
+			"tags": []any{"one", "two"},
+		},
+		"steps": []any{
+			map[string]any{"name": "first"},
+			map[string]any{"name": "second"},
+		},
+		"names": []string{"a", "b"},
+		"maps": []map[string]any{
+			{"kind": "nested"},
+		},
+	}
+	items := []model.ConversationItem{
+		{
+			Kind: model.ConversationItemToolCall,
+			ToolCall: model.ToolCallChunk{
+				ID:    "call-1",
+				Name:  "search",
+				Input: nested,
+			},
+		},
+	}
+
+	got := manager.Build("follow up", items, nil, nil)
+	nested["query"] = "beta"
+	nested["filters"].(map[string]any)["tags"].([]any)[0] = "changed"
+	nested["steps"].([]any)[0].(map[string]any)["name"] = "changed"
+	nested["names"].([]string)[0] = "changed"
+	nested["maps"].([]map[string]any)[0]["kind"] = "changed"
+
+	if got.RecentItems[0].ToolCall.Input["query"] != "alpha" {
+		t.Fatalf("query = %q, want alpha", got.RecentItems[0].ToolCall.Input["query"])
+	}
+	filters := got.RecentItems[0].ToolCall.Input["filters"].(map[string]any)
+	tags := filters["tags"].([]any)
+	if tags[0] != "one" {
+		t.Fatalf("tags[0] = %v, want one", tags[0])
+	}
+	steps := got.RecentItems[0].ToolCall.Input["steps"].([]any)
+	if steps[0].(map[string]any)["name"] != "first" {
+		t.Fatalf("steps[0].name = %v, want first", steps[0].(map[string]any)["name"])
+	}
+	names := got.RecentItems[0].ToolCall.Input["names"].([]string)
+	if names[0] != "a" {
+		t.Fatalf("names[0] = %q, want a", names[0])
+	}
+	maps := got.RecentItems[0].ToolCall.Input["maps"].([]map[string]any)
+	if maps[0]["kind"] != "nested" {
+		t.Fatalf("maps[0].kind = %v, want nested", maps[0]["kind"])
+	}
+}
+
+func TestManagerBuildKeepsToolCallSemanticMessage(t *testing.T) {
+	manager := NewManager(Config{
+		MaxRecentItems:      4,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 8,
+	})
+
+	got := manager.Build("follow up", []model.ConversationItem{
+		{
+			Kind: model.ConversationItemToolCall,
+			ToolCall: model.ToolCallChunk{
+				ID:    "call-1",
+				Name:  "search",
+				Input: map[string]any{"query": "alpha"},
+			},
+		},
+	}, nil, nil)
+
+	if len(got.RecentMessages) != 1 {
+		t.Fatalf("len(RecentMessages) = %d, want 1", len(got.RecentMessages))
+	}
+	if got.RecentMessages[0].Role != "tool_call" {
+		t.Fatalf("RecentMessages[0].Role = %q, want tool_call", got.RecentMessages[0].Role)
+	}
+	if !strings.Contains(got.RecentMessages[0].Content, "search") || !strings.Contains(got.RecentMessages[0].Content, "\"query\":\"alpha\"") {
+		t.Fatalf("RecentMessages[0].Content = %q, want semantic tool call text", got.RecentMessages[0].Content)
 	}
 }
 
