@@ -18,9 +18,10 @@ func NewFromConfig(cfg config.Config) (StreamingClient, error) {
 		})
 	case "openai_compatible":
 		return NewOpenAICompatibleProvider(Config{
-			APIKey:  cfg.OpenAIAPIKey,
-			Model:   cfg.Model,
-			BaseURL: cfg.OpenAIBaseURL,
+			APIKey:       cfg.OpenAIAPIKey,
+			Model:        cfg.Model,
+			BaseURL:      cfg.OpenAIBaseURL,
+			CacheProfile: CapabilityProfile(cfg.ProviderCacheProfile),
 		})
 	default:
 		return nil, fmt.Errorf("unsupported model provider %q", cfg.ModelProvider)

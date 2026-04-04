@@ -20,6 +20,8 @@ func registerSessionScopedRoutes(mux *http.ServeMux, deps Dependencies) {
 			handleSubmitTurn(deps, sessionID)(w, r)
 		case "events":
 			handleStreamEvents(deps, sessionID)(w, r)
+		case "select":
+			handleSelectSession(deps, sessionID)(w, r)
 		default:
 			http.NotFound(w, r)
 		}

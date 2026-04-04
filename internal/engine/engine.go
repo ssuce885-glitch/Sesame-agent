@@ -22,6 +22,10 @@ type ConversationStore interface {
 	InsertConversationItem(context.Context, string, string, int, model.ConversationItem) error
 	InsertConversationSummary(context.Context, string, int, model.Summary) error
 	ListMemoryEntriesByWorkspace(context.Context, string) ([]types.MemoryEntry, error)
+	GetProviderCacheHead(context.Context, string, string, string) (types.ProviderCacheHead, bool, error)
+	UpsertProviderCacheHead(context.Context, types.ProviderCacheHead) error
+	InsertProviderCacheEntry(context.Context, types.ProviderCacheEntry) error
+	InsertConversationCompaction(context.Context, types.ConversationCompaction) error
 }
 
 type Engine struct {
@@ -31,6 +35,7 @@ type Engine struct {
 	store        ConversationStore
 	ctxManager   *contextstate.Manager
 	compactor    contextstate.Compactor
+	runtime      *contextstate.Runtime
 	maxToolSteps int
 }
 
@@ -43,12 +48,38 @@ func New(
 	compactor contextstate.Compactor,
 	maxToolSteps int,
 ) *Engine {
+	return NewWithRuntime(
+		modelClient,
+		registry,
+		permission,
+		store,
+		ctxManager,
+		contextstate.NewRuntime(86400, 3),
+		compactor,
+		maxToolSteps,
+	)
+}
+
+func NewWithRuntime(
+	modelClient model.StreamingClient,
+	registry *tools.Registry,
+	permission *permissions.Engine,
+	store ConversationStore,
+	ctxManager *contextstate.Manager,
+	runtime *contextstate.Runtime,
+	compactor contextstate.Compactor,
+	maxToolSteps int,
+) *Engine {
+	if runtime == nil {
+		runtime = contextstate.NewRuntime(86400, 3)
+	}
 	return &Engine{
 		model:        modelClient,
 		registry:     registry,
 		permission:   permission,
 		store:        store,
 		ctxManager:   ctxManager,
+		runtime:      runtime,
 		compactor:    compactor,
 		maxToolSteps: maxToolSteps,
 	}

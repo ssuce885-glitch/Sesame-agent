@@ -5,7 +5,15 @@ import (
 	"net/http"
 )
 
-func registerStatusRoutes(mux *http.ServeMux) {
+type StatusPayload struct {
+	Status               string `json:"status"`
+	Provider             string `json:"provider,omitempty"`
+	Model                string `json:"model,omitempty"`
+	PermissionProfile    string `json:"permission_profile,omitempty"`
+	ProviderCacheProfile string `json:"provider_cache_profile,omitempty"`
+}
+
+func registerStatusRoutes(mux *http.ServeMux, payload StatusPayload) {
 	mux.HandleFunc("/v1/status", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -13,6 +21,7 @@ func registerStatusRoutes(mux *http.ServeMux) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		payload.Status = "ok"
+		_ = json.NewEncoder(w).Encode(payload)
 	})
 }

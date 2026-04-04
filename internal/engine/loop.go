@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	contextstate "go-agent/internal/context"
 	"go-agent/internal/memory"
 	"go-agent/internal/model"
 	"go-agent/internal/tools"
@@ -39,6 +40,8 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	emitFailed := func(message string) error {
 		return emit(types.EventTurnFailed, types.TurnFailedPayload{Message: message})
 	}
+	caps := e.model.Capabilities()
+	providerName := providerCacheOwnerForCapabilities(caps)
 
 	if err := emit(types.EventTurnStarted, types.TurnStartedPayload{
 		WorkspaceRoot: in.Session.WorkspaceRoot,
@@ -51,7 +54,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		sessionID = in.Session.ID
 	}
 
-	totalItems, items, summaries, memoryRefs, err := loadConversationState(ctx, e, in, sessionID)
+	totalItems, working, err := loadConversationState(ctx, e, in, sessionID)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
@@ -59,7 +62,29 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		return err
 	}
 
-	req := buildRequest(e, in, items, summaries, memoryRefs)
+	cacheHeadValue, cacheHeadOK, err := loadProviderCacheHead(ctx, e.store, sessionID, providerName, string(caps.Profile))
+	if err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
+	var cacheHead *types.ProviderCacheHead
+	if cacheHeadOK {
+		cacheHead = &cacheHeadValue
+	}
+
+	req := e.runtime.PrepareRequest(
+		working,
+		cacheHead,
+		caps,
+		model.UserMessageItem(in.Turn.UserMessage),
+		buildRuntimeInstructions(in.Session.WorkspaceRoot, working.MemoryRefs),
+	)
+	req.Stream = true
+	req.Tools = buildToolSchemas(e.registry)
+	req.ToolChoice = "auto"
+	nativeContinuation := req.Cache != nil && caps.Profile != model.CapabilityProfileNone
 	assistantStarted := false
 	nextPosition := totalItems + 1
 	toolSteps := 0
@@ -76,6 +101,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	for {
 		stream, errs := e.model.Stream(ctx, req)
 		messageEnded := false
+		var responseMeta *model.ResponseMetadata
 		var toolCalls []model.ToolCallChunk
 		assistantText := strings.Builder{}
 
@@ -100,6 +126,9 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				messageEnded = true
 			case model.StreamEventUsage:
 				continue
+			case model.StreamEventResponseMetadata:
+				responseMeta = event.ResponseMetadata
+				continue
 			default:
 				err := fmt.Errorf("unsupported stream event kind: %s", event.Kind)
 				if emitErr := emitFailed(err.Error()); emitErr != nil {
@@ -119,6 +148,30 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			}
 		}
 
+		if responseMeta != nil && req.Cache != nil && caps.Profile != model.CapabilityProfileNone {
+			cacheMode := req.Cache.Mode
+			if caps.SupportsSessionCache {
+				cacheMode = model.CacheModeSession
+			}
+			nextHead, ok := nextHeadFromResponse(e, sessionID, providerName, caps, cacheHead, req.Cache, responseMeta)
+			if ok {
+				if err := persistProviderCacheHead(ctx, e, nextHead); err != nil {
+					if emitErr := emitFailed(err.Error()); emitErr != nil {
+						return errors.Join(err, emitErr)
+					}
+					return err
+				}
+				cacheHead = nextHead
+				cacheHeadOK = true
+				if e.runtime != nil {
+					req.Cache = e.runtime.CacheDirectiveForHead(cacheHead, caps, cacheMode)
+				}
+				req.Items = nil
+				req.ToolResults = nil
+				req.UserMessage = ""
+			}
+		}
+
 		if assistantText.Len() > 0 {
 			assistantItem := model.ConversationItem{
 				Kind: model.ConversationItemAssistantText,
@@ -130,7 +183,9 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				}
 				return err
 			}
-			req.Items = append(req.Items, assistantItem)
+			if !nativeContinuation {
+				req.Items = append(req.Items, assistantItem)
+			}
 			nextPosition++
 		}
 
@@ -206,25 +261,25 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	}
 }
 
-func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string) (int, []model.ConversationItem, []model.Summary, []string, error) {
+func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string) (int, contextstate.WorkingSet, error) {
 	if e.store == nil || e.ctxManager == nil {
-		return 0, nil, nil, nil, nil
+		return 0, contextstate.WorkingSet{}, nil
 	}
 
 	items, err := e.store.ListConversationItems(ctx, sessionID)
 	if err != nil {
-		return 0, nil, nil, nil, err
+		return 0, contextstate.WorkingSet{}, err
 	}
 	totalItems := len(items)
 
 	summaries, err := e.store.ListConversationSummaries(ctx, sessionID)
 	if err != nil {
-		return 0, nil, nil, nil, err
+		return 0, contextstate.WorkingSet{}, err
 	}
 
 	entries, err := e.store.ListMemoryEntriesByWorkspace(ctx, in.Session.WorkspaceRoot)
 	if err != nil {
-		return 0, nil, nil, nil, err
+		return 0, contextstate.WorkingSet{}, err
 	}
 
 	recalled := memory.Recall(in.Turn.UserMessage, entries, 3)
@@ -234,41 +289,26 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	}
 
 	working := e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
-	if len(summaries) == 0 && working.NeedsCompact && e.compactor != nil {
-		summary, err := e.compactor.Compact(ctx, items[:working.CompactionStart])
-		if err != nil {
-			return 0, nil, nil, nil, err
+	if working.Action.Kind == contextstate.CompactionActionRolling && e.compactor != nil {
+		cutoff := working.CompactionStart
+		if cutoff < 0 {
+			cutoff = 0
 		}
-		if err := e.store.InsertConversationSummary(ctx, sessionID, working.CompactionStart, summary); err != nil {
-			return 0, nil, nil, nil, err
+		if cutoff > len(items) {
+			cutoff = len(items)
+		}
+		summary, err := e.compactor.Compact(ctx, items[:cutoff])
+		if err != nil {
+			return 0, contextstate.WorkingSet{}, err
+		}
+		if err := e.store.InsertConversationSummary(ctx, sessionID, cutoff, summary); err != nil {
+			return 0, contextstate.WorkingSet{}, err
 		}
 		summaries = append(summaries, summary)
 		working = e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
 	}
 
-	return totalItems, working.RecentItems, working.Summaries, working.MemoryRefs, nil
-}
-
-func buildRequest(e *Engine, in Input, items []model.ConversationItem, summaries []model.Summary, memoryRefs []string) model.Request {
-	reqItems := make([]model.ConversationItem, 0, len(summaries)+len(items)+1)
-	for _, summary := range summaries {
-		summary := summary
-		reqItems = append(reqItems, model.ConversationItem{
-			Kind:    model.ConversationItemSummary,
-			Summary: &summary,
-		})
-	}
-	reqItems = append(reqItems, items...)
-	reqItems = append(reqItems, model.UserMessageItem(in.Turn.UserMessage))
-
-	return model.Request{
-		UserMessage:  in.Turn.UserMessage,
-		Instructions: buildRuntimeInstructions(in.Session.WorkspaceRoot, memoryRefs),
-		Stream:       true,
-		Items:        reqItems,
-		Tools:        buildToolSchemas(e.registry),
-		ToolChoice:   "auto",
-	}
+	return totalItems, working, nil
 }
 
 func buildRuntimeInstructions(workspaceRoot string, memoryRefs []string) string {
@@ -308,4 +348,47 @@ func persistConversationItem(ctx context.Context, store ConversationStore, sessi
 		return nil
 	}
 	return store.InsertConversationItem(ctx, sessionID, turnID, position, item)
+}
+
+func providerCacheOwnerForCapabilities(caps model.ProviderCapabilities) string {
+	if caps.Profile == model.CapabilityProfileArkResponses {
+		return "openai_compatible"
+	}
+	return ""
+}
+
+func loadProviderCacheHead(ctx context.Context, store ConversationStore, sessionID, provider, capabilityProfile string) (types.ProviderCacheHead, bool, error) {
+	if store == nil || provider == "" {
+		return types.ProviderCacheHead{}, false, nil
+	}
+	return store.GetProviderCacheHead(ctx, sessionID, provider, capabilityProfile)
+}
+
+func persistProviderCacheHead(ctx context.Context, e *Engine, head *types.ProviderCacheHead) error {
+	if e == nil || e.store == nil || head == nil {
+		return nil
+	}
+
+	return e.store.UpsertProviderCacheHead(ctx, *head)
+}
+
+func nextHeadFromResponse(e *Engine, sessionID, provider string, caps model.ProviderCapabilities, head *types.ProviderCacheHead, used *model.CacheDirective, meta *model.ResponseMetadata) (*types.ProviderCacheHead, bool) {
+	if e == nil || e.runtime == nil || provider == "" || used == nil || meta == nil || meta.ResponseID == "" || caps.Profile == model.CapabilityProfileNone {
+		return head, head != nil
+	}
+
+	nextHead := e.runtime.NextCacheHead(head, caps, used, meta)
+	if nextHead == nil {
+		return head, head != nil
+	}
+	if nextHead.SessionID == "" {
+		nextHead.SessionID = sessionID
+	}
+	if nextHead.Provider == "" {
+		nextHead.Provider = provider
+	}
+	if nextHead.CapabilityProfile == "" {
+		nextHead.CapabilityProfile = string(caps.Profile)
+	}
+	return nextHead, true
 }

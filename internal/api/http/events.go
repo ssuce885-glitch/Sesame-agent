@@ -45,6 +45,8 @@ func handleStreamEvents(deps Dependencies, sessionID string) http.HandlerFunc {
 			}
 		}
 
+		flush()
+
 		lastSeq := afterSeq
 		for _, event := range events {
 			if err := stream.WriteSSE(w, event); err != nil {

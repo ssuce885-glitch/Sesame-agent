@@ -70,17 +70,19 @@ type Request struct {
 	Tools        []ToolSchema
 	ToolChoice   string
 	ToolResults  []ToolResult
+	Cache        *CacheDirective
 }
 
 type StreamEventKind string
 
 const (
-	StreamEventTextDelta     StreamEventKind = "text_delta"
-	StreamEventToolCallStart StreamEventKind = "tool_call_start"
-	StreamEventToolCallDelta StreamEventKind = "tool_call_delta"
-	StreamEventToolCallEnd   StreamEventKind = "tool_call_end"
-	StreamEventMessageEnd    StreamEventKind = "message_end"
-	StreamEventUsage         StreamEventKind = "usage"
+	StreamEventTextDelta        StreamEventKind = "text_delta"
+	StreamEventToolCallStart    StreamEventKind = "tool_call_start"
+	StreamEventToolCallDelta    StreamEventKind = "tool_call_delta"
+	StreamEventToolCallEnd      StreamEventKind = "tool_call_end"
+	StreamEventResponseMetadata StreamEventKind = "response_metadata"
+	StreamEventMessageEnd       StreamEventKind = "message_end"
+	StreamEventUsage            StreamEventKind = "usage"
 )
 
 type ToolResult struct {
@@ -100,15 +102,18 @@ type ToolCallChunk struct {
 type Usage struct {
 	InputTokens  int
 	OutputTokens int
+	CachedTokens int
 }
 
 type StreamEvent struct {
-	Kind      StreamEventKind
-	TextDelta string
-	ToolCall  ToolCallChunk
-	Usage     *Usage
+	Kind             StreamEventKind
+	TextDelta        string
+	ToolCall         ToolCallChunk
+	Usage            *Usage
+	ResponseMetadata *ResponseMetadata
 }
 
 type StreamingClient interface {
 	Stream(context.Context, Request) (<-chan StreamEvent, <-chan error)
+	Capabilities() ProviderCapabilities
 }
