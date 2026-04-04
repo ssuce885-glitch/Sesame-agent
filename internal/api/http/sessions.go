@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"go-agent/internal/types"
@@ -44,8 +46,15 @@ func handleListSessions(deps Dependencies) http.HandlerFunc {
 
 		items := make([]types.SessionListItem, 0, len(sessions))
 		for _, session := range sessions {
+			title, lastPreview, err := deriveSessionText(r.Context(), deps, session.ID)
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
 			items = append(items, types.SessionListItem{
 				ID:            session.ID,
+				Title:         title,
+				LastPreview:   lastPreview,
 				WorkspaceRoot: session.WorkspaceRoot,
 				State:         session.State,
 				ActiveTurnID:  session.ActiveTurnID,
@@ -61,6 +70,45 @@ func handleListSessions(deps Dependencies) http.HandlerFunc {
 			SelectedSessionID: selectedSessionID,
 		})
 	}
+}
+
+func deriveSessionText(ctx context.Context, deps Dependencies, sessionID string) (string, string, error) {
+	if deps.Store == nil {
+		return "", "", nil
+	}
+
+	turns, err := deps.Store.ListTurnsBySession(ctx, sessionID)
+	if err != nil {
+		return "", "", err
+	}
+
+	title := ""
+	lastPreview := ""
+	for _, turn := range turns {
+		text := clampPreview(turn.UserMessage)
+		if text == "" {
+			continue
+		}
+		if title == "" {
+			title = text
+		}
+		lastPreview = text
+	}
+
+	return title, lastPreview, nil
+}
+
+func clampPreview(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	const maxLen = 120
+	runes := []rune(trimmed)
+	if len(runes) <= maxLen {
+		return trimmed
+	}
+	return string(runes[:maxLen]) + "..."
 }
 
 func handleCreateSession(deps Dependencies) http.HandlerFunc {
