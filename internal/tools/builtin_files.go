@@ -93,11 +93,32 @@ func (globTool) Definition() Definition {
 func (globTool) IsConcurrencySafe() bool { return true }
 
 func (globTool) Execute(_ context.Context, call Call, execCtx ExecContext) (Result, error) {
-	pattern := filepath.Join(execCtx.WorkspaceRoot, call.Input["pattern"].(string))
-	matches, err := filepath.Glob(pattern)
+	matches, err := globWithinWorkspace(execCtx.WorkspaceRoot, call.Input["pattern"].(string))
 	if err != nil {
 		return Result{}, err
 	}
 
 	return Result{Text: strings.Join(matches, "\n")}, nil
+}
+
+func globWithinWorkspace(root, pattern string) ([]string, error) {
+	candidate := filepath.Clean(filepath.Join(root, pattern))
+	if err := runtime.WithinWorkspace(root, candidate); err != nil {
+		return nil, err
+	}
+
+	matches, err := filepath.Glob(candidate)
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if err := runtime.WithinWorkspace(root, match); err != nil {
+			continue
+		}
+		filtered = append(filtered, match)
+	}
+
+	return filtered, nil
 }
