@@ -82,6 +82,8 @@ func TestStorePersistsRuntimeGraph(t *testing.T) {
 		TurnID:    "turn_runtime",
 		State:     types.RunStateRunning,
 		Objective: "ship runtime graph storage",
+		Result:    "runtime graph stored",
+		Error:     "sample run warning",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -90,13 +92,14 @@ func TestStorePersistsRuntimeGraph(t *testing.T) {
 	}
 
 	plan := types.Plan{
-		ID:        "plan_1",
-		RunID:     run.ID,
-		State:     types.PlanStateActive,
-		Title:     "Minimal runtime graph",
-		Summary:   "Persist runs, plans, tasks, tool runs, and worktrees.",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:           "plan_1",
+		RunID:        run.ID,
+		State:        types.PlanStateActive,
+		Title:        "Minimal runtime graph",
+		Summary:      "Persist runs, plans, tasks, tool runs, and worktrees.",
+		ParentPlanID: "plan_root",
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	if err := store.UpsertPlan(context.Background(), plan); err != nil {
 		t.Fatalf("UpsertPlan() error = %v", err)
@@ -109,6 +112,8 @@ func TestStorePersistsRuntimeGraph(t *testing.T) {
 		State:       types.TaskStateRunning,
 		Title:       "Write runtime graph tests",
 		Description: "Verify SQLite round-trip behavior.",
+		Owner:       "codex",
+		WorktreeID:  "worktree_1",
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -124,6 +129,7 @@ func TestStorePersistsRuntimeGraph(t *testing.T) {
 		ToolName:    "Bash",
 		InputJSON:   `{"command":"go test ./internal/store/sqlite"}`,
 		OutputJSON:  `{"exit_code":0}`,
+		Error:       "stderr captured for verification",
 		StartedAt:   startedAt,
 		CompletedAt: completedAt,
 		CreatedAt:   now,
@@ -155,28 +161,28 @@ func TestStorePersistsRuntimeGraph(t *testing.T) {
 	if len(graph.Runs) != 1 {
 		t.Fatalf("len(graph.Runs) = %d, want 1", len(graph.Runs))
 	}
-	if got := graph.Runs[0]; got.ID != run.ID || got.SessionID != run.SessionID || got.TurnID != run.TurnID || got.State != run.State || got.Objective != run.Objective || !got.CreatedAt.Equal(run.CreatedAt.UTC()) || !got.UpdatedAt.Equal(run.UpdatedAt.UTC()) {
+	if got := graph.Runs[0]; got.ID != run.ID || got.SessionID != run.SessionID || got.TurnID != run.TurnID || got.State != run.State || got.Objective != run.Objective || got.Result != run.Result || got.Error != run.Error || !got.CreatedAt.Equal(run.CreatedAt.UTC()) || !got.UpdatedAt.Equal(run.UpdatedAt.UTC()) {
 		t.Fatalf("graph.Runs[0] = %#v, want %#v", got, run)
 	}
 
 	if len(graph.Plans) != 1 {
 		t.Fatalf("len(graph.Plans) = %d, want 1", len(graph.Plans))
 	}
-	if got := graph.Plans[0]; got.ID != plan.ID || got.RunID != plan.RunID || got.State != plan.State || got.Title != plan.Title || got.Summary != plan.Summary || !got.CreatedAt.Equal(plan.CreatedAt.UTC()) || !got.UpdatedAt.Equal(plan.UpdatedAt.UTC()) {
+	if got := graph.Plans[0]; got.ID != plan.ID || got.RunID != plan.RunID || got.State != plan.State || got.Title != plan.Title || got.Summary != plan.Summary || got.ParentPlanID != plan.ParentPlanID || !got.CreatedAt.Equal(plan.CreatedAt.UTC()) || !got.UpdatedAt.Equal(plan.UpdatedAt.UTC()) {
 		t.Fatalf("graph.Plans[0] = %#v, want %#v", got, plan)
 	}
 
 	if len(graph.Tasks) != 1 {
 		t.Fatalf("len(graph.Tasks) = %d, want 1", len(graph.Tasks))
 	}
-	if got := graph.Tasks[0]; got.ID != task.ID || got.RunID != task.RunID || got.PlanID != task.PlanID || got.State != task.State || got.Title != task.Title || got.Description != task.Description || !got.CreatedAt.Equal(task.CreatedAt.UTC()) || !got.UpdatedAt.Equal(task.UpdatedAt.UTC()) {
+	if got := graph.Tasks[0]; got.ID != task.ID || got.RunID != task.RunID || got.PlanID != task.PlanID || got.State != task.State || got.Title != task.Title || got.Description != task.Description || got.Owner != task.Owner || got.WorktreeID != task.WorktreeID || !got.CreatedAt.Equal(task.CreatedAt.UTC()) || !got.UpdatedAt.Equal(task.UpdatedAt.UTC()) {
 		t.Fatalf("graph.Tasks[0] = %#v, want %#v", got, task)
 	}
 
 	if len(graph.ToolRuns) != 1 {
 		t.Fatalf("len(graph.ToolRuns) = %d, want 1", len(graph.ToolRuns))
 	}
-	if got := graph.ToolRuns[0]; got.ID != toolRun.ID || got.RunID != toolRun.RunID || got.TaskID != toolRun.TaskID || got.ToolName != toolRun.ToolName || got.State != toolRun.State || got.InputJSON != toolRun.InputJSON || got.OutputJSON != toolRun.OutputJSON || !got.StartedAt.Equal(toolRun.StartedAt.UTC()) || !got.CompletedAt.Equal(toolRun.CompletedAt.UTC()) || !got.CreatedAt.Equal(toolRun.CreatedAt.UTC()) || !got.UpdatedAt.Equal(toolRun.UpdatedAt.UTC()) {
+	if got := graph.ToolRuns[0]; got.ID != toolRun.ID || got.RunID != toolRun.RunID || got.TaskID != toolRun.TaskID || got.ToolName != toolRun.ToolName || got.State != toolRun.State || got.InputJSON != toolRun.InputJSON || got.OutputJSON != toolRun.OutputJSON || got.Error != toolRun.Error || !got.StartedAt.Equal(toolRun.StartedAt.UTC()) || !got.CompletedAt.Equal(toolRun.CompletedAt.UTC()) || !got.CreatedAt.Equal(toolRun.CreatedAt.UTC()) || !got.UpdatedAt.Equal(toolRun.UpdatedAt.UTC()) {
 		t.Fatalf("graph.ToolRuns[0] = %#v, want %#v", got, toolRun)
 	}
 
@@ -308,6 +314,223 @@ func TestInsertRunRejectsDuplicateID(t *testing.T) {
 	}
 	if !got.CreatedAt.Equal(first.CreatedAt) || !got.UpdatedAt.Equal(first.UpdatedAt) {
 		t.Fatalf("run timestamps = %s/%s, want %s/%s", got.CreatedAt, got.UpdatedAt, first.CreatedAt, first.UpdatedAt)
+	}
+}
+
+func TestStorePreservesCreatedAtOnTaskRecordUpdate(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	createdAt := time.Date(2026, 4, 5, 13, 0, 0, 0, time.UTC)
+	nextUpdatedAt := createdAt.Add(15 * time.Minute)
+
+	task := types.TaskRecord{
+		ID:          "task_created_at",
+		RunID:       "run_created_at",
+		PlanID:      "plan_created_at",
+		State:       types.TaskStateRunning,
+		Title:       "Keep task created_at stable",
+		Description: "initial task payload",
+		Owner:       "owner_one",
+		WorktreeID:  "worktree_one",
+		CreatedAt:   createdAt,
+		UpdatedAt:   createdAt,
+	}
+	if err := store.UpsertTaskRecord(context.Background(), task); err != nil {
+		t.Fatalf("UpsertTaskRecord(initial) error = %v", err)
+	}
+
+	task.Description = "updated task payload"
+	task.Owner = "owner_two"
+	task.WorktreeID = "worktree_two"
+	task.UpdatedAt = nextUpdatedAt
+	if err := store.UpsertTaskRecord(context.Background(), task); err != nil {
+		t.Fatalf("UpsertTaskRecord(update) error = %v", err)
+	}
+
+	var createdAtRaw, updatedAtRaw string
+	if err := store.db.QueryRowContext(context.Background(), `
+		select created_at, updated_at
+		from task_records
+		where id = ?
+	`, task.ID).Scan(&createdAtRaw, &updatedAtRaw); err != nil {
+		t.Fatalf("task timestamp query error = %v", err)
+	}
+
+	if got, err := time.Parse(timeLayout, createdAtRaw); err != nil {
+		t.Fatalf("Parse(created_at) error = %v", err)
+	} else if !got.Equal(createdAt) {
+		t.Fatalf("task created_at = %s, want %s", got, createdAt)
+	}
+	if got, err := time.Parse(timeLayout, updatedAtRaw); err != nil {
+		t.Fatalf("Parse(updated_at) error = %v", err)
+	} else if !got.Equal(nextUpdatedAt) {
+		t.Fatalf("task updated_at = %s, want %s", got, nextUpdatedAt)
+	}
+
+	graph, err := store.ListRuntimeGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ListRuntimeGraph() error = %v", err)
+	}
+	if len(graph.Tasks) != 1 {
+		t.Fatalf("len(graph.Tasks) = %d, want 1", len(graph.Tasks))
+	}
+	got := graph.Tasks[0]
+	if got.Description != "updated task payload" || got.Owner != "owner_two" || got.WorktreeID != "worktree_two" {
+		t.Fatalf("task payload = %#v, want updated values", got)
+	}
+	if !got.CreatedAt.Equal(createdAt) {
+		t.Fatalf("task created_at = %s, want %s", got.CreatedAt, createdAt)
+	}
+	if !got.UpdatedAt.Equal(nextUpdatedAt) {
+		t.Fatalf("task updated_at = %s, want %s", got.UpdatedAt, nextUpdatedAt)
+	}
+}
+
+func TestStorePreservesCreatedAtOnToolRunUpdate(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	createdAt := time.Date(2026, 4, 5, 14, 0, 0, 0, time.UTC)
+	nextUpdatedAt := createdAt.Add(20 * time.Minute)
+
+	toolRun := types.ToolRun{
+		ID:          "tool_run_created_at",
+		RunID:       "run_created_at",
+		TaskID:      "task_created_at",
+		State:       types.ToolRunStateRunning,
+		ToolName:    "Bash",
+		InputJSON:   `{"command":"echo first"}`,
+		OutputJSON:  `{"exit_code":0}`,
+		Error:       "initial stderr",
+		StartedAt:   createdAt.Add(1 * time.Minute),
+		CompletedAt: createdAt.Add(2 * time.Minute),
+		CreatedAt:   createdAt,
+		UpdatedAt:   createdAt,
+	}
+	if err := store.UpsertToolRun(context.Background(), toolRun); err != nil {
+		t.Fatalf("UpsertToolRun(initial) error = %v", err)
+	}
+
+	toolRun.OutputJSON = `{"exit_code":1}`
+	toolRun.Error = "updated stderr"
+	toolRun.UpdatedAt = nextUpdatedAt
+	if err := store.UpsertToolRun(context.Background(), toolRun); err != nil {
+		t.Fatalf("UpsertToolRun(update) error = %v", err)
+	}
+
+	var createdAtRaw, updatedAtRaw string
+	if err := store.db.QueryRowContext(context.Background(), `
+		select created_at, updated_at
+		from tool_runs
+		where id = ?
+	`, toolRun.ID).Scan(&createdAtRaw, &updatedAtRaw); err != nil {
+		t.Fatalf("tool run timestamp query error = %v", err)
+	}
+
+	if got, err := time.Parse(timeLayout, createdAtRaw); err != nil {
+		t.Fatalf("Parse(created_at) error = %v", err)
+	} else if !got.Equal(createdAt) {
+		t.Fatalf("tool run created_at = %s, want %s", got, createdAt)
+	}
+	if got, err := time.Parse(timeLayout, updatedAtRaw); err != nil {
+		t.Fatalf("Parse(updated_at) error = %v", err)
+	} else if !got.Equal(nextUpdatedAt) {
+		t.Fatalf("tool run updated_at = %s, want %s", got, nextUpdatedAt)
+	}
+
+	graph, err := store.ListRuntimeGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ListRuntimeGraph() error = %v", err)
+	}
+	if len(graph.ToolRuns) != 1 {
+		t.Fatalf("len(graph.ToolRuns) = %d, want 1", len(graph.ToolRuns))
+	}
+	got := graph.ToolRuns[0]
+	if got.OutputJSON != `{"exit_code":1}` || got.Error != "updated stderr" {
+		t.Fatalf("tool run payload = %#v, want updated values", got)
+	}
+	if !got.CreatedAt.Equal(createdAt) {
+		t.Fatalf("tool run created_at = %s, want %s", got.CreatedAt, createdAt)
+	}
+	if !got.UpdatedAt.Equal(nextUpdatedAt) {
+		t.Fatalf("tool run updated_at = %s, want %s", got.UpdatedAt, nextUpdatedAt)
+	}
+}
+
+func TestStorePreservesCreatedAtOnWorktreeUpdate(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	createdAt := time.Date(2026, 4, 5, 15, 0, 0, 0, time.UTC)
+	nextUpdatedAt := createdAt.Add(25 * time.Minute)
+
+	worktree := types.Worktree{
+		ID:             "worktree_created_at",
+		RunID:          "run_created_at",
+		TaskID:         "task_created_at",
+		State:          types.WorktreeStateActive,
+		WorktreePath:   "E:/project/go-agent/.worktrees/initial",
+		WorktreeBranch: "feature/initial",
+		CreatedAt:      createdAt,
+		UpdatedAt:      createdAt,
+	}
+	if err := store.UpsertWorktree(context.Background(), worktree); err != nil {
+		t.Fatalf("UpsertWorktree(initial) error = %v", err)
+	}
+
+	worktree.WorktreePath = "E:/project/go-agent/.worktrees/updated"
+	worktree.WorktreeBranch = "feature/updated"
+	worktree.UpdatedAt = nextUpdatedAt
+	if err := store.UpsertWorktree(context.Background(), worktree); err != nil {
+		t.Fatalf("UpsertWorktree(update) error = %v", err)
+	}
+
+	var createdAtRaw, updatedAtRaw string
+	if err := store.db.QueryRowContext(context.Background(), `
+		select created_at, updated_at
+		from worktrees
+		where id = ?
+	`, worktree.ID).Scan(&createdAtRaw, &updatedAtRaw); err != nil {
+		t.Fatalf("worktree timestamp query error = %v", err)
+	}
+
+	if got, err := time.Parse(timeLayout, createdAtRaw); err != nil {
+		t.Fatalf("Parse(created_at) error = %v", err)
+	} else if !got.Equal(createdAt) {
+		t.Fatalf("worktree created_at = %s, want %s", got, createdAt)
+	}
+	if got, err := time.Parse(timeLayout, updatedAtRaw); err != nil {
+		t.Fatalf("Parse(updated_at) error = %v", err)
+	} else if !got.Equal(nextUpdatedAt) {
+		t.Fatalf("worktree updated_at = %s, want %s", got, nextUpdatedAt)
+	}
+
+	graph, err := store.ListRuntimeGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ListRuntimeGraph() error = %v", err)
+	}
+	if len(graph.Worktrees) != 1 {
+		t.Fatalf("len(graph.Worktrees) = %d, want 1", len(graph.Worktrees))
+	}
+	got := graph.Worktrees[0]
+	if got.WorktreePath != "E:/project/go-agent/.worktrees/updated" || got.WorktreeBranch != "feature/updated" {
+		t.Fatalf("worktree payload = %#v, want updated values", got)
+	}
+	if !got.CreatedAt.Equal(createdAt) {
+		t.Fatalf("worktree created_at = %s, want %s", got.CreatedAt, createdAt)
+	}
+	if !got.UpdatedAt.Equal(nextUpdatedAt) {
+		t.Fatalf("worktree updated_at = %s, want %s", got.UpdatedAt, nextUpdatedAt)
 	}
 }
 

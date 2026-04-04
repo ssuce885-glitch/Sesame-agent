@@ -142,28 +142,40 @@ func (s *Store) UpsertWorktree(ctx context.Context, worktree types.Worktree) err
 }
 
 func (s *Store) ListRuntimeGraph(ctx context.Context) (types.RuntimeGraph, error) {
-	runs, err := listRuntimeObjects[types.Run](ctx, s.db, `select payload, created_at, updated_at from runs order by created_at asc, id asc`)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return types.RuntimeGraph{}, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	runs, err := listRuntimeObjects[types.Run](ctx, tx, `select payload, created_at, updated_at from runs order by created_at asc, id asc`)
 	if err != nil {
 		return types.RuntimeGraph{}, err
 	}
 
-	plans, err := listRuntimeObjects[types.Plan](ctx, s.db, `select payload, created_at, updated_at from plans order by created_at asc, id asc`)
+	plans, err := listRuntimeObjects[types.Plan](ctx, tx, `select payload, created_at, updated_at from plans order by created_at asc, id asc`)
 	if err != nil {
 		return types.RuntimeGraph{}, err
 	}
 
-	tasks, err := listRuntimeObjects[types.Task](ctx, s.db, `select payload, created_at, updated_at from task_records order by created_at asc, id asc`)
+	tasks, err := listRuntimeObjects[types.Task](ctx, tx, `select payload, created_at, updated_at from task_records order by created_at asc, id asc`)
 	if err != nil {
 		return types.RuntimeGraph{}, err
 	}
 
-	toolRuns, err := listRuntimeObjects[types.ToolRun](ctx, s.db, `select payload, created_at, updated_at from tool_runs order by created_at asc, id asc`)
+	toolRuns, err := listRuntimeObjects[types.ToolRun](ctx, tx, `select payload, created_at, updated_at from tool_runs order by created_at asc, id asc`)
 	if err != nil {
 		return types.RuntimeGraph{}, err
 	}
 
-	worktrees, err := listRuntimeObjects[types.Worktree](ctx, s.db, `select payload, created_at, updated_at from worktrees order by created_at asc, id asc`)
+	worktrees, err := listRuntimeObjects[types.Worktree](ctx, tx, `select payload, created_at, updated_at from worktrees order by created_at asc, id asc`)
 	if err != nil {
+		return types.RuntimeGraph{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
 		return types.RuntimeGraph{}, err
 	}
 
@@ -176,8 +188,12 @@ func (s *Store) ListRuntimeGraph(ctx context.Context) (types.RuntimeGraph, error
 	}, nil
 }
 
-func listRuntimeObjects[T any](ctx context.Context, db *sql.DB, query string) ([]T, error) {
-	rows, err := db.QueryContext(ctx, query)
+type runtimeObjectQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func listRuntimeObjects[T any](ctx context.Context, queryer runtimeObjectQueryer, query string) ([]T, error) {
+	rows, err := queryer.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
