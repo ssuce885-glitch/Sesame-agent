@@ -150,6 +150,12 @@ func TestFakeStreamingClientCapturesNeutralRequest(t *testing.T) {
 	if got.Model != "provider-model" {
 		t.Fatalf("Model = %q, want %q", got.Model, "provider-model")
 	}
+	if got.Instructions != "system rules" {
+		t.Fatalf("Instructions = %q, want %q", got.Instructions, "system rules")
+	}
+	if !got.Stream {
+		t.Fatal("Stream = false, want true")
+	}
 	if len(got.Items) != 2 {
 		t.Fatalf("len(Items) = %d, want 2", len(got.Items))
 	}
