@@ -22,6 +22,10 @@ func registerSessionScopedRoutes(mux *http.ServeMux, deps Dependencies) {
 			handleStreamEvents(deps, sessionID)(w, r)
 		case "select":
 			handleSelectSession(deps, sessionID)(w, r)
+		case "timeline":
+			handleGetTimeline(deps, sessionID)(w, r)
+		case "workspace":
+			handleGetWorkspace(deps, sessionID)(w, r)
 		default:
 			http.NotFound(w, r)
 		}

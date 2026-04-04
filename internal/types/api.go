@@ -17,6 +17,8 @@ type PermissionDecisionRequest struct {
 
 type SessionListItem struct {
 	ID            string       `json:"id"`
+	Title         string       `json:"title,omitempty"`
+	LastPreview   string       `json:"last_preview,omitempty"`
 	WorkspaceRoot string       `json:"workspace_root"`
 	State         SessionState `json:"state"`
 	ActiveTurnID  string       `json:"active_turn_id,omitempty"`
