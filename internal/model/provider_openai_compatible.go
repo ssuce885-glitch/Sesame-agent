@@ -57,6 +57,37 @@ func (p *OpenAICompatibleProvider) Stream(ctx context.Context, req Request) (<-c
 }
 
 func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, events chan<- StreamEvent) error {
+	type functionCallMeta struct {
+		CallID string
+		Name   string
+	}
+
+	functionCalls := make(map[string]functionCallMeta)
+	rememberFunctionCall := func(itemID, callID, name string) {
+		if itemID == "" {
+			return
+		}
+		meta := functionCalls[itemID]
+		if callID != "" {
+			meta.CallID = callID
+		}
+		if name != "" {
+			meta.Name = name
+		}
+		functionCalls[itemID] = meta
+	}
+	resolveFunctionCall := func(itemID, name string) (string, string) {
+		meta := functionCalls[itemID]
+		callID := meta.CallID
+		if callID == "" {
+			callID = itemID
+		}
+		if name == "" {
+			name = meta.Name
+		}
+		return callID, name
+	}
+
 	body := struct {
 		Model        string           `json:"model"`
 		Instructions string           `json:"instructions"`
@@ -120,6 +151,21 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 		}
 
 		switch frame.Event {
+		case "response.output_item.added", "response.output_item.done":
+			var payload struct {
+				Item struct {
+					ID     string `json:"id"`
+					CallID string `json:"call_id"`
+					Type   string `json:"type"`
+					Name   string `json:"name"`
+				} `json:"item"`
+			}
+			if err := json.Unmarshal([]byte(frame.Data), &payload); err != nil {
+				return err
+			}
+			if payload.Item.Type == "function_call" {
+				rememberFunctionCall(payload.Item.ID, payload.Item.CallID, payload.Item.Name)
+			}
 		case "response.output_text.delta":
 			var payload struct {
 				Delta string `json:"delta"`
@@ -150,11 +196,12 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			if err := json.Unmarshal([]byte(frame.Data), &payload); err != nil {
 				return err
 			}
+			callID, name := resolveFunctionCall(payload.ItemID, payload.Name)
 			if err := sendStreamEvent(ctx, events, StreamEvent{
 				Kind: StreamEventToolCallDelta,
 				ToolCall: ToolCallChunk{
-					ID:         payload.ItemID,
-					Name:       payload.Name,
+					ID:         callID,
+					Name:       name,
 					InputChunk: payload.Delta,
 				},
 			}); err != nil {
@@ -169,6 +216,7 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			if err := json.Unmarshal([]byte(frame.Data), &payload); err != nil {
 				return err
 			}
+			callID, name := resolveFunctionCall(payload.ItemID, payload.Name)
 			input := map[string]any{}
 			if payload.Arguments != "" {
 				if err := json.Unmarshal([]byte(payload.Arguments), &input); err != nil {
@@ -178,8 +226,8 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			if err := sendStreamEvent(ctx, events, StreamEvent{
 				Kind: StreamEventToolCallEnd,
 				ToolCall: ToolCallChunk{
-					ID:    payload.ItemID,
-					Name:  payload.Name,
+					ID:    callID,
+					Name:  name,
 					Input: input,
 				},
 			}); err != nil {
@@ -219,6 +267,7 @@ func toResponsesInput(items []ConversationItem) []map[string]any {
 			})
 		case ConversationItemAssistantText:
 			out = append(out, map[string]any{
+				"type": "message",
 				"role": "assistant",
 				"content": []map[string]any{
 					{
@@ -231,16 +280,11 @@ func toResponsesInput(items []ConversationItem) []map[string]any {
 			if item.Result == nil {
 				continue
 			}
-			entry := map[string]any{
-				"type":     "function_call_output",
-				"call_id":  item.Result.ToolCallID,
-				"output":   item.Result.Content,
-				"is_error": item.Result.IsError,
-			}
-			if item.Result.ToolName != "" {
-				entry["name_hint"] = item.Result.ToolName
-			}
-			out = append(out, entry)
+			out = append(out, map[string]any{
+				"type":    "function_call_output",
+				"call_id": item.Result.ToolCallID,
+				"output":  item.Result.Content,
+			})
 		}
 	}
 	return out
