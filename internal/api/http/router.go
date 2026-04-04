@@ -10,10 +10,11 @@ import (
 )
 
 type Dependencies struct {
-	Bus     Bus
-	Store   Store
-	Manager Manager
-	Status  StatusPayload
+	Bus         Bus
+	Store       Store
+	Manager     Manager
+	Status      StatusPayload
+	ConsoleRoot string
 }
 
 type noopRunner struct{}
@@ -49,8 +50,10 @@ func NewRouter(deps Dependencies) http.Handler {
 	registerStatusRoutes(mux, deps.Status)
 	registerSessionRoutes(mux, deps)
 	registerSessionScopedRoutes(mux, deps)
+	registerMetricsRoutes(mux, deps)
 	registerPermissionRoutes(mux, deps)
 	registerMemoryRoutes(mux, deps)
+	registerConsoleRoutes(mux, deps)
 
 	return mux
 }
