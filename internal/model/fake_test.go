@@ -113,3 +113,47 @@ func TestFakeStreamingClientReturnsContextErrorWhenCancelled(t *testing.T) {
 		t.Fatal("expected context error from errs channel")
 	}
 }
+
+func TestFakeStreamingClientCapturesNeutralRequest(t *testing.T) {
+	client := NewFakeStreaming([][]StreamEvent{{
+		{Kind: StreamEventTextDelta, TextDelta: "hello"},
+		{Kind: StreamEventMessageEnd},
+	}})
+
+	req := Request{
+		Model:        "provider-model",
+		Instructions: "system rules",
+		Stream:       true,
+		Items: []ConversationItem{
+			UserMessageItem("inspect workspace"),
+			ToolResultItem(ToolResult{
+				ToolCallID: "tool_1",
+				ToolName:   "file_read",
+				Content:    "README contents",
+			}),
+		},
+		Tools: []ToolSchema{{
+			Name:        "file_read",
+			Description: "Read a file inside the workspace",
+			InputSchema: map[string]any{"type": "object"},
+		}},
+	}
+
+	stream, errs := client.Stream(context.Background(), req)
+	for range stream {
+	}
+	if err := <-errs; err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	got := client.LastRequest()
+	if got.Model != "provider-model" {
+		t.Fatalf("Model = %q, want %q", got.Model, "provider-model")
+	}
+	if len(got.Items) != 2 {
+		t.Fatalf("len(Items) = %d, want 2", len(got.Items))
+	}
+	if len(got.Tools) != 1 || got.Tools[0].Name != "file_read" {
+		t.Fatalf("Tools = %+v, want file_read schema", got.Tools)
+	}
+}

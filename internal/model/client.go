@@ -16,10 +16,56 @@ type Client interface {
 	Next(context.Context, Request) (Response, error)
 }
 
+type ConversationItemKind string
+
+const (
+	ConversationItemUserMessage   ConversationItemKind = "user_message"
+	ConversationItemAssistantText ConversationItemKind = "assistant_text"
+	ConversationItemToolCall      ConversationItemKind = "tool_call"
+	ConversationItemToolResult    ConversationItemKind = "tool_result"
+	ConversationItemSummary       ConversationItemKind = "summary"
+)
+
+type Summary struct {
+	RangeLabel       string
+	UserGoals        []string
+	ImportantChoices []string
+	FilesTouched     []string
+	ToolOutcomes     []string
+	OpenThreads      []string
+}
+
+type ConversationItem struct {
+	Kind     ConversationItemKind
+	Text     string
+	Summary  *Summary
+	ToolCall ToolCallChunk
+	Result   *ToolResult
+}
+
+func UserMessageItem(text string) ConversationItem {
+	return ConversationItem{Kind: ConversationItemUserMessage, Text: text}
+}
+
+func ToolResultItem(result ToolResult) ConversationItem {
+	return ConversationItem{Kind: ConversationItemToolResult, Result: &result}
+}
+
+type ToolSchema struct {
+	Name        string
+	Description string
+	InputSchema map[string]any
+}
+
 type Request struct {
-	UserMessage string
-	Model       string
-	ToolResults []ToolResult
+	UserMessage  string
+	Model        string
+	Instructions string
+	Stream       bool
+	Items        []ConversationItem
+	Tools        []ToolSchema
+	ToolChoice   string
+	ToolResults  []ToolResult
 }
 
 type StreamEventKind string

@@ -27,15 +27,18 @@ func (f *Fake) Next(_ context.Context, _ Request) (Response, error) {
 }
 
 type FakeStreaming struct {
-	streams [][]StreamEvent
-	index   int
+	streams  [][]StreamEvent
+	index    int
+	requests []Request
 }
 
 func NewFakeStreaming(streams [][]StreamEvent) *FakeStreaming {
 	return &FakeStreaming{streams: streams}
 }
 
-func (f *FakeStreaming) Stream(ctx context.Context, _ Request) (<-chan StreamEvent, <-chan error) {
+func (f *FakeStreaming) Stream(ctx context.Context, req Request) (<-chan StreamEvent, <-chan error) {
+	f.requests = append(f.requests, req)
+
 	var (
 		batch []StreamEvent
 		err   error
@@ -84,4 +87,12 @@ func (f *FakeStreaming) Stream(ctx context.Context, _ Request) (<-chan StreamEve
 	}()
 
 	return events, errs
+}
+
+func (f *FakeStreaming) LastRequest() Request {
+	if len(f.requests) == 0 {
+		return Request{}
+	}
+
+	return f.requests[len(f.requests)-1]
 }
