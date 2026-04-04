@@ -79,7 +79,9 @@ func (m *Manager) SubmitTurn(ctx context.Context, sessionID string, in SubmitTur
 		state.cancel()
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
+	// Background turn execution should not be tied to the lifetime of the
+	// submitting HTTP request, but it should still have its own cancel handle.
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	state.cancel = cancel
 	state.ActiveTurnID = in.TurnID
 	m.mu.Unlock()

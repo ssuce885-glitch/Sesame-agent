@@ -13,10 +13,13 @@ func (b *Builder) Build(messages []Message, summaries []Summary, memoryRefs []st
 	if len(messages) > b.tailSize {
 		start = len(messages) - b.tailSize
 	}
+	recentMessages := append([]Message(nil), messages[start:]...)
+	recentItems := messagesToConversationItems(recentMessages)
 
 	return WorkingContext{
-		RecentMessages: messages[start:],
-		Summaries:      summaries,
-		MemoryRefs:     memoryRefs,
+		RecentItems:    recentItems,
+		RecentMessages: recentMessages,
+		Summaries:      cloneSummaries(summaries),
+		MemoryRefs:     cloneStrings(memoryRefs),
 	}
 }

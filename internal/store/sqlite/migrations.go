@@ -50,6 +50,67 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at text not null,
 			approved integer not null default 0
 		);`,
+		`create table if not exists conversation_items (
+			id integer primary key autoincrement,
+			session_id text not null,
+			turn_id text not null default '',
+			position integer not null,
+			kind text not null,
+			payload text not null,
+			created_at text not null
+		);`,
+		`create unique index if not exists conversation_items_session_position_idx
+			on conversation_items(session_id, position);`,
+		`create table if not exists conversation_summaries (
+			id integer primary key autoincrement,
+			session_id text not null,
+			up_to_position integer not null,
+			payload text not null,
+			created_at text not null
+		);`,
+		`create table if not exists conversation_compactions (
+			id text primary key,
+			session_id text not null,
+			kind text not null,
+			generation integer not null,
+			start_position integer not null,
+			end_position integer not null,
+			summary_payload text not null,
+			reason text not null,
+			provider_profile text not null,
+			created_at text not null
+		);`,
+		`create table if not exists provider_cache_entries (
+			id text primary key,
+			session_id text not null,
+			provider text not null,
+			capability_profile text not null,
+			cache_kind text not null,
+			external_ref text not null,
+			parent_external_ref text not null default '',
+			generation integer not null,
+			status text not null,
+			expires_at text not null default '',
+			last_used_at text not null default '',
+			metadata_json text not null default '{}',
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists provider_cache_heads (
+			session_id text not null,
+			provider text not null,
+			capability_profile text not null,
+			active_session_ref text not null default '',
+			active_prefix_ref text not null default '',
+			active_generation integer not null default 0,
+			updated_at text not null,
+			primary key (session_id, provider, capability_profile)
+		);`,
+		`create table if not exists runtime_metadata (
+			key text primary key,
+			value text not null,
+			updated_at text not null
+		);`,
 	}
 
 	for _, stmt := range stmts {

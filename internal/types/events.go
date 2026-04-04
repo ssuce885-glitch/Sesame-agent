@@ -8,6 +8,7 @@ import (
 const (
 	EventTurnStarted         = "turn.started"
 	EventTurnCompleted       = "turn.completed"
+	EventTurnFailed          = "turn.failed"
 	EventTurnInterrupted     = "turn.interrupted"
 	EventAssistantStarted    = "assistant.started"
 	EventAssistantDelta      = "assistant.delta"
@@ -31,6 +32,10 @@ type Event struct {
 
 type TurnStartedPayload struct {
 	WorkspaceRoot string `json:"workspace_root"`
+}
+
+type TurnFailedPayload struct {
+	Message string `json:"message"`
 }
 
 type AssistantDeltaPayload struct {
