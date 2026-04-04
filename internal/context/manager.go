@@ -3,9 +3,25 @@ package contextstate
 import "go-agent/internal/model"
 
 type Config struct {
-	MaxRecentItems      int
-	MaxEstimatedTokens  int
-	CompactionThreshold int
+	MaxRecentItems             int
+	MaxEstimatedTokens         int
+	CompactionThreshold        int
+	MicrocompactBytesThreshold int
+}
+
+type CompactionActionKind string
+
+const (
+	CompactionActionNone         CompactionActionKind = "none"
+	CompactionActionMicrocompact CompactionActionKind = "microcompact"
+	CompactionActionRolling      CompactionActionKind = "rolling"
+)
+
+type CompactionAction struct {
+	Kind                  CompactionActionKind
+	RangeStart            int
+	RangeEnd              int
+	MicrocompactPositions []int
 }
 
 type Manager struct {
@@ -20,6 +36,8 @@ type WorkingSet struct {
 	Instructions string
 	WorkingContext
 	CompactionStart int
+	EstimatedTokens int
+	Action          CompactionAction
 	NeedsCompact    bool
 }
 
@@ -31,6 +49,8 @@ func (m *Manager) Build(userText string, items []model.ConversationItem, summari
 		start = len(items)
 	}
 	recentItems := cloneConversationItems(items[start:])
+	estimated := estimateConversationTokens(userText, recentItems, summaries, memoryRefs)
+	action := chooseCompactionAction(items, start, estimated, m.cfg)
 
 	return WorkingSet{
 		Instructions: userText,
@@ -41,6 +61,8 @@ func (m *Manager) Build(userText string, items []model.ConversationItem, summari
 			MemoryRefs:     cloneStrings(memoryRefs),
 		},
 		CompactionStart: start,
-		NeedsCompact:    len(items) > m.cfg.CompactionThreshold,
+		EstimatedTokens: estimated,
+		Action:          action,
+		NeedsCompact:    action.Kind != CompactionActionNone,
 	}
 }

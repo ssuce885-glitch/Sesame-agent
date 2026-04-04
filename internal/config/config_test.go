@@ -20,6 +20,9 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 		t.Setenv("AGENTD_COMPACTION_THRESHOLD", "")
 		t.Setenv("AGENTD_MAX_ESTIMATED_TOKENS", "")
 		t.Setenv("AGENTD_MAX_COMPACTION_PASSES", "")
+		t.Setenv("AGENTD_PROVIDER_CACHE_PROFILE", "")
+		t.Setenv("AGENTD_CACHE_EXPIRY_SECONDS", "")
+		t.Setenv("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", "")
 
 		cfg, err := Load()
 		if err != nil {
@@ -64,6 +67,15 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 		}
 		if cfg.MaxCompactionPasses != 1 {
 			t.Fatalf("MaxCompactionPasses = %d, want %d", cfg.MaxCompactionPasses, 1)
+		}
+		if cfg.ProviderCacheProfile != "none" {
+			t.Fatalf("ProviderCacheProfile = %q, want %q", cfg.ProviderCacheProfile, "none")
+		}
+		if cfg.CacheExpirySeconds != 86400 {
+			t.Fatalf("CacheExpirySeconds = %d, want %d", cfg.CacheExpirySeconds, 86400)
+		}
+		if cfg.MicrocompactBytesThreshold != 4096 {
+			t.Fatalf("MicrocompactBytesThreshold = %d, want %d", cfg.MicrocompactBytesThreshold, 4096)
 		}
 	})
 
@@ -148,4 +160,30 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 			t.Fatalf("MaxCompactionPasses = %d, want %d", cfg.MaxCompactionPasses, 5)
 		}
 	})
+}
+
+func TestLoadReadsProviderCacheOverrides(t *testing.T) {
+	t.Setenv("AGENTD_ADDR", "")
+	t.Setenv("AGENTD_DATA_DIR", t.TempDir())
+	t.Setenv("ANTHROPIC_MODEL", "")
+	t.Setenv("AGENTD_LOG_LEVEL", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("AGENTD_PROVIDER_CACHE_PROFILE", "ark_responses")
+	t.Setenv("AGENTD_CACHE_EXPIRY_SECONDS", "7200")
+	t.Setenv("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", "8192")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.ProviderCacheProfile != "ark_responses" {
+		t.Fatalf("ProviderCacheProfile = %q, want %q", cfg.ProviderCacheProfile, "ark_responses")
+	}
+	if cfg.CacheExpirySeconds != 7200 {
+		t.Fatalf("CacheExpirySeconds = %d, want %d", cfg.CacheExpirySeconds, 7200)
+	}
+	if cfg.MicrocompactBytesThreshold != 8192 {
+		t.Fatalf("MicrocompactBytesThreshold = %d, want %d", cfg.MicrocompactBytesThreshold, 8192)
+	}
 }

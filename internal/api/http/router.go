@@ -13,6 +13,7 @@ type Dependencies struct {
 	Bus     Bus
 	Store   Store
 	Manager Manager
+	Status  StatusPayload
 }
 
 type noopRunner struct{}
@@ -45,7 +46,7 @@ func NewTestDependencies(t interface {
 
 func NewRouter(deps Dependencies) http.Handler {
 	mux := http.NewServeMux()
-	registerStatusRoutes(mux)
+	registerStatusRoutes(mux, deps.Status)
 	registerSessionRoutes(mux, deps)
 	registerSessionScopedRoutes(mux, deps)
 	registerPermissionRoutes(mux, deps)

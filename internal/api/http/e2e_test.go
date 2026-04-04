@@ -292,6 +292,181 @@ func TestCreateSessionSubmitTurnAndStreamEvents(t *testing.T) {
 	}
 }
 
+func TestResponsesProviderToolCallFlowOverHTTP(t *testing.T) {
+	server, baseURL := startResponsesProviderStub(t, [][]string{
+		{
+			"event: response.output_item.added\ndata: {\"item\":{\"id\":\"tool_item_1\",\"type\":\"function_call\",\"call_id\":\"tool_1\",\"name\":\"glob\"}}\n\n",
+			"event: response.function_call_arguments.done\ndata: {\"item_id\":\"tool_item_1\",\"name\":\"glob\",\"arguments\":\"{\\\"pattern\\\":\\\"*.go\\\"}\"}\n\n",
+			"event: response.completed\ndata: {\"status\":\"completed\"}\n\n",
+		},
+		{
+			"event: response.output_text.delta\ndata: {\"delta\":\"Found files\"}\n\n",
+			"event: response.completed\ndata: {\"status\":\"completed\"}\n\n",
+		},
+	})
+	defer server.Close()
+
+	daemon := newHTTPRuntimeForTest(t, baseURL)
+	sessionID := createSession(t, daemon.URL, t.TempDir())
+	body := subscribeAndSubmit(t, daemon.URL, sessionID, "list Go files")
+
+	if !strings.Contains(body, "event: tool.completed") {
+		t.Fatalf("body = %q, want tool.completed", body)
+	}
+	if !strings.Contains(body, "Found files") {
+		t.Fatalf("body = %q, want final assistant text", body)
+	}
+}
+
+func startResponsesProviderStub(t *testing.T, responses [][]string) (*httptest.Server, string) {
+	t.Helper()
+
+	var mu sync.Mutex
+	requestIndex := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("path = %s, want /v1/responses", r.URL.Path)
+		}
+
+		mu.Lock()
+		if requestIndex >= len(responses) {
+			mu.Unlock()
+			t.Fatalf("unexpected extra responses request %d", requestIndex+1)
+		}
+		frames := responses[requestIndex]
+		requestIndex++
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, frame := range frames {
+			if _, err := io.WriteString(w, frame); err != nil {
+				t.Fatalf("WriteString() error = %v", err)
+			}
+		}
+	}))
+
+	return server, server.URL
+}
+
+func newHTTPRuntimeForTest(t *testing.T, baseURL string) *httptest.Server {
+	t.Helper()
+
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	bus := stream.NewBus()
+	provider, err := model.NewOpenAICompatibleProvider(model.Config{
+		APIKey:  "test-key",
+		Model:   "provider-model",
+		BaseURL: baseURL,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAICompatibleProvider() error = %v", err)
+	}
+
+	ctxManager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      8,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 16,
+	})
+	runner := engine.New(provider, tools.NewRegistry(), permissions.NewEngine("trusted_local"), store, ctxManager, nil, 8)
+	manager := session.NewManager(e2eSessionRunner{
+		engine: runner,
+		sink: e2eStoreAndBusSink{
+			store: store,
+			bus:   bus,
+		},
+	})
+
+	server := httptest.NewServer(NewRouter(Dependencies{
+		Store:   store,
+		Bus:     bus,
+		Manager: manager,
+		Status: StatusPayload{
+			Provider:          "openai_compatible",
+			Model:             "provider-model",
+			PermissionProfile: "trusted_local",
+		},
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func createSession(t *testing.T, baseURL string, workspaceRoot string) string {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/v1/sessions", strings.NewReader(fmt.Sprintf(`{"workspace_root":%q}`, workspaceRoot)))
+	if err != nil {
+		t.Fatalf("NewRequest(create) error = %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do(create) error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	var created types.Session
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("Decode(create) error = %v", err)
+	}
+	return created.ID
+}
+
+func subscribeAndSubmit(t *testing.T, baseURL string, sessionID string, message string) string {
+	t.Helper()
+
+	streamCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	streamReq, err := http.NewRequestWithContext(streamCtx, http.MethodGet, baseURL+"/v1/sessions/"+sessionID+"/events?after=0", nil)
+	if err != nil {
+		t.Fatalf("NewRequest(stream) error = %v", err)
+	}
+	streamResp, err := http.DefaultClient.Do(streamReq)
+	if err != nil {
+		t.Fatalf("Do(stream) error = %v", err)
+	}
+
+	bodyCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		body, err := readSSEUntil(streamResp.Body, "event: turn.completed", cancel)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		bodyCh <- body
+	}()
+
+	submitReq, err := http.NewRequest(http.MethodPost, baseURL+"/v1/sessions/"+sessionID+"/turns", strings.NewReader(fmt.Sprintf(`{"client_turn_id":"turn-1","message":%q}`, message)))
+	if err != nil {
+		t.Fatalf("NewRequest(submit) error = %v", err)
+	}
+	submitReq.Header.Set("Content-Type", "application/json")
+	submitResp, err := http.DefaultClient.Do(submitReq)
+	if err != nil {
+		t.Fatalf("Do(submit) error = %v", err)
+	}
+	defer submitResp.Body.Close()
+
+	select {
+	case body := <-bodyCh:
+		return body
+	case err := <-errCh:
+		t.Fatalf("stream error = %v", err)
+		return ""
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for HTTP tool-call flow")
+		return ""
+	}
+}
+
 type turnSubmitStore struct {
 	turns        map[string]types.Turn
 	insertCalled bool
@@ -301,6 +476,14 @@ type turnSubmitStore struct {
 }
 
 func (s *turnSubmitStore) InsertSession(context.Context, types.Session) error { return nil }
+
+func (s *turnSubmitStore) ListSessions(context.Context) ([]types.Session, error) { return nil, nil }
+
+func (s *turnSubmitStore) GetSelectedSessionID(context.Context) (string, bool, error) {
+	return "", false, nil
+}
+
+func (s *turnSubmitStore) SetSelectedSessionID(context.Context, string) error { return nil }
 
 func (s *turnSubmitStore) InsertTurn(_ context.Context, turn types.Turn) error {
 	s.insertCalled = true
@@ -494,6 +677,14 @@ type replayStore struct {
 }
 
 func (s *replayStore) InsertSession(context.Context, types.Session) error { return nil }
+
+func (s *replayStore) ListSessions(context.Context) ([]types.Session, error) { return nil, nil }
+
+func (s *replayStore) GetSelectedSessionID(context.Context) (string, bool, error) {
+	return "", false, nil
+}
+
+func (s *replayStore) SetSelectedSessionID(context.Context, string) error { return nil }
 
 func (s *replayStore) InsertTurn(context.Context, types.Turn) error { return nil }
 

@@ -273,3 +273,281 @@ func TestStoreListsMemoryEntriesByWorkspaceInUpdatedAtOrderWithUTCNormalization(
 		t.Fatalf("entries[1].ID = %q, want %q", entries[1].ID, "mem_old")
 	}
 }
+
+func TestStoreListsSessionsInUpdatedAtDescOrder(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	older := time.Date(2026, 4, 4, 8, 0, 0, 0, time.UTC)
+	newer := older.Add(5 * time.Minute)
+
+	if err := store.InsertSession(context.Background(), types.Session{
+		ID:            "sess_old",
+		WorkspaceRoot: "D:/work/old",
+		State:         types.SessionStateIdle,
+		CreatedAt:     older,
+		UpdatedAt:     older,
+	}); err != nil {
+		t.Fatalf("InsertSession(old) error = %v", err)
+	}
+	if err := store.InsertSession(context.Background(), types.Session{
+		ID:            "sess_new",
+		WorkspaceRoot: "D:/work/new",
+		State:         types.SessionStateIdle,
+		CreatedAt:     newer,
+		UpdatedAt:     newer,
+	}); err != nil {
+		t.Fatalf("InsertSession(new) error = %v", err)
+	}
+
+	sessions, err := store.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("len(sessions) = %d, want 2", len(sessions))
+	}
+	if sessions[0].ID != "sess_new" || sessions[1].ID != "sess_old" {
+		t.Fatalf("sessions = %#v, want newest first", sessions)
+	}
+}
+
+func TestStorePersistsSelectedSessionID(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	selected, ok, err := store.GetSelectedSessionID(context.Background())
+	if err != nil {
+		t.Fatalf("GetSelectedSessionID(initial) error = %v", err)
+	}
+	if ok || selected != "" {
+		t.Fatalf("initial selected = %q, %v, want empty false", selected, ok)
+	}
+
+	if err := store.SetSelectedSessionID(context.Background(), "sess_focus"); err != nil {
+		t.Fatalf("SetSelectedSessionID() error = %v", err)
+	}
+
+	selected, ok, err = store.GetSelectedSessionID(context.Background())
+	if err != nil {
+		t.Fatalf("GetSelectedSessionID(saved) error = %v", err)
+	}
+	if !ok || selected != "sess_focus" {
+		t.Fatalf("selected = %q, %v, want %q true", selected, ok, "sess_focus")
+	}
+}
+
+func TestStoreListsRunningTurnsOldestFirst(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	older := time.Date(2026, 4, 4, 8, 0, 0, 0, time.UTC)
+	newer := older.Add(5 * time.Minute)
+
+	if err := store.InsertTurn(context.Background(), types.Turn{
+		ID:          "turn_created",
+		SessionID:   "sess_1",
+		State:       types.TurnStateCreated,
+		UserMessage: "ignore me",
+		CreatedAt:   older.Add(2 * time.Minute),
+		UpdatedAt:   older.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("InsertTurn(created) error = %v", err)
+	}
+
+	if err := store.InsertTurn(context.Background(), types.Turn{
+		ID:          "turn_running_old",
+		SessionID:   "sess_1",
+		State:       types.TurnStateModelStreaming,
+		UserMessage: "first running",
+		CreatedAt:   older,
+		UpdatedAt:   older,
+	}); err != nil {
+		t.Fatalf("InsertTurn(running old) error = %v", err)
+	}
+
+	if err := store.InsertTurn(context.Background(), types.Turn{
+		ID:          "turn_running_new",
+		SessionID:   "sess_2",
+		State:       types.TurnStateToolRunning,
+		UserMessage: "second running",
+		CreatedAt:   newer,
+		UpdatedAt:   newer,
+	}); err != nil {
+		t.Fatalf("InsertTurn(running new) error = %v", err)
+	}
+
+	turns, err := store.ListRunningTurns(context.Background())
+	if err != nil {
+		t.Fatalf("ListRunningTurns() error = %v", err)
+	}
+	if len(turns) != 2 {
+		t.Fatalf("len(turns) = %d, want 2", len(turns))
+	}
+	if turns[0].ID != "turn_running_old" || turns[0].State != types.TurnStateModelStreaming {
+		t.Fatalf("turns[0] = %#v, want oldest running turn", turns[0])
+	}
+	if turns[1].ID != "turn_running_new" || turns[1].State != types.TurnStateToolRunning {
+		t.Fatalf("turns[1] = %#v, want newest running turn", turns[1])
+	}
+}
+
+func TestStorePersistsProviderCacheHeadsAndCompactions(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 4, 4, 8, 0, 0, 0, time.UTC)
+
+	head := types.ProviderCacheHead{
+		SessionID:         "sess_cache",
+		Provider:          "openai_compatible",
+		CapabilityProfile: "ark_responses",
+		ActiveSessionRef:  "resp_active",
+		ActivePrefixRef:   "resp_prefix",
+		ActiveGeneration:  3,
+		UpdatedAt:         now,
+	}
+	if err := store.UpsertProviderCacheHead(context.Background(), head); err != nil {
+		t.Fatalf("UpsertProviderCacheHead() error = %v", err)
+	}
+
+	entry := types.ProviderCacheEntry{
+		ID:                "cache_entry_1",
+		SessionID:         head.SessionID,
+		Provider:          head.Provider,
+		CapabilityProfile: head.CapabilityProfile,
+		CacheKind:         "session",
+		ExternalRef:       "resp_active",
+		Generation:        3,
+		Status:            "active",
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := store.InsertProviderCacheEntry(context.Background(), entry); err != nil {
+		t.Fatalf("InsertProviderCacheEntry() error = %v", err)
+	}
+
+	compaction := types.ConversationCompaction{
+		ID:              "compaction_1",
+		SessionID:       head.SessionID,
+		Kind:            "rolling",
+		Generation:      3,
+		StartPosition:   1,
+		EndPosition:     4,
+		SummaryPayload:  `{"range_label":"turns 1-4"}`,
+		Reason:          "token_budget",
+		ProviderProfile: head.CapabilityProfile,
+		CreatedAt:       now,
+	}
+	if err := store.InsertConversationCompaction(context.Background(), compaction); err != nil {
+		t.Fatalf("InsertConversationCompaction() error = %v", err)
+	}
+
+	gotHead, ok, err := store.GetProviderCacheHead(context.Background(), head.SessionID, head.Provider, head.CapabilityProfile)
+	if err != nil {
+		t.Fatalf("GetProviderCacheHead() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("GetProviderCacheHead() ok = false, want true")
+	}
+	if gotHead.ActiveSessionRef != head.ActiveSessionRef || gotHead.ActivePrefixRef != head.ActivePrefixRef || gotHead.ActiveGeneration != head.ActiveGeneration {
+		t.Fatalf("GetProviderCacheHead() = %#v, want %#v", gotHead, head)
+	}
+
+	var count int
+	if err := store.db.QueryRowContext(context.Background(), `select count(*) from provider_cache_entries where id = ?`, entry.ID).Scan(&count); err != nil {
+		t.Fatalf("count provider_cache_entries error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("provider_cache_entries count = %d, want 1", count)
+	}
+
+	if err := store.db.QueryRowContext(context.Background(), `select count(*) from conversation_compactions where id = ?`, compaction.ID).Scan(&count); err != nil {
+		t.Fatalf("count conversation_compactions error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("conversation_compactions count = %d, want 1", count)
+	}
+}
+
+func TestStoreProviderCacheHeadsAreScopedByCapabilityProfile(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 4, 4, 8, 0, 0, 0, time.UTC)
+
+	arkHead := types.ProviderCacheHead{
+		SessionID:         "sess_cache",
+		Provider:          "openai_compatible",
+		CapabilityProfile: "ark_responses",
+		ActiveSessionRef:  "resp_ark",
+		ActivePrefixRef:   "pref_ark",
+		ActiveGeneration:  2,
+		UpdatedAt:         now,
+	}
+	if err := store.UpsertProviderCacheHead(context.Background(), arkHead); err != nil {
+		t.Fatalf("UpsertProviderCacheHead(ark) error = %v", err)
+	}
+
+	otherHead := types.ProviderCacheHead{
+		SessionID:         "sess_cache",
+		Provider:          "openai_compatible",
+		CapabilityProfile: "anthropic_native",
+		ActiveSessionRef:  "resp_other",
+		ActivePrefixRef:   "pref_other",
+		ActiveGeneration:  5,
+		UpdatedAt:         now.Add(time.Minute),
+	}
+	if err := store.UpsertProviderCacheHead(context.Background(), otherHead); err != nil {
+		t.Fatalf("UpsertProviderCacheHead(other) error = %v", err)
+	}
+
+	gotArk, ok, err := store.GetProviderCacheHead(context.Background(), arkHead.SessionID, arkHead.Provider, arkHead.CapabilityProfile)
+	if err != nil {
+		t.Fatalf("GetProviderCacheHead(ark) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("GetProviderCacheHead(ark) ok = false, want true")
+	}
+	if gotArk.ActiveSessionRef != arkHead.ActiveSessionRef || gotArk.ActivePrefixRef != arkHead.ActivePrefixRef || gotArk.ActiveGeneration != arkHead.ActiveGeneration {
+		t.Fatalf("GetProviderCacheHead(ark) = %#v, want %#v", gotArk, arkHead)
+	}
+
+	gotOther, ok, err := store.GetProviderCacheHead(context.Background(), otherHead.SessionID, otherHead.Provider, otherHead.CapabilityProfile)
+	if err != nil {
+		t.Fatalf("GetProviderCacheHead(other) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("GetProviderCacheHead(other) ok = false, want true")
+	}
+	if gotOther.ActiveSessionRef != otherHead.ActiveSessionRef || gotOther.ActivePrefixRef != otherHead.ActivePrefixRef || gotOther.ActiveGeneration != otherHead.ActiveGeneration {
+		t.Fatalf("GetProviderCacheHead(other) = %#v, want %#v", gotOther, otherHead)
+	}
+
+	var count int
+	if err := store.db.QueryRowContext(context.Background(), `
+		select count(*)
+		from provider_cache_heads
+		where session_id = ? and provider = ?
+	`, arkHead.SessionID, arkHead.Provider).Scan(&count); err != nil {
+		t.Fatalf("count provider_cache_heads error = %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("provider_cache_heads count = %d, want 2", count)
+	}
+}

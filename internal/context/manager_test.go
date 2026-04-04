@@ -7,6 +7,91 @@ import (
 	"go-agent/internal/model"
 )
 
+func TestManagerBuildUsesEstimatedTokensBeforeItemThreshold(t *testing.T) {
+	manager := NewManager(Config{
+		MaxRecentItems:             4,
+		MaxEstimatedTokens:         20,
+		CompactionThreshold:        99,
+		MicrocompactBytesThreshold: 32,
+	})
+
+	items := []model.ConversationItem{
+		{
+			Kind: model.ConversationItemToolResult,
+			Result: &model.ToolResult{
+				Content: strings.Repeat("x", 160),
+			},
+		},
+		model.UserMessageItem("short"),
+		model.UserMessageItem("short-2"),
+		model.UserMessageItem("short-3"),
+		model.UserMessageItem("short-4"),
+	}
+
+	got := manager.Build("follow up", items, nil, nil)
+	if got.EstimatedTokens <= 20 {
+		t.Fatalf("EstimatedTokens = %d, want > 20", got.EstimatedTokens)
+	}
+	if got.Action.Kind != CompactionActionMicrocompact {
+		t.Fatalf("Action.Kind = %q, want %q", got.Action.Kind, CompactionActionMicrocompact)
+	}
+}
+
+func TestManagerBuildRequestsRollingCompactionWhenMicrocompactIsNotEnough(t *testing.T) {
+	manager := NewManager(Config{
+		MaxRecentItems:             2,
+		MaxEstimatedTokens:         24,
+		CompactionThreshold:        4,
+		MicrocompactBytesThreshold: 999,
+	})
+
+	items := []model.ConversationItem{
+		model.UserMessageItem("turn 1"),
+		model.UserMessageItem("turn 2"),
+		model.UserMessageItem("turn 3"),
+		model.UserMessageItem("turn 4"),
+		model.UserMessageItem("turn 5"),
+	}
+
+	got := manager.Build("follow up", items, nil, nil)
+	if got.Action.Kind != CompactionActionRolling {
+		t.Fatalf("Action.Kind = %q, want %q", got.Action.Kind, CompactionActionRolling)
+	}
+	if got.Action.RangeStart != 0 || got.Action.RangeEnd != 3 {
+		t.Fatalf("Action range = %d:%d, want 0:3", got.Action.RangeStart, got.Action.RangeEnd)
+	}
+}
+
+func TestManagerBuildKeepsRecentTailToolResultsOutOfMicrocompact(t *testing.T) {
+	manager := NewManager(Config{
+		MaxRecentItems:             2,
+		MaxEstimatedTokens:         24,
+		CompactionThreshold:        4,
+		MicrocompactBytesThreshold: 32,
+	})
+
+	items := []model.ConversationItem{
+		model.UserMessageItem("turn 1"),
+		model.UserMessageItem("turn 2"),
+		model.UserMessageItem("turn 3"),
+		{
+			Kind: model.ConversationItemToolResult,
+			Result: &model.ToolResult{
+				Content: strings.Repeat("x", 160),
+			},
+		},
+		model.UserMessageItem("turn 5"),
+	}
+
+	got := manager.Build("follow up", items, nil, nil)
+	if got.Action.Kind != CompactionActionRolling {
+		t.Fatalf("Action.Kind = %q, want %q", got.Action.Kind, CompactionActionRolling)
+	}
+	if got.Action.RangeStart != 0 || got.Action.RangeEnd != 3 {
+		t.Fatalf("Action range = %d:%d, want 0:3", got.Action.RangeStart, got.Action.RangeEnd)
+	}
+}
+
 func TestManagerBuildSelectsRecentItemsAndSummaries(t *testing.T) {
 	manager := NewManager(Config{
 		MaxRecentItems:      4,

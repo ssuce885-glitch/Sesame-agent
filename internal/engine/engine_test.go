@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/model"
@@ -391,6 +392,294 @@ func TestRunTurnFailsWhenToolStepLimitIsExceeded(t *testing.T) {
 	}
 }
 
+func TestRunTurnUsesStoredProviderCacheHeadAndPersistsNextHead(t *testing.T) {
+	store := &fakeConversationStore{
+		cacheHead: &types.ProviderCacheHead{
+			SessionID:         "sess_1",
+			Provider:          "openai_compatible",
+			CapabilityProfile: "ark_responses",
+			ActiveSessionRef:  "resp_prev",
+			ActivePrefixRef:   "pref_prev",
+			ActiveGeneration:  2,
+			UpdatedAt:         time.Date(2026, 4, 4, 8, 0, 0, 0, time.UTC),
+		},
+	}
+	client := &recordingStreamingClient{
+		capabilities: model.ProviderCapabilities{
+			Profile:              model.CapabilityProfileArkResponses,
+			SupportsSessionCache: true,
+			SupportsPrefixCache:  true,
+			CachesToolResults:    true,
+			RotatesSessionRef:    true,
+		},
+		streams: [][]model.StreamEvent{{
+			{Kind: model.StreamEventResponseMetadata, ResponseMetadata: &model.ResponseMetadata{
+				ResponseID:   "resp_next",
+				InputTokens:  11,
+				OutputTokens: 7,
+				CachedTokens: 4,
+			}},
+			{Kind: model.StreamEventMessageEnd},
+		}},
+	}
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      8,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 16,
+	})
+	runner := New(client, tools.NewRegistry(), permissions.NewEngine(), store, manager, nil, 8)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_1", WorkspaceRoot: t.TempDir()},
+		Turn:    types.Turn{ID: "turn_1", SessionID: "sess_1", UserMessage: "hello"},
+		Sink:    &recordingSink{},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if len(client.requests) != 1 {
+		t.Fatalf("len(requests) = %d, want 1", len(client.requests))
+	}
+	if client.requests[0].Cache == nil {
+		t.Fatal("request cache = nil, want stored cache head to be reused")
+	}
+	if client.requests[0].Cache.PreviousResponseID != "resp_prev" {
+		t.Fatalf("request cache previous = %q, want %q", client.requests[0].Cache.PreviousResponseID, "resp_prev")
+	}
+	if len(client.requests[0].Items) != 1 {
+		t.Fatalf("len(first request items) = %d, want 1 incremental user item", len(client.requests[0].Items))
+	}
+	if client.requests[0].Items[0].Kind != model.ConversationItemUserMessage || client.requests[0].Items[0].Text != "hello" {
+		t.Fatalf("first request items = %#v, want only current user item", client.requests[0].Items)
+	}
+	if store.upsertedHead == nil {
+		t.Fatal("upserted head = nil, want next cache head")
+	}
+	if store.upsertedHead.ActiveSessionRef != "resp_next" {
+		t.Fatalf("upserted head session ref = %q, want %q", store.upsertedHead.ActiveSessionRef, "resp_next")
+	}
+	if store.upsertedHead.Provider != "openai_compatible" {
+		t.Fatalf("upserted head provider = %q, want %q", store.upsertedHead.Provider, "openai_compatible")
+	}
+	if store.upsertedHead.CapabilityProfile != "ark_responses" {
+		t.Fatalf("upserted head profile = %q, want %q", store.upsertedHead.CapabilityProfile, "ark_responses")
+	}
+}
+
+func TestRunTurnUsesUpdatedCacheHeadWithinSameToolLoop(t *testing.T) {
+	workspace := t.TempDir()
+	readmePath := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(readmePath, []byte("hello from readme"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := &fakeConversationStore{
+		cacheHead: &types.ProviderCacheHead{
+			SessionID:         "sess_1",
+			Provider:          "openai_compatible",
+			CapabilityProfile: "ark_responses",
+			ActiveSessionRef:  "resp_prev",
+			ActiveGeneration:  2,
+			UpdatedAt:         time.Date(2026, 4, 4, 8, 0, 0, 0, time.UTC),
+		},
+	}
+	client := &recordingStreamingClient{
+		capabilities: model.ProviderCapabilities{
+			Profile:              model.CapabilityProfileArkResponses,
+			SupportsSessionCache: true,
+			SupportsPrefixCache:  true,
+			CachesToolResults:    true,
+			RotatesSessionRef:    true,
+		},
+		streams: [][]model.StreamEvent{
+			{
+				{Kind: model.StreamEventResponseMetadata, ResponseMetadata: &model.ResponseMetadata{
+					ResponseID:   "resp_next",
+					InputTokens:  10,
+					OutputTokens: 4,
+					CachedTokens: 6,
+				}},
+				{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+					ID:    "call_1",
+					Name:  "file_read",
+					Input: map[string]any{"path": readmePath},
+				}},
+				{Kind: model.StreamEventMessageEnd},
+			},
+			{
+				{Kind: model.StreamEventMessageEnd},
+			},
+		},
+	}
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      8,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 16,
+	})
+	runner := New(client, tools.NewRegistry(), permissions.NewEngine(), store, manager, nil, 8)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_1", WorkspaceRoot: workspace},
+		Turn:    types.Turn{ID: "turn_1", SessionID: "sess_1", UserMessage: "inspect the readme"},
+		Sink:    &recordingSink{},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if len(client.requests) != 2 {
+		t.Fatalf("len(requests) = %d, want 2", len(client.requests))
+	}
+	if client.requests[0].Cache == nil || client.requests[0].Cache.PreviousResponseID != "resp_prev" {
+		t.Fatalf("first request cache = %#v, want resp_prev", client.requests[0].Cache)
+	}
+	if client.requests[1].Cache == nil {
+		t.Fatal("second request cache = nil, want updated previous_response_id")
+	}
+	if client.requests[1].Cache.PreviousResponseID != "resp_next" {
+		t.Fatalf("second request cache previous = %q, want %q", client.requests[1].Cache.PreviousResponseID, "resp_next")
+	}
+}
+
+func TestRunTurnUsesIncrementalNativeContinuationAfterPrefixRotation(t *testing.T) {
+	workspace := t.TempDir()
+	readmePath := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(readmePath, []byte("hello from readme"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := &fakeConversationStore{
+		items: []model.ConversationItem{
+			model.UserMessageItem("turn 1"),
+			model.UserMessageItem("turn 2"),
+			model.UserMessageItem("turn 3"),
+			model.UserMessageItem("turn 4"),
+			model.UserMessageItem("turn 5"),
+		},
+	}
+	client := &recordingStreamingClient{
+		capabilities: model.ProviderCapabilities{
+			Profile:              model.CapabilityProfileArkResponses,
+			SupportsSessionCache: true,
+			SupportsPrefixCache:  true,
+			CachesToolResults:    true,
+			RotatesSessionRef:    true,
+		},
+		streams: [][]model.StreamEvent{
+			{
+				{Kind: model.StreamEventResponseMetadata, ResponseMetadata: &model.ResponseMetadata{
+					ResponseID:   "resp_prefix",
+					InputTokens:  12,
+					OutputTokens: 5,
+					CachedTokens: 8,
+				}},
+				{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+					ID:    "call_1",
+					Name:  "file_read",
+					Input: map[string]any{"path": readmePath},
+				}},
+				{Kind: model.StreamEventMessageEnd},
+			},
+			{
+				{Kind: model.StreamEventMessageEnd},
+			},
+		},
+	}
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      2,
+		MaxEstimatedTokens:  8,
+		CompactionThreshold: 4,
+	})
+	runner := New(client, tools.NewRegistry(), permissions.NewEngine(), store, manager, nil, 8)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_1", WorkspaceRoot: workspace},
+		Turn:    types.Turn{ID: "turn_6", SessionID: "sess_1", UserMessage: "follow up"},
+		Sink:    &recordingSink{},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if len(client.requests) != 2 {
+		t.Fatalf("len(requests) = %d, want 2", len(client.requests))
+	}
+	if client.requests[0].Cache == nil || client.requests[0].Cache.Mode != model.CacheModePrefix {
+		t.Fatalf("first request cache = %#v, want prefix rotation", client.requests[0].Cache)
+	}
+	if client.requests[1].Cache == nil {
+		t.Fatal("second request cache = nil, want session continuation")
+	}
+	if client.requests[1].Cache.Mode != model.CacheModeSession {
+		t.Fatalf("second request cache mode = %q, want %q", client.requests[1].Cache.Mode, model.CacheModeSession)
+	}
+	if client.requests[1].Cache.PreviousResponseID != "resp_prefix" {
+		t.Fatalf("second request cache previous = %q, want %q", client.requests[1].Cache.PreviousResponseID, "resp_prefix")
+	}
+	if client.requests[1].UserMessage != "" {
+		t.Fatalf("second request user message = %q, want empty native continuation", client.requests[1].UserMessage)
+	}
+	if len(client.requests[1].Items) != 1 {
+		t.Fatalf("len(second request items) = %d, want 1 incremental item", len(client.requests[1].Items))
+	}
+	if client.requests[1].Items[0].Kind != model.ConversationItemToolResult || client.requests[1].Items[0].Result == nil || client.requests[1].Items[0].Result.ToolCallID != "call_1" {
+		t.Fatalf("second request items = %#v, want tool result delta", client.requests[1].Items)
+	}
+}
+
+func TestRunTurnCompactsEvenWhenSummariesAlreadyExist(t *testing.T) {
+	store := &fakeConversationStore{
+		items: []model.ConversationItem{
+			model.UserMessageItem("turn 1"),
+			model.UserMessageItem("turn 2"),
+			model.UserMessageItem("turn 3"),
+			model.UserMessageItem("turn 4"),
+			model.UserMessageItem("turn 5"),
+			model.UserMessageItem("turn 6"),
+		},
+		summaries: []model.Summary{{
+			RangeLabel: "turns 1-2",
+		}},
+	}
+	client := &recordingStreamingClient{
+		streams: [][]model.StreamEvent{{
+			{Kind: model.StreamEventMessageEnd},
+		}},
+	}
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:             2,
+		MaxEstimatedTokens:         8,
+		CompactionThreshold:        4,
+		MicrocompactBytesThreshold: 9999,
+	})
+	compactor := &recordingCompactor{
+		summary: model.Summary{
+			RangeLabel: "turns 1-4",
+		},
+	}
+	runner := New(client, tools.NewRegistry(), permissions.NewEngine(), store, manager, compactor, 8)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_1", WorkspaceRoot: t.TempDir()},
+		Turn:    types.Turn{ID: "turn_7", SessionID: "sess_1", UserMessage: "follow up"},
+		Sink:    &recordingSink{},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if compactor.calls != 1 {
+		t.Fatalf("compactor calls = %d, want 1", compactor.calls)
+	}
+	if len(store.insertedSummaries) != 1 {
+		t.Fatalf("len(inserted summaries) = %d, want 1", len(store.insertedSummaries))
+	}
+	if store.insertedSummaries[0].RangeLabel != "turns 1-4" {
+		t.Fatalf("inserted summary = %#v, want rolling compaction summary", store.insertedSummaries[0])
+	}
+}
+
 type scriptedStreamingClient struct {
 	events []model.StreamEvent
 	err    error
@@ -411,9 +700,14 @@ func (c scriptedStreamingClient) Stream(_ context.Context, _ model.Request) (<-c
 	return events, errs
 }
 
+func (c scriptedStreamingClient) Capabilities() model.ProviderCapabilities {
+	return model.ProviderCapabilities{Profile: model.CapabilityProfileNone}
+}
+
 type recordingStreamingClient struct {
-	streams  [][]model.StreamEvent
-	requests []model.Request
+	streams      [][]model.StreamEvent
+	requests     []model.Request
+	capabilities model.ProviderCapabilities
 }
 
 func (c *recordingStreamingClient) Stream(_ context.Context, req model.Request) (<-chan model.StreamEvent, <-chan error) {
@@ -437,6 +731,10 @@ func (c *recordingStreamingClient) Stream(_ context.Context, req model.Request) 
 	close(errs)
 
 	return events, errs
+}
+
+func (c *recordingStreamingClient) Capabilities() model.ProviderCapabilities {
+	return c.capabilities
 }
 
 type recordingSink struct {
@@ -482,11 +780,15 @@ func assertNoEventType(t *testing.T, sink *recordingSink, unwanted string) {
 }
 
 type fakeConversationStore struct {
-	items             []model.ConversationItem
-	summaries         []model.Summary
-	memories          []types.MemoryEntry
-	insertedItems     []model.ConversationItem
-	insertedPositions []int
+	items              []model.ConversationItem
+	summaries          []model.Summary
+	memories           []types.MemoryEntry
+	cacheHead          *types.ProviderCacheHead
+	upsertedHead       *types.ProviderCacheHead
+	insertedItems      []model.ConversationItem
+	insertedPositions   []int
+	insertedSummaries   []model.Summary
+	insertedSummaryPos  []int
 }
 
 func (s *fakeConversationStore) ListConversationItems(context.Context, string) ([]model.ConversationItem, error) {
@@ -503,12 +805,45 @@ func (s *fakeConversationStore) InsertConversationItem(_ context.Context, _ stri
 	return nil
 }
 
-func (s *fakeConversationStore) InsertConversationSummary(context.Context, string, int, model.Summary) error {
+func (s *fakeConversationStore) InsertConversationSummary(_ context.Context, _ string, position int, summary model.Summary) error {
+	s.insertedSummaries = append(s.insertedSummaries, summary)
+	s.insertedSummaryPos = append(s.insertedSummaryPos, position)
 	return nil
 }
 
 func (s *fakeConversationStore) ListMemoryEntriesByWorkspace(context.Context, string) ([]types.MemoryEntry, error) {
 	return append([]types.MemoryEntry(nil), s.memories...), nil
+}
+
+func (s *fakeConversationStore) GetProviderCacheHead(context.Context, string, string, string) (types.ProviderCacheHead, bool, error) {
+	if s.cacheHead == nil {
+		return types.ProviderCacheHead{}, false, nil
+	}
+	return *s.cacheHead, true, nil
+}
+
+func (s *fakeConversationStore) UpsertProviderCacheHead(_ context.Context, head types.ProviderCacheHead) error {
+	cloned := head
+	s.upsertedHead = &cloned
+	return nil
+}
+
+func (s *fakeConversationStore) InsertProviderCacheEntry(context.Context, types.ProviderCacheEntry) error {
+	return nil
+}
+
+func (s *fakeConversationStore) InsertConversationCompaction(context.Context, types.ConversationCompaction) error {
+	return nil
+}
+
+type recordingCompactor struct {
+	summary model.Summary
+	calls   int
+}
+
+func (c *recordingCompactor) Compact(context.Context, []model.ConversationItem) (model.Summary, error) {
+	c.calls++
+	return c.summary, nil
 }
 
 func conversationItemKinds(items []model.ConversationItem) []model.ConversationItemKind {

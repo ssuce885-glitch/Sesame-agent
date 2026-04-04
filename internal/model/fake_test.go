@@ -292,3 +292,95 @@ func TestFakeStreamingClientSnapshotsNeutralRequest(t *testing.T) {
 		t.Fatalf("ToolResults[0].Content = %q, want %q", got.ToolResults[0].Content, "legacy contents")
 	}
 }
+
+func TestFakeStreamingClientSnapshotsCacheAwareRequest(t *testing.T) {
+	client := NewFakeStreaming([][]StreamEvent{{
+		{Kind: StreamEventResponseMetadata, ResponseMetadata: &ResponseMetadata{
+			ResponseID:   "resp_1",
+			CachedTokens: 7,
+		}},
+		{Kind: StreamEventMessageEnd},
+	}})
+
+	req := Request{
+		Cache: &CacheDirective{
+			Mode:               CacheModePrefix,
+			Store:              true,
+			PreviousResponseID: "resp_prev",
+			ExpireAt:           1735689600,
+		},
+	}
+
+	stream, errs := client.Stream(context.Background(), req)
+
+	req.Cache.Mode = CacheModeSession
+	req.Cache.Store = false
+	req.Cache.PreviousResponseID = "mutated"
+	req.Cache.ExpireAt = 0
+
+	var got []StreamEvent
+	for event := range stream {
+		got = append(got, event)
+	}
+	if err := <-errs; err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("len(events) = %d, want 2", len(got))
+	}
+	if got[0].Kind != StreamEventResponseMetadata || got[0].ResponseMetadata == nil {
+		t.Fatalf("first event = %+v, want response metadata", got[0])
+	}
+	if got[0].ResponseMetadata.ResponseID != "resp_1" || got[0].ResponseMetadata.CachedTokens != 7 {
+		t.Fatalf("response metadata = %+v, want resp_1/7", got[0].ResponseMetadata)
+	}
+	if got[1].Kind != StreamEventMessageEnd {
+		t.Fatalf("second event = %+v, want message end", got[1])
+	}
+
+	last := client.LastRequest()
+	if last.Cache == nil {
+		t.Fatal("Cache = nil, want snapshot")
+	}
+	if last.Cache.Mode != CacheModePrefix {
+		t.Fatalf("Cache.Mode = %q, want %q", last.Cache.Mode, CacheModePrefix)
+	}
+	if !last.Cache.Store {
+		t.Fatal("Cache.Store = false, want true")
+	}
+	if last.Cache.PreviousResponseID != "resp_prev" {
+		t.Fatalf("Cache.PreviousResponseID = %q, want %q", last.Cache.PreviousResponseID, "resp_prev")
+	}
+	if last.Cache.ExpireAt != 1735689600 {
+		t.Fatalf("Cache.ExpireAt = %d, want %d", last.Cache.ExpireAt, 1735689600)
+	}
+	if caps := client.Capabilities(); caps.Profile != CapabilityProfileNone {
+		t.Fatalf("Capabilities().Profile = %q, want %q", caps.Profile, CapabilityProfileNone)
+	}
+}
+
+func TestCacheContractShapesCompileAndHoldValues(t *testing.T) {
+	caps := ProviderCapabilities{
+		Profile:              CapabilityProfileArkResponses,
+		SupportsSessionCache: true,
+		SupportsPrefixCache:  true,
+		CachesToolResults:    true,
+		RotatesSessionRef:    true,
+	}
+
+	if !caps.SupportsSessionCache || !caps.SupportsPrefixCache || !caps.CachesToolResults || !caps.RotatesSessionRef {
+		t.Fatalf("capabilities = %+v, want all cache flags true", caps)
+	}
+
+	meta := ResponseMetadata{
+		ResponseID:   "resp_2",
+		CachedTokens: 5,
+		InputTokens:  13,
+		OutputTokens: 8,
+	}
+
+	if meta.ResponseID != "resp_2" || meta.CachedTokens != 5 || meta.InputTokens != 13 || meta.OutputTokens != 8 {
+		t.Fatalf("response metadata = %+v, want resp_2/5/13/8", meta)
+	}
+}

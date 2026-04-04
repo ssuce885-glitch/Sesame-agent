@@ -36,6 +36,10 @@ func NewFakeStreaming(streams [][]StreamEvent) *FakeStreaming {
 	return &FakeStreaming{streams: streams}
 }
 
+func (f *FakeStreaming) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{Profile: CapabilityProfileNone}
+}
+
 func (f *FakeStreaming) Stream(ctx context.Context, req Request) (<-chan StreamEvent, <-chan error) {
 	f.requests = append(f.requests, cloneRequest(req))
 
@@ -102,6 +106,10 @@ func cloneRequest(req Request) Request {
 	cloned.Items = cloneConversationItems(req.Items)
 	cloned.Tools = cloneToolSchemas(req.Tools)
 	cloned.ToolResults = append([]ToolResult(nil), req.ToolResults...)
+	if req.Cache != nil {
+		cache := *req.Cache
+		cloned.Cache = &cache
+	}
 	return cloned
 }
 

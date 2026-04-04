@@ -31,6 +31,12 @@ type storeAndBusSink struct {
 	bus   *stream.Bus
 }
 
+type runtimeWiring struct {
+	contextManagerConfig contextstate.Config
+	runtime              *contextstate.Runtime
+	compactor            contextstate.Compactor
+}
+
 func (s storeAndBusSink) Emit(ctx context.Context, event types.Event) error {
 	seq, err := s.store.AppendEvent(ctx, event)
 	if err != nil {
@@ -93,13 +99,15 @@ func main() {
 		slog.Error("build model client", "err", err)
 		os.Exit(1)
 	}
-	runner := engine.New(
+	wiring := buildRuntimeWiring(cfg, modelClient)
+	runner := engine.NewWithRuntime(
 		modelClient,
 		registry,
 		permissionEngine,
 		store,
-		contextstate.NewManager(buildContextManagerConfig(cfg)),
-		nil,
+		contextstate.NewManager(wiring.contextManagerConfig),
+		wiring.runtime,
+		wiring.compactor,
 		buildMaxToolSteps(cfg),
 	)
 	manager := session.NewManager(sessionRunnerAdapter{
@@ -109,11 +117,16 @@ func main() {
 			bus:   bus,
 		},
 	})
+	if err := recoverRuntimeState(context.Background(), store, manager); err != nil {
+		slog.Error("recover runtime state", "err", err)
+		os.Exit(1)
+	}
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
 		Bus:     bus,
 		Store:   store,
 		Manager: manager,
+		Status:  buildStatusPayload(cfg),
 	})
 
 	slog.Info("agentd listening", "addr", cfg.Addr)
@@ -134,12 +147,88 @@ func buildPermissionEngine(cfg config.Config) *permissions.Engine {
 
 func buildContextManagerConfig(cfg config.Config) contextstate.Config {
 	return contextstate.Config{
-		MaxRecentItems:      cfg.MaxRecentItems,
-		MaxEstimatedTokens:  cfg.MaxEstimatedTokens,
-		CompactionThreshold: cfg.CompactionThreshold,
+		MaxRecentItems:             cfg.MaxRecentItems,
+		MaxEstimatedTokens:         cfg.MaxEstimatedTokens,
+		CompactionThreshold:        cfg.CompactionThreshold,
+		MicrocompactBytesThreshold: cfg.MicrocompactBytesThreshold,
 	}
 }
 
 func buildMaxToolSteps(cfg config.Config) int {
 	return cfg.MaxToolSteps
+}
+
+func buildStatusPayload(cfg config.Config) httpapi.StatusPayload {
+	return httpapi.StatusPayload{
+		Provider:             cfg.ModelProvider,
+		Model:                cfg.Model,
+		PermissionProfile:    cfg.PermissionProfile,
+		ProviderCacheProfile: cfg.ProviderCacheProfile,
+	}
+}
+
+func buildRuntimeWiring(cfg config.Config, modelClient model.StreamingClient) runtimeWiring {
+	return runtimeWiring{
+		contextManagerConfig: buildContextManagerConfig(cfg),
+		runtime:              contextstate.NewRuntime(cfg.CacheExpirySeconds, cfg.MaxCompactionPasses),
+		compactor:            contextstate.NewPromptedCompactor(modelClient, cfg.Model),
+	}
+}
+
+func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *session.Manager) error {
+	sessions, err := store.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	if manager != nil {
+		for _, sessionRow := range sessions {
+			manager.RegisterSession(sessionRow)
+		}
+	}
+	if err := ensureSelectedSession(ctx, store, sessions); err != nil {
+		return err
+	}
+
+	running, err := store.ListRunningTurns(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, turn := range running {
+		if err := store.MarkTurnInterrupted(ctx, turn.ID); err != nil {
+			return err
+		}
+
+		event, err := types.NewEvent(turn.SessionID, turn.ID, types.EventTurnInterrupted, map[string]string{
+			"reason": "daemon_restart",
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := store.AppendEvent(ctx, event); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func ensureSelectedSession(ctx context.Context, store *sqlite.Store, sessions []types.Session) error {
+	if len(sessions) == 0 {
+		return nil
+	}
+
+	selected, ok, err := store.GetSelectedSessionID(ctx)
+	if err != nil {
+		return err
+	}
+	if ok {
+		for _, sessionRow := range sessions {
+			if sessionRow.ID == selected {
+				return nil
+			}
+		}
+	}
+
+	return store.SetSelectedSessionID(ctx, sessions[0].ID)
 }
