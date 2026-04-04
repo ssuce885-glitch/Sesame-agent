@@ -61,14 +61,23 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 
 	req := buildRequest(e, in, items, summaries, memoryRefs)
 	assistantStarted := false
-	assistantText := strings.Builder{}
 	nextPosition := totalItems + 1
 	toolSteps := 0
+
+	userItem := model.UserMessageItem(in.Turn.UserMessage)
+	if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, userItem); err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
+	nextPosition++
 
 	for {
 		stream, errs := e.model.Stream(ctx, req)
 		messageEnded := false
 		var toolCalls []model.ToolCallChunk
+		assistantText := strings.Builder{}
 
 		for event := range stream {
 			switch event.Kind {
@@ -110,14 +119,23 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			}
 		}
 
+		if assistantText.Len() > 0 {
+			assistantItem := model.ConversationItem{
+				Kind: model.ConversationItemAssistantText,
+				Text: assistantText.String(),
+			}
+			if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, assistantItem); err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
+			req.Items = append(req.Items, assistantItem)
+			nextPosition++
+		}
+
 		if len(toolCalls) == 0 {
 			if messageEnded {
-				if err := persistAssistantText(ctx, e.store, sessionID, in.Turn.ID, nextPosition, assistantText.String()); err != nil {
-					if emitErr := emitFailed(err.Error()); emitErr != nil {
-						return errors.Join(err, emitErr)
-					}
-					return err
-				}
 				if err := emit(types.EventAssistantCompleted, struct{}{}); err != nil {
 					return err
 				}
@@ -173,12 +191,14 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				Content:    result.Text,
 				IsError:    false,
 			}
-			if err := persistToolResult(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResult); err != nil {
+			toolResultItem := model.ToolResultItem(toolResult)
+			if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
 				if emitErr := emitFailed(err.Error()); emitErr != nil {
 					return errors.Join(err, emitErr)
 				}
 				return err
 			}
+			req.Items = append(req.Items, toolResultItem)
 			nextPosition++
 
 			req.ToolResults = append(req.ToolResults, toolResult)
@@ -214,7 +234,7 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	}
 
 	working := e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
-	if working.NeedsCompact && e.compactor != nil {
+	if len(summaries) == 0 && working.NeedsCompact && e.compactor != nil {
 		summary, err := e.compactor.Compact(ctx, items[:working.CompactionStart])
 		if err != nil {
 			return 0, nil, nil, nil, err
@@ -230,7 +250,7 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 }
 
 func buildRequest(e *Engine, in Input, items []model.ConversationItem, summaries []model.Summary, memoryRefs []string) model.Request {
-	reqItems := append([]model.ConversationItem(nil), items...)
+	reqItems := make([]model.ConversationItem, 0, len(summaries)+len(items)+1)
 	for _, summary := range summaries {
 		summary := summary
 		reqItems = append(reqItems, model.ConversationItem{
@@ -238,6 +258,7 @@ func buildRequest(e *Engine, in Input, items []model.ConversationItem, summaries
 			Summary: &summary,
 		})
 	}
+	reqItems = append(reqItems, items...)
 	reqItems = append(reqItems, model.UserMessageItem(in.Turn.UserMessage))
 
 	return model.Request{
@@ -279,20 +300,12 @@ func buildToolSchemas(registry *tools.Registry) []model.ToolSchema {
 	return schemas
 }
 
-func persistAssistantText(ctx context.Context, store ConversationStore, sessionID, turnID string, position int, text string) error {
-	if store == nil || strings.TrimSpace(text) == "" {
-		return nil
-	}
-
-	return store.InsertConversationItem(ctx, sessionID, turnID, position, model.ConversationItem{
-		Kind: model.ConversationItemAssistantText,
-		Text: text,
-	})
-}
-
-func persistToolResult(ctx context.Context, store ConversationStore, sessionID, turnID string, position int, result model.ToolResult) error {
+func persistConversationItem(ctx context.Context, store ConversationStore, sessionID, turnID string, position int, item model.ConversationItem) error {
 	if store == nil {
 		return nil
 	}
-	return store.InsertConversationItem(ctx, sessionID, turnID, position, model.ToolResultItem(result))
+	if item.Kind == model.ConversationItemAssistantText && strings.TrimSpace(item.Text) == "" {
+		return nil
+	}
+	return store.InsertConversationItem(ctx, sessionID, turnID, position, item)
 }
