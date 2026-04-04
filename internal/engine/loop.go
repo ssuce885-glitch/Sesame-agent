@@ -2,9 +2,11 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/memory"
@@ -42,6 +44,11 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	}
 	caps := e.model.Capabilities()
 	providerName := providerCacheOwnerForCapabilities(caps)
+	usageProvider := strings.TrimSpace(e.meta.Provider)
+	if usageProvider == "" {
+		usageProvider = providerName
+	}
+	usageModel := strings.TrimSpace(e.meta.Model)
 
 	if err := emit(types.EventTurnStarted, types.TurnStartedPayload{
 		WorkspaceRoot: in.Session.WorkspaceRoot,
@@ -172,6 +179,41 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			}
 		}
 
+		if responseMeta != nil {
+			cacheHitRate := 0.0
+			if responseMeta.InputTokens > 0 {
+				cacheHitRate = float64(responseMeta.CachedTokens) / float64(responseMeta.InputTokens)
+			}
+			usage := types.TurnUsage{
+				TurnID:       in.Turn.ID,
+				SessionID:    sessionID,
+				Provider:     usageProvider,
+				Model:        usageModel,
+				InputTokens:  responseMeta.InputTokens,
+				OutputTokens: responseMeta.OutputTokens,
+				CachedTokens: responseMeta.CachedTokens,
+				CacheHitRate: cacheHitRate,
+				CreatedAt:    time.Now().UTC(),
+				UpdatedAt:    time.Now().UTC(),
+			}
+			if err := persistTurnUsage(ctx, e.store, usage); err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
+			if err := emit(types.EventTurnUsage, types.TurnUsagePayload{
+				Provider:     usage.Provider,
+				Model:        usage.Model,
+				InputTokens:  usage.InputTokens,
+				OutputTokens: usage.OutputTokens,
+				CachedTokens: usage.CachedTokens,
+				CacheHitRate: usage.CacheHitRate,
+			}); err != nil {
+				return err
+			}
+		}
+
 		if assistantText.Len() > 0 {
 			assistantItem := model.ConversationItem{
 				Kind: model.ConversationItemAssistantText,
@@ -211,12 +253,27 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				return err
 			}
 
-			payload := struct {
-				ToolCallID string `json:"tool_call_id"`
-				ToolName   string `json:"tool_name"`
-			}{
+			toolCallItem := model.ConversationItem{
+				Kind: model.ConversationItemToolCall,
+				ToolCall: model.ToolCallChunk{
+					ID:    call.ID,
+					Name:  call.Name,
+					Input: call.Input,
+				},
+			}
+			if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolCallItem); err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
+			req.Items = append(req.Items, toolCallItem)
+			nextPosition++
+
+			payload := types.ToolEventPayload{
 				ToolCallID: call.ID,
 				ToolName:   call.Name,
+				Arguments:  marshalToolArguments(call.Input),
 			}
 			if err := emit(types.EventToolStarted, payload); err != nil {
 				return err
@@ -236,6 +293,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				return err
 			}
 
+			payload.ResultPreview = previewToolResult(result.Text)
 			if err := emit(types.EventToolCompleted, payload); err != nil {
 				return err
 			}
@@ -348,6 +406,32 @@ func persistConversationItem(ctx context.Context, store ConversationStore, sessi
 		return nil
 	}
 	return store.InsertConversationItem(ctx, sessionID, turnID, position, item)
+}
+
+func persistTurnUsage(ctx context.Context, store ConversationStore, usage types.TurnUsage) error {
+	if store == nil {
+		return nil
+	}
+	return store.UpsertTurnUsage(ctx, usage)
+}
+
+func marshalToolArguments(input map[string]any) string {
+	if len(input) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func previewToolResult(result string) string {
+	const maxLen = 200
+	if len(result) <= maxLen {
+		return result
+	}
+	return result[:maxLen] + "..."
 }
 
 func providerCacheOwnerForCapabilities(caps model.ProviderCapabilities) string {
