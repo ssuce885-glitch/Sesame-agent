@@ -30,13 +30,15 @@ func (m *Manager) Build(userText string, items []model.ConversationItem, summari
 	} else if max <= 0 {
 		start = len(items)
 	}
+	recentItems := cloneConversationItems(items[start:])
 
 	return WorkingSet{
 		Instructions: userText,
 		WorkingContext: WorkingContext{
-			RecentItems: append([]model.ConversationItem(nil), items[start:]...),
-			Summaries:   append([]model.Summary(nil), summaries...),
-			MemoryRefs:  append([]string(nil), memoryRefs...),
+			RecentItems:    recentItems,
+			RecentMessages: conversationItemsToMessages(recentItems),
+			Summaries:      cloneSummaries(summaries),
+			MemoryRefs:     cloneStrings(memoryRefs),
 		},
 		CompactionStart: start,
 		NeedsCompact:    len(items) > m.cfg.CompactionThreshold,
