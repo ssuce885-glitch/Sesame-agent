@@ -3,77 +3,392 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
+	contextstate "go-agent/internal/context"
+	"go-agent/internal/memory"
 	"go-agent/internal/model"
-	"go-agent/internal/permissions"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
 )
 
-func runLoop(ctx context.Context, modelClient model.Client, registry *tools.Registry, permission *permissions.Engine, in Input) ([]types.Event, error) {
-	if modelClient == nil {
-		return nil, errors.New("model client is required")
+func runLoop(ctx context.Context, e *Engine, in Input) error {
+	if e == nil {
+		return errors.New("engine is required")
 	}
-	if registry == nil {
-		return nil, errors.New("tool registry is required")
+	if e.model == nil {
+		return errors.New("model client is required")
 	}
-	if permission == nil {
-		return nil, errors.New("permission engine is required")
+	if e.registry == nil {
+		return errors.New("tool registry is required")
+	}
+	if e.permission == nil {
+		return errors.New("permission engine is required")
+	}
+	if in.Sink == nil {
+		return errors.New("event sink is required")
 	}
 
-	var events []types.Event
-	started, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventTurnStarted, types.TurnStartedPayload{
-		WorkspaceRoot: in.Session.WorkspaceRoot,
-	})
-	if err != nil {
-		return nil, err
-	}
-	events = append(events, started)
-
-	var toolResults []string
-	for {
-		resp, err := modelClient.Next(ctx, model.Request{
-			UserMessage: in.Turn.UserMessage,
-			ToolResults: toolResults,
-		})
+	emit := func(eventType string, payload any) error {
+		event, err := types.NewEvent(in.Session.ID, in.Turn.ID, eventType, payload)
 		if err != nil {
-			return nil, err
+			return err
+		}
+		return in.Sink.Emit(ctx, event)
+	}
+	emitFailed := func(message string) error {
+		return emit(types.EventTurnFailed, types.TurnFailedPayload{Message: message})
+	}
+	caps := e.model.Capabilities()
+	providerName := providerCacheOwnerForCapabilities(caps)
+
+	if err := emit(types.EventTurnStarted, types.TurnStartedPayload{
+		WorkspaceRoot: in.Session.WorkspaceRoot,
+	}); err != nil {
+		return err
+	}
+
+	sessionID := in.Turn.SessionID
+	if sessionID == "" {
+		sessionID = in.Session.ID
+	}
+
+	totalItems, working, err := loadConversationState(ctx, e, in, sessionID)
+	if err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
+
+	cacheHeadValue, cacheHeadOK, err := loadProviderCacheHead(ctx, e.store, sessionID, providerName, string(caps.Profile))
+	if err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
+	var cacheHead *types.ProviderCacheHead
+	if cacheHeadOK {
+		cacheHead = &cacheHeadValue
+	}
+
+	req := e.runtime.PrepareRequest(
+		working,
+		cacheHead,
+		caps,
+		model.UserMessageItem(in.Turn.UserMessage),
+		buildRuntimeInstructions(in.Session.WorkspaceRoot, working.MemoryRefs),
+	)
+	req.Stream = true
+	req.Tools = buildToolSchemas(e.registry)
+	req.ToolChoice = "auto"
+	nativeContinuation := req.Cache != nil && caps.Profile != model.CapabilityProfileNone
+	assistantStarted := false
+	nextPosition := totalItems + 1
+	toolSteps := 0
+
+	userItem := model.UserMessageItem(in.Turn.UserMessage)
+	if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, userItem); err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
+	nextPosition++
+
+	for {
+		stream, errs := e.model.Stream(ctx, req)
+		messageEnded := false
+		var responseMeta *model.ResponseMetadata
+		var toolCalls []model.ToolCallChunk
+		assistantText := strings.Builder{}
+
+		for event := range stream {
+			switch event.Kind {
+			case model.StreamEventTextDelta:
+				if !assistantStarted {
+					if err := emit(types.EventAssistantStarted, struct{}{}); err != nil {
+						return err
+					}
+					assistantStarted = true
+				}
+				assistantText.WriteString(event.TextDelta)
+				if err := emit(types.EventAssistantDelta, types.AssistantDeltaPayload{Text: event.TextDelta}); err != nil {
+					return err
+				}
+			case model.StreamEventToolCallStart, model.StreamEventToolCallDelta:
+				continue
+			case model.StreamEventToolCallEnd:
+				toolCalls = append(toolCalls, event.ToolCall)
+			case model.StreamEventMessageEnd:
+				messageEnded = true
+			case model.StreamEventUsage:
+				continue
+			case model.StreamEventResponseMetadata:
+				responseMeta = event.ResponseMetadata
+				continue
+			default:
+				err := fmt.Errorf("unsupported stream event kind: %s", event.Kind)
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
 		}
 
-		events = appendAssistantDelta(events, in.Session.ID, in.Turn.ID, resp.AssistantText)
-
-		if ShouldStop(len(resp.ToolCalls) > 0) {
-			done, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventTurnCompleted, map[string]string{"result": resp.AssistantText})
+		if errs != nil {
+			err := <-errs
 			if err != nil {
-				return nil, err
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
 			}
-			events = append(events, done)
-			return events, nil
 		}
 
-		for _, call := range resp.ToolCalls {
-			if permission.Decide(call.Name) == permissions.DecisionDeny {
-				return nil, context.Canceled
+		if responseMeta != nil && req.Cache != nil && caps.Profile != model.CapabilityProfileNone {
+			cacheMode := req.Cache.Mode
+			if caps.SupportsSessionCache {
+				cacheMode = model.CacheModeSession
+			}
+			nextHead, ok := nextHeadFromResponse(e, sessionID, providerName, caps, cacheHead, req.Cache, responseMeta)
+			if ok {
+				if err := persistProviderCacheHead(ctx, e, nextHead); err != nil {
+					if emitErr := emitFailed(err.Error()); emitErr != nil {
+						return errors.Join(err, emitErr)
+					}
+					return err
+				}
+				cacheHead = nextHead
+				cacheHeadOK = true
+				if e.runtime != nil {
+					req.Cache = e.runtime.CacheDirectiveForHead(cacheHead, caps, cacheMode)
+				}
+				req.Items = nil
+				req.ToolResults = nil
+				req.UserMessage = ""
+			}
+		}
+
+		if assistantText.Len() > 0 {
+			assistantItem := model.ConversationItem{
+				Kind: model.ConversationItemAssistantText,
+				Text: assistantText.String(),
+			}
+			if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, assistantItem); err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
+			if !nativeContinuation {
+				req.Items = append(req.Items, assistantItem)
+			}
+			nextPosition++
+		}
+
+		if len(toolCalls) == 0 {
+			if messageEnded {
+				if err := emit(types.EventAssistantCompleted, struct{}{}); err != nil {
+					return err
+				}
+				if err := emit(types.EventTurnCompleted, struct{}{}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		for _, call := range toolCalls {
+			toolSteps++
+			if e.maxToolSteps > 0 && toolSteps > e.maxToolSteps {
+				err := fmt.Errorf("turn exceeded max tool steps (%d)", e.maxToolSteps)
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
 			}
 
-			result, err := registry.Execute(ctx, tools.Call{Name: call.Name, Input: call.Input}, tools.ExecContext{
+			payload := struct {
+				ToolCallID string `json:"tool_call_id"`
+				ToolName   string `json:"tool_name"`
+			}{
+				ToolCallID: call.ID,
+				ToolName:   call.Name,
+			}
+			if err := emit(types.EventToolStarted, payload); err != nil {
+				return err
+			}
+
+			result, err := e.registry.Execute(ctx, tools.Call{
+				Name:  call.Name,
+				Input: call.Input,
+			}, tools.ExecContext{
 				WorkspaceRoot:    in.Session.WorkspaceRoot,
-				PermissionEngine: permission,
+				PermissionEngine: e.permission,
 			})
 			if err != nil {
-				return nil, err
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
 			}
 
-			toolResults = append(toolResults, result.Text)
-
-			completed, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventToolCompleted, map[string]string{
-				"tool_name": call.Name,
-				"result":    result.Text,
-			})
-			if err != nil {
-				return nil, err
+			if err := emit(types.EventToolCompleted, payload); err != nil {
+				return err
 			}
-			events = append(events, completed)
+
+			toolResult := model.ToolResult{
+				ToolCallID: call.ID,
+				ToolName:   call.Name,
+				Content:    result.Text,
+				IsError:    false,
+			}
+			toolResultItem := model.ToolResultItem(toolResult)
+			if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
+			req.Items = append(req.Items, toolResultItem)
+			nextPosition++
+
+			req.ToolResults = append(req.ToolResults, toolResult)
 		}
 	}
+}
+
+func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string) (int, contextstate.WorkingSet, error) {
+	if e.store == nil || e.ctxManager == nil {
+		return 0, contextstate.WorkingSet{}, nil
+	}
+
+	items, err := e.store.ListConversationItems(ctx, sessionID)
+	if err != nil {
+		return 0, contextstate.WorkingSet{}, err
+	}
+	totalItems := len(items)
+
+	summaries, err := e.store.ListConversationSummaries(ctx, sessionID)
+	if err != nil {
+		return 0, contextstate.WorkingSet{}, err
+	}
+
+	entries, err := e.store.ListMemoryEntriesByWorkspace(ctx, in.Session.WorkspaceRoot)
+	if err != nil {
+		return 0, contextstate.WorkingSet{}, err
+	}
+
+	recalled := memory.Recall(in.Turn.UserMessage, entries, 3)
+	memoryRefs := make([]string, 0, len(recalled))
+	for _, entry := range recalled {
+		memoryRefs = append(memoryRefs, entry.Content)
+	}
+
+	working := e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
+	if working.Action.Kind == contextstate.CompactionActionRolling && e.compactor != nil {
+		cutoff := working.CompactionStart
+		if cutoff < 0 {
+			cutoff = 0
+		}
+		if cutoff > len(items) {
+			cutoff = len(items)
+		}
+		summary, err := e.compactor.Compact(ctx, items[:cutoff])
+		if err != nil {
+			return 0, contextstate.WorkingSet{}, err
+		}
+		if err := e.store.InsertConversationSummary(ctx, sessionID, cutoff, summary); err != nil {
+			return 0, contextstate.WorkingSet{}, err
+		}
+		summaries = append(summaries, summary)
+		working = e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
+	}
+
+	return totalItems, working, nil
+}
+
+func buildRuntimeInstructions(workspaceRoot string, memoryRefs []string) string {
+	base := fmt.Sprintf("workspace_root=%s\nUse local tools when needed.", workspaceRoot)
+	if len(memoryRefs) == 0 {
+		return base
+	}
+	return base + "\nRelevant memory:\n- " + strings.Join(memoryRefs, "\n- ")
+}
+
+func buildToolSchemas(registry *tools.Registry) []model.ToolSchema {
+	if registry == nil {
+		return nil
+	}
+
+	defs := registry.Definitions()
+	if len(defs) == 0 {
+		return nil
+	}
+
+	schemas := make([]model.ToolSchema, 0, len(defs))
+	for _, def := range defs {
+		schemas = append(schemas, model.ToolSchema{
+			Name:        def.Name,
+			Description: def.Description,
+			InputSchema: def.InputSchema,
+		})
+	}
+	return schemas
+}
+
+func persistConversationItem(ctx context.Context, store ConversationStore, sessionID, turnID string, position int, item model.ConversationItem) error {
+	if store == nil {
+		return nil
+	}
+	if item.Kind == model.ConversationItemAssistantText && strings.TrimSpace(item.Text) == "" {
+		return nil
+	}
+	return store.InsertConversationItem(ctx, sessionID, turnID, position, item)
+}
+
+func providerCacheOwnerForCapabilities(caps model.ProviderCapabilities) string {
+	if caps.Profile == model.CapabilityProfileArkResponses {
+		return "openai_compatible"
+	}
+	return ""
+}
+
+func loadProviderCacheHead(ctx context.Context, store ConversationStore, sessionID, provider, capabilityProfile string) (types.ProviderCacheHead, bool, error) {
+	if store == nil || provider == "" {
+		return types.ProviderCacheHead{}, false, nil
+	}
+	return store.GetProviderCacheHead(ctx, sessionID, provider, capabilityProfile)
+}
+
+func persistProviderCacheHead(ctx context.Context, e *Engine, head *types.ProviderCacheHead) error {
+	if e == nil || e.store == nil || head == nil {
+		return nil
+	}
+
+	return e.store.UpsertProviderCacheHead(ctx, *head)
+}
+
+func nextHeadFromResponse(e *Engine, sessionID, provider string, caps model.ProviderCapabilities, head *types.ProviderCacheHead, used *model.CacheDirective, meta *model.ResponseMetadata) (*types.ProviderCacheHead, bool) {
+	if e == nil || e.runtime == nil || provider == "" || used == nil || meta == nil || meta.ResponseID == "" || caps.Profile == model.CapabilityProfileNone {
+		return head, head != nil
+	}
+
+	nextHead := e.runtime.NextCacheHead(head, caps, used, meta)
+	if nextHead == nil {
+		return head, head != nil
+	}
+	if nextHead.SessionID == "" {
+		nextHead.SessionID = sessionID
+	}
+	if nextHead.Provider == "" {
+		nextHead.Provider = provider
+	}
+	if nextHead.CapabilityProfile == "" {
+		nextHead.CapabilityProfile = string(caps.Profile)
+	}
+	return nextHead, true
 }

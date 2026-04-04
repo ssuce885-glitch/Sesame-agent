@@ -3,16 +3,21 @@ package tools
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"go-agent/internal/permissions"
 )
 
 type Registry struct {
-	tools map[string]Tool
+	tools       map[string]Tool
+	definitions map[string]Definition
 }
 
 func NewRegistry() *Registry {
-	r := &Registry{tools: make(map[string]Tool)}
+	r := &Registry{
+		tools:       make(map[string]Tool),
+		definitions: make(map[string]Definition),
+	}
 	r.Register(fileReadTool{})
 	r.Register(fileWriteTool{})
 	r.Register(globTool{})
@@ -23,7 +28,30 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(tool Tool) {
-	r.tools[tool.Name()] = tool
+	if r.tools == nil {
+		r.tools = make(map[string]Tool)
+	}
+	if r.definitions == nil {
+		r.definitions = make(map[string]Definition)
+	}
+
+	def := tool.Definition()
+	r.tools[def.Name] = tool
+	r.definitions[def.Name] = cloneDefinition(def)
+}
+
+func (r *Registry) Definitions() []Definition {
+	names := make([]string, 0, len(r.definitions))
+	for name := range r.definitions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	defs := make([]Definition, 0, len(names))
+	for _, name := range names {
+		defs = append(defs, cloneDefinition(r.definitions[name]))
+	}
+	return defs
 }
 
 func (r *Registry) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {

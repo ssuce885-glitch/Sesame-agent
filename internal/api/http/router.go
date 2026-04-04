@@ -1,24 +1,54 @@
 package httpapi
 
-import "net/http"
+import (
+	"context"
+	"net/http"
+	"path/filepath"
+
+	"go-agent/internal/session"
+	"go-agent/internal/store/sqlite"
+)
 
 type Dependencies struct {
-	Bus     any
-	Store   any
-	Manager any
+	Bus     Bus
+	Store   Store
+	Manager Manager
+	Status  StatusPayload
 }
 
-func NewTestDependencies(t interface{ Helper() }) Dependencies {
+type noopRunner struct{}
+
+func (noopRunner) RunTurn(ctx context.Context, in session.RunInput) error {
+	return nil
+}
+
+func NewTestDependencies(t interface {
+	Helper()
+	Fatalf(string, ...any)
+	Cleanup(func())
+	TempDir() string
+}) Dependencies {
 	t.Helper()
-	return Dependencies{}
+
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	return Dependencies{
+		Store:   store,
+		Manager: session.NewManager(noopRunner{}),
+	}
 }
 
 func NewRouter(deps Dependencies) http.Handler {
 	mux := http.NewServeMux()
-	registerStatusRoutes(mux)
+	registerStatusRoutes(mux, deps.Status)
 	registerSessionRoutes(mux, deps)
-	registerTurnRoutes(mux, deps)
-	registerEventRoutes(mux, deps)
+	registerSessionScopedRoutes(mux, deps)
 	registerPermissionRoutes(mux, deps)
 	registerMemoryRoutes(mux, deps)
 
