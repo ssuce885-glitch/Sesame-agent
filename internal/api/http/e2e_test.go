@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	contextstate "go-agent/internal/context"
 	"go-agent/internal/engine"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
@@ -89,8 +90,8 @@ func (r e2eSessionRunner) RunTurn(ctx context.Context, in session.RunInput) erro
 	return r.engine.RunTurn(ctx, engine.Input{
 		Session: in.Session,
 		Turn: types.Turn{
-			ID:         in.TurnID,
-			SessionID:  in.Session.ID,
+			ID:          in.TurnID,
+			SessionID:   in.Session.ID,
 			UserMessage: in.Message,
 		},
 		Sink: r.sink,
@@ -150,7 +151,19 @@ func TestCreateSessionSubmitTurnAndStreamEvents(t *testing.T) {
 			{Kind: model.StreamEventMessageEnd},
 		},
 	})
-	runner := engine.New(modelClient, tools.NewRegistry(), permissions.NewEngine())
+	runner := engine.New(
+		modelClient,
+		tools.NewRegistry(),
+		permissions.NewEngine(),
+		store,
+		contextstate.NewManager(contextstate.Config{
+			MaxRecentItems:      8,
+			MaxEstimatedTokens:  6000,
+			CompactionThreshold: 16,
+		}),
+		nil,
+		8,
+	)
 	manager := session.NewManager(e2eSessionRunner{
 		engine: runner,
 		sink: e2eStoreAndBusSink{

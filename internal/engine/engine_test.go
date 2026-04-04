@@ -134,11 +134,17 @@ func TestRunTurnExecutesToolAfterToolCallEnd(t *testing.T) {
 		},
 	}
 	sink := &recordingSink{}
-	runner := New(modelClient, tools.NewRegistry(), permissions.NewEngine(), nil, nil, nil, 0)
+	store := &fakeConversationStore{}
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      8,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 16,
+	})
+	runner := New(modelClient, tools.NewRegistry(), permissions.NewEngine(), store, manager, nil, 8)
 
 	err := runner.RunTurn(context.Background(), Input{
 		Session: types.Session{ID: "sess_1", WorkspaceRoot: workspace},
-		Turn:    types.Turn{ID: "turn_1", UserMessage: "inspect the readme"},
+		Turn:    types.Turn{ID: "turn_1", SessionID: "sess_1", UserMessage: "inspect the readme"},
 		Sink:    sink,
 	})
 	if err != nil {
@@ -171,6 +177,28 @@ func TestRunTurnExecutesToolAfterToolCallEnd(t *testing.T) {
 	second := modelClient.requests[1]
 	if second.UserMessage != "inspect the readme" {
 		t.Fatalf("second request message = %q, want %q", second.UserMessage, "inspect the readme")
+	}
+	if len(second.Items) < 3 {
+		t.Fatalf("len(second request items) = %d, want at least 3", len(second.Items))
+	}
+	foundUser := false
+	foundToolResult := false
+	for _, item := range second.Items {
+		if item.Kind == model.ConversationItemUserMessage && item.Text == "inspect the readme" {
+			foundUser = true
+		}
+		if item.Kind == model.ConversationItemToolResult {
+			foundToolResult = true
+			if item.Result == nil || item.Result.ToolCallID != "call_1" {
+				t.Fatalf("tool result item = %#v, want call_1", item)
+			}
+		}
+	}
+	if !foundUser {
+		t.Fatalf("second request items = %#v, want current user item", second.Items)
+	}
+	if !foundToolResult {
+		t.Fatalf("second request items = %#v, want tool_result item", second.Items)
 	}
 	if len(second.ToolResults) != 1 {
 		t.Fatalf("len(second request tool results) = %d, want 1", len(second.ToolResults))
@@ -224,26 +252,91 @@ func TestRunTurnBuildsProviderRequestFromStoredConversation(t *testing.T) {
 	}
 
 	req := client.LastRequest()
-	if len(req.Items) < 3 {
-		t.Fatalf("len(req.Items) = %d, want at least 3", len(req.Items))
+	if len(req.Items) != 3 {
+		t.Fatalf("len(req.Items) = %d, want 3", len(req.Items))
 	}
 	if !strings.Contains(req.Instructions, "workspace prefers rg for searches") {
 		t.Fatalf("Instructions = %q, want recalled memory", req.Instructions)
 	}
-	var summaryItems int
-	for _, item := range req.Items {
-		if item.Kind == model.ConversationItemSummary {
-			summaryItems++
-			if item.Summary == nil || item.Summary.RangeLabel != "turns 1-1" {
-				t.Fatalf("summary item = %#v, want stored summary", item)
-			}
+	if req.Items[0].Kind != model.ConversationItemSummary {
+		t.Fatalf("first request item kind = %q, want %q", req.Items[0].Kind, model.ConversationItemSummary)
+	}
+	if req.Items[0].Summary == nil || req.Items[0].Summary.RangeLabel != "turns 1-1" {
+		t.Fatalf("first summary item = %#v, want stored summary", req.Items[0])
+	}
+	if req.Items[1].Kind != model.ConversationItemAssistantText || req.Items[1].Text != "first answer" {
+		t.Fatalf("second request item = %#v, want recent assistant item", req.Items[1])
+	}
+	if req.Items[2].Kind != model.ConversationItemUserMessage || req.Items[2].Text != "workspace prefers rg for searches" {
+		t.Fatalf("last request item = %#v, want current user message", req.Items[2])
+	}
+	if len(store.insertedItems) != 2 {
+		t.Fatalf("len(inserted items) = %d, want 2", len(store.insertedItems))
+	}
+	if store.insertedItems[0].Kind != model.ConversationItemUserMessage || store.insertedPositions[0] != 3 {
+		t.Fatalf("first inserted item = %#v at %d, want current user at 3", store.insertedItems[0], store.insertedPositions[0])
+	}
+	if store.insertedItems[1].Kind != model.ConversationItemAssistantText || store.insertedPositions[1] != 4 {
+		t.Fatalf("second inserted item = %#v at %d, want assistant at 4", store.insertedItems[1], store.insertedPositions[1])
+	}
+}
+
+func TestRunTurnPersistsConversationItemsInStreamingOrderAcrossToolTurns(t *testing.T) {
+	workspace := t.TempDir()
+	readmePath := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(readmePath, []byte("hello from readme"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := &fakeConversationStore{}
+	client := model.NewFakeStreaming([][]model.StreamEvent{
+		{
+			{Kind: model.StreamEventTextDelta, TextDelta: "Let me check the README."},
+			{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+				ID:    "call_1",
+				Name:  "file_read",
+				Input: map[string]any{"path": readmePath},
+			}},
+			{Kind: model.StreamEventMessageEnd},
+		},
+		{
+			{Kind: model.StreamEventTextDelta, TextDelta: "README says hello from readme"},
+			{Kind: model.StreamEventMessageEnd},
+		},
+	})
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      8,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 16,
+	})
+	runner := New(client, tools.NewRegistry(), permissions.NewEngine(), store, manager, nil, 8)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_1", WorkspaceRoot: workspace},
+		Turn:    types.Turn{ID: "turn_1", SessionID: "sess_1", UserMessage: "inspect the readme"},
+		Sink:    &recordingSink{},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if len(store.insertedItems) != 4 {
+		t.Fatalf("len(inserted items) = %d, want 4", len(store.insertedItems))
+	}
+	wantKinds := []model.ConversationItemKind{
+		model.ConversationItemUserMessage,
+		model.ConversationItemAssistantText,
+		model.ConversationItemToolResult,
+		model.ConversationItemAssistantText,
+	}
+	wantPositions := []int{1, 2, 3, 4}
+	for i := range wantKinds {
+		if store.insertedItems[i].Kind != wantKinds[i] {
+			t.Fatalf("inserted item kinds = %#v, want %#v", conversationItemKinds(store.insertedItems), wantKinds)
 		}
-	}
-	if summaryItems != 1 {
-		t.Fatalf("summary item count = %d, want 1", summaryItems)
-	}
-	if len(store.insertedPositions) != 1 || store.insertedPositions[0] != 3 {
-		t.Fatalf("inserted positions = %v, want [3]", store.insertedPositions)
+		if store.insertedPositions[i] != wantPositions[i] {
+			t.Fatalf("inserted positions = %v, want %v", store.insertedPositions, wantPositions)
+		}
 	}
 }
 
@@ -341,6 +434,7 @@ type fakeConversationStore struct {
 	items             []model.ConversationItem
 	summaries         []model.Summary
 	memories          []types.MemoryEntry
+	insertedItems     []model.ConversationItem
 	insertedPositions []int
 }
 
@@ -352,7 +446,8 @@ func (s *fakeConversationStore) ListConversationSummaries(context.Context, strin
 	return append([]model.Summary(nil), s.summaries...), nil
 }
 
-func (s *fakeConversationStore) InsertConversationItem(_ context.Context, _ string, _ string, position int, _ model.ConversationItem) error {
+func (s *fakeConversationStore) InsertConversationItem(_ context.Context, _ string, _ string, position int, item model.ConversationItem) error {
+	s.insertedItems = append(s.insertedItems, item)
 	s.insertedPositions = append(s.insertedPositions, position)
 	return nil
 }
@@ -363,4 +458,12 @@ func (s *fakeConversationStore) InsertConversationSummary(context.Context, strin
 
 func (s *fakeConversationStore) ListMemoryEntriesByWorkspace(context.Context, string) ([]types.MemoryEntry, error) {
 	return append([]types.MemoryEntry(nil), s.memories...), nil
+}
+
+func conversationItemKinds(items []model.ConversationItem) []model.ConversationItemKind {
+	kinds := make([]model.ConversationItemKind, 0, len(items))
+	for _, item := range items {
+		kinds = append(kinds, item.Kind)
+	}
+	return kinds
 }

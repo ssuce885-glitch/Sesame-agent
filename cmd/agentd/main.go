@@ -9,6 +9,7 @@ import (
 
 	httpapi "go-agent/internal/api/http"
 	"go-agent/internal/config"
+	contextstate "go-agent/internal/context"
 	"go-agent/internal/engine"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
@@ -45,6 +46,7 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		Session: in.Session,
 		Turn: types.Turn{
 			ID:           in.TurnID,
+			SessionID:    in.Session.ID,
 			ClientTurnID: "",
 			UserMessage:  in.Message,
 		},
@@ -90,7 +92,19 @@ func main() {
 		slog.Error("build model client", "err", err)
 		os.Exit(1)
 	}
-	runner := engine.New(modelClient, registry, permissionEngine)
+	runner := engine.New(
+		modelClient,
+		registry,
+		permissionEngine,
+		store,
+		contextstate.NewManager(contextstate.Config{
+			MaxRecentItems:      8,
+			MaxEstimatedTokens:  6000,
+			CompactionThreshold: 16,
+		}),
+		nil,
+		8,
+	)
 	manager := session.NewManager(sessionRunnerAdapter{
 		engine: runner,
 		sink: storeAndBusSink{
