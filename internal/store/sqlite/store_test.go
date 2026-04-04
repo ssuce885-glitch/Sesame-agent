@@ -317,6 +317,188 @@ func TestInsertRunRejectsDuplicateID(t *testing.T) {
 	}
 }
 
+func TestListRuntimeGraphReadsConsistentSnapshot(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	baseAt := time.Date(2026, 4, 5, 12, 30, 0, 0, time.UTC)
+	if _, err := store.db.ExecContext(context.Background(), `pragma journal_mode = wal`); err != nil {
+		t.Fatalf("set WAL mode error = %v", err)
+	}
+	insertBaseGraph := func() {
+		if err := store.InsertRun(context.Background(), types.Run{
+			ID:        "run_snapshot_base",
+			SessionID: "sess_snapshot",
+			TurnID:    "turn_snapshot",
+			State:     types.RunStateRunning,
+			Objective: "baseline snapshot",
+			CreatedAt: baseAt,
+			UpdatedAt: baseAt,
+		}); err != nil {
+			t.Fatalf("InsertRun(base) error = %v", err)
+		}
+		if err := store.UpsertPlan(context.Background(), types.Plan{
+			ID:           "plan_snapshot_base",
+			RunID:        "run_snapshot_base",
+			State:        types.PlanStateActive,
+			Title:        "baseline plan",
+			Summary:      "base graph",
+			ParentPlanID: "plan_snapshot_parent",
+			CreatedAt:    baseAt,
+			UpdatedAt:    baseAt,
+		}); err != nil {
+			t.Fatalf("UpsertPlan(base) error = %v", err)
+		}
+		if err := store.UpsertTaskRecord(context.Background(), types.TaskRecord{
+			ID:          "task_snapshot_base",
+			RunID:       "run_snapshot_base",
+			PlanID:      "plan_snapshot_base",
+			State:       types.TaskStateRunning,
+			Title:       "baseline task",
+			Description: "base task",
+			Owner:       "owner_base",
+			WorktreeID:  "worktree_snapshot_base",
+			CreatedAt:   baseAt,
+			UpdatedAt:   baseAt,
+		}); err != nil {
+			t.Fatalf("UpsertTaskRecord(base) error = %v", err)
+		}
+		if err := store.UpsertToolRun(context.Background(), types.ToolRun{
+			ID:          "tool_run_snapshot_base",
+			RunID:       "run_snapshot_base",
+			TaskID:      "task_snapshot_base",
+			State:       types.ToolRunStateCompleted,
+			ToolName:    "Bash",
+			InputJSON:   `{"command":"echo base"}`,
+			OutputJSON:  `{"exit_code":0}`,
+			Error:       "base stderr",
+			StartedAt:   baseAt.Add(1 * time.Minute),
+			CompletedAt: baseAt.Add(2 * time.Minute),
+			CreatedAt:   baseAt,
+			UpdatedAt:   baseAt,
+		}); err != nil {
+			t.Fatalf("UpsertToolRun(base) error = %v", err)
+		}
+		if err := store.UpsertWorktree(context.Background(), types.Worktree{
+			ID:             "worktree_snapshot_base",
+			RunID:          "run_snapshot_base",
+			TaskID:         "task_snapshot_base",
+			State:          types.WorktreeStateActive,
+			WorktreePath:   "E:/project/go-agent/.worktrees/base",
+			WorktreeBranch: "feature/base",
+			CreatedAt:      baseAt,
+			UpdatedAt:      baseAt,
+		}); err != nil {
+			t.Fatalf("UpsertWorktree(base) error = %v", err)
+		}
+	}
+	insertBaseGraph()
+
+	hookStarted := make(chan struct{})
+	releaseHook := make(chan struct{})
+	originalHook := runtimeGraphReadHook
+	runtimeGraphReadHook = func(stage string) {
+		if stage != "after_runs" {
+			return
+		}
+		close(hookStarted)
+		<-releaseHook
+	}
+	t.Cleanup(func() {
+		runtimeGraphReadHook = originalHook
+	})
+
+	type result struct {
+		graph types.RuntimeGraph
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		graph, err := store.ListRuntimeGraph(context.Background())
+		done <- result{graph: graph, err: err}
+	}()
+
+	select {
+	case <-hookStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListRuntimeGraph() did not reach the snapshot hook")
+	}
+
+	newAt := baseAt.Add(1 * time.Hour)
+	if err := store.UpsertPlan(context.Background(), types.Plan{
+		ID:        "plan_snapshot_new",
+		RunID:     "run_snapshot_base",
+		State:     types.PlanStateActive,
+		Title:     "new plan",
+		Summary:   "new graph row",
+		CreatedAt: newAt,
+		UpdatedAt: newAt,
+	}); err != nil {
+		t.Fatalf("UpsertPlan(new) error = %v", err)
+	}
+	if err := store.UpsertTaskRecord(context.Background(), types.TaskRecord{
+		ID:         "task_snapshot_new",
+		RunID:      "run_snapshot_base",
+		PlanID:     "plan_snapshot_new",
+		State:      types.TaskStateRunning,
+		Title:      "new task",
+		Owner:      "owner_new",
+		WorktreeID: "worktree_snapshot_new",
+		CreatedAt:  newAt,
+		UpdatedAt:  newAt,
+	}); err != nil {
+		t.Fatalf("UpsertTaskRecord(new) error = %v", err)
+	}
+	if err := store.UpsertToolRun(context.Background(), types.ToolRun{
+		ID:         "tool_run_snapshot_new",
+		RunID:      "run_snapshot_base",
+		TaskID:     "task_snapshot_new",
+		State:      types.ToolRunStateCompleted,
+		ToolName:   "Bash",
+		InputJSON:  `{"command":"echo new"}`,
+		OutputJSON: `{"exit_code":0}`,
+		Error:      "new stderr",
+		CreatedAt:  newAt,
+		UpdatedAt:  newAt,
+	}); err != nil {
+		t.Fatalf("UpsertToolRun(new) error = %v", err)
+	}
+	if err := store.UpsertWorktree(context.Background(), types.Worktree{
+		ID:             "worktree_snapshot_new",
+		RunID:          "run_snapshot_base",
+		TaskID:         "task_snapshot_new",
+		State:          types.WorktreeStateActive,
+		WorktreePath:   "E:/project/go-agent/.worktrees/new",
+		WorktreeBranch: "feature/new",
+		CreatedAt:      newAt,
+		UpdatedAt:      newAt,
+	}); err != nil {
+		t.Fatalf("UpsertWorktree(new) error = %v", err)
+	}
+
+	close(releaseHook)
+
+	var got result
+	select {
+	case got = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListRuntimeGraph() did not finish after releasing the hook")
+	}
+	if got.err != nil {
+		t.Fatalf("ListRuntimeGraph() error = %v", got.err)
+	}
+
+	if len(got.graph.Runs) != 1 || len(got.graph.Plans) != 1 || len(got.graph.Tasks) != 1 || len(got.graph.ToolRuns) != 1 || len(got.graph.Worktrees) != 1 {
+		t.Fatalf("snapshot graph = %#v, want only baseline rows", got.graph)
+	}
+	if got.graph.Plans[0].ID != "plan_snapshot_base" || got.graph.Tasks[0].ID != "task_snapshot_base" || got.graph.ToolRuns[0].ID != "tool_run_snapshot_base" || got.graph.Worktrees[0].ID != "worktree_snapshot_base" {
+		t.Fatalf("snapshot graph IDs = %#v, want baseline rows only", got.graph)
+	}
+}
+
 func TestStorePreservesCreatedAtOnTaskRecordUpdate(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
 	if err != nil {

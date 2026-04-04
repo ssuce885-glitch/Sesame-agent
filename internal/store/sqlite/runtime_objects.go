@@ -9,6 +9,8 @@ import (
 	"go-agent/internal/types"
 )
 
+var runtimeGraphReadHook func(string)
+
 func (s *Store) InsertRun(ctx context.Context, run types.Run) error {
 	run = normalizeRun(run)
 	payload, err := marshalRuntimePayload(run)
@@ -153,6 +155,9 @@ func (s *Store) ListRuntimeGraph(ctx context.Context) (types.RuntimeGraph, error
 	runs, err := listRuntimeObjects[types.Run](ctx, tx, `select payload, created_at, updated_at from runs order by created_at asc, id asc`)
 	if err != nil {
 		return types.RuntimeGraph{}, err
+	}
+	if hook := runtimeGraphReadHook; hook != nil {
+		hook("after_runs")
 	}
 
 	plans, err := listRuntimeObjects[types.Plan](ctx, tx, `select payload, created_at, updated_at from plans order by created_at asc, id asc`)
