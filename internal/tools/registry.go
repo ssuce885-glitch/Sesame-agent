@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"go-agent/internal/permissions"
 )
@@ -23,7 +24,21 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(tool Tool) {
-	r.tools[tool.Name()] = tool
+	r.tools[tool.Definition().Name] = tool
+}
+
+func (r *Registry) Definitions() []Definition {
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	defs := make([]Definition, 0, len(names))
+	for _, name := range names {
+		defs = append(defs, r.tools[name].Definition())
+	}
+	return defs
 }
 
 func (r *Registry) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {

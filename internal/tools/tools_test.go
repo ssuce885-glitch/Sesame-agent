@@ -31,3 +31,18 @@ func TestFileReadToolRespectsWorkspaceBoundary(t *testing.T) {
 		t.Fatalf("result.Text = %q, want %q", result.Text, "hello")
 	}
 }
+
+func TestRegistryDefinitionsExposeLocalToolSchemas(t *testing.T) {
+	registry := NewRegistry()
+
+	defs := registry.Definitions()
+	if len(defs) < 5 {
+		t.Fatalf("len(Definitions) = %d, want at least 5", len(defs))
+	}
+	if defs[0].Name == "" || defs[0].Description == "" {
+		t.Fatalf("first definition = %+v, want name and description", defs[0])
+	}
+	if defs[0].InputSchema == nil {
+		t.Fatalf("first definition = %+v, want schema", defs[0])
+	}
+}

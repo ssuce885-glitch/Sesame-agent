@@ -10,7 +10,23 @@ import (
 
 type grepTool struct{}
 
-func (grepTool) Name() string            { return "grep" }
+func (grepTool) Definition() Definition {
+	return Definition{
+		Name:        "grep",
+		Description: "Search a file for a substring.",
+		InputSchema: objectSchema(map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Path to the file to search.",
+			},
+			"pattern": map[string]any{
+				"type":        "string",
+				"description": "Substring to find in the file.",
+			},
+		}, "path", "pattern"),
+	}
+}
+
 func (grepTool) IsConcurrencySafe() bool { return true }
 
 func (grepTool) Execute(_ context.Context, call Call, execCtx ExecContext) (Result, error) {

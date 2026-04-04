@@ -22,7 +22,7 @@ type ExecContext struct {
 }
 
 type Tool interface {
-	Name() string
+	Definition() Definition
 	IsConcurrencySafe() bool
 	Execute(context.Context, Call, ExecContext) (Result, error)
 }
