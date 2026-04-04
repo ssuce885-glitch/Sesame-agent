@@ -21,6 +21,50 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists runs (
+			id text primary key,
+			session_id text not null,
+			turn_id text not null default '',
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists plans (
+			id text primary key,
+			run_id text not null,
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists task_records (
+			id text primary key,
+			run_id text not null,
+			plan_id text not null default '',
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists tool_runs (
+			id text primary key,
+			run_id text not null,
+			task_id text not null default '',
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists worktrees (
+			id text primary key,
+			run_id text not null,
+			task_id text not null default '',
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
 		`create table if not exists events (
 			seq integer primary key autoincrement,
 			id text not null,

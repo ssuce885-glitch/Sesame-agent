@@ -65,6 +65,125 @@ func TestStorePersistsSessionTurnAndEvent(t *testing.T) {
 	}
 }
 
+func TestStorePersistsRuntimeGraph(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 4, 5, 10, 30, 0, 0, time.UTC)
+
+	run := types.Run{
+		ID:        "run_1",
+		SessionID: "sess_runtime",
+		TurnID:    "turn_runtime",
+		State:     types.RunStateRunning,
+		Objective: "ship runtime graph storage",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := store.InsertRun(context.Background(), run); err != nil {
+		t.Fatalf("InsertRun() error = %v", err)
+	}
+
+	plan := types.Plan{
+		ID:        "plan_1",
+		RunID:     run.ID,
+		State:     types.PlanStateActive,
+		Title:     "Minimal runtime graph",
+		Summary:   "Persist runs, plans, tasks, tool runs, and worktrees.",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := store.UpsertPlan(context.Background(), plan); err != nil {
+		t.Fatalf("UpsertPlan() error = %v", err)
+	}
+
+	task := types.TaskRecord{
+		ID:          "task_1",
+		RunID:       run.ID,
+		PlanID:      plan.ID,
+		State:       types.TaskStateRunning,
+		Title:       "Write runtime graph tests",
+		Description: "Verify SQLite round-trip behavior.",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := store.UpsertTaskRecord(context.Background(), task); err != nil {
+		t.Fatalf("UpsertTaskRecord() error = %v", err)
+	}
+
+	toolRun := types.ToolRun{
+		ID:         "tool_run_1",
+		RunID:      run.ID,
+		TaskID:     task.ID,
+		State:      types.ToolRunStateCompleted,
+		ToolName:   "Bash",
+		InputJSON:  `{"command":"go test ./internal/store/sqlite"}`,
+		OutputJSON: `{"exit_code":0}`,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := store.UpsertToolRun(context.Background(), toolRun); err != nil {
+		t.Fatalf("UpsertToolRun() error = %v", err)
+	}
+
+	worktree := types.Worktree{
+		ID:             "worktree_1",
+		RunID:          run.ID,
+		TaskID:         task.ID,
+		State:          types.WorktreeStateActive,
+		WorktreePath:   "E:/project/go-agent/.worktrees/minimal-runtime-loop",
+		WorktreeBranch: "feature/minimal-runtime-loop",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := store.UpsertWorktree(context.Background(), worktree); err != nil {
+		t.Fatalf("UpsertWorktree() error = %v", err)
+	}
+
+	graph, err := store.ListRuntimeGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ListRuntimeGraph() error = %v", err)
+	}
+
+	if len(graph.Runs) != 1 {
+		t.Fatalf("len(graph.Runs) = %d, want 1", len(graph.Runs))
+	}
+	if got := graph.Runs[0]; got.ID != run.ID || got.SessionID != run.SessionID || got.State != run.State || got.Objective != run.Objective {
+		t.Fatalf("graph.Runs[0] = %#v, want %#v", got, run)
+	}
+
+	if len(graph.Plans) != 1 {
+		t.Fatalf("len(graph.Plans) = %d, want 1", len(graph.Plans))
+	}
+	if got := graph.Plans[0]; got.ID != plan.ID || got.RunID != plan.RunID || got.State != plan.State || got.Title != plan.Title {
+		t.Fatalf("graph.Plans[0] = %#v, want %#v", got, plan)
+	}
+
+	if len(graph.Tasks) != 1 {
+		t.Fatalf("len(graph.Tasks) = %d, want 1", len(graph.Tasks))
+	}
+	if got := graph.Tasks[0]; got.ID != task.ID || got.RunID != task.RunID || got.PlanID != task.PlanID || got.State != task.State || got.Description != task.Description {
+		t.Fatalf("graph.Tasks[0] = %#v, want %#v", got, task)
+	}
+
+	if len(graph.ToolRuns) != 1 {
+		t.Fatalf("len(graph.ToolRuns) = %d, want 1", len(graph.ToolRuns))
+	}
+	if got := graph.ToolRuns[0]; got.ID != toolRun.ID || got.RunID != toolRun.RunID || got.TaskID != toolRun.TaskID || got.ToolName != toolRun.ToolName || got.State != toolRun.State {
+		t.Fatalf("graph.ToolRuns[0] = %#v, want %#v", got, toolRun)
+	}
+
+	if len(graph.Worktrees) != 1 {
+		t.Fatalf("len(graph.Worktrees) = %d, want 1", len(graph.Worktrees))
+	}
+	if got := graph.Worktrees[0]; got.ID != worktree.ID || got.RunID != worktree.RunID || got.TaskID != worktree.TaskID || got.State != worktree.State || got.WorktreePath != worktree.WorktreePath {
+		t.Fatalf("graph.Worktrees[0] = %#v, want %#v", got, worktree)
+	}
+}
+
 func TestStoreDeleteTurnRemovesRow(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "agentd.db")
