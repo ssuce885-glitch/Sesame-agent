@@ -50,6 +50,22 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at text not null,
 			approved integer not null default 0
 		);`,
+		`create table if not exists conversation_items (
+			id integer primary key autoincrement,
+			session_id text not null,
+			turn_id text not null default '',
+			position integer not null,
+			kind text not null,
+			payload text not null,
+			created_at text not null
+		);`,
+		`create table if not exists conversation_summaries (
+			id integer primary key autoincrement,
+			session_id text not null,
+			up_to_position integer not null,
+			payload text not null,
+			created_at text not null
+		);`,
 	}
 
 	for _, stmt := range stmts {

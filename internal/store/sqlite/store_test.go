@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"go-agent/internal/model"
 	"go-agent/internal/types"
 )
 
@@ -95,5 +96,60 @@ func TestStoreDeleteTurnRemovesRow(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("count = %d, want 0", count)
+	}
+}
+
+func TestStorePersistsConversationItemsAndSummaries(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	item := model.ConversationItem{
+		Kind: model.ConversationItemUserMessage,
+		Text: "inspect repository",
+	}
+	if err := store.InsertConversationItem(context.Background(), "sess_1", "turn_1", 10, item); err != nil {
+		t.Fatalf("InsertConversationItem() error = %v", err)
+	}
+
+	summary := model.Summary{
+		RangeLabel:       "turns 1-4",
+		UserGoals:        []string{"inspect repository"},
+		ImportantChoices: []string{"use glob first"},
+	}
+	if err := store.InsertConversationSummary(context.Background(), "sess_1", 4, summary); err != nil {
+		t.Fatalf("InsertConversationSummary() error = %v", err)
+	}
+
+	items, err := store.ListConversationItems(context.Background(), "sess_1")
+	if err != nil {
+		t.Fatalf("ListConversationItems() error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	entry := types.MemoryEntry{
+		ID:          "mem_1",
+		Scope:       types.MemoryScopeWorkspace,
+		WorkspaceID: "ws_1",
+		Content:     "workspace prefers rg before grep fallback",
+		SourceRefs:  []string{"turn_1"},
+		Confidence:  0.9,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	if err := store.InsertMemoryEntry(context.Background(), entry); err != nil {
+		t.Fatalf("InsertMemoryEntry() error = %v", err)
+	}
+
+	entries, err := store.ListMemoryEntriesByWorkspace(context.Background(), "ws_1")
+	if err != nil {
+		t.Fatalf("ListMemoryEntriesByWorkspace() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
 	}
 }
