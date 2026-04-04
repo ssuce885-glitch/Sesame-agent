@@ -9,7 +9,15 @@ import (
 	"go-agent/internal/types"
 )
 
+type execContexter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func (s *Store) UpsertTurnUsage(ctx context.Context, usage types.TurnUsage) error {
+	return upsertTurnUsageWithExec(ctx, s.db, usage)
+}
+
+func upsertTurnUsageWithExec(ctx context.Context, execer execContexter, usage types.TurnUsage) error {
 	createdAt := usage.CreatedAt.UTC()
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
@@ -19,7 +27,7 @@ func (s *Store) UpsertTurnUsage(ctx context.Context, usage types.TurnUsage) erro
 		updatedAt = createdAt
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	_, err := execer.ExecContext(ctx, `
 		insert into turn_usage (
 			turn_id, session_id, provider, model, input_tokens, output_tokens, cached_tokens, cache_hit_rate, created_at, updated_at
 		)

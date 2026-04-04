@@ -9,7 +9,11 @@ import (
 )
 
 func (s *Store) AppendEvent(ctx context.Context, event types.Event) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `
+	return appendEventWithExec(ctx, s.db, event)
+}
+
+func appendEventWithExec(ctx context.Context, execer execContexter, event types.Event) (int64, error) {
+	res, err := execer.ExecContext(ctx, `
 		insert into events (id, session_id, turn_id, type, time, payload)
 		values (?, ?, ?, ?, ?, ?)`,
 		event.ID,
