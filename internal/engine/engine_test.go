@@ -5,8 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	contextstate "go-agent/internal/context"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/tools"
@@ -23,7 +25,7 @@ func TestRunTurnStreamsAssistantEventsIntoSink(t *testing.T) {
 	})
 	sink := &recordingSink{}
 
-	runner := New(fakeModel, tools.NewRegistry(), permissions.NewEngine())
+	runner := New(fakeModel, tools.NewRegistry(), permissions.NewEngine(), nil, nil, nil, 0)
 	err := runner.RunTurn(context.Background(), Input{
 		Session: types.Session{ID: "sess_1", WorkspaceRoot: t.TempDir()},
 		Turn:    types.Turn{ID: "turn_1", UserMessage: "inspect the readme"},
@@ -53,7 +55,7 @@ func TestRunTurnEmitsFailedWithoutCompletedWhenStreamErrorsAfterMessageEnd(t *te
 			{Kind: model.StreamEventMessageEnd},
 		},
 		err: streamErr,
-	}, tools.NewRegistry(), permissions.NewEngine())
+	}, tools.NewRegistry(), permissions.NewEngine(), nil, nil, nil, 0)
 
 	err := runner.RunTurn(context.Background(), Input{
 		Session: types.Session{ID: "sess_1", WorkspaceRoot: t.TempDir()},
@@ -85,7 +87,7 @@ func TestRunTurnEmitsTurnFailedWhenToolExecutionFails(t *testing.T) {
 			}},
 			{Kind: model.StreamEventMessageEnd},
 		},
-	}), tools.NewRegistry(), permissions.NewEngine())
+	}), tools.NewRegistry(), permissions.NewEngine(), nil, nil, nil, 0)
 
 	err := runner.RunTurn(context.Background(), Input{
 		Session: types.Session{ID: "sess_1", WorkspaceRoot: t.TempDir()},
@@ -132,7 +134,7 @@ func TestRunTurnExecutesToolAfterToolCallEnd(t *testing.T) {
 		},
 	}
 	sink := &recordingSink{}
-	runner := New(modelClient, tools.NewRegistry(), permissions.NewEngine())
+	runner := New(modelClient, tools.NewRegistry(), permissions.NewEngine(), nil, nil, nil, 0)
 
 	err := runner.RunTurn(context.Background(), Input{
 		Session: types.Session{ID: "sess_1", WorkspaceRoot: workspace},
@@ -186,6 +188,43 @@ func TestRunTurnExecutesToolAfterToolCallEnd(t *testing.T) {
 	}
 	if got.IsError {
 		t.Fatal("tool result is_error = true, want false")
+	}
+}
+
+func TestRunTurnBuildsProviderRequestFromStoredConversation(t *testing.T) {
+	store := &fakeConversationStore{
+		items: []model.ConversationItem{
+			model.UserMessageItem("first request"),
+			{Kind: model.ConversationItemAssistantText, Text: "first answer"},
+		},
+		memories: []types.MemoryEntry{{Content: "workspace prefers rg for searches"}},
+	}
+	client := model.NewFakeStreaming([][]model.StreamEvent{{
+		{Kind: model.StreamEventTextDelta, TextDelta: "second answer"},
+		{Kind: model.StreamEventMessageEnd},
+	}})
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      8,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 16,
+	})
+	runner := New(client, tools.NewRegistry(), permissions.NewEngine(), store, manager, nil, 8)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_1", WorkspaceRoot: t.TempDir()},
+		Turn:    types.Turn{ID: "turn_2", SessionID: "sess_1", UserMessage: "follow up"},
+		Sink:    &recordingSink{},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	req := client.LastRequest()
+	if len(req.Items) < 3 {
+		t.Fatalf("len(req.Items) = %d, want at least 3", len(req.Items))
+	}
+	if !strings.Contains(req.Instructions, "workspace prefers rg for searches") {
+		t.Fatalf("Instructions = %q, want recalled memory", req.Instructions)
 	}
 }
 
@@ -277,4 +316,30 @@ func assertNoEventType(t *testing.T, sink *recordingSink, unwanted string) {
 			t.Fatalf("event types = %v, unexpected %q", sink.eventTypes(), unwanted)
 		}
 	}
+}
+
+type fakeConversationStore struct {
+	items     []model.ConversationItem
+	summaries []model.Summary
+	memories  []types.MemoryEntry
+}
+
+func (s *fakeConversationStore) ListConversationItems(context.Context, string) ([]model.ConversationItem, error) {
+	return append([]model.ConversationItem(nil), s.items...), nil
+}
+
+func (s *fakeConversationStore) ListConversationSummaries(context.Context, string) ([]model.Summary, error) {
+	return append([]model.Summary(nil), s.summaries...), nil
+}
+
+func (s *fakeConversationStore) InsertConversationItem(context.Context, string, string, int, model.ConversationItem) error {
+	return nil
+}
+
+func (s *fakeConversationStore) InsertConversationSummary(context.Context, string, int, model.Summary) error {
+	return nil
+}
+
+func (s *fakeConversationStore) ListMemoryEntriesByWorkspace(context.Context, string) ([]types.MemoryEntry, error) {
+	return append([]types.MemoryEntry(nil), s.memories...), nil
 }

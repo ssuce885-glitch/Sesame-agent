@@ -4,21 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
+	"go-agent/internal/memory"
 	"go-agent/internal/model"
-	"go-agent/internal/permissions"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
 )
 
-func runLoop(ctx context.Context, modelClient model.StreamingClient, registry *tools.Registry, permission *permissions.Engine, in Input) error {
-	if modelClient == nil {
+func runLoop(ctx context.Context, e *Engine, in Input) error {
+	if e == nil {
+		return errors.New("engine is required")
+	}
+	if e.model == nil {
 		return errors.New("model client is required")
 	}
-	if registry == nil {
+	if e.registry == nil {
 		return errors.New("tool registry is required")
 	}
-	if permission == nil {
+	if e.permission == nil {
 		return errors.New("permission engine is required")
 	}
 	if in.Sink == nil {
@@ -42,13 +46,27 @@ func runLoop(ctx context.Context, modelClient model.StreamingClient, registry *t
 		return err
 	}
 
-	req := model.Request{
-		UserMessage: in.Turn.UserMessage,
+	sessionID := in.Turn.SessionID
+	if sessionID == "" {
+		sessionID = in.Session.ID
 	}
 
+	items, summaries, memoryRefs, err := loadConversationState(ctx, e, in, sessionID)
+	if err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
+
+	req := buildRequest(e, in, items, summaries, memoryRefs)
 	assistantStarted := false
+	assistantText := strings.Builder{}
+	nextPosition := len(items) + 1
+	toolSteps := 0
+
 	for {
-		stream, errs := modelClient.Stream(ctx, req)
+		stream, errs := e.model.Stream(ctx, req)
 		messageEnded := false
 		var toolCalls []model.ToolCallChunk
 
@@ -61,6 +79,7 @@ func runLoop(ctx context.Context, modelClient model.StreamingClient, registry *t
 					}
 					assistantStarted = true
 				}
+				assistantText.WriteString(event.TextDelta)
 				if err := emit(types.EventAssistantDelta, types.AssistantDeltaPayload{Text: event.TextDelta}); err != nil {
 					return err
 				}
@@ -93,6 +112,12 @@ func runLoop(ctx context.Context, modelClient model.StreamingClient, registry *t
 
 		if len(toolCalls) == 0 {
 			if messageEnded {
+				if err := persistAssistantText(ctx, e.store, sessionID, in.Turn.ID, nextPosition, assistantText.String()); err != nil {
+					if emitErr := emitFailed(err.Error()); emitErr != nil {
+						return errors.Join(err, emitErr)
+					}
+					return err
+				}
 				if err := emit(types.EventAssistantCompleted, struct{}{}); err != nil {
 					return err
 				}
@@ -103,7 +128,16 @@ func runLoop(ctx context.Context, modelClient model.StreamingClient, registry *t
 			return nil
 		}
 
+		if e.maxToolSteps > 0 && toolSteps+len(toolCalls) > e.maxToolSteps {
+			err := fmt.Errorf("tool step limit exceeded")
+			if emitErr := emitFailed(err.Error()); emitErr != nil {
+				return errors.Join(err, emitErr)
+			}
+			return err
+		}
+
 		for _, call := range toolCalls {
+			toolSteps++
 			payload := struct {
 				ToolCallID string `json:"tool_call_id"`
 				ToolName   string `json:"tool_name"`
@@ -115,12 +149,12 @@ func runLoop(ctx context.Context, modelClient model.StreamingClient, registry *t
 				return err
 			}
 
-			result, err := registry.Execute(ctx, tools.Call{
+			result, err := e.registry.Execute(ctx, tools.Call{
 				Name:  call.Name,
 				Input: call.Input,
 			}, tools.ExecContext{
 				WorkspaceRoot:    in.Session.WorkspaceRoot,
-				PermissionEngine: permission,
+				PermissionEngine: e.permission,
 			})
 			if err != nil {
 				if emitErr := emitFailed(err.Error()); emitErr != nil {
@@ -133,12 +167,139 @@ func runLoop(ctx context.Context, modelClient model.StreamingClient, registry *t
 				return err
 			}
 
-			req.ToolResults = append(req.ToolResults, model.ToolResult{
+			toolResult := model.ToolResult{
 				ToolCallID: call.ID,
 				ToolName:   call.Name,
 				Content:    result.Text,
 				IsError:    false,
-			})
+			}
+			if err := persistToolResult(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResult); err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
+			nextPosition++
+
+			req.ToolResults = append(req.ToolResults, toolResult)
 		}
 	}
+}
+
+func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string) ([]model.ConversationItem, []model.Summary, []string, error) {
+	if e.store == nil || e.ctxManager == nil {
+		return nil, nil, nil, nil
+	}
+
+	items, err := e.store.ListConversationItems(ctx, sessionID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	summaries, err := e.store.ListConversationSummaries(ctx, sessionID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	entries, err := e.store.ListMemoryEntriesByWorkspace(ctx, in.Session.WorkspaceRoot)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	recalled := memory.Recall(in.Turn.UserMessage, entries, 3)
+	if len(recalled) == 0 && len(entries) > 0 {
+		limit := 3
+		if len(entries) < limit {
+			limit = len(entries)
+		}
+		recalled = append([]types.MemoryEntry(nil), entries[:limit]...)
+	}
+
+	memoryRefs := make([]string, 0, len(recalled))
+	for _, entry := range recalled {
+		memoryRefs = append(memoryRefs, entry.Content)
+	}
+
+	working := e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
+	if working.NeedsCompact && e.compactor != nil && working.CompactionStart > 0 {
+		summary, err := e.compactor.Compact(ctx, items[:working.CompactionStart])
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if err := e.store.InsertConversationSummary(ctx, sessionID, working.CompactionStart, summary); err != nil {
+			return nil, nil, nil, err
+		}
+		summaries = append(summaries, summary)
+		working = e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
+	}
+
+	return working.RecentItems, working.Summaries, working.MemoryRefs, nil
+}
+
+func buildRequest(e *Engine, in Input, items []model.ConversationItem, summaries []model.Summary, memoryRefs []string) model.Request {
+	reqItems := append([]model.ConversationItem(nil), items...)
+	for _, summary := range summaries {
+		summary := summary
+		reqItems = append(reqItems, model.ConversationItem{
+			Kind:    model.ConversationItemSummary,
+			Summary: &summary,
+		})
+	}
+	reqItems = append(reqItems, model.UserMessageItem(in.Turn.UserMessage))
+
+	return model.Request{
+		UserMessage:  in.Turn.UserMessage,
+		Instructions: buildRuntimeInstructions(in.Session.WorkspaceRoot, memoryRefs),
+		Stream:       true,
+		Items:        reqItems,
+		Tools:        buildToolSchemas(e.registry),
+		ToolChoice:   "auto",
+	}
+}
+
+func buildRuntimeInstructions(workspaceRoot string, memoryRefs []string) string {
+	base := fmt.Sprintf("workspace_root=%s\nUse local tools when needed.", workspaceRoot)
+	if len(memoryRefs) == 0 {
+		return base
+	}
+	return base + "\nRelevant memory:\n- " + strings.Join(memoryRefs, "\n- ")
+}
+
+func buildToolSchemas(registry *tools.Registry) []model.ToolSchema {
+	if registry == nil {
+		return nil
+	}
+
+	defs := registry.Definitions()
+	if len(defs) == 0 {
+		return nil
+	}
+
+	schemas := make([]model.ToolSchema, 0, len(defs))
+	for _, def := range defs {
+		schemas = append(schemas, model.ToolSchema{
+			Name:        def.Name,
+			Description: def.Description,
+			InputSchema: def.InputSchema,
+		})
+	}
+	return schemas
+}
+
+func persistAssistantText(ctx context.Context, store ConversationStore, sessionID, turnID string, position int, text string) error {
+	if store == nil || strings.TrimSpace(text) == "" {
+		return nil
+	}
+
+	return store.InsertConversationItem(ctx, sessionID, turnID, position, model.ConversationItem{
+		Kind: model.ConversationItemAssistantText,
+		Text: text,
+	})
+}
+
+func persistToolResult(ctx context.Context, store ConversationStore, sessionID, turnID string, position int, result model.ToolResult) error {
+	if store == nil {
+		return nil
+	}
+	return store.InsertConversationItem(ctx, sessionID, turnID, position, model.ToolResultItem(result))
 }

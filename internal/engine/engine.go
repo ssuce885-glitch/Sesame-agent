@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 
+	contextstate "go-agent/internal/context"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/tools"
@@ -15,16 +16,44 @@ type Input struct {
 	Sink    EventSink
 }
 
-type Engine struct {
-	model      model.StreamingClient
-	registry   *tools.Registry
-	permission *permissions.Engine
+type ConversationStore interface {
+	ListConversationItems(context.Context, string) ([]model.ConversationItem, error)
+	ListConversationSummaries(context.Context, string) ([]model.Summary, error)
+	InsertConversationItem(context.Context, string, string, int, model.ConversationItem) error
+	InsertConversationSummary(context.Context, string, int, model.Summary) error
+	ListMemoryEntriesByWorkspace(context.Context, string) ([]types.MemoryEntry, error)
 }
 
-func New(modelClient model.StreamingClient, registry *tools.Registry, permission *permissions.Engine) *Engine {
-	return &Engine{model: modelClient, registry: registry, permission: permission}
+type Engine struct {
+	model        model.StreamingClient
+	registry     *tools.Registry
+	permission   *permissions.Engine
+	store        ConversationStore
+	ctxManager   *contextstate.Manager
+	compactor    contextstate.Compactor
+	maxToolSteps int
+}
+
+func New(
+	modelClient model.StreamingClient,
+	registry *tools.Registry,
+	permission *permissions.Engine,
+	store ConversationStore,
+	ctxManager *contextstate.Manager,
+	compactor contextstate.Compactor,
+	maxToolSteps int,
+) *Engine {
+	return &Engine{
+		model:        modelClient,
+		registry:     registry,
+		permission:   permission,
+		store:        store,
+		ctxManager:   ctxManager,
+		compactor:    compactor,
+		maxToolSteps: maxToolSteps,
+	}
 }
 
 func (e *Engine) RunTurn(ctx context.Context, in Input) error {
-	return runLoop(ctx, e.model, e.registry, e.permission, in)
+	return runLoop(ctx, e, in)
 }
