@@ -131,6 +131,17 @@ func TestStorePersistsConversationItemsAndSummaries(t *testing.T) {
 		t.Fatalf("len(items) = %d, want 1", len(items))
 	}
 
+	summaries, err := store.ListConversationSummaries(context.Background(), "sess_1")
+	if err != nil {
+		t.Fatalf("ListConversationSummaries() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("len(summaries) = %d, want 1", len(summaries))
+	}
+	if summaries[0].RangeLabel != "turns 1-4" {
+		t.Fatalf("RangeLabel = %q, want %q", summaries[0].RangeLabel, "turns 1-4")
+	}
+
 	entry := types.MemoryEntry{
 		ID:          "mem_1",
 		Scope:       types.MemoryScopeWorkspace,
