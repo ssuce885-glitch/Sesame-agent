@@ -37,7 +37,7 @@ func (r *Registry) Register(tool Tool) {
 
 	def := tool.Definition()
 	r.tools[def.Name] = tool
-	r.definitions[def.Name] = def
+	r.definitions[def.Name] = cloneDefinition(def)
 }
 
 func (r *Registry) Definitions() []Definition {
@@ -49,7 +49,7 @@ func (r *Registry) Definitions() []Definition {
 
 	defs := make([]Definition, 0, len(names))
 	for _, name := range names {
-		defs = append(defs, r.definitions[name])
+		defs = append(defs, cloneDefinition(r.definitions[name]))
 	}
 	return defs
 }
