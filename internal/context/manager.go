@@ -39,6 +39,6 @@ func (m *Manager) Build(userText string, items []model.ConversationItem, summari
 			MemoryRefs:  append([]string(nil), memoryRefs...),
 		},
 		CompactionStart: start,
-		NeedsCompact:    len(items) > m.cfg.MaxRecentItems || len(items) > m.cfg.CompactionThreshold,
+		NeedsCompact:    len(items) > m.cfg.CompactionThreshold,
 	}
 }
