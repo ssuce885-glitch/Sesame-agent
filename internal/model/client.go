@@ -57,6 +57,10 @@ type ToolSchema struct {
 	InputSchema map[string]any
 }
 
+// Request is the provider-neutral core contract.
+// The neutral fields (Instructions, Stream, Items, Tools, ToolChoice) are the
+// source of truth; UserMessage and ToolResults remain only for transitional
+// compatibility while read paths migrate.
 type Request struct {
 	UserMessage  string
 	Model        string

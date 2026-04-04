@@ -124,6 +124,7 @@ func TestFakeStreamingClientCapturesNeutralRequest(t *testing.T) {
 		Model:        "provider-model",
 		Instructions: "system rules",
 		Stream:       true,
+		ToolChoice:   "auto",
 		Items: []ConversationItem{
 			UserMessageItem("inspect workspace"),
 			ToolResultItem(ToolResult{
@@ -156,10 +157,125 @@ func TestFakeStreamingClientCapturesNeutralRequest(t *testing.T) {
 	if !got.Stream {
 		t.Fatal("Stream = false, want true")
 	}
+	if got.ToolChoice != "auto" {
+		t.Fatalf("ToolChoice = %q, want %q", got.ToolChoice, "auto")
+	}
 	if len(got.Items) != 2 {
 		t.Fatalf("len(Items) = %d, want 2", len(got.Items))
 	}
+	if got.Items[0].Kind != ConversationItemUserMessage || got.Items[0].Text != "inspect workspace" {
+		t.Fatalf("first item = %+v, want user message", got.Items[0])
+	}
+	if got.Items[1].Kind != ConversationItemToolResult || got.Items[1].Result == nil {
+		t.Fatalf("second item = %+v, want tool result", got.Items[1])
+	}
+	if got.Items[1].Result.ToolCallID != "tool_1" || got.Items[1].Result.ToolName != "file_read" || got.Items[1].Result.Content != "README contents" {
+		t.Fatalf("second item result = %+v, want tool_1/file_read/README contents", got.Items[1].Result)
+	}
 	if len(got.Tools) != 1 || got.Tools[0].Name != "file_read" {
 		t.Fatalf("Tools = %+v, want file_read schema", got.Tools)
+	}
+	if got.Tools[0].InputSchema["type"] != "object" {
+		t.Fatalf("Tools[0].InputSchema[type] = %v, want object", got.Tools[0].InputSchema["type"])
+	}
+}
+
+func TestFakeStreamingClientSnapshotsNeutralRequest(t *testing.T) {
+	client := NewFakeStreaming([][]StreamEvent{{
+		{Kind: StreamEventMessageEnd},
+	}})
+
+	req := Request{
+		Model:        "provider-model",
+		Instructions: "system rules",
+		Stream:       true,
+		ToolChoice:   "auto",
+		Items: []ConversationItem{
+			UserMessageItem("inspect workspace"),
+			{
+				Kind: ConversationItemToolCall,
+				ToolCall: ToolCallChunk{
+					ID:   "call_1",
+					Name: "file_read",
+					Input: map[string]any{
+						"path": "README.md",
+					},
+				},
+			},
+			ToolResultItem(ToolResult{
+				ToolCallID: "tool_1",
+				ToolName:   "file_read",
+				Content:    "README contents",
+			}),
+		},
+		Tools: []ToolSchema{{
+			Name:        "file_read",
+			Description: "Read a file inside the workspace",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string"},
+				},
+			},
+		}},
+		ToolResults: []ToolResult{{
+			ToolCallID: "legacy_1",
+			ToolName:   "legacy_tool",
+			Content:    "legacy contents",
+		}},
+	}
+
+	stream, errs := client.Stream(context.Background(), req)
+	for range stream {
+	}
+	if err := <-errs; err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	req.Model = "mutated-model"
+	req.Instructions = "mutated rules"
+	req.Stream = false
+	req.ToolChoice = "none"
+	req.Items[0].Text = "mutated"
+	req.Items[1].ToolCall.Input["path"] = "CHANGED.md"
+	req.Items[2].Result.Content = "mutated contents"
+	req.Tools[0].Description = "mutated description"
+	req.Tools[0].InputSchema["type"] = "mutated"
+	req.Tools[0].InputSchema["properties"].(map[string]any)["path"].(map[string]any)["type"] = "mutated"
+	req.ToolResults[0].Content = "mutated legacy contents"
+
+	got := client.LastRequest()
+	if got.Model != "provider-model" {
+		t.Fatalf("Model = %q, want %q", got.Model, "provider-model")
+	}
+	if got.Instructions != "system rules" {
+		t.Fatalf("Instructions = %q, want %q", got.Instructions, "system rules")
+	}
+	if !got.Stream {
+		t.Fatal("Stream = false, want true")
+	}
+	if got.ToolChoice != "auto" {
+		t.Fatalf("ToolChoice = %q, want %q", got.ToolChoice, "auto")
+	}
+	if got.Items[0].Text != "inspect workspace" {
+		t.Fatalf("Items[0].Text = %q, want %q", got.Items[0].Text, "inspect workspace")
+	}
+	if got.Items[1].ToolCall.Input["path"] != "README.md" {
+		t.Fatalf("Items[1].ToolCall.Input[path] = %v, want README.md", got.Items[1].ToolCall.Input["path"])
+	}
+	if got.Items[2].Result.Content != "README contents" {
+		t.Fatalf("Items[2].Result.Content = %q, want %q", got.Items[2].Result.Content, "README contents")
+	}
+	if got.Tools[0].Description != "Read a file inside the workspace" {
+		t.Fatalf("Tools[0].Description = %q, want %q", got.Tools[0].Description, "Read a file inside the workspace")
+	}
+	if got.Tools[0].InputSchema["type"] != "object" {
+		t.Fatalf("Tools[0].InputSchema[type] = %v, want object", got.Tools[0].InputSchema["type"])
+	}
+	if got.Tools[0].InputSchema["properties"].(map[string]any)["path"].(map[string]any)["type"] != "string" {
+		t.Fatalf("Tools[0].InputSchema[properties][path][type] = %v, want string", got.Tools[0].InputSchema["properties"].(map[string]any)["path"].(map[string]any)["type"])
+	}
+	if got.ToolResults[0].Content != "legacy contents" {
+		t.Fatalf("ToolResults[0].Content = %q, want %q", got.ToolResults[0].Content, "legacy contents")
 	}
 }
