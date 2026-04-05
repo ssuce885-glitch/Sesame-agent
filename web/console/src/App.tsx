@@ -43,13 +43,13 @@ import {
   获取统计时序,
   获取统计概览,
   选择会话,
+  type AssistantContentBlock,
   type 会话项,
   type 时间线块,
 } from "./api";
 import { 初始对话状态, 对话状态归并 } from "./chatState";
+import { startConversationEventStream } from "./eventStream";
 
-const TOOL_RESULT_INLINE_THRESHOLD = 300;
-const TOOL_RESULT_SUMMARY_LIMIT = 80;
 const CONTEXT_WARNING_THRESHOLD = 5000;
 const CONTEXT_DANGER_THRESHOLD = 5800;
 const INPUT_HISTORY_LIMIT = 50;
@@ -72,55 +72,10 @@ function 记录输入历史(value: string) {
   输入历史记录 = [...输入历史记录, value].slice(-INPUT_HISTORY_LIMIT);
 }
 
-function 生成工具结果摘要(resultPreview?: string) {
-  if (!resultPreview) {
-    return "";
-  }
-  if (resultPreview.length <= TOOL_RESULT_SUMMARY_LIMIT) {
-    return resultPreview;
-  }
-  return `${resultPreview.slice(0, TOOL_RESULT_SUMMARY_LIMIT)}...`;
-}
-
-function 获取工具结果长度(resultPreview?: string) {
-  if (!resultPreview) {
-    return 0;
-  }
-  return new TextEncoder().encode(resultPreview).length;
-}
-
-export function mergeAdjacentAssistantBlocks(blocks: 时间线块[]) {
-  return blocks.reduce<时间线块[]>((mergedBlocks, block) => {
-    const previousBlock = mergedBlocks[mergedBlocks.length - 1];
-    if (
-      previousBlock?.kind === "assistant_output" &&
-      block.kind === "assistant_output" &&
-      previousBlock.turn_id &&
-      block.turn_id &&
-      previousBlock.turn_id === block.turn_id
-    ) {
-      mergedBlocks[mergedBlocks.length - 1] = {
-        ...previousBlock,
-        ...block,
-        id: previousBlock.id,
-        turn_id: previousBlock.turn_id,
-        kind: "assistant_output",
-        text: `${previousBlock.text ?? ""}${block.text ?? ""}`,
-        status: block.status ?? previousBlock.status,
-        usage: block.usage ?? previousBlock.usage,
-      };
-      return mergedBlocks;
-    }
-
-    mergedBlocks.push(block);
-    return mergedBlocks;
-  }, []);
-}
-
 export function getContextUsageWarning(blocks: 时间线块[]): 上下文告警 | null {
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index];
-    if (block.kind !== "assistant_output" || !block.usage) {
+    if (block.kind !== "assistant_message" || !block.usage) {
       continue;
     }
 
@@ -316,58 +271,40 @@ function 对话页面() {
   useEffect(() => {
     if (!当前会话ID) {
       派发({ type: "connection", value: "idle" });
+      latestSeqRef.current = 0;
       return;
     }
 
-    let disposed = false;
-    let eventSource: EventSource | null = null;
-    let retryTimer: number | null = null;
-    let after = latestSeqRef.current;
-
-    const 连接事件流 = () => {
-      if (disposed) {
-        return;
-      }
-      派发({ type: "connection", value: after > 0 ? "reconnecting" : "connecting" });
-      eventSource = 打开事件流(当前会话ID, after);
-      eventSource.onopen = () => {
-        派发({ type: "connection", value: "open" });
-      };
-      eventSource.onmessage = (message) => {
-        const event = JSON.parse(message.data) as {
-          seq: number;
-        };
-        after = event.seq;
-        latestSeqRef.current = event.seq;
-        派发({ type: "event", event: JSON.parse(message.data) });
-
-        const typedEvent = JSON.parse(message.data) as { type: string };
-        if (typedEvent.type === "turn.completed" || typedEvent.type === "turn.failed") {
-          void queryClient.invalidateQueries({ queryKey: ["timeline", 当前会话ID] });
-          void queryClient.invalidateQueries({ queryKey: ["sessions"] });
-          void queryClient.invalidateQueries({ queryKey: ["metrics-overview"] });
-          void queryClient.invalidateQueries({ queryKey: ["metrics-timeseries"] });
-          void queryClient.invalidateQueries({ queryKey: ["metrics-turns"] });
-        }
-      };
-      eventSource.onerror = () => {
-        eventSource?.close();
-        if (disposed) {
-          return;
-        }
-        派发({ type: "connection", value: "reconnecting" });
-        retryTimer = window.setTimeout(连接事件流, 1500);
-      };
-    };
-
-    连接事件流();
-    return () => {
-      disposed = true;
-      eventSource?.close();
-      if (retryTimer !== null) {
-        window.clearTimeout(retryTimer);
-      }
-    };
+    return startConversationEventStream({
+      sessionId: 当前会话ID,
+      latestSeqRef,
+      openEventSource: 打开事件流,
+      onConnectionChange: (value) => {
+        派发({ type: "connection", value });
+      },
+      onBusinessEvent: (event) => {
+        派发({ type: "event", event });
+      },
+      onRecoverFromSnapshot: async () => {
+        const timeline = await queryClient.fetchQuery({
+          queryKey: ["timeline", 当前会话ID],
+          queryFn: () => 获取时间线(当前会话ID),
+        });
+        latestSeqRef.current = timeline.latest_seq;
+        派发({
+          type: "snapshot",
+          blocks: timeline.blocks,
+          latestSeq: timeline.latest_seq,
+        });
+        return timeline.latest_seq;
+      },
+      onTerminalEvent: () => {
+        void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+        void queryClient.invalidateQueries({ queryKey: ["metrics-overview"] });
+        void queryClient.invalidateQueries({ queryKey: ["metrics-timeseries"] });
+        void queryClient.invalidateQueries({ queryKey: ["metrics-turns"] });
+      },
+    });
   }, [当前会话ID, queryClient]);
 
   async function 处理创建会话() {
@@ -512,9 +449,7 @@ function 会话列表栏(props: {
 }
 
 function 对话流(props: { blocks: 时间线块[]; currentSession?: { workspace_root: string; provider?: string; model?: string } }) {
-  const mergedBlocks = mergeAdjacentAssistantBlocks(props.blocks);
-
-  if (mergedBlocks.length === 0) {
+  if (props.blocks.length === 0) {
     return (
       <div className="stream-empty">
         <h2>开始一个任务</h2>
@@ -526,7 +461,7 @@ function 对话流(props: { blocks: 时间线块[]; currentSession?: { workspace
 
   return (
     <div className="stream-list">
-      {mergedBlocks.map((block) => (
+      {props.blocks.map((block) => (
         <对话块 key={block.id} block={block} />
       ))}
     </div>
@@ -535,17 +470,16 @@ function 对话流(props: { blocks: 时间线块[]; currentSession?: { workspace
 
 function 对话块(props: { block: 时间线块 }) {
   const { block } = props;
-  if (block.kind === "tool_call") {
-    return <ToolCallCard block={block} />;
+  if (block.kind === "assistant_message") {
+    return <AssistantMessageBlock block={block} />;
   }
 
   const titleMap: Record<时间线块["kind"], string> = {
     user_message: "用户",
     reasoning: "思考",
-    assistant_output: "最终输出",
+    assistant_message: "助手消息",
     notice: "系统通知",
     error: "错误",
-    tool_call: "工具调用",
   };
 
   return (
@@ -566,17 +500,43 @@ function 对话块(props: { block: 时间线块 }) {
   );
 }
 
-export function ToolCallCard(props: { block: 时间线块 }) {
+function AssistantMessageBlock(props: { block: 时间线块 }) {
+  return (
+    <article className="stream-block assistant_message">
+      <div className="block-header">
+        <span>助手消息</span>
+        {props.block.status ? <span className="block-status">{props.block.status}</span> : null}
+      </div>
+      <div className="block-body assistant-message-body">
+        {props.block.content?.map((item, index) =>
+          item.type === "text" ? (
+            <div key={`text_${index}`} className="assistant-text-fragment">
+              {item.text}
+            </div>
+          ) : (
+            <ToolCallCard key={item.tool_call_id} block={item} />
+          ),
+        )}
+      </div>
+      {props.block.usage ? (
+        <div className="usage-row">
+          <span>input {props.block.usage.input_tokens}</span>
+          <span>output {props.block.usage.output_tokens}</span>
+          <span>cached {props.block.usage.cached_tokens}</span>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+export function ToolCallCard(props: { block: Extract<AssistantContentBlock, { type: "tool_call" }> }) {
   const { block } = props;
   const isRunning = block.status === "running";
-  const hasInlineResult =
-    Boolean(block.result_preview) && 获取工具结果长度(block.result_preview) <= TOOL_RESULT_INLINE_THRESHOLD;
-  const [isOpen, setIsOpen] = useState(() => isRunning || hasInlineResult);
-  const summaryText = !hasInlineResult ? 生成工具结果摘要(block.result_preview) : "";
+  const [isOpen, setIsOpen] = useState(() => isRunning);
 
   useEffect(() => {
-    setIsOpen(isRunning || hasInlineResult);
-  }, [block.id, hasInlineResult, isRunning]);
+    setIsOpen(isRunning);
+  }, [block.tool_call_id]);
 
   return (
     <details
@@ -592,18 +552,13 @@ export function ToolCallCard(props: { block: 时间线块 }) {
       <summary className="tool-summary">
         <div className="tool-summary-main">
           <span>{block.tool_name || "tool call"}</span>
-          {summaryText ? <span className="tool-result-preview">{summaryText}</span> : null}
         </div>
         <span className="block-status">{block.status || "idle"}</span>
       </summary>
       {isRunning || isOpen ? (
         <>
           {block.args_preview ? <pre className="tool-panel">{block.args_preview}</pre> : null}
-          {block.result_preview ? (
-            <div className={hasInlineResult ? "tool-result tool-result-inline" : "tool-result"}>
-              {block.result_preview}
-            </div>
-          ) : null}
+          {block.result_preview ? <pre className="tool-panel">{block.result_preview}</pre> : null}
         </>
       ) : null}
     </details>

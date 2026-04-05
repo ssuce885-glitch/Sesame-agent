@@ -8,10 +8,11 @@ import (
 )
 
 type UserConfig struct {
-	Listen    UserConfigListen    `json:"listen"`
-	Provider  string              `json:"provider"`
-	Anthropic UserConfigAnthropic `json:"anthropic"`
-	OpenAI    UserConfigOpenAI    `json:"openai"`
+	Listen       UserConfigListen    `json:"listen"`
+	Provider     string              `json:"provider"`
+	Anthropic    UserConfigAnthropic `json:"anthropic"`
+	OpenAI       UserConfigOpenAI    `json:"openai"`
+	MaxToolSteps int                 `json:"max_tool_steps"`
 }
 
 type UserConfigListen struct {
