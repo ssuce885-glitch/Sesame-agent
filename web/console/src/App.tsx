@@ -1,4 +1,11 @@
-import { startTransition, useEffect, useReducer, useState, type ReactNode } from "react";
+import {
+  startTransition,
+  useEffect,
+  useReducer,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Navigate,
   NavLink,
@@ -39,6 +46,105 @@ import {
   type 时间线块,
 } from "./api";
 import { 初始对话状态, 对话状态归并 } from "./chatState";
+
+const TOOL_RESULT_INLINE_THRESHOLD = 300;
+const TOOL_RESULT_SUMMARY_LIMIT = 80;
+const CONTEXT_WARNING_THRESHOLD = 5000;
+const CONTEXT_DANGER_THRESHOLD = 5800;
+const INPUT_HISTORY_LIMIT = 50;
+
+type 上下文告警 = {
+  level: "warn" | "danger";
+  text: string;
+};
+
+let 输入历史记录: string[] = [];
+
+function 记录输入历史(value: string) {
+  if (!value) {
+    return;
+  }
+  const latestValue = 输入历史记录[输入历史记录.length - 1];
+  if (latestValue === value) {
+    return;
+  }
+  输入历史记录 = [...输入历史记录, value].slice(-INPUT_HISTORY_LIMIT);
+}
+
+function 生成工具结果摘要(resultPreview?: string) {
+  if (!resultPreview) {
+    return "";
+  }
+  if (resultPreview.length <= TOOL_RESULT_SUMMARY_LIMIT) {
+    return resultPreview;
+  }
+  return `${resultPreview.slice(0, TOOL_RESULT_SUMMARY_LIMIT)}...`;
+}
+
+function 获取工具结果长度(resultPreview?: string) {
+  if (!resultPreview) {
+    return 0;
+  }
+  return new TextEncoder().encode(resultPreview).length;
+}
+
+export function mergeAdjacentAssistantBlocks(blocks: 时间线块[]) {
+  return blocks.reduce<时间线块[]>((mergedBlocks, block) => {
+    const previousBlock = mergedBlocks[mergedBlocks.length - 1];
+    if (
+      previousBlock?.kind === "assistant_output" &&
+      block.kind === "assistant_output" &&
+      previousBlock.turn_id &&
+      block.turn_id &&
+      previousBlock.turn_id === block.turn_id
+    ) {
+      mergedBlocks[mergedBlocks.length - 1] = {
+        ...previousBlock,
+        ...block,
+        id: previousBlock.id,
+        turn_id: previousBlock.turn_id,
+        kind: "assistant_output",
+        text: `${previousBlock.text ?? ""}${block.text ?? ""}`,
+        status: block.status ?? previousBlock.status,
+        usage: block.usage ?? previousBlock.usage,
+      };
+      return mergedBlocks;
+    }
+
+    mergedBlocks.push(block);
+    return mergedBlocks;
+  }, []);
+}
+
+export function getContextUsageWarning(blocks: 时间线块[]): 上下文告警 | null {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (block.kind !== "assistant_output" || !block.usage) {
+      continue;
+    }
+
+    const totalTokens = block.usage.input_tokens + block.usage.cached_tokens;
+    if (totalTokens >= CONTEXT_DANGER_THRESHOLD) {
+      return {
+        level: "danger",
+        text: `上下文即将触发压缩（${totalTokens} tokens）`,
+      };
+    }
+    if (totalTokens >= CONTEXT_WARNING_THRESHOLD) {
+      return {
+        level: "warn",
+        text: `上下文已用 ${totalTokens} tokens，接近压缩阈值`,
+      };
+    }
+    return null;
+  }
+
+  return null;
+}
+
+export function resetInputHistoryForTests() {
+  输入历史记录 = [];
+}
 
 export default function 应用() {
   const [查询客户端] = useState(
@@ -116,6 +222,7 @@ function 对话页面() {
     会话查询.data?.selected_session_id ??
     会话查询.data?.sessions[0]?.id ??
     "";
+  const 上下文Warning = getContextUsageWarning(状态.blocks);
 
   const 时间线查询 = useQuery({
     queryKey: ["timeline", 当前会话ID],
@@ -269,14 +376,14 @@ function 对话页面() {
   async function 处理发送消息() {
     const message = 输入内容.trim();
     if (!message) {
-      return;
+      return false;
     }
 
     let sessionId = 当前会话ID;
     if (!sessionId) {
       if (!工作区路径.trim()) {
         设置错误信息("请先输入工作区路径，或选择一个已有会话。");
-        return;
+        return false;
       }
       const session = await 创建会话动作.mutateAsync(工作区路径.trim());
       sessionId = session.id;
@@ -288,6 +395,7 @@ function 对话页面() {
     设置输入内容("");
     设置错误信息("");
     await 提交消息动作.mutateAsync({ sessionId, message });
+    return true;
   }
 
   return (
@@ -319,6 +427,12 @@ function 对话页面() {
           </div>
         </div>
 
+        {上下文Warning ? (
+          <div className={`context-warning ${上下文Warning.level}`} role="status">
+            {上下文Warning.text}
+          </div>
+        ) : null}
+
         {错误信息 ? (
           <div className="inline-alert" role="alert">
             {错误信息}
@@ -331,9 +445,7 @@ function 对话页面() {
           value={输入内容}
           disabled={提交消息动作.isPending}
           onChange={设置输入内容}
-          onSubmit={() => {
-            void 处理发送消息();
-          }}
+          onSubmit={处理发送消息}
         />
       </section>
     </div>
@@ -395,7 +507,9 @@ function 会话列表栏(props: {
 }
 
 function 对话流(props: { blocks: 时间线块[]; currentSession?: { workspace_root: string; provider?: string; model?: string } }) {
-  if (props.blocks.length === 0) {
+  const mergedBlocks = mergeAdjacentAssistantBlocks(props.blocks);
+
+  if (mergedBlocks.length === 0) {
     return (
       <div className="stream-empty">
         <h2>开始一个任务</h2>
@@ -407,7 +521,7 @@ function 对话流(props: { blocks: 时间线块[]; currentSession?: { workspace
 
   return (
     <div className="stream-list">
-      {props.blocks.map((block) => (
+      {mergedBlocks.map((block) => (
         <对话块 key={block.id} block={block} />
       ))}
     </div>
@@ -417,7 +531,7 @@ function 对话流(props: { blocks: 时间线块[]; currentSession?: { workspace
 function 对话块(props: { block: 时间线块 }) {
   const { block } = props;
   if (block.kind === "tool_call") {
-    return <工具调用卡片 block={block} />;
+    return <ToolCallCard block={block} />;
   }
 
   const titleMap: Record<时间线块["kind"], string> = {
@@ -447,17 +561,170 @@ function 对话块(props: { block: 时间线块 }) {
   );
 }
 
-function 工具调用卡片(props: { block: 时间线块 }) {
+export function ToolCallCard(props: { block: 时间线块 }) {
   const { block } = props;
+  const isRunning = block.status === "running";
+  const hasInlineResult =
+    Boolean(block.result_preview) && 获取工具结果长度(block.result_preview) <= TOOL_RESULT_INLINE_THRESHOLD;
+  const [isOpen, setIsOpen] = useState(() => isRunning || hasInlineResult);
+  const summaryText = !hasInlineResult ? 生成工具结果摘要(block.result_preview) : "";
+
+  useEffect(() => {
+    setIsOpen(isRunning || hasInlineResult);
+  }, [block.id, hasInlineResult, isRunning]);
+
   return (
-    <details className="stream-block tool-card" open={block.status === "running"}>
+    <details
+      className="stream-block tool-card"
+      open={isRunning || isOpen}
+      onToggle={(event) => {
+        if (isRunning) {
+          return;
+        }
+        setIsOpen(event.currentTarget.open);
+      }}
+    >
       <summary className="tool-summary">
-        <span>{block.tool_name || "tool call"}</span>
+        <div className="tool-summary-main">
+          <span>{block.tool_name || "tool call"}</span>
+          {summaryText ? <span className="tool-result-preview">{summaryText}</span> : null}
+        </div>
         <span className="block-status">{block.status || "idle"}</span>
       </summary>
-      {block.args_preview ? <pre className="tool-panel">{block.args_preview}</pre> : null}
-      {block.result_preview ? <div className="tool-result">{block.result_preview}</div> : null}
+      {isRunning || isOpen ? (
+        <>
+          {block.args_preview ? <pre className="tool-panel">{block.args_preview}</pre> : null}
+          {block.result_preview ? (
+            <div className={hasInlineResult ? "tool-result tool-result-inline" : "tool-result"}>
+              {block.result_preview}
+            </div>
+          ) : null}
+        </>
+      ) : null}
     </details>
+  );
+}
+
+export function Composer(props: {
+  value: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+  onSubmit: () => Promise<boolean | void> | boolean | void;
+  inputId?: string;
+  labelText?: string;
+  sectionText?: string;
+  submitAriaLabel?: string;
+}) {
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [draftValue, setDraftValue] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (historyIndex === -1) {
+      setDraftValue(props.value);
+    }
+  }, [historyIndex, props.value]);
+
+  function 处理输入变化(value: string) {
+    if (historyIndex !== -1) {
+      setHistoryIndex(-1);
+    }
+    setDraftValue(value);
+    props.onChange(value);
+  }
+
+  function 处理方向键(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "ArrowUp") {
+      if (输入历史记录.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      if (historyIndex === -1) {
+        const nextIndex = 输入历史记录.length - 1;
+        setDraftValue(props.value);
+        setHistoryIndex(nextIndex);
+        props.onChange(输入历史记录[nextIndex]);
+        return;
+      }
+      const nextIndex = Math.max(0, historyIndex - 1);
+      setHistoryIndex(nextIndex);
+      props.onChange(输入历史记录[nextIndex]);
+      return;
+    }
+
+    if (event.key === "ArrowDown" && historyIndex !== -1) {
+      event.preventDefault();
+      if (historyIndex >= 输入历史记录.length - 1) {
+        setHistoryIndex(-1);
+        props.onChange(draftValue);
+        return;
+      }
+      const nextIndex = historyIndex + 1;
+      setHistoryIndex(nextIndex);
+      props.onChange(输入历史记录[nextIndex]);
+    }
+  }
+
+  async function 处理提交() {
+    const message = props.value.trim();
+    if (!message) {
+      return;
+    }
+
+    const draftBeforeSubmit = props.value;
+    setIsSubmitting(true);
+    props.onChange("");
+    setHistoryIndex(-1);
+    setDraftValue("");
+
+    try {
+      const result = await props.onSubmit();
+      if (result === false) {
+        props.onChange(draftBeforeSubmit);
+        setDraftValue(draftBeforeSubmit);
+        return;
+      }
+      记录输入历史(message);
+    } catch (error) {
+      props.onChange(draftBeforeSubmit);
+      setDraftValue(draftBeforeSubmit);
+      throw error;
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="composer">
+      {props.sectionText ? <div className="composer-section-tag">{props.sectionText}</div> : null}
+      <label className="composer-label" htmlFor={props.inputId ?? "message-box"}>
+        {props.labelText ?? "输入指令"}
+      </label>
+      <textarea
+        id={props.inputId ?? "message-box"}
+        className="composer-input"
+        value={props.value}
+        disabled={props.disabled || isSubmitting}
+        onChange={(event) => 处理输入变化(event.target.value)}
+        onKeyDown={处理方向键}
+        placeholder="例如：检查当前工作区里最近的 provider 改动，并总结风险。"
+        rows={4}
+      />
+      <div className="composer-actions">
+        <span className="composer-hint">按你的真实工作方式提问，不需要先切到统计页。</span>
+        <button
+          aria-label={props.submitAriaLabel}
+          className="primary-button"
+          disabled={props.disabled || isSubmitting}
+          onClick={() => {
+            void 处理提交();
+          }}
+          type="button"
+        >
+          发送
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -465,29 +732,16 @@ function 发送框(props: {
   value: string;
   disabled: boolean;
   onChange: (value: string) => void;
-  onSubmit: () => void;
+  onSubmit: () => Promise<boolean | void> | boolean | void;
 }) {
   return (
-    <div className="composer">
-      <label className="composer-label" htmlFor="message-box">
-        输入指令
-      </label>
-      <textarea
-        id="message-box"
-        className="composer-input"
-        value={props.value}
-        disabled={props.disabled}
-        onChange={(event) => props.onChange(event.target.value)}
-        placeholder="例如：检查当前工作区里最近的 provider 改动，并总结风险。"
-        rows={4}
-      />
-      <div className="composer-actions">
-        <span className="composer-hint">按你的真实工作方式提问，不需要先切到统计页。</span>
-        <button className="primary-button" disabled={props.disabled} onClick={props.onSubmit} type="button">
-          发送
-        </button>
-      </div>
-    </div>
+    <Composer
+      {...props}
+      inputId="chat-message-box"
+      labelText="任务输入"
+      sectionText="输入指令"
+      submitAriaLabel="发送消息"
+    />
   );
 }
 
