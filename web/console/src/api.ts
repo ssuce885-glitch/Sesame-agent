@@ -17,14 +17,32 @@ export interface 会话列表响应 {
 export interface 时间线块 {
   id: string;
   turn_id?: string;
-  kind: "user_message" | "reasoning" | "tool_call" | "assistant_output" | "notice" | "error";
+  kind: "user_message" | "reasoning" | "assistant_message" | "notice" | "error";
   status?: string;
   text?: string;
+  tool_call_id?: string;
   tool_name?: string;
   args_preview?: string;
   result_preview?: string;
+  content?: AssistantContentBlock[];
   usage?: Token用量;
 }
+
+export interface 文本内容块 {
+  type: "text";
+  text: string;
+}
+
+export interface 工具调用内容块 {
+  type: "tool_call";
+  tool_call_id: string;
+  tool_name: string;
+  args_preview?: string;
+  result_preview?: string;
+  status?: string;
+}
+
+export type AssistantContentBlock = 文本内容块 | 工具调用内容块;
 
 export interface 时间线响应 {
   blocks: 时间线块[];

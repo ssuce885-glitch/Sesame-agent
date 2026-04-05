@@ -30,5 +30,5 @@ type Manager interface {
 }
 
 type Bus interface {
-	Subscribe(sessionID string) <-chan types.Event
+	Subscribe(sessionID string) (<-chan types.Event, func())
 }
