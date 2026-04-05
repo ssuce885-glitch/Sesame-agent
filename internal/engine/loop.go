@@ -220,20 +220,25 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 
 		if len(toolCalls) == 0 {
-			if messageEnded {
-				usage := buildTurnUsage(
-					hasUsage,
-					in.Turn.ID,
-					sessionID,
-					usageProvider,
-					usageModel,
-					totalInputTokens,
-					totalOutputTokens,
-					totalCachedTokens,
-				)
-				if err := finalizeTurn(ctx, e, in, usage); err != nil {
-					return err
+			if !messageEnded {
+				err := fmt.Errorf("model stream ended without message_end signal")
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
 				}
+				return err
+			}
+			usage := buildTurnUsage(
+				hasUsage,
+				in.Turn.ID,
+				sessionID,
+				usageProvider,
+				usageModel,
+				totalInputTokens,
+				totalOutputTokens,
+				totalCachedTokens,
+			)
+			if err := finalizeTurn(ctx, e, in, usage); err != nil {
+				return err
 			}
 			return nil
 		}
