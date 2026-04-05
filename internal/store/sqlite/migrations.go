@@ -25,6 +25,50 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists runs (
+			id text primary key,
+			session_id text not null,
+			turn_id text not null default '',
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists plans (
+			id text primary key,
+			run_id text not null,
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists task_records (
+			id text primary key,
+			run_id text not null,
+			plan_id text not null default '',
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists tool_runs (
+			id text primary key,
+			run_id text not null,
+			task_id text not null default '',
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists worktrees (
+			id text primary key,
+			run_id text not null,
+			task_id text not null default '',
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
 		`create table if not exists events (
 			seq integer primary key autoincrement,
 			id text not null,
@@ -62,6 +106,18 @@ func (s *Store) migrate(ctx context.Context) error {
 			kind text not null,
 			payload text not null,
 			created_at text not null
+		);`,
+		`create table if not exists turn_usage (
+			turn_id text primary key,
+			session_id text not null,
+			provider text not null default '',
+			model text not null default '',
+			input_tokens integer not null default 0,
+			output_tokens integer not null default 0,
+			cached_tokens integer not null default 0,
+			cache_hit_rate real not null default 0,
+			created_at text not null,
+			updated_at text not null
 		);`,
 		`create unique index if not exists conversation_items_session_position_idx
 			on conversation_items(session_id, position);`,

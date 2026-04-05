@@ -16,11 +16,17 @@ type Input struct {
 	Sink    EventSink
 }
 
+type RuntimeMetadata struct {
+	Provider string
+	Model    string
+}
+
 type ConversationStore interface {
 	ListConversationItems(context.Context, string) ([]model.ConversationItem, error)
 	ListConversationSummaries(context.Context, string) ([]model.Summary, error)
 	InsertConversationItem(context.Context, string, string, int, model.ConversationItem) error
 	InsertConversationSummary(context.Context, string, int, model.Summary) error
+	UpsertTurnUsage(context.Context, types.TurnUsage) error
 	ListMemoryEntriesByWorkspace(context.Context, string) ([]types.MemoryEntry, error)
 	GetProviderCacheHead(context.Context, string, string, string) (types.ProviderCacheHead, bool, error)
 	UpsertProviderCacheHead(context.Context, types.ProviderCacheHead) error
@@ -36,6 +42,7 @@ type Engine struct {
 	ctxManager   *contextstate.Manager
 	compactor    contextstate.Compactor
 	runtime      *contextstate.Runtime
+	meta         RuntimeMetadata
 	maxToolSteps int
 }
 
@@ -56,6 +63,7 @@ func New(
 		ctxManager,
 		contextstate.NewRuntime(86400, 3),
 		compactor,
+		RuntimeMetadata{},
 		maxToolSteps,
 	)
 }
@@ -68,6 +76,7 @@ func NewWithRuntime(
 	ctxManager *contextstate.Manager,
 	runtime *contextstate.Runtime,
 	compactor contextstate.Compactor,
+	meta RuntimeMetadata,
 	maxToolSteps int,
 ) *Engine {
 	if runtime == nil {
@@ -81,6 +90,7 @@ func NewWithRuntime(
 		ctxManager:   ctxManager,
 		runtime:      runtime,
 		compactor:    compactor,
+		meta:         meta,
 		maxToolSteps: maxToolSteps,
 	}
 }

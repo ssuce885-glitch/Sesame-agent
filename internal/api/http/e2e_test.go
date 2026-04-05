@@ -518,8 +518,24 @@ func (s *turnSubmitStore) DeleteTurn(ctx context.Context, turnID string) error {
 	return nil
 }
 
+func (s *turnSubmitStore) GetSession(context.Context, string) (types.Session, bool, error) {
+	return types.Session{}, false, nil
+}
+
+func (s *turnSubmitStore) ListTurnsBySession(context.Context, string) ([]types.Turn, error) {
+	return nil, nil
+}
+
+func (s *turnSubmitStore) ListConversationItems(context.Context, string) ([]model.ConversationItem, error) {
+	return nil, nil
+}
+
 func (s *turnSubmitStore) ListSessionEvents(context.Context, string, int64) ([]types.Event, error) {
 	return nil, nil
+}
+
+func (s *turnSubmitStore) LatestSessionEventSeq(context.Context, string) (int64, error) {
+	return 0, nil
 }
 
 type turnSubmitManager struct {
@@ -711,6 +727,18 @@ func (s *replayStore) InsertTurn(context.Context, types.Turn) error { return nil
 
 func (s *replayStore) DeleteTurn(context.Context, string) error { return nil }
 
+func (s *replayStore) GetSession(context.Context, string) (types.Session, bool, error) {
+	return types.Session{}, false, nil
+}
+
+func (s *replayStore) ListTurnsBySession(context.Context, string) ([]types.Turn, error) {
+	return nil, nil
+}
+
+func (s *replayStore) ListConversationItems(context.Context, string) ([]model.ConversationItem, error) {
+	return nil, nil
+}
+
 func (s *replayStore) ListSessionEvents(ctx context.Context, sessionID string, afterSeq int64) ([]types.Event, error) {
 	s.listCalled = true
 	s.afterSeq = afterSeq
@@ -725,6 +753,10 @@ func (s *replayStore) ListSessionEvents(ctx context.Context, sessionID string, a
 		})
 	}
 	return s.events, nil
+}
+
+func (s *replayStore) LatestSessionEventSeq(context.Context, string) (int64, error) {
+	return 0, nil
 }
 
 type replayBus struct {
