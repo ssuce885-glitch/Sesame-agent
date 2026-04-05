@@ -2,44 +2,11 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"time"
 
 	"go-agent/internal/types"
 )
 
-func (s *Store) GetSession(ctx context.Context, sessionID string) (types.Session, bool, error) {
-	row := s.db.QueryRowContext(ctx, `
-		select id, workspace_root, state, active_turn_id, created_at, updated_at
-		from sessions
-		where id = ?
-	`, sessionID)
-
-	var session types.Session
-	var state string
-	var createdAt string
-	var updatedAt string
-	err := row.Scan(&session.ID, &session.WorkspaceRoot, &state, &session.ActiveTurnID, &createdAt, &updatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return types.Session{}, false, nil
-	}
-	if err != nil {
-		return types.Session{}, false, err
-	}
-
-	session.State = types.SessionState(state)
-	session.CreatedAt, err = time.Parse(timeLayout, createdAt)
-	if err != nil {
-		return types.Session{}, false, err
-	}
-	session.UpdatedAt, err = time.Parse(timeLayout, updatedAt)
-	if err != nil {
-		return types.Session{}, false, err
-	}
-
-	return session, true, nil
-}
 
 func (s *Store) ListTurnsBySession(ctx context.Context, sessionID string) ([]types.Turn, error) {
 	rows, err := s.db.QueryContext(ctx, `

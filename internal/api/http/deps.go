@@ -17,7 +17,6 @@ type Store interface {
 	SetSelectedSessionID(context.Context, string) error
 	InsertTurn(context.Context, types.Turn) error
 	DeleteTurn(context.Context, string) error
-	GetSession(context.Context, string) (types.Session, bool, error)
 	ListTurnsBySession(context.Context, string) ([]types.Turn, error)
 	ListConversationItems(context.Context, string) ([]model.ConversationItem, error)
 	ListSessionEvents(context.Context, string, int64) ([]types.Event, error)

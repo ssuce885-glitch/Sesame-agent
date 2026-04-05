@@ -81,13 +81,25 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		cacheHead = &cacheHeadValue
 	}
 
+	instructions, err := buildRuntimeInstructionsWithMaxBytes(in.Session, e.basePrompt, working.MemoryRefs, e.maxWorkspacePromptBytes)
+	if err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
 	req := e.runtime.PrepareRequest(
 		working,
 		cacheHead,
 		caps,
 		model.UserMessageItem(in.Turn.UserMessage),
-		buildRuntimeInstructions(in.Session.WorkspaceRoot, working.MemoryRefs),
+		instructions.Text,
 	)
+	for _, notice := range instructions.Notices {
+		if err := emit(types.EventSystemNotice, types.NoticePayload{Text: notice}); err != nil {
+			return err
+		}
+	}
 	req.Stream = true
 	req.Tools = buildToolSchemas(e.registry)
 	req.ToolChoice = "auto"
@@ -352,13 +364,6 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	return totalItems, working, nil
 }
 
-func buildRuntimeInstructions(workspaceRoot string, memoryRefs []string) string {
-	base := fmt.Sprintf("workspace_root=%s\nUse local tools when needed.", workspaceRoot)
-	if len(memoryRefs) == 0 {
-		return base
-	}
-	return base + "\nRelevant memory:\n- " + strings.Join(memoryRefs, "\n- ")
-}
 
 func buildToolSchemas(registry *tools.Registry) []model.ToolSchema {
 	if registry == nil {
