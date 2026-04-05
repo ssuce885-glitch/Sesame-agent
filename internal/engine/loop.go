@@ -2,9 +2,11 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/memory"
@@ -42,6 +44,11 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	}
 	caps := e.model.Capabilities()
 	providerName := providerCacheOwnerForCapabilities(caps)
+	usageProvider := strings.TrimSpace(e.meta.Provider)
+	if usageProvider == "" {
+		usageProvider = providerName
+	}
+	usageModel := strings.TrimSpace(e.meta.Model)
 
 	if err := emit(types.EventTurnStarted, types.TurnStartedPayload{
 		WorkspaceRoot: in.Session.WorkspaceRoot,
@@ -88,6 +95,10 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	assistantStarted := false
 	nextPosition := totalItems + 1
 	toolSteps := 0
+	totalInputTokens := 0
+	totalOutputTokens := 0
+	totalCachedTokens := 0
+	hasUsage := false
 
 	userItem := model.UserMessageItem(in.Turn.UserMessage)
 	if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, userItem); err != nil {
@@ -172,6 +183,13 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			}
 		}
 
+		if responseMeta != nil {
+			totalInputTokens += responseMeta.InputTokens
+			totalOutputTokens += responseMeta.OutputTokens
+			totalCachedTokens += responseMeta.CachedTokens
+			hasUsage = true
+		}
+
 		if assistantText.Len() > 0 {
 			assistantItem := model.ConversationItem{
 				Kind: model.ConversationItemAssistantText,
@@ -191,10 +209,17 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 
 		if len(toolCalls) == 0 {
 			if messageEnded {
-				if err := emit(types.EventAssistantCompleted, struct{}{}); err != nil {
-					return err
-				}
-				if err := emit(types.EventTurnCompleted, struct{}{}); err != nil {
+				usage := buildTurnUsage(
+					hasUsage,
+					in.Turn.ID,
+					sessionID,
+					usageProvider,
+					usageModel,
+					totalInputTokens,
+					totalOutputTokens,
+					totalCachedTokens,
+				)
+				if err := finalizeTurn(ctx, e, in, usage); err != nil {
 					return err
 				}
 			}
@@ -211,12 +236,27 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				return err
 			}
 
-			payload := struct {
-				ToolCallID string `json:"tool_call_id"`
-				ToolName   string `json:"tool_name"`
-			}{
+			toolCallItem := model.ConversationItem{
+				Kind: model.ConversationItemToolCall,
+				ToolCall: model.ToolCallChunk{
+					ID:    call.ID,
+					Name:  call.Name,
+					Input: call.Input,
+				},
+			}
+			if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolCallItem); err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
+			req.Items = append(req.Items, toolCallItem)
+			nextPosition++
+
+			payload := types.ToolEventPayload{
 				ToolCallID: call.ID,
 				ToolName:   call.Name,
+				Arguments:  marshalToolArguments(call.Input),
 			}
 			if err := emit(types.EventToolStarted, payload); err != nil {
 				return err
@@ -236,6 +276,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				return err
 			}
 
+			payload.ResultPreview = previewToolResult(result.Text)
 			if err := emit(types.EventToolCompleted, payload); err != nil {
 				return err
 			}
@@ -348,6 +389,102 @@ func persistConversationItem(ctx context.Context, store ConversationStore, sessi
 		return nil
 	}
 	return store.InsertConversationItem(ctx, sessionID, turnID, position, item)
+}
+
+func persistTurnUsage(ctx context.Context, store ConversationStore, usage types.TurnUsage) error {
+	if store == nil {
+		return nil
+	}
+	return store.UpsertTurnUsage(ctx, usage)
+}
+
+func buildTurnUsage(hasUsage bool, turnID, sessionID, provider, model string, inputTokens, outputTokens, cachedTokens int) *types.TurnUsage {
+	if !hasUsage {
+		return nil
+	}
+	cacheHitRate := 0.0
+	if inputTokens > 0 {
+		cacheHitRate = float64(cachedTokens) / float64(inputTokens)
+	}
+	now := time.Now().UTC()
+	return &types.TurnUsage{
+		TurnID:       turnID,
+		SessionID:    sessionID,
+		Provider:     provider,
+		Model:        model,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		CachedTokens: cachedTokens,
+		CacheHitRate: cacheHitRate,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+}
+
+func finalizeTurn(ctx context.Context, e *Engine, in Input, usage *types.TurnUsage) error {
+	finalEvents := make([]types.Event, 0, 3)
+
+	assistantCompleted, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventAssistantCompleted, struct{}{})
+	if err != nil {
+		return err
+	}
+	finalEvents = append(finalEvents, assistantCompleted)
+
+	if usage != nil {
+		usageEvent, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventTurnUsage, types.TurnUsagePayload{
+			Provider:     usage.Provider,
+			Model:        usage.Model,
+			InputTokens:  usage.InputTokens,
+			OutputTokens: usage.OutputTokens,
+			CachedTokens: usage.CachedTokens,
+			CacheHitRate: usage.CacheHitRate,
+		})
+		if err != nil {
+			return err
+		}
+		finalEvents = append(finalEvents, usageEvent)
+	}
+
+	turnCompleted, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventTurnCompleted, struct{}{})
+	if err != nil {
+		return err
+	}
+	finalEvents = append(finalEvents, turnCompleted)
+
+	if sink, ok := in.Sink.(TurnFinalizingSink); ok {
+		return sink.FinalizeTurn(ctx, usage, finalEvents)
+	}
+
+	if usage != nil {
+		if err := persistTurnUsage(ctx, e.store, *usage); err != nil {
+			return err
+		}
+	}
+	for _, event := range finalEvents {
+		if err := in.Sink.Emit(ctx, event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func marshalToolArguments(input map[string]any) string {
+	if len(input) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func previewToolResult(result string) string {
+	const maxLen = 200
+	if len(result) <= maxLen {
+		return result
+	}
+	return result[:maxLen] + "..."
 }
 
 func providerCacheOwnerForCapabilities(caps model.ProviderCapabilities) string {

@@ -98,3 +98,23 @@ curl http://127.0.0.1:4317/v1/status
 ```
 
 The status payload reports the active provider, model, and permission profile without leaking secrets.
+
+## Build And Open The Local Console
+
+The daemon can serve a local React console from `web/console/dist`. Build it once before starting `agentd`:
+
+```bash
+cd web/console
+npm.cmd install
+npm.cmd run build
+cd ../..
+go run ./cmd/agentd
+```
+
+Then open:
+
+```text
+http://127.0.0.1:4317/chat
+```
+
+The console is chat-first and also exposes a separate `/metrics` page for `input tokens`, `output tokens`, and `cached tokens`.
