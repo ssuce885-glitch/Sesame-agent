@@ -14,6 +14,10 @@ func registerSessionScopedRoutes(mux *http.ServeMux, deps Dependencies) {
 				handlePatchSession(deps, parts[0])(w, r)
 				return
 			}
+			if r.Method == http.MethodDelete {
+				handleDeleteSession(deps, parts[0])(w, r)
+				return
+			}
 			http.NotFound(w, r)
 			return
 		}

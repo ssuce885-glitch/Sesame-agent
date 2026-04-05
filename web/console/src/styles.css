@@ -245,27 +245,21 @@ button {
 }
 
 .session-row {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  position: relative;
   width: 100%;
-  padding: 14px;
   border-radius: 20px;
   border: 1px solid rgba(138, 163, 196, 0.12);
   background: rgba(10, 15, 24, 0.7);
   color: var(--text);
-  text-align: left;
   transition:
     border-color 160ms ease,
     background-color 160ms ease,
     transform 90ms ease;
 }
 
-.session-row:hover,
-.session-row:focus-visible {
+.session-row:hover {
   border-color: rgba(245, 158, 11, 0.46);
   background: rgba(13, 21, 32, 0.9);
-  outline: none;
   transform: translateY(-1px);
 }
 
@@ -276,10 +270,57 @@ button {
     rgba(14, 23, 34, 0.96);
 }
 
+.session-main-hitarea {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  border-radius: 20px;
+  padding: 14px 84px 14px 14px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.session-main-hitarea:focus-visible {
+  outline: 2px solid rgba(245, 158, 11, 0.5);
+  outline-offset: -2px;
+}
+
 .session-row-top {
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+.session-delete-button {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  min-width: 56px;
+  border: 1px solid rgba(251, 113, 133, 0.18);
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(251, 113, 133, 0.08);
+  color: #ffc4cf;
+  font-size: 0.8rem;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.session-delete-button:hover:not(:disabled),
+.session-delete-button:focus-visible {
+  border-color: rgba(251, 113, 133, 0.42);
+  background: rgba(251, 113, 133, 0.16);
+  outline: none;
+}
+
+.session-delete-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .session-title {

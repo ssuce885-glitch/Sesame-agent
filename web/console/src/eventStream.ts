@@ -127,11 +127,12 @@ export function startConversationEventStream(options: StartConversationEventStre
     }, LIVENESS_TIMEOUT_MS);
   };
 
-  const handleBusinessMessage = (message: MessageEvent<string>) => {
+  const handleBusinessMessage: EventListener = (event) => {
+    const message = event as MessageEvent<string>;
     resetLiveness();
 
-    const event = JSON.parse(message.data) as 服务端事件;
-    const decision = classifyBusinessEventSeq(options.latestSeqRef.current, event.seq);
+    const businessEvent = JSON.parse(message.data) as 服务端事件;
+    const decision = classifyBusinessEventSeq(options.latestSeqRef.current, businessEvent.seq);
     if (decision === "ignore") {
       return;
     }
@@ -140,10 +141,10 @@ export function startConversationEventStream(options: StartConversationEventStre
       return;
     }
 
-    options.latestSeqRef.current = event.seq;
-    options.onBusinessEvent(event);
-    if (event.type === "turn.completed" || event.type === "turn.failed") {
-      options.onTerminalEvent?.(event.type);
+    options.latestSeqRef.current = businessEvent.seq;
+    options.onBusinessEvent(businessEvent);
+    if (businessEvent.type === "turn.completed" || businessEvent.type === "turn.failed") {
+      options.onTerminalEvent?.(businessEvent.type);
     }
   };
 
@@ -157,12 +158,19 @@ export function startConversationEventStream(options: StartConversationEventStre
     }
   };
 
-const BUSINESS_EVENT_TYPES = [
-  "turn.started", "turn.completed", "turn.failed", "turn.usage",
-  "assistant.started", "assistant.delta", "assistant.completed",
-  "tool.started", "tool.completed",
-  "system.notice", "context.compacted",
-] as const;
+  const BUSINESS_EVENT_TYPES = [
+    "turn.started",
+    "turn.completed",
+    "turn.failed",
+    "turn.usage",
+    "assistant.started",
+    "assistant.delta",
+    "assistant.completed",
+    "tool.started",
+    "tool.completed",
+    "system.notice",
+    "context.compacted",
+  ] as const;
 
   const connect = () => {
     if (disposed) {

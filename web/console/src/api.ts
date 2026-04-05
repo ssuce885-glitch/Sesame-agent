@@ -14,6 +14,11 @@ export interface 会话列表响应 {
   selected_session_id?: string;
 }
 
+export interface 删除会话响应 {
+  deleted_session_id: string;
+  selected_session_id?: string;
+}
+
 export interface 时间线块 {
   id: string;
   turn_id?: string;
@@ -174,6 +179,12 @@ export function 创建会话(workspaceRoot: string) {
 export function 选择会话(sessionId: string) {
   return 请求JSON<{ selected_session_id: string }>(`/v1/sessions/${sessionId}/select`, {
     method: "POST",
+  });
+}
+
+export function 删除会话(sessionId: string) {
+  return 请求JSON<删除会话响应>(`/v1/sessions/${sessionId}`, {
+    method: "DELETE",
   });
 }
 
