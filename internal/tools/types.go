@@ -11,6 +11,11 @@ type Call struct {
 	Input map[string]any
 }
 
+func (c Call) StringInput(key string) string {
+	v, _ := c.Input[key].(string)
+	return v
+}
+
 type Result struct {
 	Text         string
 	ArtifactPath string
