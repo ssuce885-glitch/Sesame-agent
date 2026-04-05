@@ -221,6 +221,102 @@ func TestLoadReadsSystemPromptOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadUserConfig(t *testing.T) {
+	t.Run("file not found returns zero config", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("USERPROFILE", os.Getenv("HOME"))
+		uc, err := loadUserConfig()
+		if err != nil {
+			t.Fatalf("loadUserConfig() error = %v", err)
+		}
+		if uc != (UserConfig{}) {
+			t.Fatalf("expected zero UserConfig, got %+v", uc)
+		}
+	})
+
+	t.Run("valid file is parsed", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+		dir := filepath.Join(home, ".agentd")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := `{"provider":"anthropic","anthropic":{"api_key":"sk-test","model":"claude-opus-4"}}`
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		uc, err := loadUserConfig()
+		if err != nil {
+			t.Fatalf("loadUserConfig() error = %v", err)
+		}
+		if uc.Provider != "anthropic" {
+			t.Fatalf("Provider = %q, want %q", uc.Provider, "anthropic")
+		}
+		if uc.Anthropic.APIKey != "sk-test" {
+			t.Fatalf("APIKey = %q, want %q", uc.Anthropic.APIKey, "sk-test")
+		}
+		if uc.Anthropic.Model != "claude-opus-4" {
+			t.Fatalf("Model = %q, want %q", uc.Anthropic.Model, "claude-opus-4")
+		}
+	})
+
+	t.Run("invalid JSON returns error", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+		dir := filepath.Join(home, ".agentd")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{bad json"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := loadUserConfig()
+		if err == nil {
+			t.Fatal("loadUserConfig() error = nil, want error")
+		}
+	})
+}
+
+func TestLoadUserConfigEnvPriority(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := filepath.Join(home, ".agentd")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `{"anthropic":{"api_key":"from-file"}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("env var overrides file value", func(t *testing.T) {
+		t.Setenv("AGENTD_DATA_DIR", t.TempDir())
+		t.Setenv("ANTHROPIC_API_KEY", "from-env")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.AnthropicAPIKey != "from-env" {
+			t.Fatalf("AnthropicAPIKey = %q, want %q", cfg.AnthropicAPIKey, "from-env")
+		}
+	})
+
+	t.Run("file value used when env var absent", func(t *testing.T) {
+		t.Setenv("AGENTD_DATA_DIR", t.TempDir())
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.AnthropicAPIKey != "from-file" {
+			t.Fatalf("AnthropicAPIKey = %q, want %q", cfg.AnthropicAPIKey, "from-file")
+		}
+	})
+}
+
 func TestResolveSystemPrompt(t *testing.T) {
 	t.Run("prefers inline system prompt over file", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "prompt.md")

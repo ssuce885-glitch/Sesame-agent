@@ -35,20 +35,26 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	model := os.Getenv("AGENTD_MODEL")
+	uc, err := loadUserConfig()
+	if err != nil {
+		return Config{}, err
+	}
+
+	openAIModelFallback := uc.OpenAI.Model
+	model := envOrDefaultWithFallback("AGENTD_MODEL", openAIModelFallback, "")
 	if model == "" {
-		model = envOrDefault("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+		model = envOrDefaultWithFallback("ANTHROPIC_MODEL", uc.Anthropic.Model, "claude-sonnet-4-5")
 	}
 
 	cfg := Config{
-		Addr:                       envOrDefault("AGENTD_ADDR", "127.0.0.1:4317"),
+		Addr:                       envOrDefaultWithFallback("AGENTD_ADDR", uc.Listen.Addr, "127.0.0.1:4317"),
 		DataDir:                    envOrDefault("AGENTD_DATA_DIR", ""),
-		ModelProvider:              envOrDefault("AGENTD_MODEL_PROVIDER", "anthropic"),
+		ModelProvider:              envOrDefaultWithFallback("AGENTD_MODEL_PROVIDER", uc.Provider, "anthropic"),
 		Model:                      model,
-		AnthropicAPIKey:            envOrDefault("ANTHROPIC_API_KEY", ""),
-		AnthropicBaseURL:           envOrDefault("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-		OpenAIAPIKey:               envOrDefault("OPENAI_API_KEY", ""),
-		OpenAIBaseURL:              envOrDefault("OPENAI_BASE_URL", ""),
+		AnthropicAPIKey:            envOrDefaultWithFallback("ANTHROPIC_API_KEY", uc.Anthropic.APIKey, ""),
+		AnthropicBaseURL:           envOrDefaultWithFallback("ANTHROPIC_BASE_URL", uc.Anthropic.BaseURL, "https://api.anthropic.com"),
+		OpenAIAPIKey:               envOrDefaultWithFallback("OPENAI_API_KEY", uc.OpenAI.APIKey, ""),
+		OpenAIBaseURL:              envOrDefaultWithFallback("OPENAI_BASE_URL", uc.OpenAI.BaseURL, ""),
 		ProviderCacheProfile:       envOrDefault("AGENTD_PROVIDER_CACHE_PROFILE", "none"),
 		CacheExpirySeconds:         intEnvOrDefault("AGENTD_CACHE_EXPIRY_SECONDS", 86400),
 		MicrocompactBytesThreshold: intEnvOrDefault("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", 4096),
@@ -88,6 +94,16 @@ func (c Config) ResolveSystemPrompt() (string, error) {
 	}
 
 	return strings.TrimSpace(string(data)), nil
+}
+
+func envOrDefaultWithFallback(key, fileFallback, hardDefault string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	if fileFallback != "" {
+		return fileFallback
+	}
+	return hardDefault
 }
 
 func envOrDefault(key, fallback string) string {
