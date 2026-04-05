@@ -42,8 +42,10 @@ type Engine struct {
 	ctxManager   *contextstate.Manager
 	compactor    contextstate.Compactor
 	runtime      *contextstate.Runtime
-	meta         RuntimeMetadata
-	maxToolSteps int
+	meta                    RuntimeMetadata
+	basePrompt              string
+	maxWorkspacePromptBytes int
+	maxToolSteps            int
 }
 
 func New(
@@ -97,4 +99,18 @@ func NewWithRuntime(
 
 func (e *Engine) RunTurn(ctx context.Context, in Input) error {
 	return runLoop(ctx, e, in)
+}
+
+func (e *Engine) SetBaseSystemPrompt(prompt string) {
+	if e == nil {
+		return
+	}
+	e.basePrompt = prompt
+}
+
+func (e *Engine) SetMaxWorkspacePromptBytes(n int) {
+	if e == nil {
+		return
+	}
+	e.maxWorkspacePromptBytes = n
 }

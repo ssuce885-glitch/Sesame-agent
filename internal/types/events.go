@@ -19,6 +19,7 @@ const (
 	EventToolCompleted       = "tool.completed"
 	EventPermissionRequested = "permission.requested"
 	EventContextCompacted    = "context.compacted"
+	EventSystemNotice        = "system.notice"
 )
 
 type Event struct {
@@ -40,6 +41,10 @@ type TurnFailedPayload struct {
 }
 
 type AssistantDeltaPayload struct {
+	Text string `json:"text"`
+}
+
+type NoticePayload struct {
 	Text string `json:"text"`
 }
 
