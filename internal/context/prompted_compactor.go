@@ -53,7 +53,7 @@ func (p *PromptedCompactor) Compact(ctx context.Context, items []model.Conversat
 		return model.Summary{}, errors.New("prompted compactor stream ended before message end")
 	}
 
-	raw := strings.TrimSpace(text.String())
+	raw := extractJSON(strings.TrimSpace(text.String()))
 	if raw == "" {
 		return model.Summary{}, errors.New("prompted compactor returned empty summary JSON")
 	}
@@ -90,3 +90,26 @@ The object must contain exactly these keys:
 - tool_outcomes
 - open_threads
 Use strings for range_label and arrays of strings for the remaining keys.`
+
+// extractJSON strips markdown code fences and returns the first JSON object found.
+func extractJSON(s string) string {
+	// Strip ```json ... ``` or ``` ... ``` fences
+	if i := strings.Index(s, "```"); i >= 0 {
+		s = s[i:]
+		// skip the opening fence line
+		if nl := strings.Index(s, "\n"); nl >= 0 {
+			s = s[nl+1:]
+		}
+		if end := strings.Index(s, "```"); end >= 0 {
+			s = s[:end]
+		}
+	}
+	s = strings.TrimSpace(s)
+	// find first { ... }
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start >= 0 && end > start {
+		return s[start : end+1]
+	}
+	return s
+}

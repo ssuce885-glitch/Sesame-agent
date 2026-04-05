@@ -3,9 +3,12 @@ package httpapi
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"go-agent/internal/stream"
 )
+
+var eventStreamKeepaliveInterval = 15 * time.Second
 
 func handleStreamEvents(deps Dependencies, sessionID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -21,7 +24,7 @@ func handleStreamEvents(deps Dependencies, sessionID string) http.HandlerFunc {
 		afterSeq := int64(0)
 		if raw := r.URL.Query().Get("after"); raw != "" {
 			parsed, err := strconv.ParseInt(raw, 10, 64)
-			if err != nil {
+			if err != nil || parsed < 0 {
 				http.Error(w, "bad request", http.StatusBadRequest)
 				return
 			}
@@ -32,7 +35,18 @@ func handleStreamEvents(deps Dependencies, sessionID string) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		sub := deps.Bus.Subscribe(sessionID)
+		sub, unsubscribe := deps.Bus.Subscribe(sessionID)
+		defer unsubscribe()
+
+		latestSeq, err := deps.Store.LatestSessionEventSeq(r.Context(), sessionID)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if afterSeq > latestSeq {
+			afterSeq = latestSeq
+		}
+
 		events, err := deps.Store.ListSessionEvents(r.Context(), sessionID, afterSeq)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -47,6 +61,9 @@ func handleStreamEvents(deps Dependencies, sessionID string) http.HandlerFunc {
 
 		flush()
 
+		keepaliveTicker := time.NewTicker(eventStreamKeepaliveInterval)
+		defer keepaliveTicker.Stop()
+
 		lastSeq := afterSeq
 		for _, event := range events {
 			if err := stream.WriteSSE(w, event); err != nil {
@@ -57,6 +74,11 @@ func handleStreamEvents(deps Dependencies, sessionID string) http.HandlerFunc {
 				lastSeq = event.Seq
 			}
 		}
+
+		if err := stream.WriteSSEKeepalive(w, sessionID, lastSeq, time.Now().UTC()); err != nil {
+			return
+		}
+		flush()
 
 		for {
 			select {
@@ -71,6 +93,15 @@ func handleStreamEvents(deps Dependencies, sessionID string) http.HandlerFunc {
 					return
 				}
 				lastSeq = event.Seq
+				flush()
+			case <-keepaliveTicker.C:
+				latestSeq, err := deps.Store.LatestSessionEventSeq(r.Context(), sessionID)
+				if err != nil {
+					latestSeq = lastSeq
+				}
+				if err := stream.WriteSSEKeepalive(w, sessionID, latestSeq, time.Now().UTC()); err != nil {
+					return
+				}
 				flush()
 			case <-r.Context().Done():
 				return

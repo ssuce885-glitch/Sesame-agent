@@ -126,7 +126,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		messageEnded := false
 		var responseMeta *model.ResponseMetadata
 		var toolCalls []model.ToolCallChunk
-		assistantText := strings.Builder{}
+		orderedAssistantItems := make([]model.ConversationItem, 0, 4)
 
 		for event := range stream {
 			switch event.Kind {
@@ -137,7 +137,15 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 					}
 					assistantStarted = true
 				}
-				assistantText.WriteString(event.TextDelta)
+				lastIndex := len(orderedAssistantItems) - 1
+				if lastIndex >= 0 && orderedAssistantItems[lastIndex].Kind == model.ConversationItemAssistantText {
+					orderedAssistantItems[lastIndex].Text += event.TextDelta
+				} else {
+					orderedAssistantItems = append(orderedAssistantItems, model.ConversationItem{
+						Kind: model.ConversationItemAssistantText,
+						Text: event.TextDelta,
+					})
+				}
 				if err := emit(types.EventAssistantDelta, types.AssistantDeltaPayload{Text: event.TextDelta}); err != nil {
 					return err
 				}
@@ -145,6 +153,14 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				continue
 			case model.StreamEventToolCallEnd:
 				toolCalls = append(toolCalls, event.ToolCall)
+				orderedAssistantItems = append(orderedAssistantItems, model.ConversationItem{
+					Kind: model.ConversationItemToolCall,
+					ToolCall: model.ToolCallChunk{
+						ID:    event.ToolCall.ID,
+						Name:  event.ToolCall.Name,
+						Input: event.ToolCall.Input,
+					},
+				})
 			case model.StreamEventMessageEnd:
 				messageEnded = true
 			case model.StreamEventUsage:
@@ -202,18 +218,14 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			hasUsage = true
 		}
 
-		if assistantText.Len() > 0 {
-			assistantItem := model.ConversationItem{
-				Kind: model.ConversationItemAssistantText,
-				Text: assistantText.String(),
-			}
+		for _, assistantItem := range orderedAssistantItems {
 			if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, assistantItem); err != nil {
 				if emitErr := emitFailed(err.Error()); emitErr != nil {
 					return errors.Join(err, emitErr)
 				}
 				return err
 			}
-			if !nativeContinuation {
+			if assistantItem.Kind == model.ConversationItemToolCall || !nativeContinuation {
 				req.Items = append(req.Items, assistantItem)
 			}
 			nextPosition++
@@ -253,23 +265,6 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				return err
 			}
 
-			toolCallItem := model.ConversationItem{
-				Kind: model.ConversationItemToolCall,
-				ToolCall: model.ToolCallChunk{
-					ID:    call.ID,
-					Name:  call.Name,
-					Input: call.Input,
-				},
-			}
-			if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolCallItem); err != nil {
-				if emitErr := emitFailed(err.Error()); emitErr != nil {
-					return errors.Join(err, emitErr)
-				}
-				return err
-			}
-			req.Items = append(req.Items, toolCallItem)
-			nextPosition++
-
 			payload := types.ToolEventPayload{
 				ToolCallID: call.ID,
 				ToolName:   call.Name,
@@ -279,21 +274,24 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				return err
 			}
 
-			result, err := e.registry.Execute(ctx, tools.Call{
+			result, execErr := e.registry.Execute(ctx, tools.Call{
 				Name:  call.Name,
 				Input: call.Input,
 			}, tools.ExecContext{
 				WorkspaceRoot:    in.Session.WorkspaceRoot,
 				PermissionEngine: e.permission,
 			})
-			if err != nil {
-				if emitErr := emitFailed(err.Error()); emitErr != nil {
-					return errors.Join(err, emitErr)
-				}
-				return err
+
+			var toolResultText string
+			var toolIsError bool
+			if execErr != nil {
+				toolResultText = execErr.Error()
+				toolIsError = true
+			} else {
+				toolResultText = result.Text
 			}
 
-			payload.ResultPreview = previewToolResult(result.Text)
+			payload.ResultPreview = previewToolResult(toolResultText)
 			if err := emit(types.EventToolCompleted, payload); err != nil {
 				return err
 			}
@@ -301,8 +299,8 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			toolResult := model.ToolResult{
 				ToolCallID: call.ID,
 				ToolName:   call.Name,
-				Content:    result.Text,
-				IsError:    false,
+				Content:    toolResultText,
+				IsError:    toolIsError,
 			}
 			toolResultItem := model.ToolResultItem(toolResult)
 			if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResultItem); err != nil {

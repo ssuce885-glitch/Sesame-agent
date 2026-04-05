@@ -89,6 +89,11 @@ func TestRunTurnEmitsTurnFailedWhenToolExecutionFails(t *testing.T) {
 			}},
 			{Kind: model.StreamEventMessageEnd},
 		},
+		// second stream: model responds after receiving the error tool result
+		{
+			{Kind: model.StreamEventTextDelta, TextDelta: "done"},
+			{Kind: model.StreamEventMessageEnd},
+		},
 	}), tools.NewRegistry(), permissions.NewEngine(), nil, nil, nil, 0)
 
 	err := runner.RunTurn(context.Background(), Input{
@@ -96,17 +101,19 @@ func TestRunTurnEmitsTurnFailedWhenToolExecutionFails(t *testing.T) {
 		Turn:    types.Turn{ID: "turn_1", UserMessage: "hello"},
 		Sink:    sink,
 	})
-	if err == nil {
-		t.Fatal("RunTurn() error = nil, want non-nil")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", err)
 	}
 
 	assertEventTypes(t, sink, []string{
 		types.EventTurnStarted,
 		types.EventToolStarted,
-		types.EventTurnFailed,
+		types.EventToolCompleted,
+		types.EventAssistantStarted,
+		types.EventAssistantDelta,
+		types.EventAssistantCompleted,
+		types.EventTurnCompleted,
 	})
-	assertNoEventType(t, sink, types.EventTurnCompleted)
-	assertNoEventType(t, sink, types.EventAssistantCompleted)
 }
 
 func TestRunTurnExecutesToolAfterToolCallEnd(t *testing.T) {
@@ -365,6 +372,88 @@ func TestRunTurnPersistsConversationItemsInStreamingOrderAcrossToolTurns(t *test
 		}
 		if store.insertedPositions[i] != wantPositions[i] {
 			t.Fatalf("inserted positions = %v, want %v", store.insertedPositions, wantPositions)
+		}
+	}
+}
+
+func TestRunTurnPersistsAssistantSegmentsAndToolCallsInStreamOrder(t *testing.T) {
+	workspace := t.TempDir()
+	readmePath := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(readmePath, []byte("hello from readme"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := &fakeConversationStore{}
+	client := model.NewFakeStreaming([][]model.StreamEvent{
+		{
+			{Kind: model.StreamEventTextDelta, TextDelta: "Before tool. "},
+			{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+				ID:    "call_1",
+				Name:  "file_read",
+				Input: map[string]any{"path": readmePath},
+			}},
+			{Kind: model.StreamEventTextDelta, TextDelta: "After tool."},
+			{Kind: model.StreamEventMessageEnd},
+		},
+		{
+			{Kind: model.StreamEventTextDelta, TextDelta: "Final answer."},
+			{Kind: model.StreamEventMessageEnd},
+		},
+	})
+	manager := contextstate.NewManager(contextstate.Config{
+		MaxRecentItems:      8,
+		MaxEstimatedTokens:  6000,
+		CompactionThreshold: 16,
+	})
+	runner := NewWithRuntime(
+		client,
+		tools.NewRegistry(),
+		permissions.NewEngine(),
+		store,
+		manager,
+		contextstate.NewRuntime(86400, 3),
+		nil,
+		RuntimeMetadata{
+			Provider: "openai_compatible",
+			Model:    "glm-4.5",
+		},
+		8,
+	)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_1", WorkspaceRoot: workspace},
+		Turn:    types.Turn{ID: "turn_1", SessionID: "sess_1", UserMessage: "inspect the readme"},
+		Sink:    &recordingSink{},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if len(store.insertedItems) != 6 {
+		t.Fatalf("len(inserted items) = %d, want 6", len(store.insertedItems))
+	}
+	wantKinds := []model.ConversationItemKind{
+		model.ConversationItemUserMessage,
+		model.ConversationItemAssistantText,
+		model.ConversationItemToolCall,
+		model.ConversationItemAssistantText,
+		model.ConversationItemToolResult,
+		model.ConversationItemAssistantText,
+	}
+	wantTexts := []string{
+		"",
+		"Before tool. ",
+		"",
+		"After tool.",
+		"",
+		"Final answer.",
+	}
+	for i, wantKind := range wantKinds {
+		if store.insertedItems[i].Kind != wantKind {
+			t.Fatalf("inserted item kinds = %#v, want %#v", conversationItemKinds(store.insertedItems), wantKinds)
+		}
+		if wantTexts[i] != "" && store.insertedItems[i].Text != wantTexts[i] {
+			t.Fatalf("inserted item %d text = %q, want %q", i, store.insertedItems[i].Text, wantTexts[i])
 		}
 	}
 }

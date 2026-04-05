@@ -8,7 +8,6 @@ import App, {
   Composer,
   ToolCallCard,
   getContextUsageWarning,
-  mergeAdjacentAssistantBlocks,
   resetInputHistoryForTests,
 } from "./App";
 import type { Token用量, 时间线块 } from "./api";
@@ -72,112 +71,76 @@ describe("应用", () => {
 });
 
 describe("console ui helpers", () => {
-  it("合并相邻且同 turn 的 assistant_output，并保留最后一个 usage", () => {
-    const blocks: 时间线块[] = [
-      {
-        id: "assistant_1",
-        turn_id: "turn_1",
-        kind: "assistant_output",
-        text: "第一段",
-        status: "streaming",
-      },
-      {
-        id: "assistant_2",
-        turn_id: "turn_1",
-        kind: "assistant_output",
-        text: "\n第二段",
-        status: "completed",
-        usage: makeUsage(3200, 180),
-      },
-      {
-        id: "tool_1",
-        turn_id: "turn_1",
-        kind: "tool_call",
-        status: "completed",
-        tool_name: "file_read",
-      },
-      {
-        id: "assistant_3",
-        turn_id: "turn_2",
-        kind: "assistant_output",
-        text: "第三段",
-      },
-    ];
-
-    expect(mergeAdjacentAssistantBlocks(blocks)).toEqual([
-      {
-        id: "assistant_1",
-        turn_id: "turn_1",
-        kind: "assistant_output",
-        text: "第一段\n第二段",
-        status: "completed",
-        usage: makeUsage(3200, 180),
-      },
-      {
-        id: "tool_1",
-        turn_id: "turn_1",
-        kind: "tool_call",
-        status: "completed",
-        tool_name: "file_read",
-      },
-      {
-        id: "assistant_3",
-        turn_id: "turn_2",
-        kind: "assistant_output",
-        text: "第三段",
-      },
-    ]);
-  });
-
-  it("根据结果长度决定工具卡片默认展开还是折叠", () => {
-    const shortResult = "短结果";
-    const longResult = "很长的工具结果".repeat(30);
-
+  it("运行中的工具卡片默认展开并显示参数", () => {
     const shortRender = render(
       <ToolCallCard
         block={{
-          id: "tool_short",
-          kind: "tool_call",
+          type: "tool_call",
+          tool_call_id: "tool_short",
           status: "completed",
           tool_name: "glob",
-          result_preview: shortResult,
+          args_preview: "{\"pattern\":\"*.go\"}",
         }}
       />,
     );
 
-    expect(shortRender.container.querySelector("details")).toHaveAttribute("open");
-    expect(screen.getByText(shortResult)).toBeInTheDocument();
+    expect(shortRender.container.querySelector("details")).not.toHaveAttribute("open");
+    expect(screen.queryByText("{\"pattern\":\"*.go\"}")).not.toBeInTheDocument();
 
     shortRender.unmount();
 
     const longRender = render(
       <ToolCallCard
         block={{
-          id: "tool_long",
-          kind: "tool_call",
-          status: "completed",
+          type: "tool_call",
+          tool_call_id: "tool_long",
+          status: "running",
           tool_name: "grep",
-          result_preview: longResult,
+          args_preview: "{\"pattern\":\"TODO\"}",
         }}
       />,
     );
 
-    expect(longRender.container.querySelector("details")).not.toHaveAttribute("open");
-    expect(screen.getByText(`${longResult.slice(0, 80)}...`)).toBeInTheDocument();
-    expect(screen.queryByText(longResult)).not.toBeInTheDocument();
+    expect(longRender.container.querySelector("details")).toHaveAttribute("open");
+    expect(screen.getByText("{\"pattern\":\"TODO\"}")).toBeInTheDocument();
+
+    longRender.unmount();
+
+    const completedRender = render(
+      <ToolCallCard
+        block={{
+          type: "tool_call",
+          tool_call_id: "tool_completed",
+          status: "completed",
+          tool_name: "file_read",
+          args_preview: "{\"path\":\"README.md\"}",
+          result_preview: "README body",
+        }}
+      />,
+    );
+
+    const details = completedRender.container.querySelector("details");
+    if (!(details instanceof HTMLDetailsElement)) {
+      throw new Error("expected details element");
+    }
+    details.open = true;
+    fireEvent(details, new Event("toggle"));
+
+    expect(screen.getByText("README body")).toBeInTheDocument();
   });
 
-  it("根据最新 assistant_output 的 usage 计算 context warning", () => {
+  it("根据最新 assistant_message 的 usage 计算 context warning", () => {
     expect(getContextUsageWarning([])).toBeNull();
 
     expect(
       getContextUsageWarning([
         {
           id: "assistant_warn",
-          kind: "assistant_output",
+          kind: "assistant_message",
+          content: [{ type: "text", text: "warn" }],
           usage: makeUsage(4800, 200),
         },
-      ]),
+      ] as unknown as 时间线块[]),
     ).toEqual({
       level: "warn",
       text: "上下文已用 5000 tokens，接近压缩阈值",
@@ -187,10 +150,11 @@ describe("console ui helpers", () => {
       getContextUsageWarning([
         {
           id: "assistant_danger",
-          kind: "assistant_output",
+          kind: "assistant_message",
+          content: [{ type: "text", text: "danger" }],
           usage: makeUsage(5600, 200),
         },
-      ]),
+      ] as unknown as 时间线块[]),
     ).toEqual({
       level: "danger",
       text: "上下文即将触发压缩（5800 tokens）",
