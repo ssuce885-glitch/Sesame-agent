@@ -73,12 +73,12 @@ func (b *signalingBus) Publish(event types.Event) {
 	b.inner.Publish(event)
 }
 
-func (b *signalingBus) Subscribe(sessionID string) <-chan types.Event {
-	ch := b.inner.Subscribe(sessionID)
+func (b *signalingBus) Subscribe(sessionID string) (<-chan types.Event, func()) {
+	ch, unsub := b.inner.Subscribe(sessionID)
 	b.once.Do(func() {
 		close(b.subscribed)
 	})
-	return ch
+	return ch, unsub
 }
 
 type e2eSessionRunner struct {
@@ -559,7 +559,9 @@ func (m *turnSubmitManager) SubmitTurn(ctx context.Context, sessionID string, in
 	return "turn_test_id", nil
 }
 
-func (m *turnSubmitManager) Subscribe(string) <-chan types.Event { return nil }
+func (m *turnSubmitManager) Subscribe(string) (<-chan types.Event, func()) {
+	return nil, func() {}
+}
 
 func TestSubmitTurnUsesSessionScopedRoute(t *testing.T) {
 	store := &turnSubmitStore{}
@@ -748,6 +750,9 @@ func (s *replayStore) ListSessionEvents(ctx context.Context, sessionID string, a
 }
 
 func (s *replayStore) LatestSessionEventSeq(context.Context, string) (int64, error) {
+	if len(s.events) > 0 {
+		return s.events[len(s.events)-1].Seq, nil
+	}
 	return 0, nil
 }
 
@@ -756,11 +761,11 @@ type replayBus struct {
 	subscribeCalled bool
 }
 
-func (b *replayBus) Subscribe(sessionID string) <-chan types.Event {
+func (b *replayBus) Subscribe(sessionID string) (<-chan types.Event, func()) {
 	b.subscribeCalled = true
 	ch := make(chan types.Event)
 	close(ch)
-	return ch
+	return ch, func() {}
 }
 
 func TestEventStreamReplaysHistoryBeforeSubscribing(t *testing.T) {
@@ -799,7 +804,7 @@ func TestEventStreamReplaysHistoryBeforeSubscribing(t *testing.T) {
 	if !strings.Contains(body, "id: 7") {
 		t.Fatalf("body = %q, want SSE history event", body)
 	}
-	if !strings.Contains(body, "event: turn.started") {
+	if !strings.Contains(body, "\"type\":\"turn.started\"") {
 		t.Fatalf("body = %q, want SSE event type", body)
 	}
 	if !strings.Contains(body, "workspace_root") {
@@ -813,17 +818,17 @@ type handoffBus struct {
 	subscribed bool
 }
 
-func (b *handoffBus) Subscribe(sessionID string) <-chan types.Event {
+func (b *handoffBus) Subscribe(sessionID string) (<-chan types.Event, func()) {
 	b.subscribed = true
 	if b.published && b.ch == nil {
 		ch := make(chan types.Event)
 		close(ch)
-		return ch
+		return ch, func() {}
 	}
 	if b.ch == nil {
 		b.ch = make(chan types.Event, 1)
 	}
-	return b.ch
+	return b.ch, func() {}
 }
 
 func (b *handoffBus) Publish(event types.Event) error {

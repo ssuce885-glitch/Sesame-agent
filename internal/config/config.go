@@ -60,7 +60,7 @@ func Load() (Config, error) {
 		MicrocompactBytesThreshold: intEnvOrDefault("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", 4096),
 		LogLevel:                   envOrDefault("AGENTD_LOG_LEVEL", "info"),
 		PermissionProfile:          envOrDefault("AGENTD_PERMISSION_PROFILE", "read_only"),
-		MaxToolSteps:               intEnvOrDefault("AGENTD_MAX_TOOL_STEPS", 8),
+		MaxToolSteps:               intEnvOrDefaultWithFallback("AGENTD_MAX_TOOL_STEPS", uc.MaxToolSteps, 8),
 		MaxShellOutputBytes:        intEnvOrDefault("AGENTD_MAX_SHELL_OUTPUT_BYTES", 4096),
 		ShellTimeoutSeconds:        intEnvOrDefault("AGENTD_SHELL_TIMEOUT_SECONDS", 30),
 		MaxFileWriteBytes:          intEnvOrDefault("AGENTD_MAX_FILE_WRITE_BYTES", 1<<20),
@@ -127,4 +127,17 @@ func intEnvOrDefault(key string, fallback int) int {
 	}
 
 	return parsed
+}
+
+func intEnvOrDefaultWithFallback(key string, fileFallback int, hardDefault int) int {
+	value := os.Getenv(key)
+	if value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil {
+			return parsed
+		}
+	}
+	if fileFallback != 0 {
+		return fileFallback
+	}
+	return hardDefault
 }

@@ -467,14 +467,93 @@ func TestTimelineEndpointReturnsNormalizedBlocksAndLatestSeq(t *testing.T) {
 	if !strings.Contains(body, "\"kind\":\"user_message\"") {
 		t.Fatalf("body = %s, want user_message block", body)
 	}
-	if !strings.Contains(body, "\"kind\":\"tool_call\"") {
-		t.Fatalf("body = %s, want tool_call block", body)
+	if !strings.Contains(body, "\"kind\":\"assistant_message\"") {
+		t.Fatalf("body = %s, want assistant_message block", body)
 	}
 	if !strings.Contains(body, "\"latest_seq\":1") {
 		t.Fatalf("body = %s, want latest_seq 1", body)
 	}
+	if strings.Contains(body, "\"kind\":\"tool_result\"") {
+		t.Fatalf("body = %s, want tool_result blocks removed", body)
+	}
+	if !strings.Contains(body, "\"tool_call_id\":\"call_1\"") {
+		t.Fatalf("body = %s, want tool_call_id on assistant message content", body)
+	}
 	if !strings.Contains(body, "\"result_preview\":\"readme content\"") {
-		t.Fatalf("body = %s, want tool result preview attached", body)
+		t.Fatalf("body = %s, want result_preview backfilled onto tool_call content", body)
+	}
+}
+
+func TestTimelineEndpointGroupsAssistantItemsIntoAssistantMessages(t *testing.T) {
+	deps := NewTestDependencies(t)
+	store := deps.Store.(*sqlite.Store)
+	now := time.Now().UTC()
+	if err := store.InsertSession(context.Background(), types.Session{
+		ID:            "sess_assistant_message",
+		WorkspaceRoot: "E:/project/go-agent",
+		State:         types.SessionStateIdle,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("InsertSession() error = %v", err)
+	}
+	if err := store.InsertConversationItem(context.Background(), "sess_assistant_message", "turn_1", 1, model.UserMessageItem("hello")); err != nil {
+		t.Fatalf("InsertConversationItem(user) error = %v", err)
+	}
+	if err := store.InsertConversationItem(context.Background(), "sess_assistant_message", "turn_1", 2, model.ConversationItem{
+		Kind: model.ConversationItemAssistantText,
+		Text: "Before tool. ",
+	}); err != nil {
+		t.Fatalf("InsertConversationItem(assistant_text_1) error = %v", err)
+	}
+	if err := store.InsertConversationItem(context.Background(), "sess_assistant_message", "turn_1", 3, model.ConversationItem{
+		Kind: model.ConversationItemToolCall,
+		ToolCall: model.ToolCallChunk{
+			ID:    "call_1",
+			Name:  "file_read",
+			Input: map[string]any{"path": "README.md"},
+		},
+	}); err != nil {
+		t.Fatalf("InsertConversationItem(tool_call) error = %v", err)
+	}
+	if err := store.InsertConversationItem(context.Background(), "sess_assistant_message", "turn_1", 4, model.ConversationItem{
+		Kind: model.ConversationItemAssistantText,
+		Text: "After tool.",
+	}); err != nil {
+		t.Fatalf("InsertConversationItem(assistant_text_2) error = %v", err)
+	}
+	if err := store.InsertConversationItem(context.Background(), "sess_assistant_message", "turn_1", 5, model.ToolResultItem(model.ToolResult{
+		ToolCallID: "call_1",
+		ToolName:   "file_read",
+		Content:    "readme content",
+	})); err != nil {
+		t.Fatalf("InsertConversationItem(tool_result) error = %v", err)
+	}
+
+	handler := NewRouter(deps)
+	req := httptest.NewRequest(http.MethodGet, "/v1/sessions/sess_assistant_message/timeline", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "\"kind\":\"assistant_message\"") {
+		t.Fatalf("body = %s, want assistant_message block", body)
+	}
+	if !strings.Contains(body, "\"content\":[{\"type\":\"text\",\"text\":\"Before tool. \"},{\"type\":\"tool_call\"") {
+		t.Fatalf("body = %s, want assistant content blocks in order", body)
+	}
+	if !strings.Contains(body, "\"text\":\"After tool.\"") {
+		t.Fatalf("body = %s, want trailing assistant text inside message content", body)
+	}
+	if strings.Contains(body, "\"kind\":\"tool_result\"") {
+		t.Fatalf("body = %s, want tool_result blocks removed", body)
+	}
+	if !strings.Contains(body, "\"result_preview\":\"readme content\"") {
+		t.Fatalf("body = %s, want result_preview on tool_call content", body)
 	}
 }
 
