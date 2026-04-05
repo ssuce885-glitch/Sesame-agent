@@ -337,6 +337,26 @@ button {
   background: rgba(245, 158, 11, 0.12);
 }
 
+.context-warning {
+  border: 1px solid rgba(138, 163, 196, 0.16);
+  border-radius: 18px;
+  padding: 12px 14px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.context-warning.warn {
+  color: #fde7ba;
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(94, 62, 11, 0.28);
+}
+
+.context-warning.danger {
+  color: #ffd1dc;
+  border-color: rgba(251, 113, 133, 0.32);
+  background: rgba(70, 25, 39, 0.82);
+}
+
 .inline-alert,
 .stream-empty,
 .empty-card,
@@ -445,6 +465,21 @@ button {
   display: none;
 }
 
+.tool-summary-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tool-result-preview {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 400;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
 .tool-panel,
 .tool-result {
   margin: 0;
@@ -461,6 +496,13 @@ button {
 .tool-result {
   color: #c7d4e7;
   line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-result-inline {
+  border-top: 1px solid rgba(138, 163, 196, 0.08);
+  padding-top: 14px;
 }
 
 .composer {
@@ -468,6 +510,13 @@ button {
   flex-direction: column;
   gap: 12px;
   margin-top: auto;
+}
+
+.composer-section-tag {
+  color: var(--muted);
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .composer-label {
