@@ -131,6 +131,146 @@ func (s *Store) UpdateSessionSystemPrompt(ctx context.Context, sessionID, system
 	return s.GetSession(ctx, sessionID)
 }
 
+func (s *Store) DeleteSession(ctx context.Context, sessionID string) (string, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", false, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var exists int
+	if err := tx.QueryRowContext(ctx, `
+		select count(*)
+		from sessions
+		where id = ?
+	`, sessionID).Scan(&exists); err != nil {
+		return "", false, err
+	}
+	if exists == 0 {
+		return "", false, nil
+	}
+
+	selectedSessionID, hasSelected, err := getSelectedSessionIDWithQueryer(ctx, tx)
+	if err != nil {
+		return "", false, err
+	}
+
+	deleteStatements := []struct {
+		query string
+		args  []any
+	}{
+		{
+			query: `delete from tool_runs where run_id in (select id from runs where session_id = ?)`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from worktrees where run_id in (select id from runs where session_id = ?)`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from task_records where run_id in (select id from runs where session_id = ?)`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from plans where run_id in (select id from runs where session_id = ?)`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from provider_cache_entries where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from provider_cache_heads where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from conversation_compactions where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from conversation_summaries where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from turn_usage where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from conversation_items where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from events where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from turns where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from runs where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from sessions where id = ?`,
+			args:  []any{sessionID},
+		},
+	}
+	for _, stmt := range deleteStatements {
+		if _, err := tx.ExecContext(ctx, stmt.query, stmt.args...); err != nil {
+			return "", false, err
+		}
+	}
+
+	nextSelected := ""
+	if hasSelected && selectedSessionID != sessionID {
+		var remaining int
+		if err := tx.QueryRowContext(ctx, `
+			select count(*)
+			from sessions
+			where id = ?
+		`, selectedSessionID).Scan(&remaining); err != nil {
+			return "", false, err
+		}
+		if remaining > 0 {
+			nextSelected = selectedSessionID
+		}
+	}
+
+	if nextSelected == "" {
+		var candidate string
+		err := tx.QueryRowContext(ctx, `
+			select id
+			from sessions
+			order by updated_at desc, created_at desc
+			limit 1
+		`).Scan(&candidate)
+		if err != nil && err != sql.ErrNoRows {
+			return "", false, err
+		}
+		if err == nil {
+			nextSelected = candidate
+		}
+	}
+
+	if nextSelected != "" {
+		if err := setSelectedSessionIDWithExec(ctx, tx, nextSelected); err != nil {
+			return "", false, err
+		}
+	} else {
+		if err := clearSelectedSessionIDWithExec(ctx, tx); err != nil {
+			return "", false, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", false, err
+	}
+	return nextSelected, true, nil
+}
+
 func (s *Store) DeleteTurn(ctx context.Context, turnID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

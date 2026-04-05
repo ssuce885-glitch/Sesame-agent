@@ -496,6 +496,10 @@ func (s *turnSubmitStore) GetSelectedSessionID(context.Context) (string, bool, e
 
 func (s *turnSubmitStore) SetSelectedSessionID(context.Context, string) error { return nil }
 
+func (s *turnSubmitStore) DeleteSession(context.Context, string) (string, bool, error) {
+	return "", false, nil
+}
+
 func (s *turnSubmitStore) InsertTurn(_ context.Context, turn types.Turn) error {
 	s.insertCalled = true
 	if s.turns == nil {
@@ -720,6 +724,10 @@ func (s *replayStore) GetSelectedSessionID(context.Context) (string, bool, error
 }
 
 func (s *replayStore) SetSelectedSessionID(context.Context, string) error { return nil }
+
+func (s *replayStore) DeleteSession(context.Context, string) (string, bool, error) {
+	return "", false, nil
+}
 
 func (s *replayStore) InsertTurn(context.Context, types.Turn) error { return nil }
 

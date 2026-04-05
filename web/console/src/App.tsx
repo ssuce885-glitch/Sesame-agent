@@ -34,6 +34,7 @@ import {
 
 import {
   创建会话,
+  删除会话,
   打开事件流,
   提交消息,
   获取会话列表,
@@ -222,6 +223,31 @@ function 对话页面() {
     },
   });
 
+  const 删除会话动作 = useMutation({
+    mutationFn: 删除会话,
+    onSuccess: async (response) => {
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      await queryClient.invalidateQueries({ queryKey: ["metrics-overview"] });
+      await queryClient.invalidateQueries({ queryKey: ["metrics-timeseries"] });
+      await queryClient.invalidateQueries({ queryKey: ["metrics-turns"] });
+      设置错误信息("");
+      startTransition(() => {
+        setSearchParams((current) => {
+          const next = new URLSearchParams(current);
+          if (response.selected_session_id) {
+            next.set("session", response.selected_session_id);
+          } else {
+            next.delete("session");
+          }
+          return next;
+        });
+      });
+    },
+    onError: (error) => {
+      设置错误信息(error instanceof Error ? error.message : "删除会话失败");
+    },
+  });
+
   const 提交消息动作 = useMutation({
     mutationFn: ({ sessionId, message }: { sessionId: string; message: string }) => 提交消息(sessionId, message),
     onSuccess: async () => {
@@ -340,18 +366,28 @@ function 对话页面() {
     return true;
   }
 
+  function 处理删除会话(session: 会话项) {
+    const title = session.title || "未命名会话";
+    if (!window.confirm(`确认删除会话“${title}”？此操作不可恢复。`)) {
+      return;
+    }
+    void 删除会话动作.mutateAsync(session.id);
+  }
+
   return (
     <div className="chat-layout">
-      <会话列表栏
+      <SessionListRail
         selectedSessionId={当前会话ID}
         sessions={会话查询.data?.sessions ?? []}
         workspaceRoot={工作区路径}
         loading={会话查询.isLoading}
+        deletingSessionId={删除会话动作.isPending ? 删除会话动作.variables : undefined}
         onCreate={处理创建会话}
         onWorkspaceRootChange={设置工作区路径}
         onSelect={(sessionId) => {
           void 选择会话动作.mutateAsync(sessionId);
         }}
+        onDelete={处理删除会话}
       />
 
       <section className="chat-main">
@@ -394,14 +430,16 @@ function 对话页面() {
   );
 }
 
-function 会话列表栏(props: {
+export function SessionListRail(props: {
   sessions: 会话项[];
   selectedSessionId: string;
   workspaceRoot: string;
   loading: boolean;
+  deletingSessionId?: string;
   onWorkspaceRootChange: (value: string) => void;
   onCreate: () => void;
   onSelect: (sessionId: string) => void;
+  onDelete: (session: 会话项) => void;
 }) {
   return (
     <aside className="session-rail">
@@ -429,20 +467,48 @@ function 会话列表栏(props: {
         {!props.loading && props.sessions.length === 0 ? (
           <div className="empty-card">还没有会话。先输入工作区路径，然后点击“新建会话”。</div>
         ) : null}
-        {props.sessions.map((session) => (
-          <button
-            key={session.id}
-            className={session.id === props.selectedSessionId ? "session-row active" : "session-row"}
-            onClick={() => props.onSelect(session.id)}
-            type="button"
-          >
-            <div className="session-row-top">
-              <span className="session-title">{session.title || "未命名会话"}</span>
-              <span className="session-time">{格式化时间(session.updated_at)}</span>
-            </div>
-            <div className="session-preview">{session.last_preview || "等待第一条消息..."}</div>
-          </button>
-        ))}
+        {props.sessions.map((session) => {
+          const title = session.title || "未命名会话";
+          const isIdle = session.state === "idle";
+          const isDeleting = props.deletingSessionId === session.id;
+          const deleteDisabled = !isIdle || isDeleting;
+          const deleteTitle = !isIdle ? "运行中的会话暂不支持删除" : isDeleting ? "正在删除会话" : undefined;
+
+          return (
+            <article
+              key={session.id}
+              className={session.id === props.selectedSessionId ? "session-row active" : "session-row"}
+            >
+              <button
+                className="session-main-hitarea"
+                onClick={() => props.onSelect(session.id)}
+                type="button"
+              >
+                <div className="session-row-top">
+                  <span className="session-title">{title}</span>
+                  <span className="session-time">{格式化时间(session.updated_at)}</span>
+                </div>
+                <div className="session-preview">{session.last_preview || "等待第一条消息..."}</div>
+              </button>
+              <button
+                aria-label={`删除会话 ${title}`}
+                className="session-delete-button"
+                disabled={deleteDisabled}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (deleteDisabled) {
+                    return;
+                  }
+                  props.onDelete(session);
+                }}
+                title={deleteTitle}
+                type="button"
+              >
+                删除
+              </button>
+            </article>
+          );
+        })}
       </div>
     </aside>
   );

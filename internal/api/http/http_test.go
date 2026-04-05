@@ -18,15 +18,19 @@ import (
 )
 
 type fakeStore struct {
-	session           types.Session
-	sessions          []types.Session
-	turns             []types.Turn
-	conversationItems []model.ConversationItem
-	latestSeq         int64
-	selectedSessionID string
-	hasSelected       bool
-	setSelectedCalls  int
-	called            bool
+	session                   types.Session
+	sessions                  []types.Session
+	turns                     []types.Turn
+	conversationItems         []model.ConversationItem
+	latestSeq                 int64
+	selectedSessionID         string
+	hasSelected               bool
+	setSelectedCalls          int
+	deleteSessionID           string
+	deleteSessionNextSelected string
+	deleteSessionDeleted      bool
+	deleteSessionErr          error
+	called                    bool
 }
 
 func (s *fakeStore) InsertSession(ctx context.Context, session types.Session) error {
@@ -64,6 +68,11 @@ func (s *fakeStore) SetSelectedSessionID(_ context.Context, sessionID string) er
 	s.hasSelected = true
 	s.setSelectedCalls++
 	return nil
+}
+
+func (s *fakeStore) DeleteSession(_ context.Context, sessionID string) (string, bool, error) {
+	s.deleteSessionID = sessionID
+	return s.deleteSessionNextSelected, s.deleteSessionDeleted, s.deleteSessionErr
 }
 
 func (s *fakeStore) InsertTurn(ctx context.Context, turn types.Turn) error {
@@ -352,6 +361,63 @@ func TestSelectSessionPersistsExplicitFocus(t *testing.T) {
 	}
 	if store.selectedSessionID != "sess_2" || store.setSelectedCalls != 1 {
 		t.Fatalf("selected session = %q, calls = %d, want sess_2 and 1", store.selectedSessionID, store.setSelectedCalls)
+	}
+}
+
+func TestDeleteSessionReturnsFallbackSelectedSessionID(t *testing.T) {
+	store := &fakeStore{
+		sessions: []types.Session{
+			{ID: "sess_1", WorkspaceRoot: "D:/work/one", State: types.SessionStateIdle},
+			{ID: "sess_2", WorkspaceRoot: "D:/work/two", State: types.SessionStateIdle},
+		},
+		deleteSessionNextSelected: "sess_2",
+		deleteSessionDeleted:      true,
+	}
+	handler := NewRouter(Dependencies{
+		Store:   store,
+		Manager: &fakeManager{},
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/sessions/sess_1", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if store.deleteSessionID != "sess_1" {
+		t.Fatalf("DeleteSession() sessionID = %q, want %q", store.deleteSessionID, "sess_1")
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "\"deleted_session_id\":\"sess_1\"") {
+		t.Fatalf("body = %q, want deleted session id", body)
+	}
+	if !strings.Contains(body, "\"selected_session_id\":\"sess_2\"") {
+		t.Fatalf("body = %q, want fallback selected session id", body)
+	}
+}
+
+func TestDeleteSessionRejectsNonIdleSession(t *testing.T) {
+	store := &fakeStore{
+		sessions: []types.Session{
+			{ID: "sess_busy", WorkspaceRoot: "D:/work/demo", State: types.SessionStateRunning},
+		},
+		deleteSessionDeleted: true,
+	}
+	handler := NewRouter(Dependencies{
+		Store:   store,
+		Manager: &fakeManager{},
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/sessions/sess_busy", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusConflict)
+	}
+	if store.deleteSessionID != "" {
+		t.Fatalf("DeleteSession() sessionID = %q, want empty when session is not idle", store.deleteSessionID)
 	}
 }
 

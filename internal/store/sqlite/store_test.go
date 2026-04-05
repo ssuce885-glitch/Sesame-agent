@@ -1047,6 +1047,282 @@ func TestStorePersistsSelectedSessionID(t *testing.T) {
 	}
 }
 
+func TestStoreDeleteSessionRemovesSessionScopedDataAndFallsBackSelection(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC)
+	target := types.Session{
+		ID:            "sess_delete",
+		WorkspaceRoot: "E:/project/go-agent",
+		State:         types.SessionStateIdle,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	fallback := types.Session{
+		ID:            "sess_keep",
+		WorkspaceRoot: "E:/project/go-agent",
+		State:         types.SessionStateIdle,
+		CreatedAt:     now.Add(time.Minute),
+		UpdatedAt:     now.Add(time.Minute),
+	}
+	if err := store.InsertSession(context.Background(), target); err != nil {
+		t.Fatalf("InsertSession(target) error = %v", err)
+	}
+	if err := store.InsertSession(context.Background(), fallback); err != nil {
+		t.Fatalf("InsertSession(fallback) error = %v", err)
+	}
+	if err := store.SetSelectedSessionID(context.Background(), target.ID); err != nil {
+		t.Fatalf("SetSelectedSessionID() error = %v", err)
+	}
+
+	turn := types.Turn{
+		ID:          "turn_delete",
+		SessionID:   target.ID,
+		State:       types.TurnStateCompleted,
+		UserMessage: "delete this session",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := store.InsertTurn(context.Background(), turn); err != nil {
+		t.Fatalf("InsertTurn() error = %v", err)
+	}
+	if err := store.InsertConversationItem(context.Background(), target.ID, turn.ID, 1, model.UserMessageItem(turn.UserMessage)); err != nil {
+		t.Fatalf("InsertConversationItem() error = %v", err)
+	}
+	if err := store.InsertConversationSummary(context.Background(), target.ID, 1, model.Summary{RangeLabel: "turns 1-1"}); err != nil {
+		t.Fatalf("InsertConversationSummary() error = %v", err)
+	}
+	event, err := types.NewEvent(target.ID, turn.ID, types.EventAssistantDelta, map[string]any{"text": "hello"})
+	if err != nil {
+		t.Fatalf("NewEvent() error = %v", err)
+	}
+	if _, err := store.AppendEvent(context.Background(), event); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+	if err := store.UpsertTurnUsage(context.Background(), types.TurnUsage{
+		TurnID:       turn.ID,
+		SessionID:    target.ID,
+		Provider:     "openai_compatible",
+		Model:        "glm-4-7-251222",
+		InputTokens:  12,
+		OutputTokens: 3,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertTurnUsage() error = %v", err)
+	}
+
+	run := types.Run{
+		ID:        "run_delete",
+		SessionID: target.ID,
+		TurnID:    turn.ID,
+		State:     types.RunStateCompleted,
+		Objective: "clean up",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := store.InsertRun(context.Background(), run); err != nil {
+		t.Fatalf("InsertRun() error = %v", err)
+	}
+	plan := types.Plan{
+		ID:        "plan_delete",
+		RunID:     run.ID,
+		State:     types.PlanStateCompleted,
+		Title:     "plan",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := store.UpsertPlan(context.Background(), plan); err != nil {
+		t.Fatalf("UpsertPlan() error = %v", err)
+	}
+	task := types.TaskRecord{
+		ID:          "task_delete",
+		RunID:       run.ID,
+		PlanID:      plan.ID,
+		State:       types.TaskStateCompleted,
+		Title:       "task",
+		Description: "task",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := store.UpsertTaskRecord(context.Background(), task); err != nil {
+		t.Fatalf("UpsertTaskRecord() error = %v", err)
+	}
+	if err := store.UpsertToolRun(context.Background(), types.ToolRun{
+		ID:        "tool_run_delete",
+		RunID:     run.ID,
+		TaskID:    task.ID,
+		State:     types.ToolRunStateCompleted,
+		ToolName:  "shell_command",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertToolRun() error = %v", err)
+	}
+	if err := store.UpsertWorktree(context.Background(), types.Worktree{
+		ID:             "worktree_delete",
+		RunID:          run.ID,
+		TaskID:         task.ID,
+		State:          types.WorktreeStateRemoved,
+		WorktreePath:   "E:/project/go-agent/.worktrees/tmp",
+		WorktreeBranch: "feature/tmp",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("UpsertWorktree() error = %v", err)
+	}
+
+	head := types.ProviderCacheHead{
+		SessionID:         target.ID,
+		Provider:          "openai_compatible",
+		CapabilityProfile: "ark_responses",
+		ActiveSessionRef:  "resp_active",
+		ActivePrefixRef:   "pref_active",
+		ActiveGeneration:  1,
+		UpdatedAt:         now,
+	}
+	if err := store.UpsertProviderCacheHead(context.Background(), head); err != nil {
+		t.Fatalf("UpsertProviderCacheHead() error = %v", err)
+	}
+	if err := store.InsertProviderCacheEntry(context.Background(), types.ProviderCacheEntry{
+		ID:                "cache_delete",
+		SessionID:         target.ID,
+		Provider:          head.Provider,
+		CapabilityProfile: head.CapabilityProfile,
+		CacheKind:         "session",
+		ExternalRef:       "resp_active",
+		Generation:        1,
+		Status:            "active",
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}); err != nil {
+		t.Fatalf("InsertProviderCacheEntry() error = %v", err)
+	}
+	if err := store.InsertConversationCompaction(context.Background(), types.ConversationCompaction{
+		ID:              "compaction_delete",
+		SessionID:       target.ID,
+		Kind:            "rolling",
+		Generation:      1,
+		StartPosition:   1,
+		EndPosition:     1,
+		SummaryPayload:  `{"range_label":"turns 1-1"}`,
+		Reason:          "token_budget",
+		ProviderProfile: head.CapabilityProfile,
+		CreatedAt:       now,
+	}); err != nil {
+		t.Fatalf("InsertConversationCompaction() error = %v", err)
+	}
+
+	nextSelected, deleted, err := store.DeleteSession(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("DeleteSession() error = %v", err)
+	}
+	if !deleted {
+		t.Fatal("DeleteSession() deleted = false, want true")
+	}
+	if nextSelected != fallback.ID {
+		t.Fatalf("nextSelected = %q, want %q", nextSelected, fallback.ID)
+	}
+
+	gotSelected, ok, err := store.GetSelectedSessionID(context.Background())
+	if err != nil {
+		t.Fatalf("GetSelectedSessionID() error = %v", err)
+	}
+	if !ok || gotSelected != fallback.ID {
+		t.Fatalf("selected session = %q, %v, want %q true", gotSelected, ok, fallback.ID)
+	}
+
+	if _, ok, err := store.GetSession(context.Background(), target.ID); err != nil {
+		t.Fatalf("GetSession(target) error = %v", err)
+	} else if ok {
+		t.Fatal("GetSession(target) ok = true, want false")
+	}
+
+	checks := []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{name: "sessions", query: `select count(*) from sessions where id = ?`, args: []any{target.ID}},
+		{name: "turns", query: `select count(*) from turns where session_id = ?`, args: []any{target.ID}},
+		{name: "events", query: `select count(*) from events where session_id = ?`, args: []any{target.ID}},
+		{name: "conversation_items", query: `select count(*) from conversation_items where session_id = ?`, args: []any{target.ID}},
+		{name: "conversation_summaries", query: `select count(*) from conversation_summaries where session_id = ?`, args: []any{target.ID}},
+		{name: "turn_usage", query: `select count(*) from turn_usage where session_id = ?`, args: []any{target.ID}},
+		{name: "conversation_compactions", query: `select count(*) from conversation_compactions where session_id = ?`, args: []any{target.ID}},
+		{name: "provider_cache_entries", query: `select count(*) from provider_cache_entries where session_id = ?`, args: []any{target.ID}},
+		{name: "provider_cache_heads", query: `select count(*) from provider_cache_heads where session_id = ?`, args: []any{target.ID}},
+		{name: "runs", query: `select count(*) from runs where session_id = ?`, args: []any{target.ID}},
+		{name: "plans", query: `select count(*) from plans where run_id = ?`, args: []any{run.ID}},
+		{name: "task_records", query: `select count(*) from task_records where run_id = ?`, args: []any{run.ID}},
+		{name: "tool_runs", query: `select count(*) from tool_runs where run_id = ?`, args: []any{run.ID}},
+		{name: "worktrees", query: `select count(*) from worktrees where run_id = ?`, args: []any{run.ID}},
+	}
+	for _, check := range checks {
+		var count int
+		if err := store.db.QueryRowContext(context.Background(), check.query, check.args...).Scan(&count); err != nil {
+			t.Fatalf("count %s error = %v", check.name, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s count = %d, want 0", check.name, count)
+		}
+	}
+}
+
+func TestStoreDeleteSessionClearsSelectedMetadataWhenLastSessionIsRemoved(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC)
+	session := types.Session{
+		ID:            "sess_last",
+		WorkspaceRoot: "E:/project/go-agent",
+		State:         types.SessionStateIdle,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := store.InsertSession(context.Background(), session); err != nil {
+		t.Fatalf("InsertSession() error = %v", err)
+	}
+	if err := store.SetSelectedSessionID(context.Background(), session.ID); err != nil {
+		t.Fatalf("SetSelectedSessionID() error = %v", err)
+	}
+
+	nextSelected, deleted, err := store.DeleteSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("DeleteSession() error = %v", err)
+	}
+	if !deleted {
+		t.Fatal("DeleteSession() deleted = false, want true")
+	}
+	if nextSelected != "" {
+		t.Fatalf("nextSelected = %q, want empty", nextSelected)
+	}
+
+	selected, ok, err := store.GetSelectedSessionID(context.Background())
+	if err != nil {
+		t.Fatalf("GetSelectedSessionID() error = %v", err)
+	}
+	if ok || selected != "" {
+		t.Fatalf("selected = %q, %v, want empty false", selected, ok)
+	}
+
+	sessions, err := store.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("len(sessions) = %d, want 0", len(sessions))
+	}
+}
+
 func TestStoreListsRunningTurnsOldestFirst(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
 	if err != nil {

@@ -41,3 +41,8 @@ type ListSessionsResponse struct {
 type SelectSessionResponse struct {
 	SelectedSessionID string `json:"selected_session_id"`
 }
+
+type DeleteSessionResponse struct {
+	DeletedSessionID  string `json:"deleted_session_id"`
+	SelectedSessionID string `json:"selected_session_id,omitempty"`
+}

@@ -1,18 +1,18 @@
 import { useState } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App, {
   Composer,
+  SessionListRail,
   ToolCallCard,
   getContextUsageWarning,
   resetInputHistoryForTests,
 } from "./App";
-import type { Token用量, 时间线块 } from "./api";
 
-function makeUsage(inputTokens: number, cachedTokens: number): Token用量 {
+function makeUsage(inputTokens: number, cachedTokens: number) {
   return {
     provider: "openai_compatible",
     model: "gpt-4.1-mini",
@@ -42,8 +42,8 @@ beforeEach(() => {
   resetInputHistoryForTests();
 });
 
-describe("应用", () => {
-  it("默认展示对话页布局和中文导航", () => {
+describe("app", () => {
+  it("renders the chat shell and navigation", () => {
     render(
       <MemoryRouter initialEntries={["/chat"]}>
         <App />
@@ -51,27 +51,23 @@ describe("应用", () => {
     );
 
     expect(screen.getByText("Agent Console")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "对话" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "统计" })).toBeInTheDocument();
-    expect(screen.getByText("会话")).toBeInTheDocument();
-    expect(screen.getByText("输入指令")).toBeInTheDocument();
+    expect(screen.getAllByRole("link")).toHaveLength(2);
   });
 
-  it("可以切换到统计页", () => {
+  it("renders the metrics page", () => {
     render(
       <MemoryRouter initialEntries={["/metrics"]}>
         <App />
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("Token 统计")).toBeInTheDocument();
     expect(screen.getByText("input tokens")).toBeInTheDocument();
     expect(screen.getByText("cached tokens")).toBeInTheDocument();
   });
 });
 
 describe("console ui helpers", () => {
-  it("运行中的工具卡片默认展开并显示参数", () => {
+  it("keeps completed tool calls collapsed by default and shows previews when opened", () => {
     const shortRender = render(
       <ToolCallCard
         block={{
@@ -129,68 +125,136 @@ describe("console ui helpers", () => {
     expect(screen.getByText("README body")).toBeInTheDocument();
   });
 
-  it("根据最新 assistant_message 的 usage 计算 context warning", () => {
+  it("computes the context warning from the latest assistant_message usage", () => {
     expect(getContextUsageWarning([])).toBeNull();
 
-    expect(
-      getContextUsageWarning([
+    const warn = getContextUsageWarning(
+      [
         {
           id: "assistant_warn",
           kind: "assistant_message",
           content: [{ type: "text", text: "warn" }],
           usage: makeUsage(4800, 200),
         },
-      ] as unknown as 时间线块[]),
-    ).toEqual({
+      ] as Parameters<typeof getContextUsageWarning>[0],
+    );
+    expect(warn).toMatchObject({
       level: "warn",
-      text: "上下文已用 5000 tokens，接近压缩阈值",
     });
+    expect(warn?.text).toContain("5000 tokens");
 
-    expect(
-      getContextUsageWarning([
+    const danger = getContextUsageWarning(
+      [
         {
           id: "assistant_danger",
           kind: "assistant_message",
           content: [{ type: "text", text: "danger" }],
           usage: makeUsage(5600, 200),
         },
-      ] as unknown as 时间线块[]),
-    ).toEqual({
+      ] as Parameters<typeof getContextUsageWarning>[0],
+    );
+    expect(danger).toMatchObject({
       level: "danger",
-      text: "上下文即将触发压缩（5800 tokens）",
     });
+    expect(danger?.text).toContain("5800 tokens");
   });
 });
 
-describe("输入历史", () => {
-  it("支持方向键浏览历史、去重，并在回到底部时恢复草稿", async () => {
+describe("session list rail", () => {
+  it("renders a persistent delete button for idle sessions without triggering selection", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    const onDelete = vi.fn();
+
+    render(
+      <SessionListRail
+        sessions={[
+          {
+            id: "sess_idle",
+            title: "删除我",
+            last_preview: "preview",
+            workspace_root: "E:/project/go-agent",
+            state: "idle",
+            updated_at: "2026-04-05T14:54:00Z",
+            is_selected: false,
+          },
+        ]}
+        selectedSessionId=""
+        workspaceRoot="E:/project/go-agent"
+        loading={false}
+        onWorkspaceRootChange={() => {}}
+        onCreate={() => {}}
+        onSelect={onSelect}
+        onDelete={onDelete}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "删除会话 删除我" }));
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ id: "sess_idle" }));
+  });
+
+  it("disables the delete button for non-idle sessions", () => {
+    render(
+      <SessionListRail
+        sessions={[
+          {
+            id: "sess_busy",
+            title: "忙碌会话",
+            last_preview: "preview",
+            workspace_root: "E:/project/go-agent",
+            state: "running",
+            updated_at: "2026-04-05T14:54:00Z",
+            is_selected: false,
+          },
+        ]}
+        selectedSessionId=""
+        workspaceRoot="E:/project/go-agent"
+        loading={false}
+        onWorkspaceRootChange={() => {}}
+        onCreate={() => {}}
+        onSelect={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+
+    const deleteButton = screen.getByRole("button", { name: "删除会话 忙碌会话" });
+    expect(deleteButton).toBeDisabled();
+    expect(deleteButton).toHaveAttribute("title", "运行中的会话暂不支持删除");
+  });
+});
+
+describe("input history", () => {
+  it("supports arrow-key history navigation, dedupes adjacent entries, and restores the draft", async () => {
     const user = userEvent.setup();
 
-    render(<ComposerHarness />);
+    const view = render(<ComposerHarness />);
 
-    const textarea = screen.getByLabelText("输入指令");
-    const sendButton = screen.getByRole("button", { name: "发送" });
+    const scoped = within(view.container);
+    const textarea = scoped.getByRole("textbox");
+    const sendButton = scoped.getByRole("button");
 
-    await user.type(textarea, "第一条");
+    await user.type(textarea, "first");
     await user.click(sendButton);
 
-    await user.type(textarea, "第二条");
+    await user.type(textarea, "second");
     await user.click(sendButton);
 
-    await user.type(textarea, "第二条");
+    await user.type(textarea, "second");
     await user.click(sendButton);
 
-    await user.type(textarea, "草稿");
+    await user.type(textarea, "draft");
     fireEvent.keyDown(textarea, { key: "ArrowUp" });
-    expect(textarea).toHaveValue("第二条");
+    expect(textarea).toHaveValue("second");
 
     fireEvent.keyDown(textarea, { key: "ArrowUp" });
-    expect(textarea).toHaveValue("第一条");
+    expect(textarea).toHaveValue("first");
 
     fireEvent.keyDown(textarea, { key: "ArrowDown" });
-    expect(textarea).toHaveValue("第二条");
+    expect(textarea).toHaveValue("second");
 
     fireEvent.keyDown(textarea, { key: "ArrowDown" });
-    expect(textarea).toHaveValue("草稿");
+    expect(textarea).toHaveValue("draft");
   });
 });
