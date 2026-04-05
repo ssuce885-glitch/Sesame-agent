@@ -2,6 +2,7 @@ import {
   startTransition,
   useEffect,
   useReducer,
+  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -211,6 +212,7 @@ function 对话页面() {
   const [输入内容, 设置输入内容] = useState("");
   const [错误信息, 设置错误信息] = useState("");
   const [状态, 派发] = useReducer(对话状态归并, 初始对话状态);
+  const latestSeqRef = useRef(0);
 
   const 会话查询 = useQuery({
     queryKey: ["sessions"],
@@ -295,12 +297,14 @@ function 对话页面() {
 
   useEffect(() => {
     if (时间线查询.data) {
+      latestSeqRef.current = 时间线查询.data.latest_seq;
       派发({
         type: "snapshot",
         blocks: 时间线查询.data.blocks,
         latestSeq: 时间线查询.data.latest_seq,
       });
     } else if (!当前会话ID) {
+      latestSeqRef.current = 0;
       派发({
         type: "snapshot",
         blocks: [],
@@ -310,7 +314,7 @@ function 对话页面() {
   }, [当前会话ID, 时间线查询.data]);
 
   useEffect(() => {
-    if (!当前会话ID || !时间线查询.data) {
+    if (!当前会话ID) {
       派发({ type: "connection", value: "idle" });
       return;
     }
@@ -318,7 +322,7 @@ function 对话页面() {
     let disposed = false;
     let eventSource: EventSource | null = null;
     let retryTimer: number | null = null;
-    let after = 时间线查询.data.latest_seq;
+    let after = latestSeqRef.current;
 
     const 连接事件流 = () => {
       if (disposed) {
@@ -334,6 +338,7 @@ function 对话页面() {
           seq: number;
         };
         after = event.seq;
+        latestSeqRef.current = event.seq;
         派发({ type: "event", event: JSON.parse(message.data) });
 
         const typedEvent = JSON.parse(message.data) as { type: string };
@@ -363,7 +368,7 @@ function 对话页面() {
         window.clearTimeout(retryTimer);
       }
     };
-  }, [当前会话ID, 时间线查询.data, queryClient]);
+  }, [当前会话ID, queryClient]);
 
   async function 处理创建会话() {
     if (!工作区路径.trim()) {
