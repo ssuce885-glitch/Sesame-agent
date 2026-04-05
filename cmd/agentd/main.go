@@ -83,6 +83,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	basePrompt, err := cfg.ResolveSystemPrompt()
+	if err != nil {
+		slog.Error("resolve system prompt", "err", err)
+		os.Exit(1)
+	}
+
 	if err := ensureDataDir(cfg.DataDir); err != nil {
 		slog.Error("prepare data dir", "err", err, "path", cfg.DataDir)
 		os.Exit(1)
@@ -125,7 +131,8 @@ func main() {
 		},
 		buildMaxToolSteps(cfg),
 	)
-	runner.SetBaseSystemPrompt(cfg.SystemPrompt)
+	runner.SetBaseSystemPrompt(basePrompt)
+	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
 	manager := session.NewManager(sessionRunnerAdapter{
 		engine: runner,
 		sink: storeAndBusSink{

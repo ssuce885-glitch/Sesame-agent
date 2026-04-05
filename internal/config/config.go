@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -29,6 +30,8 @@ type Config struct {
 	MaxEstimatedTokens         int
 	MaxCompactionPasses        int
 	SystemPrompt               string
+	SystemPromptFile           string
+	MaxWorkspacePromptBytes    int
 }
 
 func Load() (Config, error) {
@@ -60,6 +63,8 @@ func Load() (Config, error) {
 		MaxEstimatedTokens:         intEnvOrDefault("AGENTD_MAX_ESTIMATED_TOKENS", 6000),
 		MaxCompactionPasses:        intEnvOrDefault("AGENTD_MAX_COMPACTION_PASSES", 1),
 		SystemPrompt:               envOrDefault("AGENTD_SYSTEM_PROMPT", ""),
+		SystemPromptFile:           envOrDefault("AGENTD_SYSTEM_PROMPT_FILE", ""),
+		MaxWorkspacePromptBytes:    intEnvOrDefault("AGENTD_MAX_WORKSPACE_PROMPT_BYTES", 32768),
 	}
 
 	if cfg.DataDir == "" {
@@ -67,6 +72,22 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func (c Config) ResolveSystemPrompt() (string, error) {
+	if strings.TrimSpace(c.SystemPrompt) != "" {
+		return strings.TrimSpace(c.SystemPrompt), nil
+	}
+	if strings.TrimSpace(c.SystemPromptFile) == "" {
+		return "", nil
+	}
+
+	data, err := os.ReadFile(c.SystemPromptFile)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(data)), nil
 }
 
 func envOrDefault(key, fallback string) string {
