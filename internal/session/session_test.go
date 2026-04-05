@@ -124,3 +124,41 @@ func TestSubmitTurnRunContextOutlivesRequestContext(t *testing.T) {
 		t.Fatal("timed out waiting for runtime cancellation")
 	}
 }
+
+func TestUpdateSessionReplacesPromptWithoutResettingRuntimeState(t *testing.T) {
+	manager := NewManager(&fakeRunner{done: make(chan struct{}, 1)})
+	now := time.Now().UTC()
+	manager.RegisterSession(types.Session{
+		ID:            "sess_test",
+		WorkspaceRoot: "D:/work/demo",
+		SystemPrompt:  "first prompt",
+		State:         types.SessionStateIdle,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+
+	manager.runtime["sess_test"].ActiveTurnID = "turn_live"
+
+	ok := manager.UpdateSession(types.Session{
+		ID:            "sess_test",
+		WorkspaceRoot: "D:/work/demo",
+		SystemPrompt:  "second prompt",
+		State:         types.SessionStateIdle,
+		CreatedAt:     now,
+		UpdatedAt:     now.Add(time.Minute),
+	})
+	if !ok {
+		t.Fatal("UpdateSession() ok = false, want true")
+	}
+
+	state, ok := manager.GetRuntimeState("sess_test")
+	if !ok {
+		t.Fatal("GetRuntimeState() ok = false, want true")
+	}
+	if state.ActiveTurnID != "turn_live" {
+		t.Fatalf("ActiveTurnID = %q, want %q", state.ActiveTurnID, "turn_live")
+	}
+	if got := manager.sessions["sess_test"].SystemPrompt; got != "second prompt" {
+		t.Fatalf("SystemPrompt = %q, want %q", got, "second prompt")
+	}
+}

@@ -315,6 +315,59 @@ func TestStoreListsSessionsInUpdatedAtDescOrder(t *testing.T) {
 	}
 }
 
+func TestStorePersistsAndUpdatesSessionSystemPrompt(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Now().UTC()
+	if err := store.InsertSession(context.Background(), types.Session{
+		ID:            "sess_prompt",
+		WorkspaceRoot: "D:/work/prompt",
+		SystemPrompt:  "focus on internal/model",
+		State:         types.SessionStateIdle,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("InsertSession() error = %v", err)
+	}
+
+	sessions, err := store.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("len(sessions) = %d, want 1", len(sessions))
+	}
+	if sessions[0].SystemPrompt != "focus on internal/model" {
+		t.Fatalf("SystemPrompt = %q, want %q", sessions[0].SystemPrompt, "focus on internal/model")
+	}
+
+	updated, ok, err := store.UpdateSessionSystemPrompt(context.Background(), "sess_prompt", "focus on internal/context")
+	if err != nil {
+		t.Fatalf("UpdateSessionSystemPrompt() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("UpdateSessionSystemPrompt() ok = false, want true")
+	}
+	if updated.SystemPrompt != "focus on internal/context" {
+		t.Fatalf("updated.SystemPrompt = %q, want %q", updated.SystemPrompt, "focus on internal/context")
+	}
+
+	got, ok, err := store.GetSession(context.Background(), "sess_prompt")
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("GetSession() ok = false, want true")
+	}
+	if got.SystemPrompt != "focus on internal/context" {
+		t.Fatalf("GetSession().SystemPrompt = %q, want %q", got.SystemPrompt, "focus on internal/context")
+	}
+}
+
 func TestStorePersistsSelectedSessionID(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
 	if err != nil {

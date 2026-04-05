@@ -32,6 +32,30 @@ func (s *fakeStore) ListSessions(context.Context) ([]types.Session, error) {
 	return append([]types.Session(nil), s.sessions...), nil
 }
 
+func (s *fakeStore) GetSession(_ context.Context, sessionID string) (types.Session, bool, error) {
+	for _, session := range s.sessions {
+		if session.ID == sessionID {
+			return session, true, nil
+		}
+	}
+	return types.Session{}, false, nil
+}
+
+func (s *fakeStore) UpdateSessionSystemPrompt(_ context.Context, sessionID, systemPrompt string) (types.Session, bool, error) {
+	for i, session := range s.sessions {
+		if session.ID != sessionID {
+			continue
+		}
+		session.SystemPrompt = systemPrompt
+		s.sessions[i] = session
+		if s.session.ID == sessionID {
+			s.session = session
+		}
+		return session, true, nil
+	}
+	return types.Session{}, false, nil
+}
+
 func (s *fakeStore) GetSelectedSessionID(context.Context) (string, bool, error) {
 	return s.selectedSessionID, s.hasSelected, nil
 }
@@ -58,11 +82,18 @@ func (s *fakeStore) ListSessionEvents(ctx context.Context, sessionID string, aft
 type fakeManager struct {
 	session types.Session
 	called  bool
+	updated types.Session
 }
 
 func (m *fakeManager) RegisterSession(session types.Session) {
 	m.called = true
 	m.session = session
+}
+
+func (m *fakeManager) UpdateSession(session types.Session) bool {
+	m.updated = session
+	m.session = session
+	return true
 }
 
 func (m *fakeManager) SubmitTurn(ctx context.Context, sessionID string, in session.SubmitTurnInput) (string, error) {
@@ -129,7 +160,7 @@ func TestCreateSessionPersistsAndReturnsSession(t *testing.T) {
 		Manager: manager,
 	})
 
-	reqBody := `{"workspace_root":"D:/work/demo"}`
+	reqBody := `{"workspace_root":"D:/work/demo","system_prompt":"focus on internal/model"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", strings.NewReader(reqBody))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -143,6 +174,9 @@ func TestCreateSessionPersistsAndReturnsSession(t *testing.T) {
 	if store.session.WorkspaceRoot != "D:/work/demo" {
 		t.Fatalf("workspace root = %q, want %q", store.session.WorkspaceRoot, "D:/work/demo")
 	}
+	if store.session.SystemPrompt != "focus on internal/model" {
+		t.Fatalf("system prompt = %q, want %q", store.session.SystemPrompt, "focus on internal/model")
+	}
 	if !manager.called {
 		t.Fatal("manager.RegisterSession was not called")
 	}
@@ -151,6 +185,9 @@ func TestCreateSessionPersistsAndReturnsSession(t *testing.T) {
 	}
 	if manager.session.WorkspaceRoot != "D:/work/demo" {
 		t.Fatalf("registered workspace root = %q, want %q", manager.session.WorkspaceRoot, "D:/work/demo")
+	}
+	if manager.session.SystemPrompt != "focus on internal/model" {
+		t.Fatalf("registered system prompt = %q, want %q", manager.session.SystemPrompt, "focus on internal/model")
 	}
 	if manager.session.State != types.SessionStateIdle {
 		t.Fatalf("registered state = %q, want %q", manager.session.State, types.SessionStateIdle)
@@ -163,8 +200,49 @@ func TestCreateSessionPersistsAndReturnsSession(t *testing.T) {
 	if got.WorkspaceRoot != "D:/work/demo" {
 		t.Fatalf("response workspace_root = %q, want %q", got.WorkspaceRoot, "D:/work/demo")
 	}
+	if got.SystemPrompt != "focus on internal/model" {
+		t.Fatalf("response system_prompt = %q, want %q", got.SystemPrompt, "focus on internal/model")
+	}
 	if !strings.Contains(rec.Body.String(), `"workspace_root":"D:/work/demo"`) {
 		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestPatchSessionUpdatesSystemPrompt(t *testing.T) {
+	store := &fakeStore{
+		sessions: []types.Session{{
+			ID:            "sess_1",
+			WorkspaceRoot: "D:/work/demo",
+			SystemPrompt:  "old prompt",
+			State:         types.SessionStateIdle,
+		}},
+	}
+	manager := &fakeManager{}
+	handler := NewRouter(Dependencies{
+		Store:   store,
+		Manager: manager,
+	})
+
+	req := httptest.NewRequest(http.MethodPatch, "/v1/sessions/sess_1", strings.NewReader(`{"system_prompt":"new prompt"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := store.sessions[0].SystemPrompt; got != "new prompt" {
+		t.Fatalf("store system prompt = %q, want %q", got, "new prompt")
+	}
+	if got := manager.updated.SystemPrompt; got != "new prompt" {
+		t.Fatalf("manager updated system prompt = %q, want %q", got, "new prompt")
+	}
+
+	var session types.Session
+	if err := json.Unmarshal(rec.Body.Bytes(), &session); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if session.SystemPrompt != "new prompt" {
+		t.Fatalf("response system prompt = %q, want %q", session.SystemPrompt, "new prompt")
 	}
 }
 

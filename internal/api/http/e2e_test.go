@@ -29,7 +29,7 @@ import (
 func TestCreateSessionThenStreamEvents(t *testing.T) {
 	handler := NewRouter(NewTestDependencies(t))
 
-	createReq := httptest.NewRequest(http.MethodPost, "/v1/sessions", strings.NewReader(`{"workspace_root":"D:/work/demo"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/sessions", strings.NewReader(`{"workspace_root":"D:/work/demo","system_prompt":"focus on greetings"}`))
 	createReq.Header.Set("Content-Type", "application/json")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
@@ -179,7 +179,7 @@ func TestCreateSessionSubmitTurnAndStreamEvents(t *testing.T) {
 	}))
 	defer server.Close()
 
-	createReq, err := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", strings.NewReader(`{"workspace_root":"D:/work/demo"}`))
+	createReq, err := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", strings.NewReader(`{"workspace_root":"D:/work/demo","system_prompt":"focus on greetings"}`))
 	if err != nil {
 		t.Fatalf("NewRequest(create) error = %v", err)
 	}
@@ -201,6 +201,9 @@ func TestCreateSessionSubmitTurnAndStreamEvents(t *testing.T) {
 	}
 	if created.ID == "" {
 		t.Fatal("created session ID is empty")
+	}
+	if created.SystemPrompt != "focus on greetings" {
+		t.Fatalf("created.SystemPrompt = %q, want %q", created.SystemPrompt, "focus on greetings")
 	}
 
 	streamCtx, cancel := context.WithCancel(context.Background())
@@ -479,6 +482,14 @@ func (s *turnSubmitStore) InsertSession(context.Context, types.Session) error { 
 
 func (s *turnSubmitStore) ListSessions(context.Context) ([]types.Session, error) { return nil, nil }
 
+func (s *turnSubmitStore) GetSession(context.Context, string) (types.Session, bool, error) {
+	return types.Session{}, false, nil
+}
+
+func (s *turnSubmitStore) UpdateSessionSystemPrompt(context.Context, string, string) (types.Session, bool, error) {
+	return types.Session{}, false, nil
+}
+
 func (s *turnSubmitStore) GetSelectedSessionID(context.Context) (string, bool, error) {
 	return "", false, nil
 }
@@ -520,6 +531,8 @@ type turnSubmitManager struct {
 }
 
 func (m *turnSubmitManager) RegisterSession(types.Session) {}
+
+func (m *turnSubmitManager) UpdateSession(types.Session) bool { return true }
 
 func (m *turnSubmitManager) SubmitTurn(ctx context.Context, sessionID string, in session.SubmitTurnInput) (string, error) {
 	m.called = true
@@ -679,6 +692,14 @@ type replayStore struct {
 func (s *replayStore) InsertSession(context.Context, types.Session) error { return nil }
 
 func (s *replayStore) ListSessions(context.Context) ([]types.Session, error) { return nil, nil }
+
+func (s *replayStore) GetSession(context.Context, string) (types.Session, bool, error) {
+	return types.Session{}, false, nil
+}
+
+func (s *replayStore) UpdateSessionSystemPrompt(context.Context, string, string) (types.Session, bool, error) {
+	return types.Session{}, false, nil
+}
 
 func (s *replayStore) GetSelectedSessionID(context.Context) (string, bool, error) {
 	return "", false, nil

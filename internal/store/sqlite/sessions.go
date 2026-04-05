@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"go-agent/internal/types"
@@ -11,10 +12,11 @@ const timeLayout = time.RFC3339Nano
 
 func (s *Store) InsertSession(ctx context.Context, session types.Session) error {
 	_, err := s.db.ExecContext(ctx, `
-		insert into sessions (id, workspace_root, state, active_turn_id, created_at, updated_at)
-		values (?, ?, ?, ?, ?, ?)`,
+		insert into sessions (id, workspace_root, system_prompt, state, active_turn_id, created_at, updated_at)
+		values (?, ?, ?, ?, ?, ?, ?)`,
 		session.ID,
 		session.WorkspaceRoot,
+		session.SystemPrompt,
 		session.State,
 		session.ActiveTurnID,
 		session.CreatedAt.Format(timeLayout),
@@ -42,7 +44,7 @@ func (s *Store) InsertTurn(ctx context.Context, turn types.Turn) error {
 
 func (s *Store) ListSessions(ctx context.Context) ([]types.Session, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select id, workspace_root, state, active_turn_id, created_at, updated_at
+		select id, workspace_root, system_prompt, state, active_turn_id, created_at, updated_at
 		from sessions
 		order by updated_at desc, created_at desc
 	`)
@@ -57,7 +59,7 @@ func (s *Store) ListSessions(ctx context.Context) ([]types.Session, error) {
 		var state string
 		var createdAt string
 		var updatedAt string
-		if err := rows.Scan(&session.ID, &session.WorkspaceRoot, &state, &session.ActiveTurnID, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&session.ID, &session.WorkspaceRoot, &session.SystemPrompt, &state, &session.ActiveTurnID, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		session.State = types.SessionState(state)
@@ -73,6 +75,60 @@ func (s *Store) ListSessions(ctx context.Context) ([]types.Session, error) {
 	}
 
 	return out, rows.Err()
+}
+
+func (s *Store) GetSession(ctx context.Context, sessionID string) (types.Session, bool, error) {
+	var session types.Session
+	var state string
+	var createdAt string
+	var updatedAt string
+	err := s.db.QueryRowContext(ctx, `
+		select id, workspace_root, system_prompt, state, active_turn_id, created_at, updated_at
+		from sessions
+		where id = ?`,
+		sessionID,
+	).Scan(&session.ID, &session.WorkspaceRoot, &session.SystemPrompt, &state, &session.ActiveTurnID, &createdAt, &updatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return types.Session{}, false, nil
+		}
+		return types.Session{}, false, err
+	}
+
+	session.State = types.SessionState(state)
+	session.CreatedAt, err = time.Parse(timeLayout, createdAt)
+	if err != nil {
+		return types.Session{}, false, err
+	}
+	session.UpdatedAt, err = time.Parse(timeLayout, updatedAt)
+	if err != nil {
+		return types.Session{}, false, err
+	}
+
+	return session, true, nil
+}
+
+func (s *Store) UpdateSessionSystemPrompt(ctx context.Context, sessionID, systemPrompt string) (types.Session, bool, error) {
+	now := time.Now().UTC().Format(timeLayout)
+	result, err := s.db.ExecContext(ctx, `
+		update sessions
+		set system_prompt = ?, updated_at = ?
+		where id = ?`,
+		systemPrompt,
+		now,
+		sessionID,
+	)
+	if err != nil {
+		return types.Session{}, false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return types.Session{}, false, err
+	}
+	if rowsAffected == 0 {
+		return types.Session{}, false, nil
+	}
+	return s.GetSession(ctx, sessionID)
 }
 
 func (s *Store) DeleteTurn(ctx context.Context, turnID string) error {

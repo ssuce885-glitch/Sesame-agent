@@ -47,6 +47,7 @@ func handleListSessions(deps Dependencies) http.HandlerFunc {
 			items = append(items, types.SessionListItem{
 				ID:            session.ID,
 				WorkspaceRoot: session.WorkspaceRoot,
+				SystemPrompt:  session.SystemPrompt,
 				State:         session.State,
 				ActiveTurnID:  session.ActiveTurnID,
 				CreatedAt:     session.CreatedAt,
@@ -83,6 +84,7 @@ func handleCreateSession(deps Dependencies) http.HandlerFunc {
 		session := types.Session{
 			ID:            types.NewID("sess"),
 			WorkspaceRoot: req.WorkspaceRoot,
+			SystemPrompt:  req.SystemPrompt,
 			State:         types.SessionStateIdle,
 			CreatedAt:     now,
 			UpdatedAt:     now,
