@@ -28,6 +28,7 @@ const (
 type Session struct {
 	ID            string       `json:"id"`
 	WorkspaceRoot string       `json:"workspace_root"`
+	SystemPrompt  string       `json:"system_prompt,omitempty"`
 	State         SessionState `json:"state"`
 	ActiveTurnID  string       `json:"active_turn_id,omitempty"`
 	CreatedAt     time.Time    `json:"created_at"`

@@ -1,12 +1,16 @@
 package sqlite
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 func (s *Store) migrate(ctx context.Context) error {
 	stmts := []string{
 		`create table if not exists sessions (
 			id text primary key,
 			workspace_root text not null,
+			system_prompt text not null default '',
 			state text not null,
 			active_turn_id text not null default '',
 			created_at text not null,
@@ -119,5 +123,22 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 
+	if err := s.ensureColumn(ctx, "sessions", "system_prompt", `alter table sessions add column system_prompt text not null default ''`); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (s *Store) ensureColumn(ctx context.Context, table, column, alterStmt string) error {
+	var count int
+	query := fmt.Sprintf("select count(*) from pragma_table_info('%s') where name = ?", table)
+	if err := s.db.QueryRowContext(ctx, query, column).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, alterStmt)
+	return err
 }

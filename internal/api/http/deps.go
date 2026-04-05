@@ -10,6 +10,8 @@ import (
 type Store interface {
 	InsertSession(context.Context, types.Session) error
 	ListSessions(context.Context) ([]types.Session, error)
+	GetSession(context.Context, string) (types.Session, bool, error)
+	UpdateSessionSystemPrompt(context.Context, string, string) (types.Session, bool, error)
 	GetSelectedSessionID(context.Context) (string, bool, error)
 	SetSelectedSessionID(context.Context, string) error
 	InsertTurn(context.Context, types.Turn) error
@@ -19,6 +21,7 @@ type Store interface {
 
 type Manager interface {
 	RegisterSession(types.Session)
+	UpdateSession(types.Session) bool
 	SubmitTurn(context.Context, string, session.SubmitTurnInput) (string, error)
 }
 

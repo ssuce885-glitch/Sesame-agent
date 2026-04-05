@@ -49,6 +49,17 @@ func (m *Manager) RegisterSession(session types.Session) {
 	m.runtime[session.ID] = &RuntimeState{}
 }
 
+func (m *Manager) UpdateSession(session types.Session) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.sessions[session.ID]; !ok {
+		return false
+	}
+	m.sessions[session.ID] = session
+	return true
+}
+
 func (m *Manager) GetRuntimeState(sessionID string) (RuntimeState, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

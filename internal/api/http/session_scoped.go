@@ -9,6 +9,14 @@ func registerSessionScopedRoutes(mux *http.ServeMux, deps Dependencies) {
 	mux.HandleFunc("/v1/sessions/", func(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(r.URL.Path, "/v1/sessions/")
 		parts := strings.Split(rest, "/")
+		if len(parts) == 1 && parts[0] != "" {
+			if r.Method == http.MethodPatch {
+				handlePatchSession(deps, parts[0])(w, r)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			http.NotFound(w, r)
 			return

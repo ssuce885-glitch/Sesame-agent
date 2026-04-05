@@ -218,7 +218,7 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			input := map[string]any{}
 			if payload.Arguments != "" {
 				if err := json.Unmarshal([]byte(payload.Arguments), &input); err != nil {
-					return fmt.Errorf("decode function call arguments: %w", err)
+					return fmt.Errorf("decode function call arguments (raw=%q): %w", payload.Arguments, err)
 				}
 			}
 			if err := sendStreamEvent(ctx, events, StreamEvent{
