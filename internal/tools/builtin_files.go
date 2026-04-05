@@ -36,7 +36,7 @@ func (fileReadTool) Definition() Definition {
 func (fileReadTool) IsConcurrencySafe() bool { return true }
 
 func (fileReadTool) Execute(_ context.Context, call Call, execCtx ExecContext) (Result, error) {
-	path := call.Input["path"].(string)
+	path := call.StringInput("path")
 	if err := runtime.WithinWorkspace(execCtx.WorkspaceRoot, path); err != nil {
 		return Result{}, err
 	}

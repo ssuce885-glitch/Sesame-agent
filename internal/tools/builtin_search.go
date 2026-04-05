@@ -30,8 +30,8 @@ func (grepTool) Definition() Definition {
 func (grepTool) IsConcurrencySafe() bool { return true }
 
 func (grepTool) Execute(_ context.Context, call Call, execCtx ExecContext) (Result, error) {
-	path := call.Input["path"].(string)
-	pattern := call.Input["pattern"].(string)
+	path := call.StringInput("path")
+	pattern := call.StringInput("pattern")
 	if err := runtime.WithinWorkspace(execCtx.WorkspaceRoot, path); err != nil {
 		return Result{}, err
 	}

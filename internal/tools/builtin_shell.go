@@ -38,7 +38,7 @@ func (shellTool) Definition() Definition {
 func (shellTool) IsConcurrencySafe() bool { return false }
 
 func (shellTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
-	command := call.Input["command"].(string)
+	command := call.StringInput("command")
 	shellCtx, cancel := context.WithTimeout(ctx, time.Duration(shellCommandTimeoutSeconds)*time.Second)
 	defer cancel()
 
