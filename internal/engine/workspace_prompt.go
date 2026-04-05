@@ -31,7 +31,7 @@ func loadWorkspacePromptBundle(workspaceRoot string, maxBytes int) (text string,
 	parts := make([]string, 0, 4)
 	currentBytes := 0
 
-	promptText, err := readWorkspacePrompt(promptPath)
+	promptText, err := readWorkspacePrompt(workspaceRoot, promptPath)
 	if err != nil {
 		return "", nil, err
 	}
@@ -79,15 +79,24 @@ func loadWorkspacePromptBundle(workspaceRoot string, maxBytes int) (text string,
 	return strings.Join(parts, "\n\n"), nil, nil
 }
 
-func readWorkspacePrompt(path string) (string, error) {
-	data, err := readFile(path)
+func readWorkspacePrompt(workspaceRoot, path string) (string, error) {
+	real, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
 		}
 		return "", err
 	}
-
+	if err := validateWorkspacePath(workspaceRoot, real); err != nil {
+		return "", err
+	}
+	data, err := readFile(real)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
 	return strings.TrimSpace(string(data)), nil
 }
 
@@ -139,7 +148,15 @@ func readWorkspaceRule(workspaceRoot, path string) (string, bool, error) {
 		return "", false, err
 	}
 
-	data, err := readFile(path)
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", false, err
+	}
+	if err := validateWorkspacePath(workspaceRoot, real); err != nil {
+		return "", false, err
+	}
+
+	data, err := readFile(real)
 	if err != nil {
 		return "", false, err
 	}

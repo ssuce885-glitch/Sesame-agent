@@ -25,13 +25,18 @@ func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		events, err := deps.Store.ListSessionEvents(r.Context(), sessionID, 0)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
 		latestSeq, err := deps.Store.LatestSessionEventSeq(r.Context(), sessionID)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		blocks := normalizeTimelineBlocks(items)
+		blocks := normalizeTimelineBlocks(items, events)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(types.SessionTimelineResponse{
 			Blocks:    blocks,
@@ -40,7 +45,7 @@ func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 	}
 }
 
-func normalizeTimelineBlocks(items []model.ConversationItem) []types.TimelineBlock {
+func normalizeTimelineBlocks(items []model.ConversationItem, events []types.Event) []types.TimelineBlock {
 	blocks := make([]types.TimelineBlock, 0, len(items))
 	toolIndexByCallID := map[string]int{}
 
@@ -93,6 +98,21 @@ func normalizeTimelineBlocks(items []model.ConversationItem) []types.TimelineBlo
 		default:
 			continue
 		}
+	}
+
+	for _, event := range events {
+		if event.Type != types.EventSystemNotice {
+			continue
+		}
+		var p types.NoticePayload
+		if err := json.Unmarshal(event.Payload, &p); err != nil {
+			continue
+		}
+		blocks = append(blocks, types.TimelineBlock{
+			ID:   "notice_" + strconv.FormatInt(event.Seq, 10),
+			Kind: "notice",
+			Text: p.Text,
+		})
 	}
 
 	return blocks

@@ -94,6 +94,19 @@ function 应用事件(state: 对话状态, event: 服务端事件): 对话状态
           },
         ],
       };
+    case "system.notice":
+      return {
+        ...nextState,
+        blocks: [
+          ...nextState.blocks,
+          {
+            id: `notice_${event.seq}`,
+            turn_id: event.turn_id,
+            kind: "notice",
+            text: (event.payload as { text: string }).text,
+          },
+        ],
+      };
     default:
       return nextState;
   }

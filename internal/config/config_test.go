@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 	t.Run("uses defaults when data dir is set", func(t *testing.T) {
@@ -23,7 +27,6 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 		t.Setenv("AGENTD_PROVIDER_CACHE_PROFILE", "")
 		t.Setenv("AGENTD_CACHE_EXPIRY_SECONDS", "")
 		t.Setenv("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", "")
-		t.Setenv("AGENTD_SYSTEM_PROMPT", "")
 
 		cfg, err := Load()
 		if err != nil {
@@ -69,6 +72,9 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 		if cfg.MaxCompactionPasses != 1 {
 			t.Fatalf("MaxCompactionPasses = %d, want %d", cfg.MaxCompactionPasses, 1)
 		}
+		if cfg.MaxWorkspacePromptBytes != 32768 {
+			t.Fatalf("MaxWorkspacePromptBytes = %d, want %d", cfg.MaxWorkspacePromptBytes, 32768)
+		}
 		if cfg.ProviderCacheProfile != "none" {
 			t.Fatalf("ProviderCacheProfile = %q, want %q", cfg.ProviderCacheProfile, "none")
 		}
@@ -77,9 +83,6 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 		}
 		if cfg.MicrocompactBytesThreshold != 4096 {
 			t.Fatalf("MicrocompactBytesThreshold = %d, want %d", cfg.MicrocompactBytesThreshold, 4096)
-		}
-		if cfg.SystemPrompt != "" {
-			t.Fatalf("SystemPrompt = %q, want empty default", cfg.SystemPrompt)
 		}
 	})
 
@@ -175,7 +178,6 @@ func TestLoadReadsProviderCacheOverrides(t *testing.T) {
 	t.Setenv("AGENTD_PROVIDER_CACHE_PROFILE", "ark_responses")
 	t.Setenv("AGENTD_CACHE_EXPIRY_SECONDS", "7200")
 	t.Setenv("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", "8192")
-	t.Setenv("AGENTD_SYSTEM_PROMPT", "You are the global agent prompt.")
 
 	cfg, err := Load()
 	if err != nil {
@@ -191,7 +193,74 @@ func TestLoadReadsProviderCacheOverrides(t *testing.T) {
 	if cfg.MicrocompactBytesThreshold != 8192 {
 		t.Fatalf("MicrocompactBytesThreshold = %d, want %d", cfg.MicrocompactBytesThreshold, 8192)
 	}
-	if cfg.SystemPrompt != "You are the global agent prompt." {
-		t.Fatalf("SystemPrompt = %q, want %q", cfg.SystemPrompt, "You are the global agent prompt.")
+}
+
+func TestLoadReadsSystemPromptOverrides(t *testing.T) {
+	t.Setenv("AGENTD_ADDR", "")
+	t.Setenv("AGENTD_DATA_DIR", t.TempDir())
+	t.Setenv("ANTHROPIC_MODEL", "")
+	t.Setenv("AGENTD_LOG_LEVEL", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("AGENTD_SYSTEM_PROMPT", "env prompt")
+	t.Setenv("AGENTD_SYSTEM_PROMPT_FILE", "C:/tmp/system.md")
+	t.Setenv("AGENTD_MAX_WORKSPACE_PROMPT_BYTES", "1234")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
 	}
+
+	if cfg.SystemPrompt != "env prompt" {
+		t.Fatalf("SystemPrompt = %q, want %q", cfg.SystemPrompt, "env prompt")
+	}
+	if cfg.SystemPromptFile != "C:/tmp/system.md" {
+		t.Fatalf("SystemPromptFile = %q, want %q", cfg.SystemPromptFile, "C:/tmp/system.md")
+	}
+	if cfg.MaxWorkspacePromptBytes != 1234 {
+		t.Fatalf("MaxWorkspacePromptBytes = %d, want %d", cfg.MaxWorkspacePromptBytes, 1234)
+	}
+}
+
+func TestResolveSystemPrompt(t *testing.T) {
+	t.Run("prefers inline system prompt over file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "prompt.md")
+		if err := os.WriteFile(path, []byte("from file"), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		got, err := (Config{
+			SystemPrompt:     "from env",
+			SystemPromptFile: path,
+		}).ResolveSystemPrompt()
+		if err != nil {
+			t.Fatalf("ResolveSystemPrompt() error = %v", err)
+		}
+		if got != "from env" {
+			t.Fatalf("ResolveSystemPrompt() = %q, want %q", got, "from env")
+		}
+	})
+
+	t.Run("reads configured prompt file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "prompt.md")
+		if err := os.WriteFile(path, []byte("from file"), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		got, err := (Config{SystemPromptFile: path}).ResolveSystemPrompt()
+		if err != nil {
+			t.Fatalf("ResolveSystemPrompt() error = %v", err)
+		}
+		if got != "from file" {
+			t.Fatalf("ResolveSystemPrompt() = %q, want %q", got, "from file")
+		}
+	})
+
+	t.Run("returns error for missing file", func(t *testing.T) {
+		_, err := (Config{
+			SystemPromptFile: filepath.Join(t.TempDir(), "missing.md"),
+		}).ResolveSystemPrompt()
+		if err == nil {
+			t.Fatal("ResolveSystemPrompt() error = nil, want error")
+		}
+	})
 }
