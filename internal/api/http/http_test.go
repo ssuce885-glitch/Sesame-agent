@@ -40,15 +40,6 @@ func (s *fakeStore) ListSessions(context.Context) ([]types.Session, error) {
 	return append([]types.Session(nil), s.sessions...), nil
 }
 
-func (s *fakeStore) GetSession(_ context.Context, sessionID string) (types.Session, bool, error) {
-	for _, session := range s.sessions {
-		if session.ID == sessionID {
-			return session, true, nil
-		}
-	}
-	return types.Session{}, false, nil
-}
-
 func (s *fakeStore) UpdateSessionSystemPrompt(_ context.Context, sessionID, systemPrompt string) (types.Session, bool, error) {
 	for i, session := range s.sessions {
 		if session.ID != sessionID {

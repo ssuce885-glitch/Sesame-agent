@@ -125,6 +125,7 @@ func main() {
 		},
 		buildMaxToolSteps(cfg),
 	)
+	runner.SetBaseSystemPrompt(cfg.SystemPrompt)
 	manager := session.NewManager(sessionRunnerAdapter{
 		engine: runner,
 		sink: storeAndBusSink{

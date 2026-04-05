@@ -518,10 +518,6 @@ func (s *turnSubmitStore) DeleteTurn(ctx context.Context, turnID string) error {
 	return nil
 }
 
-func (s *turnSubmitStore) GetSession(context.Context, string) (types.Session, bool, error) {
-	return types.Session{}, false, nil
-}
-
 func (s *turnSubmitStore) ListTurnsBySession(context.Context, string) ([]types.Turn, error) {
 	return nil, nil
 }
@@ -726,10 +722,6 @@ func (s *replayStore) SetSelectedSessionID(context.Context, string) error { retu
 func (s *replayStore) InsertTurn(context.Context, types.Turn) error { return nil }
 
 func (s *replayStore) DeleteTurn(context.Context, string) error { return nil }
-
-func (s *replayStore) GetSession(context.Context, string) (types.Session, bool, error) {
-	return types.Session{}, false, nil
-}
 
 func (s *replayStore) ListTurnsBySession(context.Context, string) ([]types.Turn, error) {
 	return nil, nil

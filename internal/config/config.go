@@ -28,6 +28,7 @@ type Config struct {
 	CompactionThreshold        int
 	MaxEstimatedTokens         int
 	MaxCompactionPasses        int
+	SystemPrompt               string
 }
 
 func Load() (Config, error) {
@@ -58,6 +59,7 @@ func Load() (Config, error) {
 		CompactionThreshold:        intEnvOrDefault("AGENTD_COMPACTION_THRESHOLD", 16),
 		MaxEstimatedTokens:         intEnvOrDefault("AGENTD_MAX_ESTIMATED_TOKENS", 6000),
 		MaxCompactionPasses:        intEnvOrDefault("AGENTD_MAX_COMPACTION_PASSES", 1),
+		SystemPrompt:               envOrDefault("AGENTD_SYSTEM_PROMPT", ""),
 	}
 
 	if cfg.DataDir == "" {

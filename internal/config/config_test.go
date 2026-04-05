@@ -23,6 +23,7 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 		t.Setenv("AGENTD_PROVIDER_CACHE_PROFILE", "")
 		t.Setenv("AGENTD_CACHE_EXPIRY_SECONDS", "")
 		t.Setenv("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", "")
+		t.Setenv("AGENTD_SYSTEM_PROMPT", "")
 
 		cfg, err := Load()
 		if err != nil {
@@ -76,6 +77,9 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 		}
 		if cfg.MicrocompactBytesThreshold != 4096 {
 			t.Fatalf("MicrocompactBytesThreshold = %d, want %d", cfg.MicrocompactBytesThreshold, 4096)
+		}
+		if cfg.SystemPrompt != "" {
+			t.Fatalf("SystemPrompt = %q, want empty default", cfg.SystemPrompt)
 		}
 	})
 
@@ -171,6 +175,7 @@ func TestLoadReadsProviderCacheOverrides(t *testing.T) {
 	t.Setenv("AGENTD_PROVIDER_CACHE_PROFILE", "ark_responses")
 	t.Setenv("AGENTD_CACHE_EXPIRY_SECONDS", "7200")
 	t.Setenv("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", "8192")
+	t.Setenv("AGENTD_SYSTEM_PROMPT", "You are the global agent prompt.")
 
 	cfg, err := Load()
 	if err != nil {
@@ -185,5 +190,8 @@ func TestLoadReadsProviderCacheOverrides(t *testing.T) {
 	}
 	if cfg.MicrocompactBytesThreshold != 8192 {
 		t.Fatalf("MicrocompactBytesThreshold = %d, want %d", cfg.MicrocompactBytesThreshold, 8192)
+	}
+	if cfg.SystemPrompt != "You are the global agent prompt." {
+		t.Fatalf("SystemPrompt = %q, want %q", cfg.SystemPrompt, "You are the global agent prompt.")
 	}
 }

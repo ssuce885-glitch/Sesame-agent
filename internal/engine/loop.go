@@ -364,7 +364,6 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	return totalItems, working, nil
 }
 
-
 func buildToolSchemas(registry *tools.Registry) []model.ToolSchema {
 	if registry == nil {
 		return nil
