@@ -165,6 +165,77 @@ func TestManagerStopsRunningShellTask(t *testing.T) {
 	}
 }
 
+func TestManagerRunsAgentTaskThroughExecutor(t *testing.T) {
+	root := t.TempDir()
+	executor := &fakeAgentExecutor{output: "agent:summarize the workspace"}
+	manager := NewManager(Config{MaxConcurrentTasks: 8, TaskOutputMaxBytes: 1 << 20}, nil, executor)
+
+	task, err := manager.Create(context.Background(), CreateTaskInput{
+		Type:          TaskTypeAgent,
+		Command:       "summarize the workspace",
+		WorkspaceRoot: root,
+		Start:         true,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	waitForTaskTerminal(t, manager, task.ID, root)
+	output, err := manager.ReadOutput(task.ID, root)
+	if err != nil {
+		t.Fatalf("ReadOutput() error = %v", err)
+	}
+	if output != "agent:summarize the workspace" {
+		t.Fatalf("output = %q, want %q", output, "agent:summarize the workspace")
+	}
+}
+
+func TestManagerRunsRemoteTaskThroughShim(t *testing.T) {
+	root := t.TempDir()
+	shim := filepath.Join(root, "remote-shim.cmd")
+	script := "@echo off\r\necho remote:%~1\r\n"
+	if err := os.WriteFile(shim, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewManager(Config{MaxConcurrentTasks: 8, TaskOutputMaxBytes: 1 << 20}, nil, nil)
+	manager.SetRemoteConfig(RemoteExecutorConfig{ShimCommand: shim, TimeoutSeconds: 30})
+
+	task, err := manager.Create(context.Background(), CreateTaskInput{
+		Type:          TaskTypeRemote,
+		Command:       "deploy now",
+		WorkspaceRoot: root,
+		Start:         true,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	waitForTaskTerminal(t, manager, task.ID, root)
+	output, err := manager.ReadOutput(task.ID, root)
+	if err != nil {
+		t.Fatalf("ReadOutput() error = %v", err)
+	}
+	if !strings.Contains(output, "remote:deploy now") {
+		t.Fatalf("output = %q, want remote command echo", output)
+	}
+}
+
+func TestManagerRejectsRemoteTaskWhenShimMissing(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(Config{MaxConcurrentTasks: 8, TaskOutputMaxBytes: 1 << 20}, nil, nil)
+
+	_, err := manager.Create(context.Background(), CreateTaskInput{
+		Type:          TaskTypeRemote,
+		Command:       "deploy now",
+		WorkspaceRoot: root,
+		Start:         true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("Create() error = %v, want not configured", err)
+	}
+}
+
 func waitForTaskTerminal(t *testing.T, manager *Manager, taskID, workspaceRoot string) {
 	t.Helper()
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,6 +62,7 @@ func (m *Manager) registerDefaultRunners(agentExecutor AgentExecutor) {
 	if agentExecutor != nil {
 		m.runners[TaskTypeAgent] = NewAgentRunner(agentExecutor)
 	}
+	m.runners[TaskTypeRemote] = RemoteRunner{config: m.remote}
 }
 
 func (m *Manager) Create(_ context.Context, in CreateTaskInput) (Task, error) {
@@ -224,6 +226,20 @@ func (m *Manager) ReadOutput(taskID, workspaceRoot string) (string, error) {
 	return task.Output, nil
 }
 
+func (m *Manager) SetRemoteConfig(cfg RemoteExecutorConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.remote = cfg
+	if runner, ok := m.runners[TaskTypeRemote]; ok {
+		remoteRunner, ok := runner.(RemoteRunner)
+		if ok {
+			remoteRunner.config = cfg
+			m.runners[TaskTypeRemote] = remoteRunner
+		}
+	}
+}
+
 func (m *Manager) Append(taskID string, chunk []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -307,6 +323,9 @@ func (m *Manager) startLocked(task *Task) error {
 	runner, ok := m.runners[task.Type]
 	if !ok {
 		return fmt.Errorf("task type %q is not supported", task.Type)
+	}
+	if remoteRunner, ok := runner.(RemoteRunner); ok && strings.TrimSpace(remoteRunner.config.ShimCommand) == "" {
+		return fmt.Errorf("remote runner is not configured")
 	}
 
 	runCtx, cancel := context.WithCancel(context.Background())

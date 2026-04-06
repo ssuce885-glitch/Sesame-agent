@@ -1,0 +1,44 @@
+package task
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+type RemoteRunner struct {
+	config RemoteExecutorConfig
+}
+
+func (r RemoteRunner) Run(ctx context.Context, task *Task, sink OutputSink) error {
+	if strings.TrimSpace(r.config.ShimCommand) == "" {
+		return fmt.Errorf("remote runner is not configured")
+	}
+
+	runCtx := ctx
+	cancel := func() {}
+	if r.config.TimeoutSeconds > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, time.Duration(r.config.TimeoutSeconds)*time.Second)
+	}
+	defer cancel()
+
+	shimCommand := strings.TrimSpace(r.config.ShimCommand)
+	var cmd *exec.Cmd
+	if info, err := os.Stat(shimCommand); err == nil && !info.IsDir() {
+		cmd = exec.CommandContext(runCtx, shimCommand, task.Command)
+	} else {
+		escapedCommand := strings.ReplaceAll(task.Command, `"`, `""`)
+		command := fmt.Sprintf(`%s "%s"`, shimCommand, escapedCommand)
+		cmd = exec.CommandContext(runCtx, "cmd", "/c", command)
+	}
+	cmd.Dir = task.WorkspaceRoot
+
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		_ = sink.Append(task.ID, output)
+	}
+	return err
+}
