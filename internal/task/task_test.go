@@ -99,6 +99,90 @@ func TestManagerReloadMarksRunningTasksFailed(t *testing.T) {
 	}
 }
 
+func TestManagerRunsShellTaskAndCapturesOutput(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(Config{MaxConcurrentTasks: 8, TaskOutputMaxBytes: 1 << 20}, nil, nil)
+
+	task, err := manager.Create(context.Background(), CreateTaskInput{
+		Type:          TaskTypeShell,
+		Command:       "echo shell-task",
+		WorkspaceRoot: root,
+		Start:         true,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	waitForTaskTerminal(t, manager, task.ID, root)
+	got, ok, err := manager.Get(task.ID, root)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("Get() ok = false, want true")
+	}
+	if got.Status != TaskStatusCompleted {
+		t.Fatalf("Status = %q, want %q", got.Status, TaskStatusCompleted)
+	}
+
+	output, err := manager.ReadOutput(task.ID, root)
+	if err != nil {
+		t.Fatalf("ReadOutput() error = %v", err)
+	}
+	if !strings.Contains(output, "shell-task") {
+		t.Fatalf("output = %q, want shell-task", output)
+	}
+}
+
+func TestManagerStopsRunningShellTask(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(Config{MaxConcurrentTasks: 8, TaskOutputMaxBytes: 1 << 20}, nil, nil)
+
+	task, err := manager.Create(context.Background(), CreateTaskInput{
+		Type:          TaskTypeShell,
+		Command:       "ping -n 6 127.0.0.1 > nul",
+		WorkspaceRoot: root,
+		Start:         true,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := manager.Stop(task.ID, root); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	waitForTaskTerminal(t, manager, task.ID, root)
+
+	got, ok, err := manager.Get(task.ID, root)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("Get() ok = false, want true")
+	}
+	if got.Status != TaskStatusStopped {
+		t.Fatalf("Status = %q, want %q", got.Status, TaskStatusStopped)
+	}
+}
+
+func waitForTaskTerminal(t *testing.T, manager *Manager, taskID, workspaceRoot string) {
+	t.Helper()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, ok, err := manager.Get(taskID, workspaceRoot)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if ok && isTerminalStatus(got.Status) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatalf("task %q did not reach terminal state", taskID)
+}
+
 func TestStatusTransitionHelpers(t *testing.T) {
 	t.Run("terminal status detection", func(t *testing.T) {
 		if !isTerminalStatus(TaskStatusCompleted) {
