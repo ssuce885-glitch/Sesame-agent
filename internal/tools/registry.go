@@ -18,6 +18,8 @@ func NewRegistry() *Registry {
 		tools:       make(map[string]Tool),
 		definitions: make(map[string]Definition),
 	}
+	r.Register(enterPlanModeTool{})
+	r.Register(exitPlanModeTool{})
 	r.Register(fileReadTool{})
 	r.Register(fileWriteTool{})
 	r.Register(fileEditTool{})
