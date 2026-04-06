@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
+	"go-agent/internal/runtimegraph"
+	"go-agent/internal/store/sqlite"
 	"go-agent/internal/task"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
@@ -261,6 +264,68 @@ func TestRunTurnPassesTaskManagerIntoToolExecContext(t *testing.T) {
 	}
 	if capturingTool.gotManager != manager {
 		t.Fatalf("tool exec manager = %p, want %p", capturingTool.gotManager, manager)
+	}
+}
+
+func TestRunTurnSharesMutableTurnContextAcrossToolExecutions(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	service := runtimegraph.NewService(store)
+	capturingTool := &runtimeContextCapturingTool{}
+	registry := tools.NewRegistry()
+	registry.Register(capturingTool)
+
+	runner := New(model.NewFakeStreaming([][]model.StreamEvent{
+		{
+			{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+				ID:    "call_1",
+				Name:  "glob",
+				Input: map[string]any{"pattern": "first"},
+			}},
+			{Kind: model.StreamEventMessageEnd},
+		},
+		{
+			{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+				ID:    "call_2",
+				Name:  "glob",
+				Input: map[string]any{"pattern": "second"},
+			}},
+			{Kind: model.StreamEventMessageEnd},
+		},
+		{
+			{Kind: model.StreamEventTextDelta, TextDelta: "done"},
+			{Kind: model.StreamEventMessageEnd},
+		},
+	}), registry, permissions.NewEngine(), nil, nil, nil, 8)
+	runner.SetRuntimeService(service)
+
+	err = runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_runtime_ctx", WorkspaceRoot: t.TempDir()},
+		Turn:    types.Turn{ID: "turn_runtime_ctx", SessionID: "sess_runtime_ctx", UserMessage: "capture runtime context"},
+		Sink:    &recordingSink{},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if len(capturingTool.turnContexts) != 2 {
+		t.Fatalf("len(turnContexts) = %d, want 2", len(capturingTool.turnContexts))
+	}
+	if capturingTool.turnContexts[0] != capturingTool.turnContexts[1] {
+		t.Fatal("turn contexts differ, want the same pointer shared across tool executions")
+	}
+	if capturingTool.turnContexts[0].CurrentSessionID != "sess_runtime_ctx" || capturingTool.turnContexts[0].CurrentTurnID != "turn_runtime_ctx" {
+		t.Fatalf("turn context = %#v, want current session/turn ids populated", capturingTool.turnContexts[0])
+	}
+	if capturingTool.seenRunIDs[0] != "" || capturingTool.seenRunIDs[1] != "run_from_first" {
+		t.Fatalf("seen run ids = %v, want empty then propagated run_from_first", capturingTool.seenRunIDs)
+	}
+	if len(capturingTool.runtimeServices) != 2 || capturingTool.runtimeServices[0] != service || capturingTool.runtimeServices[1] != service {
+		t.Fatalf("runtime services = %#v, want injected runtime service on both tool calls", capturingTool.runtimeServices)
 	}
 }
 
@@ -1263,6 +1328,46 @@ func (t *taskManagerCapturingTool) IsConcurrencySafe() bool { return true }
 
 func (t *taskManagerCapturingTool) Execute(_ context.Context, _ tools.Call, execCtx tools.ExecContext) (tools.Result, error) {
 	t.gotManager = execCtx.TaskManager
+	return tools.Result{Text: "ok"}, nil
+}
+
+type runtimeContextCapturingTool struct {
+	turnContexts    []*runtimegraph.TurnContext
+	seenRunIDs      []string
+	runtimeServices []*runtimegraph.Service
+}
+
+func (t *runtimeContextCapturingTool) Definition() tools.Definition {
+	return tools.Definition{
+		Name:        "glob",
+		Description: "capture runtimegraph wiring",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"pattern": map[string]any{"type": "string"},
+			},
+		},
+	}
+}
+
+func (t *runtimeContextCapturingTool) IsConcurrencySafe() bool { return true }
+
+func (t *runtimeContextCapturingTool) Execute(_ context.Context, call tools.Call, execCtx tools.ExecContext) (tools.Result, error) {
+	if execCtx.RuntimeService == nil {
+		return tools.Result{}, fmt.Errorf("runtime service missing")
+	}
+	if execCtx.TurnContext == nil {
+		return tools.Result{}, fmt.Errorf("turn context missing")
+	}
+
+	t.runtimeServices = append(t.runtimeServices, execCtx.RuntimeService)
+	t.turnContexts = append(t.turnContexts, execCtx.TurnContext)
+	t.seenRunIDs = append(t.seenRunIDs, execCtx.TurnContext.CurrentRunID)
+
+	if call.StringInput("pattern") == "first" {
+		execCtx.TurnContext.CurrentRunID = "run_from_first"
+	}
+
 	return tools.Result{Text: "ok"}, nil
 }
 

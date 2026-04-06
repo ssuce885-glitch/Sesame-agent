@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"go-agent/internal/permissions"
+	"go-agent/internal/runtimegraph"
+	"go-agent/internal/store/sqlite"
 	"go-agent/internal/task"
 )
 
@@ -85,12 +87,12 @@ func TestFileReadToolRespectsWorkspaceBoundary(t *testing.T) {
 	}
 }
 
-func TestRegistryDefinitionsExposePhase2ToolSchemas(t *testing.T) {
+func TestRegistryDefinitionsExposePhase3PlanModeSchemas(t *testing.T) {
 	registry := NewRegistry()
 
 	defs := registry.Definitions()
-	if len(defs) != 14 {
-		t.Fatalf("len(Definitions) = %d, want 14", len(defs))
+	if len(defs) != 16 {
+		t.Fatalf("len(Definitions) = %d, want 16", len(defs))
 	}
 
 	gotNames := make([]string, 0, len(defs))
@@ -104,6 +106,7 @@ func TestRegistryDefinitionsExposePhase2ToolSchemas(t *testing.T) {
 		}
 	}
 	wantNames := []string{
+		"enter_plan_mode", "exit_plan_mode",
 		"file_edit", "file_read", "file_write", "glob", "grep",
 		"notebook_edit", "shell_command",
 		"task_create", "task_get", "task_list", "task_output", "task_stop", "task_update",
@@ -113,7 +116,7 @@ func TestRegistryDefinitionsExposePhase2ToolSchemas(t *testing.T) {
 		t.Fatalf("Definitions() names = %v, want %v", gotNames, wantNames)
 	}
 
-	requireSchemaFields := func(name string, required []string, props ...string) {
+	requireSchemaFields := func(name string, required []string, props ...string) Definition {
 		t.Helper()
 		for _, def := range defs {
 			if def.Name != name {
@@ -131,11 +134,14 @@ func TestRegistryDefinitionsExposePhase2ToolSchemas(t *testing.T) {
 					t.Fatalf("definition %q missing property %q", name, prop)
 				}
 			}
-			return
+			return def
 		}
 		t.Fatalf("missing definition %q", name)
+		return Definition{}
 	}
 
+	requireSchemaFields("enter_plan_mode", []string{"plan_file"}, "plan_file")
+	exitDef := requireSchemaFields("exit_plan_mode", []string{}, "state")
 	requireSchemaFields("file_read", []string{"path"}, "path")
 	requireSchemaFields("file_write", []string{"path", "content"}, "path", "content")
 	requireSchemaFields("file_edit", []string{"file_path", "old_string", "new_string"}, "file_path", "old_string", "new_string", "replace_all")
@@ -150,6 +156,95 @@ func TestRegistryDefinitionsExposePhase2ToolSchemas(t *testing.T) {
 	requireSchemaFields("task_output", []string{"task_id"}, "task_id")
 	requireSchemaFields("task_stop", []string{"task_id"}, "task_id")
 	requireSchemaFields("task_update", []string{"task_id"}, "task_id", "status", "description")
+
+	stateProp := exitDef.InputSchema["properties"].(map[string]any)["state"].(map[string]any)
+	gotEnum, _ := stateProp["enum"].([]string)
+	wantEnum := []string{"completed", "approved", "failed"}
+	if !reflect.DeepEqual(gotEnum, wantEnum) {
+		t.Fatalf("exit_plan_mode enum = %v, want %v", gotEnum, wantEnum)
+	}
+}
+
+func TestPlanModeToolsRequireRuntimeServiceAndTurnContext(t *testing.T) {
+	registry := NewRegistry()
+	_, err := registry.Execute(context.Background(), Call{
+		Name:  "enter_plan_mode",
+		Input: map[string]any{"plan_file": "docs/superpowers/plans/demo.md"},
+	}, ExecContext{
+		WorkspaceRoot:    t.TempDir(),
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime service is not configured") {
+		t.Fatalf("enter_plan_mode error = %v, want runtime service is not configured", err)
+	}
+
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	_, err = registry.Execute(context.Background(), Call{
+		Name:  "enter_plan_mode",
+		Input: map[string]any{"plan_file": "docs/superpowers/plans/demo.md"},
+	}, ExecContext{
+		WorkspaceRoot:    t.TempDir(),
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+		RuntimeService:   runtimegraph.NewService(store),
+	})
+	if err == nil || !strings.Contains(err.Error(), "turn runtime context is not configured") {
+		t.Fatalf("enter_plan_mode missing turn context error = %v, want turn runtime context is not configured", err)
+	}
+}
+
+func TestPlanModeToolsDriveLifecycle(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	service := runtimegraph.NewService(store)
+	registry := NewRegistry()
+	turnCtx := &runtimegraph.TurnContext{
+		CurrentSessionID: "sess_plan_tools",
+		CurrentTurnID:    "turn_plan_tools",
+	}
+
+	created, err := registry.Execute(context.Background(), Call{
+		Name:  "enter_plan_mode",
+		Input: map[string]any{"plan_file": "docs/superpowers/plans/phase3.md"},
+	}, ExecContext{
+		WorkspaceRoot:    t.TempDir(),
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+		RuntimeService:   service,
+		TurnContext:      turnCtx,
+	})
+	if err != nil {
+		t.Fatalf("enter_plan_mode error = %v", err)
+	}
+	if !strings.Contains(created.Text, `"state": "active"`) {
+		t.Fatalf("enter_plan_mode result = %q, want active payload", created.Text)
+	}
+	if turnCtx.CurrentRunID == "" {
+		t.Fatal("TurnContext.CurrentRunID = empty, want lazy-created run id")
+	}
+
+	exited, err := registry.Execute(context.Background(), Call{
+		Name:  "exit_plan_mode",
+		Input: map[string]any{"state": "approved"},
+	}, ExecContext{
+		WorkspaceRoot:    t.TempDir(),
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+		RuntimeService:   service,
+		TurnContext:      turnCtx,
+	})
+	if err != nil {
+		t.Fatalf("exit_plan_mode error = %v", err)
+	}
+	if !strings.Contains(exited.Text, `"state": "approved"`) {
+		t.Fatalf("exit_plan_mode result = %q, want approved payload", exited.Text)
+	}
 }
 
 func TestTodoWriteToolPersistsWorkspaceTodos(t *testing.T) {

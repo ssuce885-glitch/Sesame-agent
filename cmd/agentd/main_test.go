@@ -15,6 +15,7 @@ import (
 	"go-agent/internal/engine"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
+	"go-agent/internal/runtimegraph"
 	sessionstate "go-agent/internal/session"
 	"go-agent/internal/store/sqlite"
 	"go-agent/internal/tools"
@@ -237,6 +238,43 @@ func TestBuildAgentTaskExecutorRunsPromptThroughEngine(t *testing.T) {
 	lastRequest := modelClient.LastRequest()
 	if lastRequest.UserMessage != "summarize workspace" {
 		t.Fatalf("model request message = %q, want %q", lastRequest.UserMessage, "summarize workspace")
+	}
+}
+
+func TestBuildAgentTaskExecutorRunsPromptThroughEngineWithRuntimegraphService(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	modelClient := model.NewFakeStreaming([][]model.StreamEvent{{
+		{Kind: model.StreamEventTextDelta, TextDelta: "agent reply"},
+		{Kind: model.StreamEventMessageEnd},
+	}})
+	runner := engine.New(
+		modelClient,
+		tools.NewRegistry(),
+		permissions.NewEngine("trusted_local"),
+		nil,
+		nil,
+		nil,
+		8,
+	)
+	runner.SetRuntimeService(runtimegraph.NewService(store))
+
+	executor := buildAgentTaskExecutor(runner)
+	if executor == nil {
+		t.Fatal("buildAgentTaskExecutor() = nil, want executor")
+	}
+
+	var output bytes.Buffer
+	workspace := t.TempDir()
+	if err := executor.RunTask(context.Background(), workspace, "summarize workspace", &output); err != nil {
+		t.Fatalf("RunTask() error = %v", err)
+	}
+	if output.String() != "agent reply" {
+		t.Fatalf("RunTask() output = %q, want %q", output.String(), "agent reply")
 	}
 }
 
