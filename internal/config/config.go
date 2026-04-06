@@ -3,9 +3,17 @@ package config
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
+
+type CLIStartupOverrides struct {
+	DataDir        string
+	Addr           string
+	Model          string
+	PermissionMode string
+}
 
 type Config struct {
 	Addr                         string
@@ -88,6 +96,35 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+func ResolveCLIStartupConfig(overrides CLIStartupOverrides) (Config, error) {
+	uc, err := loadUserConfig()
+	if err != nil {
+		return Config{}, err
+	}
+
+	dataDir, err := resolveCLIDataDir(strings.TrimSpace(overrides.DataDir))
+	if err != nil {
+		return Config{}, err
+	}
+
+	openAIModelFallback := uc.OpenAI.Model
+	model := firstNonEmpty(
+		strings.TrimSpace(overrides.Model),
+		envOrDefaultWithFallback("AGENTD_MODEL", openAIModelFallback, ""),
+	)
+	if model == "" {
+		model = envOrDefaultWithFallback("ANTHROPIC_MODEL", uc.Anthropic.Model, "claude-sonnet-4-5")
+	}
+
+	return Config{
+		Addr:              firstNonEmpty(strings.TrimSpace(overrides.Addr), envOrDefaultWithFallback("AGENTD_ADDR", uc.Listen.Addr, "127.0.0.1:4317")),
+		DataDir:           dataDir,
+		ModelProvider:     envOrDefaultWithFallback("AGENTD_MODEL_PROVIDER", uc.Provider, "anthropic"),
+		Model:             model,
+		PermissionProfile: firstNonEmpty(strings.TrimSpace(overrides.PermissionMode), envOrDefault("AGENTD_PERMISSION_PROFILE", "read_only")),
+	}, nil
+}
+
 func (c Config) ResolveSystemPrompt() (string, error) {
 	if strings.TrimSpace(c.SystemPrompt) != "" {
 		return strings.TrimSpace(c.SystemPrompt), nil
@@ -148,4 +185,28 @@ func intEnvOrDefaultWithFallback(key string, fileFallback int, hardDefault int) 
 		return fileFallback
 	}
 	return hardDefault
+}
+
+func resolveCLIDataDir(explicit string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	if env := envOrDefault("AGENTD_DATA_DIR", ""); env != "" {
+		return env, nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".agentd"), nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

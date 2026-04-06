@@ -410,3 +410,70 @@ func TestResolveSystemPrompt(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveCLIStartupConfigUsesDefaultDataDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("AGENTD_DATA_DIR", "")
+	t.Setenv("AGENTD_ADDR", "")
+	t.Setenv("AGENTD_MODEL_PROVIDER", "")
+	t.Setenv("AGENTD_MODEL", "")
+	t.Setenv("AGENTD_PERMISSION_PROFILE", "")
+
+	cfg, err := ResolveCLIStartupConfig(CLIStartupOverrides{})
+	if err != nil {
+		t.Fatalf("ResolveCLIStartupConfig() error = %v", err)
+	}
+
+	want := filepath.Join(home, ".agentd")
+	if cfg.DataDir != want {
+		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, want)
+	}
+	if cfg.Addr != "127.0.0.1:4317" {
+		t.Fatalf("Addr = %q, want %q", cfg.Addr, "127.0.0.1:4317")
+	}
+	if cfg.ModelProvider != "anthropic" {
+		t.Fatalf("ModelProvider = %q, want %q", cfg.ModelProvider, "anthropic")
+	}
+	if cfg.Model != "claude-sonnet-4-5" {
+		t.Fatalf("Model = %q, want %q", cfg.Model, "claude-sonnet-4-5")
+	}
+	if cfg.PermissionProfile != "read_only" {
+		t.Fatalf("PermissionProfile = %q, want %q", cfg.PermissionProfile, "read_only")
+	}
+}
+
+func TestResolveCLIStartupConfigPrefersExplicitOverrides(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("AGENTD_DATA_DIR", "")
+	t.Setenv("AGENTD_ADDR", "")
+	t.Setenv("AGENTD_MODEL_PROVIDER", "")
+	t.Setenv("AGENTD_MODEL", "")
+	t.Setenv("AGENTD_PERMISSION_PROFILE", "")
+
+	cfg, err := ResolveCLIStartupConfig(CLIStartupOverrides{
+		DataDir:        "E:/runtime",
+		Addr:           "127.0.0.1:9000",
+		Model:          "gpt-5.4",
+		PermissionMode: "trusted_local",
+	})
+	if err != nil {
+		t.Fatalf("ResolveCLIStartupConfig() error = %v", err)
+	}
+
+	if cfg.DataDir != "E:/runtime" {
+		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "E:/runtime")
+	}
+	if cfg.Addr != "127.0.0.1:9000" {
+		t.Fatalf("Addr = %q, want %q", cfg.Addr, "127.0.0.1:9000")
+	}
+	if cfg.Model != "gpt-5.4" {
+		t.Fatalf("Model = %q, want %q", cfg.Model, "gpt-5.4")
+	}
+	if cfg.PermissionProfile != "trusted_local" {
+		t.Fatalf("PermissionProfile = %q, want %q", cfg.PermissionProfile, "trusted_local")
+	}
+}
