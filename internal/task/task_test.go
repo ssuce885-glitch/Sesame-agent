@@ -8,15 +8,94 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestManagerRegistersTaskSession(t *testing.T) {
-	manager := NewManager()
-	task := manager.Create("sess_parent", "D:/work/demo")
-	if task.ParentSessionID != "sess_parent" {
-		t.Fatalf("ParentSessionID = %q, want %q", task.ParentSessionID, "sess_parent")
+func TestManagerCreateListGetAndUpdateTask(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(Config{MaxConcurrentTasks: 8, TaskOutputMaxBytes: 1 << 20}, nil, nil)
+
+	task, err := manager.Create(context.Background(), CreateTaskInput{
+		Type:          TaskTypeShell,
+		Command:       "echo hello",
+		Description:   "run echo",
+		WorkspaceRoot: root,
+		Start:         false,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if task.Status != TaskStatusPending {
+		t.Fatalf("Status = %q, want %q", task.Status, TaskStatusPending)
+	}
+
+	listed, err := manager.List(root)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != task.ID {
+		t.Fatalf("List() = %#v, want task %q", listed, task.ID)
+	}
+
+	got, ok, err := manager.Get(task.ID, root)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !ok || got.ID != task.ID {
+		t.Fatalf("Get() = %#v, %v, want task %q", got, ok, task.ID)
+	}
+
+	if err := manager.Update(task.ID, root, UpdateTaskInput{
+		Status:      TaskStatusStopped,
+		Description: "stopped before start",
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	updated, ok, err := manager.Get(task.ID, root)
+	if err != nil {
+		t.Fatalf("Get() after update error = %v", err)
+	}
+	if !ok {
+		t.Fatal("Get() after update ok = false, want true")
+	}
+	if updated.Status != TaskStatusStopped {
+		t.Fatalf("updated.Status = %q, want %q", updated.Status, TaskStatusStopped)
+	}
+	if updated.Description != "stopped before start" {
+		t.Fatalf("updated.Description = %q, want %q", updated.Description, "stopped before start")
+	}
+	if updated.EndTime == nil {
+		t.Fatal("updated.EndTime = nil, want terminal timestamp")
+	}
+}
+
+func TestManagerReloadMarksRunningTasksFailed(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"tasks":[{"id":"task_1","type":"shell","status":"running","command":"echo hi","workspace_root":"` + filepath.ToSlash(root) + `","start_time":"2026-04-06T10:00:00Z"}]}`
+	if err := os.WriteFile(filepath.Join(root, ".claude", "tasks.json"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewManager(Config{MaxConcurrentTasks: 8, TaskOutputMaxBytes: 1 << 20}, nil, nil)
+
+	task, ok, err := manager.Get("task_1", root)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("Get() ok = false, want true")
+	}
+	if task.Status != TaskStatusFailed {
+		t.Fatalf("Status = %q, want %q", task.Status, TaskStatusFailed)
+	}
+	if !strings.Contains(task.Error, "process restart") {
+		t.Fatalf("Error = %q, want restart marker", task.Error)
 	}
 }
 
