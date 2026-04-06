@@ -47,6 +47,13 @@ func (e *Engine) Decide(toolName string) Decision {
 		allowed["file_edit"] = struct{}{}
 		allowed["notebook_edit"] = struct{}{}
 		allowed["shell_command"] = struct{}{}
+		allowed["todo_write"] = struct{}{}
+		allowed["task_create"] = struct{}{}
+		allowed["task_get"] = struct{}{}
+		allowed["task_list"] = struct{}{}
+		allowed["task_output"] = struct{}{}
+		allowed["task_stop"] = struct{}{}
+		allowed["task_update"] = struct{}{}
 	case "", "read_only":
 		// Read-only profile intentionally keeps the base allow-list only.
 	default:

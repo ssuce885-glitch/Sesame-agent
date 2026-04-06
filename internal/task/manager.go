@@ -226,6 +226,19 @@ func (m *Manager) ReadOutput(taskID, workspaceRoot string) (string, error) {
 	return task.Output, nil
 }
 
+func (m *Manager) WriteTodos(workspaceRoot string, todos []TodoItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	workspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
+	state, err := m.ensureWorkspaceLocked(workspaceRoot)
+	if err != nil {
+		return err
+	}
+
+	return writeTodosFile(state.todosFile, todos)
+}
+
 func (m *Manager) SetRemoteConfig(cfg RemoteExecutorConfig) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

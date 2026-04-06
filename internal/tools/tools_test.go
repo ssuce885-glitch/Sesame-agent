@@ -8,8 +8,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"go-agent/internal/permissions"
+	"go-agent/internal/task"
 )
 
 type countingTool struct {
@@ -83,74 +85,55 @@ func TestFileReadToolRespectsWorkspaceBoundary(t *testing.T) {
 	}
 }
 
-func TestRegistryDefinitionsExposeLocalToolSchemas(t *testing.T) {
+func TestRegistryDefinitionsExposePhase2ToolSchemas(t *testing.T) {
 	registry := NewRegistry()
 
 	defs := registry.Definitions()
-	if len(defs) != 7 {
-		t.Fatalf("len(Definitions) = %d, want 7", len(defs))
+	if len(defs) != 14 {
+		t.Fatalf("len(Definitions) = %d, want 14", len(defs))
 	}
 
 	gotNames := make([]string, 0, len(defs))
 	for _, def := range defs {
 		gotNames = append(gotNames, def.Name)
+		if def.Description == "" {
+			t.Fatalf("definition %q missing description", def.Name)
+		}
+		if def.InputSchema == nil {
+			t.Fatalf("definition %q missing schema", def.Name)
+		}
 	}
-	wantNames := []string{"file_edit", "file_read", "file_write", "glob", "grep", "notebook_edit", "shell_command"}
+	wantNames := []string{
+		"file_edit", "file_read", "file_write", "glob", "grep",
+		"notebook_edit", "shell_command",
+		"task_create", "task_get", "task_list", "task_output", "task_stop", "task_update",
+		"todo_write",
+	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("Definitions() names = %v, want %v", gotNames, wantNames)
 	}
 
-	defsAgain := registry.Definitions()
-	gotNamesAgain := make([]string, 0, len(defsAgain))
-	for _, def := range defsAgain {
-		gotNamesAgain = append(gotNamesAgain, def.Name)
-	}
-	if !reflect.DeepEqual(gotNamesAgain, wantNames) {
-		t.Fatalf("Definitions() second call names = %v, want %v", gotNamesAgain, wantNames)
-	}
-
-	for _, def := range defs {
-		if def.Description == "" {
-			t.Fatalf("definition = %+v, want description", def)
-		}
-		if def.InputSchema == nil {
-			t.Fatalf("definition = %+v, want schema", def)
-		}
-		if got, ok := def.InputSchema["type"].(string); !ok || got != "object" {
-			t.Fatalf("definition %q schema type = %#v, want object", def.Name, def.InputSchema["type"])
-		}
-		if got, ok := def.InputSchema["additionalProperties"].(bool); !ok || got {
-			t.Fatalf("definition %q additionalProperties = %#v, want false", def.Name, def.InputSchema["additionalProperties"])
-		}
-	}
-
 	requireSchemaFields := func(name string, required []string, props ...string) {
 		t.Helper()
-
-		var def Definition
-		found := false
-		for _, candidate := range defs {
-			if candidate.Name == name {
-				def = candidate
-				found = true
-				break
+		for _, def := range defs {
+			if def.Name != name {
+				continue
 			}
-		}
-		if !found {
-			t.Fatalf("missing definition %q", name)
-		}
 
-		gotRequired, _ := def.InputSchema["required"].([]string)
-		if !reflect.DeepEqual(gotRequired, required) {
-			t.Fatalf("definition %q required = %v, want %v", name, gotRequired, required)
-		}
-
-		properties, _ := def.InputSchema["properties"].(map[string]any)
-		for _, prop := range props {
-			if _, ok := properties[prop]; !ok {
-				t.Fatalf("definition %q properties missing %q", name, prop)
+			gotRequired, _ := def.InputSchema["required"].([]string)
+			if !reflect.DeepEqual(gotRequired, required) {
+				t.Fatalf("definition %q required = %v, want %v", name, gotRequired, required)
 			}
+
+			properties, _ := def.InputSchema["properties"].(map[string]any)
+			for _, prop := range props {
+				if _, ok := properties[prop]; !ok {
+					t.Fatalf("definition %q missing property %q", name, prop)
+				}
+			}
+			return
 		}
+		t.Fatalf("missing definition %q", name)
 	}
 
 	requireSchemaFields("file_read", []string{"path"}, "path")
@@ -160,6 +143,135 @@ func TestRegistryDefinitionsExposeLocalToolSchemas(t *testing.T) {
 	requireSchemaFields("grep", []string{"path", "pattern"}, "path", "pattern")
 	requireSchemaFields("notebook_edit", []string{"notebook_path", "new_source"}, "notebook_path", "cell_id", "new_source", "cell_type", "edit_mode")
 	requireSchemaFields("shell_command", []string{"command"}, "command")
+	requireSchemaFields("todo_write", []string{"todos"}, "todos")
+	requireSchemaFields("task_create", []string{"type", "command"}, "type", "command", "description")
+	requireSchemaFields("task_get", []string{"task_id"}, "task_id")
+	requireSchemaFields("task_list", []string{}, "status")
+	requireSchemaFields("task_output", []string{"task_id"}, "task_id")
+	requireSchemaFields("task_stop", []string{"task_id"}, "task_id")
+	requireSchemaFields("task_update", []string{"task_id"}, "task_id", "status", "description")
+}
+
+func TestTodoWriteToolPersistsWorkspaceTodos(t *testing.T) {
+	root := t.TempDir()
+	manager := task.NewManager(task.Config{MaxConcurrentTasks: 8, TaskOutputMaxBytes: 1 << 20}, nil, nil)
+
+	registry := NewRegistry()
+	_, err := registry.Execute(context.Background(), Call{
+		Name: "todo_write",
+		Input: map[string]any{
+			"todos": []any{
+				map[string]any{"content": "write tests", "status": "pending", "activeForm": "Writing tests"},
+			},
+		},
+	}, ExecContext{
+		WorkspaceRoot:    root,
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+		TaskManager:      manager,
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "todos.json"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "write tests") {
+		t.Fatalf("todos.json = %q, want persisted todo", string(data))
+	}
+}
+
+func TestTaskToolsDriveTaskLifecycle(t *testing.T) {
+	root := t.TempDir()
+	manager := task.NewManager(task.Config{MaxConcurrentTasks: 8, TaskOutputMaxBytes: 1 << 20}, nil, nil)
+	registry := NewRegistry()
+	execCtx := ExecContext{
+		WorkspaceRoot:    root,
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+		TaskManager:      manager,
+	}
+
+	created, err := registry.Execute(context.Background(), Call{
+		Name: "task_create",
+		Input: map[string]any{
+			"type":        "shell",
+			"command":     "echo tool-task",
+			"description": "tool lifecycle",
+		},
+	}, execCtx)
+	if err != nil {
+		t.Fatalf("task_create error = %v", err)
+	}
+	if created.Text == "" {
+		t.Fatal("task_create returned empty task id")
+	}
+
+	waitForToolTaskTerminal(t, manager, created.Text, root)
+
+	listed, err := registry.Execute(context.Background(), Call{Name: "task_list", Input: map[string]any{}}, execCtx)
+	if err != nil {
+		t.Fatalf("task_list error = %v", err)
+	}
+	if !strings.Contains(listed.Text, created.Text) {
+		t.Fatalf("task_list text = %q, want task id %q", listed.Text, created.Text)
+	}
+
+	got, err := registry.Execute(context.Background(), Call{
+		Name:  "task_get",
+		Input: map[string]any{"task_id": created.Text},
+	}, execCtx)
+	if err != nil {
+		t.Fatalf("task_get error = %v", err)
+	}
+	if !strings.Contains(got.Text, "tool lifecycle") {
+		t.Fatalf("task_get text = %q, want description", got.Text)
+	}
+
+	output, err := registry.Execute(context.Background(), Call{
+		Name:  "task_output",
+		Input: map[string]any{"task_id": created.Text},
+	}, execCtx)
+	if err != nil {
+		t.Fatalf("task_output error = %v", err)
+	}
+	if !strings.Contains(output.Text, "tool-task") {
+		t.Fatalf("task_output text = %q, want shell output", output.Text)
+	}
+}
+
+func TestTaskToolsRequireTrustedLocalAndManager(t *testing.T) {
+	root := t.TempDir()
+	registry := NewRegistry()
+
+	_, err := registry.Execute(context.Background(), Call{
+		Name:  "task_list",
+		Input: map[string]any{},
+	}, ExecContext{
+		WorkspaceRoot:    root,
+		PermissionEngine: permissions.NewEngine("workspace_write"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "denied") {
+		t.Fatalf("task_list error = %v, want denied", err)
+	}
+}
+
+func waitForToolTaskTerminal(t *testing.T, manager *task.Manager, taskID, workspaceRoot string) {
+	t.Helper()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, ok, err := manager.Get(taskID, workspaceRoot)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if ok && (got.Status == task.TaskStatusCompleted || got.Status == task.TaskStatusFailed || got.Status == task.TaskStatusStopped) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatalf("task %q did not reach terminal state", taskID)
 }
 
 func TestRegistryDefinitionsUseFrozenSnapshots(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
+	"go-agent/internal/task"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
 )
@@ -225,6 +226,41 @@ func TestRunTurnExecutesToolAfterToolCallEnd(t *testing.T) {
 	}
 	if got.IsError {
 		t.Fatal("tool result is_error = true, want false")
+	}
+}
+
+func TestRunTurnPassesTaskManagerIntoToolExecContext(t *testing.T) {
+	capturingTool := &taskManagerCapturingTool{}
+	registry := tools.NewRegistry()
+	registry.Register(capturingTool)
+
+	manager := task.NewManager(task.Config{MaxConcurrentTasks: 8, TaskOutputMaxBytes: 1 << 20}, nil, nil)
+	runner := New(model.NewFakeStreaming([][]model.StreamEvent{
+		{
+			{Kind: model.StreamEventToolCallEnd, ToolCall: model.ToolCallChunk{
+				ID:    "call_1",
+				Name:  "glob",
+				Input: map[string]any{"pattern": "*"},
+			}},
+			{Kind: model.StreamEventMessageEnd},
+		},
+		{
+			{Kind: model.StreamEventTextDelta, TextDelta: "captured"},
+			{Kind: model.StreamEventMessageEnd},
+		},
+	}), registry, permissions.NewEngine(), nil, nil, nil, 8)
+	runner.SetTaskManager(manager)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_1", WorkspaceRoot: t.TempDir()},
+		Turn:    types.Turn{ID: "turn_1", SessionID: "sess_1", UserMessage: "capture manager"},
+		Sink:    &recordingSink{},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if capturingTool.gotManager != manager {
+		t.Fatalf("tool exec manager = %p, want %p", capturingTool.gotManager, manager)
 	}
 }
 
@@ -1204,6 +1240,30 @@ func (c *recordingStreamingClient) Stream(_ context.Context, req model.Request) 
 
 func (c *recordingStreamingClient) Capabilities() model.ProviderCapabilities {
 	return c.capabilities
+}
+
+type taskManagerCapturingTool struct {
+	gotManager *task.Manager
+}
+
+func (t *taskManagerCapturingTool) Definition() tools.Definition {
+	return tools.Definition{
+		Name:        "glob",
+		Description: "capture task manager",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"pattern": map[string]any{"type": "string"},
+			},
+		},
+	}
+}
+
+func (t *taskManagerCapturingTool) IsConcurrencySafe() bool { return true }
+
+func (t *taskManagerCapturingTool) Execute(_ context.Context, _ tools.Call, execCtx tools.ExecContext) (tools.Result, error) {
+	t.gotManager = execCtx.TaskManager
+	return tools.Result{Text: "ok"}, nil
 }
 
 type recordingSink struct {

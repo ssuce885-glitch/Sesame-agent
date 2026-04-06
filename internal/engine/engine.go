@@ -6,6 +6,7 @@ import (
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
+	"go-agent/internal/task"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
 )
@@ -35,17 +36,18 @@ type ConversationStore interface {
 }
 
 type Engine struct {
-	model        model.StreamingClient
-	registry     *tools.Registry
-	permission   *permissions.Engine
-	store        ConversationStore
-	ctxManager   *contextstate.Manager
-	compactor    contextstate.Compactor
-	runtime      *contextstate.Runtime
+	model                   model.StreamingClient
+	registry                *tools.Registry
+	permission              *permissions.Engine
+	store                   ConversationStore
+	ctxManager              *contextstate.Manager
+	compactor               contextstate.Compactor
+	runtime                 *contextstate.Runtime
 	meta                    RuntimeMetadata
 	basePrompt              string
 	maxWorkspacePromptBytes int
 	maxToolSteps            int
+	taskManager             *task.Manager
 }
 
 func New(
@@ -113,4 +115,11 @@ func (e *Engine) SetMaxWorkspacePromptBytes(n int) {
 		return
 	}
 	e.maxWorkspacePromptBytes = n
+}
+
+func (e *Engine) SetTaskManager(manager *task.Manager) {
+	if e == nil {
+		return
+	}
+	e.taskManager = manager
 }

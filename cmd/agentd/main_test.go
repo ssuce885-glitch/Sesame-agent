@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	httpapi "go-agent/internal/api/http"
 	"go-agent/internal/config"
 	contextstate "go-agent/internal/context"
+	"go-agent/internal/engine"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	sessionstate "go-agent/internal/session"
@@ -172,6 +174,70 @@ func TestConfigureRuntimeGuardrailsAffectsTools(t *testing.T) {
 			t.Fatalf("len(shell_command output) = %d, want 4", len(result.Text))
 		}
 	})
+}
+
+func TestTaskEventSinkRoutesAssistantDeltaAndTurnFailures(t *testing.T) {
+	var output bytes.Buffer
+	sink := taskEventSink{writer: &output}
+
+	assistantEvent, err := types.NewEvent("sess_1", "turn_1", types.EventAssistantDelta, types.AssistantDeltaPayload{
+		Text: "agent output",
+	})
+	if err != nil {
+		t.Fatalf("NewEvent(assistant.delta) error = %v", err)
+	}
+	if err := sink.Emit(context.Background(), assistantEvent); err != nil {
+		t.Fatalf("Emit(assistant.delta) error = %v", err)
+	}
+	if output.String() != "agent output" {
+		t.Fatalf("assistant output = %q, want %q", output.String(), "agent output")
+	}
+
+	failedEvent, err := types.NewEvent("sess_1", "turn_1", types.EventTurnFailed, types.TurnFailedPayload{
+		Message: "task failed",
+	})
+	if err != nil {
+		t.Fatalf("NewEvent(turn.failed) error = %v", err)
+	}
+	err = sink.Emit(context.Background(), failedEvent)
+	if err == nil || !strings.Contains(err.Error(), "task failed") {
+		t.Fatalf("Emit(turn.failed) error = %v, want task failed", err)
+	}
+}
+
+func TestBuildAgentTaskExecutorRunsPromptThroughEngine(t *testing.T) {
+	modelClient := model.NewFakeStreaming([][]model.StreamEvent{{
+		{Kind: model.StreamEventTextDelta, TextDelta: "agent reply"},
+		{Kind: model.StreamEventMessageEnd},
+	}})
+	runner := engine.New(
+		modelClient,
+		tools.NewRegistry(),
+		permissions.NewEngine("trusted_local"),
+		nil,
+		nil,
+		nil,
+		8,
+	)
+
+	executor := buildAgentTaskExecutor(runner)
+	if executor == nil {
+		t.Fatal("buildAgentTaskExecutor() = nil, want executor")
+	}
+
+	var output bytes.Buffer
+	workspace := t.TempDir()
+	if err := executor.RunTask(context.Background(), workspace, "summarize workspace", &output); err != nil {
+		t.Fatalf("RunTask() error = %v", err)
+	}
+	if output.String() != "agent reply" {
+		t.Fatalf("RunTask() output = %q, want %q", output.String(), "agent reply")
+	}
+
+	lastRequest := modelClient.LastRequest()
+	if lastRequest.UserMessage != "summarize workspace" {
+		t.Fatalf("model request message = %q, want %q", lastRequest.UserMessage, "summarize workspace")
+	}
 }
 
 func TestRecoverRunningTurnsMarksInterruptedOnStartup(t *testing.T) {

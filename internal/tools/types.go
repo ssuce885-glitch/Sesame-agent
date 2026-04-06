@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"go-agent/internal/permissions"
+	"go-agent/internal/task"
 )
 
 type Call struct {
@@ -24,6 +25,7 @@ type Result struct {
 type ExecContext struct {
 	WorkspaceRoot    string
 	PermissionEngine *permissions.Engine
+	TaskManager      *task.Manager
 }
 
 type Tool interface {

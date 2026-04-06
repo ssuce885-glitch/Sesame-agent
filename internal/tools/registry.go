@@ -25,6 +25,13 @@ func NewRegistry() *Registry {
 	r.Register(grepTool{})
 	r.Register(notebookEditTool{})
 	r.Register(shellTool{})
+	r.Register(taskCreateTool{})
+	r.Register(taskGetTool{})
+	r.Register(taskListTool{})
+	r.Register(taskOutputTool{})
+	r.Register(taskStopTool{})
+	r.Register(taskUpdateTool{})
+	r.Register(todoWriteTool{})
 
 	return r
 }

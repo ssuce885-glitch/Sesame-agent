@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,6 +20,7 @@ import (
 	"go-agent/internal/store/artifacts"
 	"go-agent/internal/store/sqlite"
 	"go-agent/internal/stream"
+	"go-agent/internal/task"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
 )
@@ -35,6 +39,14 @@ type runtimeWiring struct {
 	contextManagerConfig contextstate.Config
 	runtime              *contextstate.Runtime
 	compactor            contextstate.Compactor
+}
+
+type taskEventSink struct {
+	writer io.Writer
+}
+
+type agentTaskExecutor struct {
+	runner *engine.Engine
 }
 
 func (s storeAndBusSink) Emit(ctx context.Context, event types.Event) error {
@@ -70,6 +82,61 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		Sink: a.sink,
 	})
 	return err
+}
+
+func (s taskEventSink) Emit(_ context.Context, event types.Event) error {
+	switch event.Type {
+	case types.EventAssistantDelta:
+		if s.writer == nil {
+			return nil
+		}
+
+		var payload types.AssistantDeltaPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		_, err := io.WriteString(s.writer, payload.Text)
+		return err
+	case types.EventTurnFailed:
+		var payload types.TurnFailedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Message == "" {
+			return errors.New("turn failed")
+		}
+		return errors.New(payload.Message)
+	default:
+		return nil
+	}
+}
+
+func buildAgentTaskExecutor(runner *engine.Engine) task.AgentExecutor {
+	if runner == nil {
+		return nil
+	}
+	return agentTaskExecutor{runner: runner}
+}
+
+func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, sink io.Writer) error {
+	if a.runner == nil {
+		return errors.New("engine runner is not configured")
+	}
+
+	sessionID := types.NewID("task_session")
+	turnID := types.NewID("task_turn")
+	return a.runner.RunTurn(ctx, engine.Input{
+		Session: types.Session{
+			ID:            sessionID,
+			WorkspaceRoot: workspaceRoot,
+		},
+		Turn: types.Turn{
+			ID:          turnID,
+			SessionID:   sessionID,
+			UserMessage: prompt,
+		},
+		Sink: taskEventSink{writer: sink},
+	})
 }
 
 func ensureDataDir(path string) error {
@@ -133,6 +200,15 @@ func main() {
 	)
 	runner.SetBaseSystemPrompt(basePrompt)
 	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
+	taskManager := task.NewManager(task.Config{
+		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
+		TaskOutputMaxBytes: cfg.TaskOutputMaxBytes,
+	}, nil, buildAgentTaskExecutor(runner))
+	taskManager.SetRemoteConfig(task.RemoteExecutorConfig{
+		ShimCommand:    cfg.RemoteExecutorShimCommand,
+		TimeoutSeconds: cfg.RemoteExecutorTimeoutSeconds,
+	})
+	runner.SetTaskManager(taskManager)
 	manager := session.NewManager(sessionRunnerAdapter{
 		engine: runner,
 		sink: storeAndBusSink{
