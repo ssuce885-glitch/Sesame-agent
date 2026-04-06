@@ -6,6 +6,7 @@ import (
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
+	"go-agent/internal/runtimegraph"
 	"go-agent/internal/task"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
@@ -48,6 +49,7 @@ type Engine struct {
 	maxWorkspacePromptBytes int
 	maxToolSteps            int
 	taskManager             *task.Manager
+	runtimeService          *runtimegraph.Service
 }
 
 func New(
@@ -122,4 +124,11 @@ func (e *Engine) SetTaskManager(manager *task.Manager) {
 		return
 	}
 	e.taskManager = manager
+}
+
+func (e *Engine) SetRuntimeService(service *runtimegraph.Service) {
+	if e == nil {
+		return
+	}
+	e.runtimeService = service
 }
