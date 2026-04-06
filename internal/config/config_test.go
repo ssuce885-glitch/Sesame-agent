@@ -7,6 +7,10 @@ import (
 )
 
 func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
 	t.Run("uses defaults when data dir is set", func(t *testing.T) {
 		t.Setenv("AGENTD_ADDR", "")
 		dataDir := t.TempDir()
@@ -27,6 +31,10 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 		t.Setenv("AGENTD_PROVIDER_CACHE_PROFILE", "")
 		t.Setenv("AGENTD_CACHE_EXPIRY_SECONDS", "")
 		t.Setenv("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", "")
+		t.Setenv("AGENTD_MAX_CONCURRENT_TASKS", "")
+		t.Setenv("AGENTD_TASK_OUTPUT_MAX_BYTES", "")
+		t.Setenv("AGENTD_REMOTE_EXECUTOR_SHIM_COMMAND", "")
+		t.Setenv("AGENTD_REMOTE_EXECUTOR_TIMEOUT_SECONDS", "")
 
 		cfg, err := Load()
 		if err != nil {
@@ -83,6 +91,18 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 		}
 		if cfg.MicrocompactBytesThreshold != 4096 {
 			t.Fatalf("MicrocompactBytesThreshold = %d, want %d", cfg.MicrocompactBytesThreshold, 4096)
+		}
+		if cfg.MaxConcurrentTasks != 8 {
+			t.Fatalf("MaxConcurrentTasks = %d, want %d", cfg.MaxConcurrentTasks, 8)
+		}
+		if cfg.TaskOutputMaxBytes != 1<<20 {
+			t.Fatalf("TaskOutputMaxBytes = %d, want %d", cfg.TaskOutputMaxBytes, 1<<20)
+		}
+		if cfg.RemoteExecutorShimCommand != "" {
+			t.Fatalf("RemoteExecutorShimCommand = %q, want empty", cfg.RemoteExecutorShimCommand)
+		}
+		if cfg.RemoteExecutorTimeoutSeconds != 300 {
+			t.Fatalf("RemoteExecutorTimeoutSeconds = %d, want %d", cfg.RemoteExecutorTimeoutSeconds, 300)
 		}
 	})
 
@@ -167,6 +187,36 @@ func TestLoadUsesDefaultsAndRequiresDataDir(t *testing.T) {
 			t.Fatalf("MaxCompactionPasses = %d, want %d", cfg.MaxCompactionPasses, 5)
 		}
 	})
+}
+
+func TestLoadReadsTaskExecutionOverrides(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	t.Setenv("AGENTD_DATA_DIR", t.TempDir())
+	t.Setenv("AGENTD_MAX_CONCURRENT_TASKS", "3")
+	t.Setenv("AGENTD_TASK_OUTPUT_MAX_BYTES", "8192")
+	t.Setenv("AGENTD_REMOTE_EXECUTOR_SHIM_COMMAND", "ssh deploy@example")
+	t.Setenv("AGENTD_REMOTE_EXECUTOR_TIMEOUT_SECONDS", "45")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.MaxConcurrentTasks != 3 {
+		t.Fatalf("MaxConcurrentTasks = %d, want %d", cfg.MaxConcurrentTasks, 3)
+	}
+	if cfg.TaskOutputMaxBytes != 8192 {
+		t.Fatalf("TaskOutputMaxBytes = %d, want %d", cfg.TaskOutputMaxBytes, 8192)
+	}
+	if cfg.RemoteExecutorShimCommand != "ssh deploy@example" {
+		t.Fatalf("RemoteExecutorShimCommand = %q, want %q", cfg.RemoteExecutorShimCommand, "ssh deploy@example")
+	}
+	if cfg.RemoteExecutorTimeoutSeconds != 45 {
+		t.Fatalf("RemoteExecutorTimeoutSeconds = %d, want %d", cfg.RemoteExecutorTimeoutSeconds, 45)
+	}
 }
 
 func TestLoadReadsProviderCacheOverrides(t *testing.T) {

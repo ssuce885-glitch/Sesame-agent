@@ -8,30 +8,34 @@ import (
 )
 
 type Config struct {
-	Addr                       string
-	DataDir                    string
-	ModelProvider              string
-	Model                      string
-	AnthropicAPIKey            string
-	AnthropicBaseURL           string
-	OpenAIAPIKey               string
-	OpenAIBaseURL              string
-	ProviderCacheProfile       string
-	CacheExpirySeconds         int
-	MicrocompactBytesThreshold int
-	LogLevel                   string
-	PermissionProfile          string
-	MaxToolSteps               int
-	MaxShellOutputBytes        int
-	ShellTimeoutSeconds        int
-	MaxFileWriteBytes          int
-	MaxRecentItems             int
-	CompactionThreshold        int
-	MaxEstimatedTokens         int
-	MaxCompactionPasses        int
-	SystemPrompt               string
-	SystemPromptFile           string
-	MaxWorkspacePromptBytes    int
+	Addr                         string
+	DataDir                      string
+	ModelProvider                string
+	Model                        string
+	AnthropicAPIKey              string
+	AnthropicBaseURL             string
+	OpenAIAPIKey                 string
+	OpenAIBaseURL                string
+	ProviderCacheProfile         string
+	CacheExpirySeconds           int
+	MicrocompactBytesThreshold   int
+	LogLevel                     string
+	PermissionProfile            string
+	MaxToolSteps                 int
+	MaxShellOutputBytes          int
+	ShellTimeoutSeconds          int
+	MaxFileWriteBytes            int
+	MaxRecentItems               int
+	CompactionThreshold          int
+	MaxEstimatedTokens           int
+	MaxCompactionPasses          int
+	SystemPrompt                 string
+	SystemPromptFile             string
+	MaxWorkspacePromptBytes      int
+	MaxConcurrentTasks           int
+	TaskOutputMaxBytes           int
+	RemoteExecutorShimCommand    string
+	RemoteExecutorTimeoutSeconds int
 }
 
 func Load() (Config, error) {
@@ -47,30 +51,34 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		Addr:                       envOrDefaultWithFallback("AGENTD_ADDR", uc.Listen.Addr, "127.0.0.1:4317"),
-		DataDir:                    envOrDefault("AGENTD_DATA_DIR", ""),
-		ModelProvider:              envOrDefaultWithFallback("AGENTD_MODEL_PROVIDER", uc.Provider, "anthropic"),
-		Model:                      model,
-		AnthropicAPIKey:            envOrDefaultWithFallback("ANTHROPIC_API_KEY", uc.Anthropic.APIKey, ""),
-		AnthropicBaseURL:           envOrDefaultWithFallback("ANTHROPIC_BASE_URL", uc.Anthropic.BaseURL, "https://api.anthropic.com"),
-		OpenAIAPIKey:               envOrDefaultWithFallback("OPENAI_API_KEY", uc.OpenAI.APIKey, ""),
-		OpenAIBaseURL:              envOrDefaultWithFallback("OPENAI_BASE_URL", uc.OpenAI.BaseURL, ""),
-		ProviderCacheProfile:       envOrDefault("AGENTD_PROVIDER_CACHE_PROFILE", "none"),
-		CacheExpirySeconds:         intEnvOrDefault("AGENTD_CACHE_EXPIRY_SECONDS", 86400),
-		MicrocompactBytesThreshold: intEnvOrDefault("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", 4096),
-		LogLevel:                   envOrDefault("AGENTD_LOG_LEVEL", "info"),
-		PermissionProfile:          envOrDefault("AGENTD_PERMISSION_PROFILE", "read_only"),
-		MaxToolSteps:               intEnvOrDefaultWithFallback("AGENTD_MAX_TOOL_STEPS", uc.MaxToolSteps, 8),
-		MaxShellOutputBytes:        intEnvOrDefault("AGENTD_MAX_SHELL_OUTPUT_BYTES", 4096),
-		ShellTimeoutSeconds:        intEnvOrDefault("AGENTD_SHELL_TIMEOUT_SECONDS", 30),
-		MaxFileWriteBytes:          intEnvOrDefault("AGENTD_MAX_FILE_WRITE_BYTES", 1<<20),
-		MaxRecentItems:             intEnvOrDefault("AGENTD_MAX_RECENT_ITEMS", 8),
-		CompactionThreshold:        intEnvOrDefault("AGENTD_COMPACTION_THRESHOLD", 16),
-		MaxEstimatedTokens:         intEnvOrDefault("AGENTD_MAX_ESTIMATED_TOKENS", 6000),
-		MaxCompactionPasses:        intEnvOrDefault("AGENTD_MAX_COMPACTION_PASSES", 1),
-		SystemPrompt:               envOrDefault("AGENTD_SYSTEM_PROMPT", ""),
-		SystemPromptFile:           envOrDefault("AGENTD_SYSTEM_PROMPT_FILE", ""),
-		MaxWorkspacePromptBytes:    intEnvOrDefault("AGENTD_MAX_WORKSPACE_PROMPT_BYTES", 32768),
+		Addr:                         envOrDefaultWithFallback("AGENTD_ADDR", uc.Listen.Addr, "127.0.0.1:4317"),
+		DataDir:                      envOrDefault("AGENTD_DATA_DIR", ""),
+		ModelProvider:                envOrDefaultWithFallback("AGENTD_MODEL_PROVIDER", uc.Provider, "anthropic"),
+		Model:                        model,
+		AnthropicAPIKey:              envOrDefaultWithFallback("ANTHROPIC_API_KEY", uc.Anthropic.APIKey, ""),
+		AnthropicBaseURL:             envOrDefaultWithFallback("ANTHROPIC_BASE_URL", uc.Anthropic.BaseURL, "https://api.anthropic.com"),
+		OpenAIAPIKey:                 envOrDefaultWithFallback("OPENAI_API_KEY", uc.OpenAI.APIKey, ""),
+		OpenAIBaseURL:                envOrDefaultWithFallback("OPENAI_BASE_URL", uc.OpenAI.BaseURL, ""),
+		ProviderCacheProfile:         envOrDefault("AGENTD_PROVIDER_CACHE_PROFILE", "none"),
+		CacheExpirySeconds:           intEnvOrDefault("AGENTD_CACHE_EXPIRY_SECONDS", 86400),
+		MicrocompactBytesThreshold:   intEnvOrDefault("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", 4096),
+		LogLevel:                     envOrDefault("AGENTD_LOG_LEVEL", "info"),
+		PermissionProfile:            envOrDefault("AGENTD_PERMISSION_PROFILE", "read_only"),
+		MaxToolSteps:                 intEnvOrDefaultWithFallback("AGENTD_MAX_TOOL_STEPS", uc.MaxToolSteps, 8),
+		MaxShellOutputBytes:          intEnvOrDefault("AGENTD_MAX_SHELL_OUTPUT_BYTES", 4096),
+		ShellTimeoutSeconds:          intEnvOrDefault("AGENTD_SHELL_TIMEOUT_SECONDS", 30),
+		MaxFileWriteBytes:            intEnvOrDefault("AGENTD_MAX_FILE_WRITE_BYTES", 1<<20),
+		MaxRecentItems:               intEnvOrDefault("AGENTD_MAX_RECENT_ITEMS", 8),
+		CompactionThreshold:          intEnvOrDefault("AGENTD_COMPACTION_THRESHOLD", 16),
+		MaxEstimatedTokens:           intEnvOrDefault("AGENTD_MAX_ESTIMATED_TOKENS", 6000),
+		MaxCompactionPasses:          intEnvOrDefault("AGENTD_MAX_COMPACTION_PASSES", 1),
+		SystemPrompt:                 envOrDefault("AGENTD_SYSTEM_PROMPT", ""),
+		SystemPromptFile:             envOrDefault("AGENTD_SYSTEM_PROMPT_FILE", ""),
+		MaxWorkspacePromptBytes:      intEnvOrDefault("AGENTD_MAX_WORKSPACE_PROMPT_BYTES", 32768),
+		MaxConcurrentTasks:           intEnvOrDefault("AGENTD_MAX_CONCURRENT_TASKS", 8),
+		TaskOutputMaxBytes:           intEnvOrDefault("AGENTD_TASK_OUTPUT_MAX_BYTES", 1<<20),
+		RemoteExecutorShimCommand:    envOrDefault("AGENTD_REMOTE_EXECUTOR_SHIM_COMMAND", ""),
+		RemoteExecutorTimeoutSeconds: intEnvOrDefault("AGENTD_REMOTE_EXECUTOR_TIMEOUT_SECONDS", 300),
 	}
 
 	if cfg.DataDir == "" {
