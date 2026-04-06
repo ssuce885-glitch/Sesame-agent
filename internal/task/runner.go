@@ -7,22 +7,36 @@ import (
 
 var errAgentExecutorNotConfigured = errors.New("agent executor is not configured")
 
-type defaultRunner struct {
-	executor     AgentExecutor
-	remoteConfig RemoteExecutorConfig
+type AgentRunner struct {
+	executor AgentExecutor
 }
 
-func NewRunner(executor AgentExecutor, remoteConfig RemoteExecutorConfig) Runner {
-	return &defaultRunner{
-		executor:     executor,
-		remoteConfig: remoteConfig,
+func NewAgentRunner(executor AgentExecutor) Runner {
+	return AgentRunner{
+		executor: executor,
 	}
 }
 
-func (r *defaultRunner) Run(ctx context.Context, task Task, sink OutputSink) error {
+func (r AgentRunner) Run(ctx context.Context, task *Task, sink OutputSink) error {
 	if r.executor == nil {
 		return errAgentExecutorNotConfigured
 	}
 
-	return r.executor.Execute(ctx, task, sink, r.remoteConfig)
+	writer := outputSinkWriter{
+		taskID: task.ID,
+		sink:   sink,
+	}
+	return r.executor.RunTask(ctx, task.WorkspaceRoot, task.Command, writer)
+}
+
+type outputSinkWriter struct {
+	taskID string
+	sink   OutputSink
+}
+
+func (w outputSinkWriter) Write(p []byte) (int, error) {
+	if err := w.sink.Append(w.taskID, p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
