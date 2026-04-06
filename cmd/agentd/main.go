@@ -16,6 +16,7 @@ import (
 	"go-agent/internal/engine"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
+	"go-agent/internal/runtimegraph"
 	"go-agent/internal/session"
 	"go-agent/internal/store/artifacts"
 	"go-agent/internal/store/sqlite"
@@ -167,6 +168,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	runtimeService := runtimegraph.NewService(store)
 
 	_, err = artifacts.New(filepath.Join(cfg.DataDir, "artifacts"))
 	if err != nil {
@@ -200,6 +202,7 @@ func main() {
 	)
 	runner.SetBaseSystemPrompt(basePrompt)
 	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
+	runner.SetRuntimeService(runtimeService)
 	taskManager := task.NewManager(task.Config{
 		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
 		TaskOutputMaxBytes: cfg.TaskOutputMaxBytes,

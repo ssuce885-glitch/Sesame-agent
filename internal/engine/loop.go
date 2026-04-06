@@ -11,6 +11,7 @@ import (
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/memory"
 	"go-agent/internal/model"
+	"go-agent/internal/runtimegraph"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
 )
@@ -59,6 +60,10 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	sessionID := in.Turn.SessionID
 	if sessionID == "" {
 		sessionID = in.Session.ID
+	}
+	turnCtx := &runtimegraph.TurnContext{
+		CurrentSessionID: sessionID,
+		CurrentTurnID:    in.Turn.ID,
 	}
 
 	totalItems, working, err := loadConversationState(ctx, e, in, sessionID)
@@ -281,6 +286,8 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				WorkspaceRoot:    in.Session.WorkspaceRoot,
 				PermissionEngine: e.permission,
 				TaskManager:      e.taskManager,
+				RuntimeService:   e.runtimeService,
+				TurnContext:      turnCtx,
 			})
 
 			var toolResultText string
