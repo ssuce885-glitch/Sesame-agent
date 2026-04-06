@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +17,22 @@ type countingTool struct {
 	calls      int
 }
 
+type testNotebookFile struct {
+	Cells         []testNotebookCell `json:"cells"`
+	Metadata      map[string]any     `json:"metadata"`
+	NBFormat      int                `json:"nbformat"`
+	NBFormatMinor int                `json:"nbformat_minor"`
+}
+
+type testNotebookCell struct {
+	CellType       string         `json:"cell_type"`
+	ID             string         `json:"id"`
+	Source         any            `json:"source"`
+	Metadata       map[string]any `json:"metadata"`
+	ExecutionCount any            `json:"execution_count"`
+	Outputs        []any          `json:"outputs"`
+}
+
 func (t *countingTool) Definition() Definition {
 	t.calls++
 	return t.definition
@@ -25,6 +42,22 @@ func (t *countingTool) IsConcurrencySafe() bool { return true }
 
 func (t *countingTool) Execute(context.Context, Call, ExecContext) (Result, error) {
 	return Result{}, nil
+}
+
+func readNotebookFixture(t *testing.T, path string) testNotebookFile {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var notebook testNotebookFile
+	if err := json.Unmarshal(data, &notebook); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	return notebook
 }
 
 func TestFileReadToolRespectsWorkspaceBoundary(t *testing.T) {
@@ -54,15 +87,15 @@ func TestRegistryDefinitionsExposeLocalToolSchemas(t *testing.T) {
 	registry := NewRegistry()
 
 	defs := registry.Definitions()
-	if len(defs) != 5 {
-		t.Fatalf("len(Definitions) = %d, want 5", len(defs))
+	if len(defs) != 7 {
+		t.Fatalf("len(Definitions) = %d, want 7", len(defs))
 	}
 
 	gotNames := make([]string, 0, len(defs))
 	for _, def := range defs {
 		gotNames = append(gotNames, def.Name)
 	}
-	wantNames := []string{"file_read", "file_write", "glob", "grep", "shell_command"}
+	wantNames := []string{"file_edit", "file_read", "file_write", "glob", "grep", "notebook_edit", "shell_command"}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("Definitions() names = %v, want %v", gotNames, wantNames)
 	}
@@ -122,8 +155,10 @@ func TestRegistryDefinitionsExposeLocalToolSchemas(t *testing.T) {
 
 	requireSchemaFields("file_read", []string{"path"}, "path")
 	requireSchemaFields("file_write", []string{"path", "content"}, "path", "content")
+	requireSchemaFields("file_edit", []string{"file_path", "old_string", "new_string"}, "file_path", "old_string", "new_string", "replace_all")
 	requireSchemaFields("glob", []string{"pattern"}, "pattern")
 	requireSchemaFields("grep", []string{"path", "pattern"}, "path", "pattern")
+	requireSchemaFields("notebook_edit", []string{"notebook_path", "new_source"}, "notebook_path", "cell_id", "new_source", "cell_type", "edit_mode")
 	requireSchemaFields("shell_command", []string{"command"}, "command")
 }
 
@@ -207,6 +242,41 @@ func TestPermissionProfilesControlLocalTools(t *testing.T) {
 		}
 
 		_, err = registry.Execute(context.Background(), Call{
+			Name: "file_edit",
+			Input: map[string]any{
+				"file_path":  filepath.Join(root, "blocked.txt"),
+				"old_string": "hello",
+				"new_string": "bye",
+			},
+		}, ExecContext{
+			WorkspaceRoot:    root,
+			PermissionEngine: permissions.NewEngine(),
+		})
+		if err == nil || !strings.Contains(err.Error(), "denied") {
+			t.Fatalf("file_edit error = %v, want denied", err)
+		}
+
+		notebookPath := filepath.Join(root, "blocked.ipynb")
+		if err := os.WriteFile(notebookPath, []byte(`{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}`), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		_, err = registry.Execute(context.Background(), Call{
+			Name: "notebook_edit",
+			Input: map[string]any{
+				"notebook_path": notebookPath,
+				"new_source":    "print('x')\n",
+				"cell_type":     "code",
+				"edit_mode":     "insert",
+			},
+		}, ExecContext{
+			WorkspaceRoot:    root,
+			PermissionEngine: permissions.NewEngine(),
+		})
+		if err == nil || !strings.Contains(err.Error(), "denied") {
+			t.Fatalf("notebook_edit error = %v, want denied", err)
+		}
+
+		_, err = registry.Execute(context.Background(), Call{
 			Name:  "shell_command",
 			Input: map[string]any{"command": "echo blocked"},
 		}, ExecContext{
@@ -241,6 +311,58 @@ func TestPermissionProfilesControlLocalTools(t *testing.T) {
 			t.Fatalf("written file = %q, want %q", string(data), "hello")
 		}
 
+		editResult, err := registry.Execute(context.Background(), Call{
+			Name: "file_edit",
+			Input: map[string]any{
+				"file_path":  writePath,
+				"old_string": "hello",
+				"new_string": "world",
+			},
+		}, ExecContext{
+			WorkspaceRoot:    root,
+			PermissionEngine: permissions.NewEngine("trusted_local"),
+		})
+		if err != nil {
+			t.Fatalf("file_edit error = %v", err)
+		}
+		if editResult.Text != writePath {
+			t.Fatalf("file_edit result.Text = %q, want %q", editResult.Text, writePath)
+		}
+		data, err = os.ReadFile(writePath)
+		if err != nil {
+			t.Fatalf("ReadFile() error = %v", err)
+		}
+		if string(data) != "world" {
+			t.Fatalf("edited file = %q, want %q", string(data), "world")
+		}
+
+		notebookPath := filepath.Join(root, "allowed.ipynb")
+		if err := os.WriteFile(notebookPath, []byte(`{"cells":[],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":5}`), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		notebookResult, err := registry.Execute(context.Background(), Call{
+			Name: "notebook_edit",
+			Input: map[string]any{
+				"notebook_path": notebookPath,
+				"new_source":    "print('ok')\n",
+				"cell_type":     "code",
+				"edit_mode":     "insert",
+			},
+		}, ExecContext{
+			WorkspaceRoot:    root,
+			PermissionEngine: permissions.NewEngine("trusted_local"),
+		})
+		if err != nil {
+			t.Fatalf("notebook_edit error = %v", err)
+		}
+		if notebookResult.Text != notebookPath {
+			t.Fatalf("notebook_edit result.Text = %q, want %q", notebookResult.Text, notebookPath)
+		}
+		notebook := readNotebookFixture(t, notebookPath)
+		if len(notebook.Cells) != 1 {
+			t.Fatalf("len(notebook.Cells) = %d, want 1", len(notebook.Cells))
+		}
+
 		shellResult, err := registry.Execute(context.Background(), Call{
 			Name:  "shell_command",
 			Input: map[string]any{"command": "echo ok"},
@@ -255,6 +377,256 @@ func TestPermissionProfilesControlLocalTools(t *testing.T) {
 			t.Fatalf("shell_command result.Text = %q, want output", shellResult.Text)
 		}
 	})
+}
+
+func TestFileEditToolReplacesSingleUniqueMatchAndPreservesMode(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(path, []byte("hello world"), 0o640); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	beforeInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+
+	registry := NewRegistry()
+	result, err := registry.Execute(context.Background(), Call{
+		Name: "file_edit",
+		Input: map[string]any{
+			"file_path":  path,
+			"old_string": "world",
+			"new_string": "gophers",
+		},
+	}, ExecContext{
+		WorkspaceRoot:    root,
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Text != path {
+		t.Fatalf("result.Text = %q, want %q", result.Text, path)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(data) != "hello gophers" {
+		t.Fatalf("file contents = %q, want %q", string(data), "hello gophers")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if info.Mode().Perm() != beforeInfo.Mode().Perm() {
+		t.Fatalf("Mode().Perm() = %o, want unchanged %o", info.Mode().Perm(), beforeInfo.Mode().Perm())
+	}
+}
+
+func TestFileEditToolRejectsAmbiguousMatchWithoutReplaceAll(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(path, []byte("alpha beta alpha"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	registry := NewRegistry()
+	_, err := registry.Execute(context.Background(), Call{
+		Name: "file_edit",
+		Input: map[string]any{
+			"file_path":  path,
+			"old_string": "alpha",
+			"new_string": "omega",
+		},
+	}, ExecContext{
+		WorkspaceRoot:    root,
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "replace_all") {
+		t.Fatalf("Execute() error = %v, want replace_all guidance", err)
+	}
+}
+
+func TestFileEditToolReplaceAll(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(path, []byte("alpha beta alpha"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	registry := NewRegistry()
+	_, err := registry.Execute(context.Background(), Call{
+		Name: "file_edit",
+		Input: map[string]any{
+			"file_path":   path,
+			"old_string":  "alpha",
+			"new_string":  "omega",
+			"replace_all": true,
+		},
+	}, ExecContext{
+		WorkspaceRoot:    root,
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(data) != "omega beta omega" {
+		t.Fatalf("file contents = %q, want %q", string(data), "omega beta omega")
+	}
+}
+
+func TestNotebookEditToolReplacesCellSourceAndClearsCodeOutputs(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "demo.ipynb")
+	content := `{
+  "cells": [
+    {
+      "cell_type": "code",
+      "id": "cell-1",
+      "source": ["print('hi')\n"],
+      "metadata": {},
+      "execution_count": 1,
+      "outputs": [{"output_type":"stream","text":"hi\n"}]
+    }
+  ],
+  "metadata": {"language_info":{"name":"python"},"kernelspec":{"name":"python3"}},
+  "nbformat": 4,
+  "nbformat_minor": 5
+}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	beforeInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+
+	registry := NewRegistry()
+	result, err := registry.Execute(context.Background(), Call{
+		Name: "notebook_edit",
+		Input: map[string]any{
+			"notebook_path": path,
+			"cell_id":       "cell-1",
+			"new_source":    "print('bye')\n",
+			"edit_mode":     "replace",
+		},
+	}, ExecContext{
+		WorkspaceRoot:    root,
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Text != path {
+		t.Fatalf("result.Text = %q, want %q", result.Text, path)
+	}
+
+	notebook := readNotebookFixture(t, path)
+	if len(notebook.Cells) != 1 {
+		t.Fatalf("len(notebook.Cells) = %d, want 1", len(notebook.Cells))
+	}
+	if notebook.Cells[0].Source != "print('bye')\n" {
+		t.Fatalf("cell source = %#v, want %q", notebook.Cells[0].Source, "print('bye')\n")
+	}
+	if notebook.Cells[0].ExecutionCount != nil {
+		t.Fatalf("ExecutionCount = %#v, want nil", notebook.Cells[0].ExecutionCount)
+	}
+	if len(notebook.Cells[0].Outputs) != 0 {
+		t.Fatalf("len(Outputs) = %d, want 0", len(notebook.Cells[0].Outputs))
+	}
+	if notebook.Metadata["kernelspec"].(map[string]any)["name"] != "python3" {
+		t.Fatalf("kernelspec.name = %#v, want %q", notebook.Metadata["kernelspec"], "python3")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if info.Mode().Perm() != beforeInfo.Mode().Perm() {
+		t.Fatalf("Mode().Perm() = %o, want unchanged %o", info.Mode().Perm(), beforeInfo.Mode().Perm())
+	}
+}
+
+func TestNotebookEditToolInsertsAndDeletesCells(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "demo.ipynb")
+	content := `{
+  "cells": [
+    {"cell_type":"markdown","id":"cell-1","source":"# Heading\n","metadata":{}},
+    {"cell_type":"code","id":"cell-2","source":"print('hi')\n","metadata":{},"execution_count":null,"outputs":[]}
+  ],
+  "metadata": {"language_info":{"name":"python"}},
+  "nbformat": 4,
+  "nbformat_minor": 5
+}`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	registry := NewRegistry()
+	_, err := registry.Execute(context.Background(), Call{
+		Name: "notebook_edit",
+		Input: map[string]any{
+			"notebook_path": path,
+			"cell_id":       "cell-1",
+			"new_source":    "## Notes\n",
+			"cell_type":     "markdown",
+			"edit_mode":     "insert",
+		},
+	}, ExecContext{
+		WorkspaceRoot:    root,
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+	})
+	if err != nil {
+		t.Fatalf("insert Execute() error = %v", err)
+	}
+
+	notebook := readNotebookFixture(t, path)
+	if len(notebook.Cells) != 3 {
+		t.Fatalf("len(notebook.Cells) = %d, want 3", len(notebook.Cells))
+	}
+	inserted := notebook.Cells[1]
+	if inserted.CellType != "markdown" {
+		t.Fatalf("inserted.CellType = %q, want %q", inserted.CellType, "markdown")
+	}
+	if inserted.Source != "## Notes\n" {
+		t.Fatalf("inserted.Source = %#v, want %q", inserted.Source, "## Notes\n")
+	}
+	if inserted.ID == "" {
+		t.Fatal("inserted.ID = empty, want generated id")
+	}
+
+	_, err = registry.Execute(context.Background(), Call{
+		Name: "notebook_edit",
+		Input: map[string]any{
+			"notebook_path": path,
+			"cell_id":       inserted.ID,
+			"new_source":    "",
+			"edit_mode":     "delete",
+		},
+	}, ExecContext{
+		WorkspaceRoot:    root,
+		PermissionEngine: permissions.NewEngine("trusted_local"),
+	})
+	if err != nil {
+		t.Fatalf("delete Execute() error = %v", err)
+	}
+
+	notebook = readNotebookFixture(t, path)
+	if len(notebook.Cells) != 2 {
+		t.Fatalf("len(notebook.Cells) after delete = %d, want 2", len(notebook.Cells))
+	}
+	if notebook.Cells[0].ID != "cell-1" || notebook.Cells[1].ID != "cell-2" {
+		t.Fatalf("cell order after delete = [%q %q], want [cell-1 cell-2]", notebook.Cells[0].ID, notebook.Cells[1].ID)
+	}
 }
 
 func TestShellCommandTruncatesOutputAndUsesWorkspaceDir(t *testing.T) {

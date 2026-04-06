@@ -20,8 +20,10 @@ func NewRegistry() *Registry {
 	}
 	r.Register(fileReadTool{})
 	r.Register(fileWriteTool{})
+	r.Register(fileEditTool{})
 	r.Register(globTool{})
 	r.Register(grepTool{})
+	r.Register(notebookEditTool{})
 	r.Register(shellTool{})
 
 	return r
