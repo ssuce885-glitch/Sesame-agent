@@ -235,6 +235,65 @@ The first version should include:
 
 The first version should not require a full terminal widget framework if a simpler line-editor path is sufficient.
 
+### Session Switching Protection
+
+When switching sessions with `/session use <id>`, protect user input:
+
+**Behavior**:
+1. If user has typed input but not submitted, show confirmation:
+   ```
+   You have unsaved input: "fix the bug in..."
+   Switch to session sess_abc123? (y/N)
+   ```
+2. On confirmation, discard input and switch
+3. On cancellation, remain in current session
+
+**Alternative - Draft Saving** (optional enhancement):
+- Auto-save unsaved input to `.claude/drafts/<session_id>.txt`
+- Show message: `Input saved to draft. Use /draft restore to recover.`
+- `/draft list` - show saved drafts
+- `/draft restore [session_id]` - restore draft to input buffer
+
+This draft-saving path is explicitly deferred from v1. The required v1 behavior is the confirmation prompt before discarding unsent input.
+
+### Plan Mode Integration
+
+When entering plan mode with `/plan enter`, the REPL behavior changes locally while continuing to use the existing session/turn execution path:
+
+**Visual Indicators**:
+- Status line shows `[plan]` mode indicator
+- Input prompt changes to `plan>` instead of `>`
+- Output blocks are prefixed with `[plan]` tag
+
+**Input Routing**:
+- All plain text input continues to submit normal turns in the current interactive session
+- The CLI marks those turns as occurring while local plan mode is active
+- Slash commands continue to work normally
+- `/plan exit` returns to normal mode
+
+**Output Rendering**:
+- Plan mode output uses distinct styling (e.g., blue color)
+- Tool calls in plan mode are marked as plan-scoped
+- Clear visual separation from normal agent output
+
+**Mode Transition**:
+```
+> /plan enter
+Entering plan mode...
+[plan] Ready to plan implementation.
+
+plan> analyze the codebase structure
+[plan] Analyzing...
+[plan tool: Glob] pattern="**/*.go"
+[plan] Found 42 Go files...
+
+plan> /plan exit
+Exiting plan mode.
+> 
+```
+
+In v1, plan mode is a local REPL presentation mode layered on top of the existing `enter_plan_mode` / `exit_plan_mode` runtime graph behavior. It does not require a separate execution channel, session type, or special turn pipeline.
+
 ## Slash Command Information Architecture
 
 ### Command Families
@@ -282,6 +341,19 @@ They are not sent to the model as ordinary prompts.
 Only plain user text enters the turn submission pipeline.
 
 This is important for correctness, latency, and testability.
+
+### Deferred Command Families
+
+The following command families are explicitly deferred from v1 because they require additional storage, logging, or runtime-configuration infrastructure:
+
+- `/logs`
+- `/debug`
+- `/session cleanup`
+- `/session archive`
+- `/config set`
+- `/config notifications`
+
+The v1 REPL should keep its command surface focused on core interaction, session switching, task inspection, plan mode, and cron management.
 
 ## Session, Turn, and Worker Model
 
@@ -344,6 +416,29 @@ Recommended implementation:
 
 This allows the CLI and APIs to hide worker sessions by default while still exposing them when asked.
 
+### Worker Session Lifecycle
+
+Worker sessions follow a minimal managed lifecycle in v1:
+
+**Creation**:
+- Worker sessions are created lazily on first cron trigger
+- Each cron job gets exactly one worker session (stored in `worker_session_id`)
+- Session is created with `kind = worker` and bound to the cron's workspace
+
+**Active Use**:
+- Every cron trigger creates a new turn in the worker session
+- Worker session maintains conversation continuity across cron runs
+- Session state persists between triggers
+
+**Retirement**:
+- When a cron job is deleted or disabled permanently, its worker session may be marked `closed`
+- Closed worker sessions are hidden from the default interactive session list
+- Timed retention, archival policies, and worker cleanup commands are deferred from v1
+
+**User Control**:
+- `/session workers` lists known worker sessions
+- deeper worker-session inspection is deferred from v1
+
 ## Cron, Task, and Interactive Collaboration Model
 
 ### Separation Of Concerns
@@ -380,6 +475,26 @@ The first version should default to:
 
 If a job is still running when the next fire time arrives, the default behavior is to skip the new trigger and record the skip.
 
+**Concurrency Check Details**:
+
+The skip check operates at the session level:
+1. When a cron trigger fires, check if the worker session has an active turn
+2. If yes and `skip_if_running = true`, skip this trigger
+3. Record the skip event with timestamp in `scheduled_tasks.last_skip_at`
+4. Increment `scheduled_tasks.skip_count`
+5. If `skip_count` reaches 10 consecutive skips, log a warning
+
+**Skip Visibility**:
+- Skips are recorded in the cron job metadata
+- `/cron inspect <id>` shows skip statistics
+- `/cron list` shows a warning indicator for jobs with high skip rates
+
+**Future Concurrency Policies**:
+Later versions may support:
+- `allow_concurrent = true` - allow multiple simultaneous runs
+- `queue_if_running = true` - queue triggers instead of skipping
+- `cancel_previous = true` - cancel running turn and start new one
+
 ### Frontend Visibility
 
 Background automation should be visible but not intrusive.
@@ -395,6 +510,26 @@ The user can inspect details with:
 - `/cron inspect <job>`
 - `/task output <task>`
 - `/session workers`
+
+**Notification Rendering Strategy**:
+
+Cron notifications should not interrupt user workflow:
+
+1. **Timing**: Notifications are buffered and displayed at the next input prompt
+2. **Format**: Rendered as distinct `[system]` blocks with timestamp
+3. **Content**:
+   - Start: `[system] Cron 'backup-db' started (job_abc123)`
+   - Success: `[system] Cron 'backup-db' completed in 2.3s`
+   - Failure: `[system] Cron 'backup-db' failed: connection timeout (use /cron inspect job_abc123)`
+   - Skip: `[system] Cron 'backup-db' skipped (previous run still active)`
+
+**Non-Intrusive Display**:
+- Notifications never interrupt streaming agent output
+- Notifications never overwrite user input in progress
+- Multiple notifications are batched and shown together
+- Notifications are visually distinct from agent messages (different color/prefix)
+
+User-configurable notification verbosity is deferred from v1.
 
 ## Persistence Model
 
@@ -449,28 +584,37 @@ Recommended first-version table:
 
 Suggested fields:
 
-- `id`
-- `workspace_root`
-- `owner_session_id`
-- `worker_session_id`
-- `cron_expr`
-- `prompt`
-- `enabled`
-- `next_run_at`
-- `last_run_at`
-- `last_status`
-- `last_error`
-- `created_at`
-- `updated_at`
+- `id` - unique cron job identifier
+- `name` - user-friendly job name
+- `workspace_root` - workspace this job belongs to
+- `owner_session_id` - interactive session that created this job
+- `worker_session_id` - background session for execution
+- `cron_expr` - cron schedule expression
+- `prompt` - prompt to execute on each trigger
+- `enabled` - whether job is active
+- `skip_if_running` - concurrency policy (default true)
+- `timeout_seconds` - execution timeout (default 3600)
+- `next_run_at` - next scheduled fire time
+- `last_run_at` - last successful execution time
+- `last_status` - last execution result (success/failed/skipped/timeout)
+- `last_error` - last error message if failed
+- `last_skip_at` - last time a trigger was skipped
+- `total_runs` - total number of executions
+- `success_count` - number of successful runs
+- `fail_count` - number of failed runs
+- `skip_count` - consecutive skips (reset on successful run)
+- `created_at` - job creation timestamp
+- `updated_at` - last modification timestamp
 
-This is enough for:
+This supports:
 
-- `/cron list`
-- `/cron inspect`
-- pause/resume
+- `/cron list` with status indicators
+- `/cron inspect` with full statistics
+- pause/resume operations
 - daemon restart recovery
+- skip rate monitoring and alerting
 
-Per-run historical detail can be added later if needed.
+Detailed per-run history tables and debug-specific inspection commands are deferred from v1. The initial implementation should rely on the `last_*` fields above plus execution-task inspection via `/task`.
 
 ## Daemon Lifecycle
 
@@ -499,6 +643,29 @@ Recommended health strategy:
 - CLI probes the health/status endpoint
 - pid/metadata files are advisory only
 - actual readiness is determined by successful health probing
+
+**Startup Race Condition Handling**:
+
+When multiple CLI instances start simultaneously, prevent duplicate daemon launches:
+
+1. **Port Binding Lock**: Daemon attempts to bind to configured port (atomic operation)
+2. **PID File Write**: On successful bind, write PID file with exclusive lock
+3. **Health Endpoint**: Daemon exposes a lightweight health/status endpoint immediately after binding
+4. **CLI Retry Logic**:
+   - Attempt to connect to health endpoint
+   - If connection refused, attempt to launch daemon
+   - If launch fails (port already bound), wait 2 seconds
+   - Retry health check (another instance may be starting)
+   - Maximum 3 retry attempts with exponential backoff
+   - If all retries fail, exit with clear error message
+
+**Health Check Details**:
+- Endpoint: reuse `GET /v1/status` in v1, or add a dedicated lightweight health endpoint only if startup coupling becomes a problem
+- Response: JSON status payload
+- Timeout: 5 seconds
+- Success criteria: HTTP 200 with valid JSON
+
+This ensures only one daemon runs per data directory, even with concurrent CLI launches.
 
 ### Exit Behavior
 
@@ -577,9 +744,41 @@ The product should reuse existing daemon configuration where possible.
 
 - reading the same user config file used by `agentd`
 - passing temporary startup overrides from CLI flags to the launched daemon
-- showing effective local runtime config via `/status` or `/config`
+- showing effective local runtime config via `/status` or read-only `/config`
 
 The first version should avoid introducing a second configuration universe.
+
+### Multi-Workspace Support
+
+The product should cleanly handle multiple workspace roots:
+
+**Workspace Isolation**:
+- Each `workspace_root` has its own default interactive session
+- Cron jobs are bound to their workspace root
+- Worker sessions inherit workspace from their cron job
+- Session list commands default to current workspace scope
+
+**Workspace Commands**:
+- `/session list` - show sessions for current workspace only
+- `/session list --all` - show sessions across all workspaces
+- `/session list --workspace /path/to/other` - show specific workspace
+- `/cron list` - show cron jobs for current workspace
+- `/cron list --all` - show all cron jobs
+
+**Workspace Switching**:
+When user changes directory and runs `sesame-agent`:
+- CLI detects new workspace root
+- Automatically switches to that workspace's interactive session
+- Previous workspace sessions remain active in daemon
+- User can manually switch back with `/session use <id>`
+
+**Workspace Metadata**:
+The `sessions` table already stores `workspace_root`. If workspace-scoped queries become hot in practice, add an index:
+```sql
+CREATE INDEX idx_sessions_workspace ON sessions(workspace_root);
+```
+
+This enables clean multi-project workflows without session pollution.
 
 ## Testing Strategy
 
@@ -618,22 +817,27 @@ Add regression coverage for:
 The first version should ship the following:
 
 - `sesame-agent` terminal entrypoint
-- automatic local daemon reuse/launch
-- chat-first enhanced REPL
-- session restore/create flow
-- streaming turn rendering
+- automatic local daemon reuse/launch with race condition protection
+- chat-first enhanced REPL with status line
+- session restore/create flow with workspace awareness
+- streaming turn rendering with block formatting
 - basic slash commands
   - `/help`
   - `/clear`
   - `/exit`
   - `/status`
-  - `/session`
-  - `/task`
-  - `/plan`
-  - `/cron`
+  - `/session` (list, use, workers)
+  - `/task` (list, show, output, stop)
+  - `/plan` (enter, exit)
+  - `/cron` (add, list, inspect, pause, resume, remove)
+  - `/config` (read-only display)
 - execution-task inspection
-- cron management basics
-- worker-session isolation for background automation
+- cron management using `scheduled_tasks` metadata
+- worker-session isolation with minimal retirement behavior
+- buffered cron notifications
+- session switching protection
+- plan mode REPL integration
+- multi-workspace support
 
 ## Explicitly Deferred
 
@@ -644,6 +848,12 @@ The first version should defer:
 - cross-host control plane
 - task model unification
 - worktree UX
+- draft restore commands
+- detailed cron execution history tables
+- `/logs` and `/debug` command families
+- runtime config mutation from the REPL
+- worker-session archival policies and cleanup commands
+- configurable cron notification verbosity
 - complex notification routing
 - advanced cron overlap policies
 - multi-pane dashboards
