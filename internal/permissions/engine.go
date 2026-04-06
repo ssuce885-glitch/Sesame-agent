@@ -54,6 +54,8 @@ func (e *Engine) Decide(toolName string) Decision {
 		allowed["task_output"] = struct{}{}
 		allowed["task_stop"] = struct{}{}
 		allowed["task_update"] = struct{}{}
+		allowed["enter_plan_mode"] = struct{}{}
+		allowed["exit_plan_mode"] = struct{}{}
 	case "", "read_only":
 		// Read-only profile intentionally keeps the base allow-list only.
 	default:

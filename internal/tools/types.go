@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"go-agent/internal/permissions"
+	"go-agent/internal/runtimegraph"
 	"go-agent/internal/task"
 )
 
@@ -26,6 +27,8 @@ type ExecContext struct {
 	WorkspaceRoot    string
 	PermissionEngine *permissions.Engine
 	TaskManager      *task.Manager
+	RuntimeService   *runtimegraph.Service
+	TurnContext      *runtimegraph.TurnContext
 }
 
 type Tool interface {

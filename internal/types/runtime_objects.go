@@ -65,6 +65,7 @@ type Plan struct {
 	Title        string    `json:"title,omitempty"`
 	Summary      string    `json:"summary,omitempty"`
 	ParentPlanID string    `json:"parent_plan_id,omitempty"`
+	PlanFile     string    `json:"plan_file,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
