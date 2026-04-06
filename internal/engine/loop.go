@@ -280,6 +280,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			}, tools.ExecContext{
 				WorkspaceRoot:    in.Session.WorkspaceRoot,
 				PermissionEngine: e.permission,
+				TaskManager:      e.taskManager,
 			})
 
 			var toolResultText string
