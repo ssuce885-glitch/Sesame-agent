@@ -40,8 +40,12 @@ func (e *Engine) Decide(toolName string) Decision {
 	switch e.profile {
 	case "workspace_write":
 		allowed["file_write"] = struct{}{}
+		allowed["file_edit"] = struct{}{}
+		allowed["notebook_edit"] = struct{}{}
 	case "trusted_local":
 		allowed["file_write"] = struct{}{}
+		allowed["file_edit"] = struct{}{}
+		allowed["notebook_edit"] = struct{}{}
 		allowed["shell_command"] = struct{}{}
 	case "", "read_only":
 		// Read-only profile intentionally keeps the base allow-list only.
