@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -192,6 +193,141 @@ func TestStorePersistsRuntimeGraph(t *testing.T) {
 	if got := graph.Worktrees[0]; got.ID != worktree.ID || got.RunID != worktree.RunID || got.TaskID != worktree.TaskID || got.State != worktree.State || got.WorktreePath != worktree.WorktreePath || got.WorktreeBranch != worktree.WorktreeBranch || !got.CreatedAt.Equal(worktree.CreatedAt.UTC()) || !got.UpdatedAt.Equal(worktree.UpdatedAt.UTC()) {
 		t.Fatalf("graph.Worktrees[0] = %#v, want %#v", got, worktree)
 	}
+}
+
+func TestStoreListActivePlansForSession(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC)
+	runA := types.Run{
+		ID:        "run_session_a",
+		SessionID: "sess_a",
+		State:     types.RunStateRunning,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	runB := types.Run{
+		ID:        "run_session_b",
+		SessionID: "sess_b",
+		State:     types.RunStateRunning,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := store.InsertRun(context.Background(), runA); err != nil {
+		t.Fatalf("InsertRun(runA) error = %v", err)
+	}
+	if err := store.InsertRun(context.Background(), runB); err != nil {
+		t.Fatalf("InsertRun(runB) error = %v", err)
+	}
+
+	for _, plan := range []types.Plan{
+		{
+			ID:        "plan_active_a",
+			RunID:     runA.ID,
+			State:     types.PlanStateActive,
+			PlanFile:  "docs/plans/a.md",
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		{
+			ID:        "plan_completed_a",
+			RunID:     runA.ID,
+			State:     types.PlanStateCompleted,
+			PlanFile:  "docs/plans/old.md",
+			CreatedAt: now.Add(time.Minute),
+			UpdatedAt: now.Add(time.Minute),
+		},
+		{
+			ID:        "plan_active_b",
+			RunID:     runB.ID,
+			State:     types.PlanStateActive,
+			PlanFile:  "docs/plans/b.md",
+			CreatedAt: now.Add(2 * time.Minute),
+			UpdatedAt: now.Add(2 * time.Minute),
+		},
+	} {
+		if err := store.UpsertPlan(context.Background(), plan); err != nil {
+			t.Fatalf("UpsertPlan(%s) error = %v", plan.ID, err)
+		}
+	}
+
+	got, err := store.ListActivePlansForSession(context.Background(), "sess_a")
+	if err != nil {
+		t.Fatalf("ListActivePlansForSession() error = %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "plan_active_a" || got[0].PlanFile != "docs/plans/a.md" {
+		t.Fatalf("ListActivePlansForSession() = %#v, want only active sess_a plan", got)
+	}
+}
+
+func TestStoreWithTxCommitsAndRollsBack(t *testing.T) {
+	t.Run("commits when callback returns nil", func(t *testing.T) {
+		store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		defer store.Close()
+
+		now := time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC)
+		err = store.WithTx(context.Background(), func(tx RuntimeTx) error {
+			return tx.InsertRun(context.Background(), types.Run{
+				ID:        "run_commit",
+				SessionID: "sess_commit",
+				State:     types.RunStateRunning,
+				CreatedAt: now,
+				UpdatedAt: now,
+			})
+		})
+		if err != nil {
+			t.Fatalf("WithTx(commit) error = %v", err)
+		}
+
+		graph, err := store.ListRuntimeGraph(context.Background())
+		if err != nil {
+			t.Fatalf("ListRuntimeGraph() error = %v", err)
+		}
+		if len(graph.Runs) != 1 || graph.Runs[0].ID != "run_commit" {
+			t.Fatalf("graph.Runs = %#v, want committed run", graph.Runs)
+		}
+	})
+
+	t.Run("rolls back when callback returns error", func(t *testing.T) {
+		store, err := Open(filepath.Join(t.TempDir(), "agentd.db"))
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		defer store.Close()
+
+		now := time.Date(2026, 4, 6, 10, 30, 0, 0, time.UTC)
+		wantErr := errors.New("force rollback")
+		err = store.WithTx(context.Background(), func(tx RuntimeTx) error {
+			if err := tx.InsertRun(context.Background(), types.Run{
+				ID:        "run_rollback",
+				SessionID: "sess_rollback",
+				State:     types.RunStateRunning,
+				CreatedAt: now,
+				UpdatedAt: now,
+			}); err != nil {
+				return err
+			}
+			return wantErr
+		})
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("WithTx(rollback) error = %v, want %v", err, wantErr)
+		}
+
+		graph, err := store.ListRuntimeGraph(context.Background())
+		if err != nil {
+			t.Fatalf("ListRuntimeGraph() error = %v", err)
+		}
+		if len(graph.Runs) != 0 {
+			t.Fatalf("graph.Runs = %#v, want rollback to leave no rows", graph.Runs)
+		}
+	})
 }
 
 func TestStorePreservesCreatedAtOnRuntimeObjectUpdate(t *testing.T) {

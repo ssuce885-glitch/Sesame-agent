@@ -12,13 +12,39 @@ import (
 var runtimeGraphReadHook func(string)
 
 func (s *Store) InsertRun(ctx context.Context, run types.Run) error {
+	return insertRunWithExec(ctx, s.db, run)
+}
+
+func (s *Store) UpsertPlan(ctx context.Context, plan types.Plan) error {
+	return upsertPlanWithExec(ctx, s.db, plan)
+}
+
+func (s *Store) ListActivePlansForSession(ctx context.Context, sessionID string) ([]types.Plan, error) {
+	return listActivePlansForSession(ctx, s.db, sessionID)
+}
+
+func (t runtimeTx) InsertRun(ctx context.Context, run types.Run) error {
+	return insertRunWithExec(ctx, t.tx, run)
+}
+
+func (t runtimeTx) UpsertPlan(ctx context.Context, plan types.Plan) error {
+	return upsertPlanWithExec(ctx, t.tx, plan)
+}
+
+func (t runtimeTx) ListActivePlansForSession(ctx context.Context, sessionID string) ([]types.Plan, error) {
+	return listActivePlansForSession(ctx, t.tx, sessionID)
+}
+
+func insertRunWithExec(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, run types.Run) error {
 	run = normalizeRun(run)
 	payload, err := marshalRuntimePayload(run)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err = execer.ExecContext(ctx, `
 		insert into runs (id, session_id, turn_id, state, payload, created_at, updated_at)
 		values (?, ?, ?, ?, ?, ?, ?)
 	`,
@@ -33,14 +59,16 @@ func (s *Store) InsertRun(ctx context.Context, run types.Run) error {
 	return err
 }
 
-func (s *Store) UpsertPlan(ctx context.Context, plan types.Plan) error {
+func upsertPlanWithExec(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, plan types.Plan) error {
 	plan = normalizePlan(plan)
 	payload, err := marshalRuntimePayload(plan)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err = execer.ExecContext(ctx, `
 		insert into plans (id, run_id, state, payload, created_at, updated_at)
 		values (?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set
@@ -197,8 +225,8 @@ type runtimeObjectQueryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-func listRuntimeObjects[T any](ctx context.Context, queryer runtimeObjectQueryer, query string) ([]T, error) {
-	rows, err := queryer.QueryContext(ctx, query)
+func listRuntimeObjects[T any](ctx context.Context, queryer runtimeObjectQueryer, query string, args ...any) ([]T, error) {
+	rows, err := queryer.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -227,6 +255,16 @@ func listRuntimeObjects[T any](ctx context.Context, queryer runtimeObjectQueryer
 	}
 
 	return out, nil
+}
+
+func listActivePlansForSession(ctx context.Context, queryer runtimeObjectQueryer, sessionID string) ([]types.Plan, error) {
+	return listRuntimeObjects[types.Plan](ctx, queryer, `
+		select p.payload, p.created_at, p.updated_at
+		from plans p
+		join runs r on p.run_id = r.id
+		where r.session_id = ? and p.state = ?
+		order by p.created_at desc, p.id desc
+	`, sessionID, types.PlanStateActive)
 }
 
 func marshalRuntimePayload(v any) (string, error) {
