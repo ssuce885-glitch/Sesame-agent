@@ -124,6 +124,14 @@ type Plan struct {
 }
 ```
 
+`PlanFile` semantics for this subphase:
+
+- it stores the user-provided plan file path exactly as provided after basic string trimming
+- the tool validates that it is non-empty for `enter_plan_mode`
+- the service does not validate that the file exists
+- it may be a relative path or an absolute path
+- it is metadata for runtime graph continuity, not a filesystem guarantee
+
 No new `PlanState` values are added in this subphase.
 
 Valid terminal states remain:
@@ -156,6 +164,16 @@ type ExecContext struct {
 ```
 
 The runtime service may update `TurnContext.CurrentRunID` after lazily creating a run, allowing later tools in the same turn to reuse the same runtime graph root.
+
+This subphase does **not** add mutex protection to `TurnContext`.
+
+Rationale:
+
+- the current engine loop executes tool calls sequentially within a turn
+- the shared turn context is owned by one turn execution flow
+- adding locking before concurrent tool execution exists would add API complexity without current benefit
+
+If a later phase introduces true parallel tool execution within one turn while reusing the same mutable context object, synchronization or accessor methods should be added then.
 
 ## Store Helpers
 
@@ -338,6 +356,8 @@ Lazy run creation uses existing `types.Run` fields:
 - `TurnID = TurnID`
 - `State = types.RunStateRunning`
 - `Objective = "Plan mode session"`
+
+`types.RunStateRunning` already exists in the current runtime graph model and is intentionally reused here. The design uses `running` rather than `pending` because the run becomes the active root for an entered plan mode immediately after creation.
 
 ### ExitPlanMode
 
