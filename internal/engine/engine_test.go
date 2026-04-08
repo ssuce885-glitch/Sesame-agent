@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,36 @@ func TestRunTurnStreamsAssistantEventsIntoSink(t *testing.T) {
 		types.EventTurnCompleted,
 	}
 	assertEventTypes(t, sink, want)
+}
+
+func TestRunTurnExposesOnlyVisibleToolsForPermissionProfile(t *testing.T) {
+	fakeModel := model.NewFakeStreaming([][]model.StreamEvent{
+		{
+			{Kind: model.StreamEventTextDelta, TextDelta: "ok"},
+			{Kind: model.StreamEventMessageEnd},
+		},
+	})
+	runner := New(fakeModel, tools.NewRegistry(), permissions.NewEngine(), nil, nil, nil, 0)
+
+	err := runner.RunTurn(context.Background(), Input{
+		Session: types.Session{ID: "sess_visible_tools", WorkspaceRoot: t.TempDir()},
+		Turn:    types.Turn{ID: "turn_visible_tools", SessionID: "sess_visible_tools", UserMessage: "hello"},
+		Sink:    &recordingSink{},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	req := fakeModel.LastRequest()
+	gotNames := make([]string, 0, len(req.Tools))
+	for _, tool := range req.Tools {
+		gotNames = append(gotNames, tool.Name)
+	}
+
+	wantNames := []string{"file_read", "glob", "grep"}
+	if !reflect.DeepEqual(gotNames, wantNames) {
+		t.Fatalf("request tool names = %v, want %v", gotNames, wantNames)
+	}
 }
 
 func TestRunTurnEmitsFailedWithoutCompletedWhenStreamErrorsAfterMessageEnd(t *testing.T) {
@@ -226,6 +257,9 @@ func TestRunTurnExecutesToolAfterToolCallEnd(t *testing.T) {
 	}
 	if got.Content != "hello from readme" {
 		t.Fatalf("tool result content = %q, want %q", got.Content, "hello from readme")
+	}
+	if !strings.Contains(got.StructuredJSON, "\"path\"") {
+		t.Fatalf("tool result structured_json = %q, want file_read structured payload", got.StructuredJSON)
 	}
 	if got.IsError {
 		t.Fatal("tool result is_error = true, want false")

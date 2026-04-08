@@ -1,13 +1,14 @@
 package tools
 
 func PartitionByConcurrency(calls []Call, registry *Registry) (parallel []Call, serial []Call) {
-	for _, call := range calls {
-		tool := registry.tools[call.Name]
-		if tool != nil && tool.IsConcurrencySafe() {
-			parallel = append(parallel, call)
-			continue
+	for _, batch := range NewRuntime(registry, nil).PlanBatches(calls, ExecContext{}) {
+		for _, prepared := range batch.Calls {
+			if batch.Parallel {
+				parallel = append(parallel, prepared.Original)
+				continue
+			}
+			serial = append(serial, prepared.Original)
 		}
-		serial = append(serial, call)
 	}
 
 	return parallel, serial

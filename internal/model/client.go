@@ -86,10 +86,11 @@ const (
 )
 
 type ToolResult struct {
-	ToolCallID string
-	ToolName   string
-	Content    string
-	IsError    bool
+	ToolCallID     string
+	ToolName       string
+	Content        string
+	StructuredJSON string
+	IsError        bool
 }
 
 type ToolCallChunk struct {
