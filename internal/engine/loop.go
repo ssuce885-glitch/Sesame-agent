@@ -65,6 +65,14 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		CurrentSessionID: sessionID,
 		CurrentTurnID:    in.Turn.ID,
 	}
+	toolExecCtx := tools.ExecContext{
+		WorkspaceRoot:    in.Session.WorkspaceRoot,
+		PermissionEngine: e.permission,
+		TaskManager:      e.taskManager,
+		RuntimeService:   e.runtimeService,
+		TurnContext:      turnCtx,
+	}
+	toolRuntime := tools.NewRuntime(e.registry, toolRunStoreFromConversationStore(e.store))
 
 	totalItems, working, err := loadConversationState(ctx, e, in, sessionID)
 	if err != nil {
@@ -106,7 +114,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 	}
 	req.Stream = true
-	req.Tools = buildToolSchemas(e.registry)
+	req.Tools = buildToolSchemas(toolRuntime.VisibleDefinitions(toolExecCtx))
 	req.ToolChoice = "auto"
 	nativeContinuation := req.Cache != nil && caps.Profile != model.CapabilityProfileNone
 	assistantStarted := false
@@ -260,67 +268,144 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			return nil
 		}
 
+		callInputs := make([]tools.Call, 0, len(toolCalls))
 		for _, call := range toolCalls {
-			toolSteps++
-			if e.maxToolSteps > 0 && toolSteps > e.maxToolSteps {
+			callInputs = append(callInputs, tools.Call{
+				Name:  call.Name,
+				Input: call.Input,
+			})
+		}
+
+		callOffset := 0
+		for _, batch := range toolRuntime.PlanBatches(callInputs, toolExecCtx) {
+			if callOffset+len(batch.Calls) > len(toolCalls) {
+				err := fmt.Errorf("tool batch size mismatch")
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
+
+			batchToolCalls := toolCalls[callOffset : callOffset+len(batch.Calls)]
+			stepLimitExceededAfterBatch := false
+			if e.maxToolSteps > 0 {
+				remainingSteps := e.maxToolSteps - toolSteps
+				if remainingSteps <= 0 {
+					err := fmt.Errorf("turn exceeded max tool steps (%d)", e.maxToolSteps)
+					if emitErr := emitFailed(err.Error()); emitErr != nil {
+						return errors.Join(err, emitErr)
+					}
+					return err
+				}
+				if remainingSteps < len(batch.Calls) {
+					batch.Calls = batch.Calls[:remainingSteps]
+					batchToolCalls = batchToolCalls[:remainingSteps]
+					batch.Parallel = batch.Parallel && len(batch.Calls) > 1
+					stepLimitExceededAfterBatch = true
+				}
+			}
+
+			for _, call := range batchToolCalls {
+				toolSteps++
+				payload := types.ToolEventPayload{
+					ToolCallID: call.ID,
+					ToolName:   call.Name,
+					Arguments:  marshalToolArguments(call.Input),
+				}
+				if err := emit(types.EventToolStarted, payload); err != nil {
+					return err
+				}
+			}
+
+			executed, err := toolRuntime.ExecuteBatch(ctx, batch, toolExecCtx)
+			if err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
+
+			stopAfterBatch := false
+			for index, execResult := range executed {
+				call := batchToolCalls[index]
+				result := execResult.Result
+				output := execResult.Output
+				execErr := execResult.Err
+
+				var toolResultText string
+				var toolIsError bool
+				if execErr != nil {
+					toolResultText = execErr.Error()
+					toolIsError = true
+					stopAfterBatch = true
+				} else {
+					toolResultText = result.Text
+					if strings.TrimSpace(output.PreviewText) != "" {
+						toolResultText = output.PreviewText
+					}
+				}
+				modelToolResult := execResult.ModelResult
+				modelToolResultText := toolResultText
+				if !toolIsError {
+					if strings.TrimSpace(modelToolResult.Text) != "" {
+						modelToolResultText = modelToolResult.Text
+					} else if strings.TrimSpace(result.ModelText) != "" {
+						modelToolResultText = result.ModelText
+					}
+				}
+
+				payload := types.ToolEventPayload{
+					ToolCallID:    call.ID,
+					ToolName:      call.Name,
+					Arguments:     marshalToolArguments(call.Input),
+					ResultPreview: previewToolResult(toolResultText),
+				}
+				if err := emit(types.EventToolCompleted, payload); err != nil {
+					return err
+				}
+
+				toolResult := model.ToolResult{
+					ToolCallID:     call.ID,
+					ToolName:       call.Name,
+					Content:        modelToolResultText,
+					StructuredJSON: marshalStructuredToolResult(modelToolResult.Structured),
+					IsError:        toolIsError,
+				}
+				toolResultItem := model.ToolResultItem(toolResult)
+				if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
+					if emitErr := emitFailed(err.Error()); emitErr != nil {
+						return errors.Join(err, emitErr)
+					}
+					return err
+				}
+				req.Items = append(req.Items, toolResultItem)
+				nextPosition++
+
+				req.ToolResults = append(req.ToolResults, toolResult)
+
+				for _, item := range output.NewItems {
+					if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, item); err != nil {
+						if emitErr := emitFailed(err.Error()); emitErr != nil {
+							return errors.Join(err, emitErr)
+						}
+						return err
+					}
+					req.Items = append(req.Items, item)
+					nextPosition++
+				}
+			}
+
+			callOffset += len(batch.Calls)
+			if stepLimitExceededAfterBatch {
 				err := fmt.Errorf("turn exceeded max tool steps (%d)", e.maxToolSteps)
 				if emitErr := emitFailed(err.Error()); emitErr != nil {
 					return errors.Join(err, emitErr)
 				}
 				return err
 			}
-
-			payload := types.ToolEventPayload{
-				ToolCallID: call.ID,
-				ToolName:   call.Name,
-				Arguments:  marshalToolArguments(call.Input),
+			if stopAfterBatch {
+				break
 			}
-			if err := emit(types.EventToolStarted, payload); err != nil {
-				return err
-			}
-
-			result, execErr := e.registry.Execute(ctx, tools.Call{
-				Name:  call.Name,
-				Input: call.Input,
-			}, tools.ExecContext{
-				WorkspaceRoot:    in.Session.WorkspaceRoot,
-				PermissionEngine: e.permission,
-				TaskManager:      e.taskManager,
-				RuntimeService:   e.runtimeService,
-				TurnContext:      turnCtx,
-			})
-
-			var toolResultText string
-			var toolIsError bool
-			if execErr != nil {
-				toolResultText = execErr.Error()
-				toolIsError = true
-			} else {
-				toolResultText = result.Text
-			}
-
-			payload.ResultPreview = previewToolResult(toolResultText)
-			if err := emit(types.EventToolCompleted, payload); err != nil {
-				return err
-			}
-
-			toolResult := model.ToolResult{
-				ToolCallID: call.ID,
-				ToolName:   call.Name,
-				Content:    toolResultText,
-				IsError:    toolIsError,
-			}
-			toolResultItem := model.ToolResultItem(toolResult)
-			if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
-				if emitErr := emitFailed(err.Error()); emitErr != nil {
-					return errors.Join(err, emitErr)
-				}
-				return err
-			}
-			req.Items = append(req.Items, toolResultItem)
-			nextPosition++
-
-			req.ToolResults = append(req.ToolResults, toolResult)
 		}
 	}
 }
@@ -375,12 +460,7 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	return totalItems, working, nil
 }
 
-func buildToolSchemas(registry *tools.Registry) []model.ToolSchema {
-	if registry == nil {
-		return nil
-	}
-
-	defs := registry.Definitions()
+func buildToolSchemas(defs []tools.Definition) []model.ToolSchema {
 	if len(defs) == 0 {
 		return nil
 	}
@@ -394,6 +474,17 @@ func buildToolSchemas(registry *tools.Registry) []model.ToolSchema {
 		})
 	}
 	return schemas
+}
+
+func marshalStructuredToolResult(value any) string {
+	if value == nil {
+		return ""
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 func persistConversationItem(ctx context.Context, store ConversationStore, sessionID, turnID string, position int, item model.ConversationItem) error {
@@ -495,11 +586,22 @@ func marshalToolArguments(input map[string]any) string {
 }
 
 func previewToolResult(result string) string {
-	const maxLen = 200
-	if len(result) <= maxLen {
-		return result
+	return tools.PreviewText(result, 200)
+}
+
+type toolRunStore interface {
+	UpsertToolRun(context.Context, types.ToolRun) error
+}
+
+func toolRunStoreFromConversationStore(store ConversationStore) toolRunStore {
+	if store == nil {
+		return nil
 	}
-	return result[:maxLen] + "..."
+	runtimeStore, ok := any(store).(toolRunStore)
+	if !ok {
+		return nil
+	}
+	return runtimeStore
 }
 
 func providerCacheOwnerForCapabilities(caps model.ProviderCapabilities) string {

@@ -1,16 +1,22 @@
 package tools
 
 type Definition struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
+	Name           string
+	Aliases        []string
+	Description    string
+	InputSchema    map[string]any
+	OutputSchema   map[string]any
+	MaxInlineBytes int
 }
 
 func cloneDefinition(def Definition) Definition {
 	return Definition{
-		Name:        def.Name,
-		Description: def.Description,
-		InputSchema: cloneStringAnyMap(def.InputSchema),
+		Name:           def.Name,
+		Aliases:        cloneStringSlice(def.Aliases),
+		Description:    def.Description,
+		InputSchema:    cloneStringAnyMap(def.InputSchema),
+		OutputSchema:   cloneStringAnyMap(def.OutputSchema),
+		MaxInlineBytes: def.MaxInlineBytes,
 	}
 }
 
@@ -35,6 +41,16 @@ func cloneStringAnyMap(src map[string]any) map[string]any {
 	for key, value := range src {
 		cloned[key] = cloneAny(value)
 	}
+	return cloned
+}
+
+func cloneStringSlice(src []string) []string {
+	if src == nil {
+		return nil
+	}
+
+	cloned := make([]string, len(src))
+	copy(cloned, src)
 	return cloned
 }
 
