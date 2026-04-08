@@ -1,0 +1,60 @@
+# Trellis Configuration
+# Project-level settings for the Trellis workflow system
+#
+# All values have sensible defaults. Only override what you need.
+
+#-------------------------------------------------------------------------------
+# Session Recording
+#-------------------------------------------------------------------------------
+
+# Commit message used when auto-committing journal/index changes
+# after running add_session.py
+session_commit_message: "chore: record journal"
+
+# Maximum lines per journal file before rotating to a new one
+max_journal_lines: 2000
+
+#-------------------------------------------------------------------------------
+# Packages (Monorepo)
+#-------------------------------------------------------------------------------
+
+# Declare packages in this project and their source code paths.
+# If omitted, Trellis assumes a single-repo layout (spec/backend/, spec/frontend/).
+#
+packages:
+  cmd:
+    path: cmd
+  internal:
+    path: internal
+  web-console:
+    path: web/console
+  docs:
+    path: docs
+
+# Default package used when --package is not specified.
+default_package: internal
+
+#-------------------------------------------------------------------------------
+# Task Lifecycle Hooks
+#-------------------------------------------------------------------------------
+
+# Shell commands to run after task lifecycle events.
+# Each hook receives TASK_JSON_PATH environment variable pointing to task.json.
+# Hook failures print a warning but do not block the main operation.
+#
+#-------------------------------------------------------------------------------
+# Update Skip Paths
+#-------------------------------------------------------------------------------
+
+# Files or directories to skip during `trellis update`.
+# Use this to prevent update from re-adding files you intentionally removed.
+#
+update:
+  skip:
+    - .claude/commands/
+    - .agents/skills/
+    - .cursor/
+    - .runtime-data/
+    - web/console/node_modules/
+    - web/console/dist/
+    - .tmp-agentd-clean-20260406-233332/

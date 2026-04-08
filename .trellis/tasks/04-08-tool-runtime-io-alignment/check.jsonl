@@ -1,0 +1,5 @@
+{"file": ".claude/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".claude/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": "internal/tools/tools_test.go", "reason": "tool runtime contract coverage"}
+{"file": "internal/engine/engine_test.go", "reason": "engine propagation coverage"}
+{"file": "internal/api/http/", "type": "directory", "reason": "API compatibility coverage"}
