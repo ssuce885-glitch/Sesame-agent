@@ -12,7 +12,7 @@ const defaultGlobalSystemPromptVersion = "2026-04-05.sectioned.v1"
 const defaultMaxWorkspacePromptBytes = 32768
 
 const defaultGlobalSystemPrompt = `# Identity
-You are go-agent, a local software engineering assistant.
+You are Sesame, a local software engineering assistant.
 
 # System
 Follow the runtime instructions for this turn and respect workspace-specific rules when they are present.

@@ -7,10 +7,13 @@ import (
 
 type StatusPayload struct {
 	Status               string `json:"status"`
+	DaemonID             string `json:"daemon_id,omitempty"`
 	Provider             string `json:"provider,omitempty"`
 	Model                string `json:"model,omitempty"`
 	PermissionProfile    string `json:"permission_profile,omitempty"`
 	ProviderCacheProfile string `json:"provider_cache_profile,omitempty"`
+	ConfigFingerprint    string `json:"config_fingerprint,omitempty"`
+	PID                  int    `json:"pid,omitempty"`
 }
 
 func registerStatusRoutes(mux *http.ServeMux, payload StatusPayload) {

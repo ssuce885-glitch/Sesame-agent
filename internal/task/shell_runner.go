@@ -3,14 +3,15 @@ package task
 import (
 	"context"
 	"io"
-	"os/exec"
 	"sync"
+
+	runtimex "go-agent/internal/runtime"
 )
 
 type ShellRunner struct{}
 
 func (ShellRunner) Run(ctx context.Context, task *Task, sink OutputSink) error {
-	cmd := exec.CommandContext(ctx, "cmd", "/c", task.Command)
+	cmd := runtimex.NewShellCommandContext(ctx, task.Command)
 	cmd.Dir = task.WorkspaceRoot
 
 	stdout, err := cmd.StdoutPipe()

@@ -29,12 +29,16 @@ func handleGetWorkspace(deps Dependencies, sessionID string) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		permissionProfile := deps.Status.PermissionProfile
+		if sessionRow.PermissionProfile != "" {
+			permissionProfile = sessionRow.PermissionProfile
+		}
 		_ = json.NewEncoder(w).Encode(types.SessionWorkspaceResponse{
 			SessionID:            sessionRow.ID,
 			WorkspaceRoot:        sessionRow.WorkspaceRoot,
 			Provider:             deps.Status.Provider,
 			Model:                deps.Status.Model,
-			PermissionProfile:    deps.Status.PermissionProfile,
+			PermissionProfile:    permissionProfile,
 			ProviderCacheProfile: deps.Status.ProviderCacheProfile,
 		})
 	}

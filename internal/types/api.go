@@ -17,7 +17,14 @@ type SubmitTurnRequest struct {
 }
 
 type PermissionDecisionRequest struct {
-	Decision string `json:"decision"`
+	RequestID string `json:"request_id"`
+	Decision  string `json:"decision"`
+}
+
+type PermissionDecisionResponse struct {
+	Request PermissionRequest `json:"request"`
+	TurnID  string            `json:"turn_id"`
+	Resumed bool              `json:"resumed"`
 }
 
 type SessionListItem struct {

@@ -123,6 +123,7 @@ func cloneConversationItems(items []ConversationItem) []ConversationItem {
 		cloned[i] = ConversationItem{
 			Kind:    item.Kind,
 			Text:    item.Text,
+			Parts:   cloneContentParts(item.Parts),
 			Summary: cloneSummary(item.Summary),
 			ToolCall: ToolCallChunk{
 				ID:         item.ToolCall.ID,
@@ -166,6 +167,15 @@ func cloneToolSchemas(tools []ToolSchema) []ToolSchema {
 			InputSchema: cloneStringAnyMap(tool.InputSchema),
 		}
 	}
+	return cloned
+}
+
+func cloneContentParts(parts []ContentPart) []ContentPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	cloned := make([]ContentPart, len(parts))
+	copy(cloned, parts)
 	return cloned
 }
 

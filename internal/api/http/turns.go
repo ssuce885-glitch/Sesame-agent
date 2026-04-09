@@ -11,6 +11,11 @@ import (
 	"go-agent/internal/types"
 )
 
+type turnInterruptStore interface {
+	GetSession(context.Context, string) (types.Session, bool, error)
+	MarkTurnInterrupted(context.Context, string) error
+}
+
 func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -64,5 +69,56 @@ func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(turn)
+	}
+}
+
+func handleInterruptTurn(deps Dependencies, sessionID string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		store, ok := deps.Store.(turnInterruptStore)
+		if !ok {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		sess, found, err := store.GetSession(r.Context(), sessionID)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.NotFound(w, r)
+			return
+		}
+
+		turnID := strings.TrimSpace(sess.ActiveTurnID)
+		if turnID == "" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		if interrupter, ok := deps.Manager.(interface {
+			InterruptTurn(string, string) bool
+		}); ok {
+			interrupter.InterruptTurn(sessionID, turnID)
+		}
+
+		bg := context.WithoutCancel(r.Context())
+		if err := store.MarkTurnInterrupted(bg, turnID); err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if err := appendRuntimeTimelineEvent(bg, deps, sessionID, turnID, types.EventTurnInterrupted, map[string]string{
+			"reason": "user_cancelled",
+		}); err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusAccepted)
 	}
 }

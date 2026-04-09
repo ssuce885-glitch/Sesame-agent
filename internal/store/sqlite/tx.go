@@ -10,6 +10,8 @@ import (
 type RuntimeTx interface {
 	InsertRun(context.Context, types.Run) error
 	UpsertPlan(context.Context, types.Plan) error
+	UpsertTaskRecord(context.Context, types.TaskRecord) error
+	UpsertWorktree(context.Context, types.Worktree) error
 	ListActivePlansForSession(context.Context, string) ([]types.Plan, error)
 }
 

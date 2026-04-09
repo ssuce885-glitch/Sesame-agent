@@ -20,7 +20,13 @@ func NewRuntime(cacheExpirySeconds, maxCompactionPasses int) *Runtime {
 }
 
 func (r *Runtime) PrepareRequest(plan WorkingSet, head *types.ProviderCacheHead, caps model.ProviderCapabilities, userItem model.ConversationItem, instructions string) model.Request {
-	fullItems := make([]model.ConversationItem, 0, len(plan.Summaries)+len(plan.RecentItems)+1)
+	promptItems := plan.PromptItems
+	if len(promptItems) == 0 {
+		promptItems = plan.RecentItems
+	}
+
+	hasUserItem := userItem.Kind != ""
+	fullItems := make([]model.ConversationItem, 0, len(plan.Summaries)+len(promptItems)+map[bool]int{true: 1, false: 0}[hasUserItem])
 	for _, summary := range plan.Summaries {
 		summary := summary
 		fullItems = append(fullItems, model.ConversationItem{
@@ -28,8 +34,10 @@ func (r *Runtime) PrepareRequest(plan WorkingSet, head *types.ProviderCacheHead,
 			Summary: &summary,
 		})
 	}
-	fullItems = append(fullItems, cloneConversationItems(plan.RecentItems)...)
-	fullItems = append(fullItems, cloneConversationItem(userItem))
+	fullItems = append(fullItems, cloneConversationItems(promptItems)...)
+	if hasUserItem {
+		fullItems = append(fullItems, cloneConversationItem(userItem))
+	}
 
 	req := model.Request{
 		UserMessage:  userItem.Text,
@@ -41,7 +49,11 @@ func (r *Runtime) PrepareRequest(plan WorkingSet, head *types.ProviderCacheHead,
 		return req
 	}
 
-	if caps.SupportsPrefixCache && shouldRotatePrefix(plan.Action, head, r.maxCompactionPasses) {
+	prefixCompactionRequested := plan.CompactionApplied ||
+		plan.Action.Kind == CompactionActionMicrocompact ||
+		plan.Action.Kind == CompactionActionRolling
+
+	if caps.SupportsPrefixCache && shouldRotatePrefix(prefixCompactionRequested, head, r.maxCompactionPasses) {
 		req.Cache = &model.CacheDirective{
 			Mode:               model.CacheModePrefix,
 			Store:              true,
@@ -52,8 +64,20 @@ func (r *Runtime) PrepareRequest(plan WorkingSet, head *types.ProviderCacheHead,
 	}
 
 	if caps.SupportsSessionCache {
+		if plan.CompactionApplied && caps.RotatesSessionRef {
+			req.Cache = &model.CacheDirective{
+				Mode:     model.CacheModeSession,
+				Store:    true,
+				ExpireAt: r.cacheExpiryUnix(),
+			}
+			return req
+		}
 		if previous := previousSessionResponseID(head); previous != "" {
-			req.Items = []model.ConversationItem{cloneConversationItem(userItem)}
+			if hasUserItem {
+				req.Items = []model.ConversationItem{cloneConversationItem(userItem)}
+			} else {
+				req.Items = nil
+			}
 			req.Cache = &model.CacheDirective{
 				Mode:               model.CacheModeSession,
 				Store:              true,
@@ -64,9 +88,9 @@ func (r *Runtime) PrepareRequest(plan WorkingSet, head *types.ProviderCacheHead,
 		}
 		if head == nil {
 			req.Cache = &model.CacheDirective{
-				Mode:               model.CacheModeSession,
-				Store:              true,
-				ExpireAt:           r.cacheExpiryUnix(),
+				Mode:     model.CacheModeSession,
+				Store:    true,
+				ExpireAt: r.cacheExpiryUnix(),
 			}
 		}
 	}
@@ -74,8 +98,8 @@ func (r *Runtime) PrepareRequest(plan WorkingSet, head *types.ProviderCacheHead,
 	return req
 }
 
-func shouldRotatePrefix(action CompactionAction, head *types.ProviderCacheHead, maxCompactionPasses int) bool {
-	if action.Kind != CompactionActionMicrocompact && action.Kind != CompactionActionRolling {
+func shouldRotatePrefix(compactionRequested bool, head *types.ProviderCacheHead, maxCompactionPasses int) bool {
+	if !compactionRequested {
 		return false
 	}
 	if head == nil || head.ActivePrefixRef == "" {

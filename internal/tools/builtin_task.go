@@ -5,16 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	"go-agent/internal/runtimegraph"
 	"go-agent/internal/task"
+	"go-agent/internal/types"
 )
 
 type taskCreateTool struct{}
 
 type TaskCreateInput struct {
-	Type        string `json:"type"`
-	Command     string `json:"command"`
-	Description string `json:"description,omitempty"`
+	Type         string `json:"type"`
+	Command      string `json:"command"`
+	Description  string `json:"description,omitempty"`
+	PlanID       string `json:"plan_id,omitempty"`
+	ParentTaskID string `json:"parent_task_id,omitempty"`
+	Owner        string `json:"owner,omitempty"`
+	Kind         string `json:"kind,omitempty"`
+	WorktreeID   string `json:"worktree_id,omitempty"`
+	Start        *bool  `json:"start,omitempty"`
 }
 
 type TaskCreateOutput struct {
@@ -54,6 +63,8 @@ type TaskUpdateInput struct {
 	TaskID      string `json:"task_id"`
 	Status      string `json:"status,omitempty"`
 	Description string `json:"description,omitempty"`
+	Owner       string `json:"owner,omitempty"`
+	WorktreeID  string `json:"worktree_id,omitempty"`
 }
 
 type TaskUpdateOutput struct {
@@ -81,6 +92,30 @@ func (taskCreateTool) Definition() Definition {
 				"type":        "string",
 				"description": "Optional task description.",
 			},
+			"plan_id": map[string]any{
+				"type":        "string",
+				"description": "Optional runtime plan identifier.",
+			},
+			"parent_task_id": map[string]any{
+				"type":        "string",
+				"description": "Optional parent task identifier.",
+			},
+			"owner": map[string]any{
+				"type":        "string",
+				"description": "Optional task owner label.",
+			},
+			"kind": map[string]any{
+				"type":        "string",
+				"description": "Optional orchestration kind label.",
+			},
+			"worktree_id": map[string]any{
+				"type":        "string",
+				"description": "Optional linked worktree id.",
+			},
+			"start": map[string]any{
+				"type":        "boolean",
+				"description": "Whether to start immediately. Defaults to true.",
+			},
 		}, "type", "command"),
 		OutputSchema: objectSchema(map[string]any{
 			"task_id":     map[string]any{"type": "string"},
@@ -98,6 +133,14 @@ func (taskCreateTool) Decode(call Call) (DecodedCall, error) {
 		Type:        strings.TrimSpace(call.StringInput("type")),
 		Command:     strings.TrimSpace(call.StringInput("command")),
 		Description: strings.TrimSpace(call.StringInput("description")),
+		PlanID:      strings.TrimSpace(call.StringInput("plan_id")),
+		ParentTaskID: strings.TrimSpace(call.StringInput("parent_task_id")),
+		Owner:       strings.TrimSpace(call.StringInput("owner")),
+		Kind:        strings.TrimSpace(call.StringInput("kind")),
+		WorktreeID:  strings.TrimSpace(call.StringInput("worktree_id")),
+	}
+	if start, ok := call.Input["start"].(bool); ok {
+		input.Start = &start
 	}
 	if input.Type == "" {
 		return DecodedCall{}, fmt.Errorf("type is required")
@@ -108,9 +151,15 @@ func (taskCreateTool) Decode(call Call) (DecodedCall, error) {
 	normalized := Call{
 		Name: call.Name,
 		Input: map[string]any{
-			"type":        input.Type,
-			"command":     input.Command,
-			"description": input.Description,
+			"type":           input.Type,
+			"command":        input.Command,
+			"description":    input.Description,
+			"plan_id":        input.PlanID,
+			"parent_task_id": input.ParentTaskID,
+			"owner":          input.Owner,
+			"kind":           input.Kind,
+			"worktree_id":    input.WorktreeID,
+			"start":          input.Start,
 		},
 	}
 	return DecodedCall{Call: normalized, Input: input}, nil
@@ -136,16 +185,50 @@ func (taskCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 	if err != nil {
 		return ToolExecutionResult{}, err
 	}
+	start := true
+	if input.Start != nil {
+		start = *input.Start
+	}
 
+	taskKind := input.Kind
+	if taskKind == "" {
+		taskKind = string(taskType)
+	}
 	created, err := manager.Create(ctx, task.CreateTaskInput{
 		Type:          taskType,
 		Command:       input.Command,
 		Description:   input.Description,
+		ParentTaskID:  input.ParentTaskID,
+		Owner:         input.Owner,
+		Kind:          taskKind,
+		WorktreeID:    input.WorktreeID,
 		WorkspaceRoot: execCtx.WorkspaceRoot,
-		Start:         true,
+		Start:         start,
 	})
 	if err != nil {
 		return ToolExecutionResult{}, err
+	}
+	emittedRuntimeBlock := false
+	if execCtx.RuntimeService != nil && execCtx.TurnContext != nil {
+		if runtimeTask, err := execCtx.RuntimeService.CreateTask(ctx, execCtx.TurnContext, runtimegraph.CreateTaskInput{
+			SessionID:       execCtx.TurnContext.CurrentSessionID,
+			TurnID:          execCtx.TurnContext.CurrentTurnID,
+			PlanID:          input.PlanID,
+			ParentTaskID:    input.ParentTaskID,
+			Title:           input.Command,
+			Description:     input.Description,
+			Owner:           input.Owner,
+			Kind:            taskKind,
+			ExecutionTaskID: created.ID,
+			WorktreeID:      input.WorktreeID,
+		}); err == nil {
+			execCtx.TurnContext.CurrentTaskID = runtimeTask.ID
+			emitTimelineBlockEvent(ctx, execCtx, types.EventTaskUpdated, types.TimelineBlockFromTask(runtimeTask))
+			emittedRuntimeBlock = true
+		}
+	}
+	if !emittedRuntimeBlock {
+		emitTimelineBlockEvent(ctx, execCtx, types.EventTaskUpdated, timelineBlockFromManagerTask(created, currentRunID(execCtx)))
 	}
 
 	modelText := fmt.Sprintf("Task created successfully with id: %s", created.ID)
@@ -452,7 +535,7 @@ func (t taskStopTool) Execute(ctx context.Context, call Call, execCtx ExecContex
 	return output.Result, err
 }
 
-func (taskStopTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
+func (taskStopTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
 	manager, err := requireTaskManager(execCtx)
 	if err != nil {
 		return ToolExecutionResult{}, err
@@ -462,6 +545,26 @@ func (taskStopTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execC
 	taskID := input.TaskID
 	if err := manager.Stop(taskID, execCtx.WorkspaceRoot); err != nil {
 		return ToolExecutionResult{}, err
+	}
+	updated, err := getTaskForWorkspace(manager, taskID, execCtx.WorkspaceRoot)
+	if err == nil {
+		if execCtx.RuntimeService != nil && execCtx.TurnContext != nil {
+			_ = execCtx.RuntimeService.UpdateTask(ctx, types.Task{
+				ID:              updated.ID,
+				RunID:           currentRunID(execCtx),
+				ParentTaskID:    updated.ParentTaskID,
+				State:           runtimeTaskStateFromTaskStatus(updated.Status),
+				Title:           updated.Command,
+				Description:     updated.Description,
+				Owner:           updated.Owner,
+				Kind:            updated.Kind,
+				ExecutionTaskID: updated.ExecutionTaskID,
+				WorktreeID:      updated.WorktreeID,
+				CreatedAt:       updated.StartTime,
+				UpdatedAt:       timeNowUTC(),
+			})
+		}
+		emitTimelineBlockEvent(ctx, execCtx, types.EventTaskUpdated, timelineBlockFromManagerTask(updated, currentRunID(execCtx)))
 	}
 
 	modelText := fmt.Sprintf("Task stopped: %s", taskID)
@@ -502,6 +605,14 @@ func (taskUpdateTool) Definition() Definition {
 				"type":        "string",
 				"description": "Optional description override.",
 			},
+			"owner": map[string]any{
+				"type":        "string",
+				"description": "Optional owner override.",
+			},
+			"worktree_id": map[string]any{
+				"type":        "string",
+				"description": "Optional worktree link override.",
+			},
 		}, "task_id"),
 		OutputSchema: objectSchema(map[string]any{
 			"task": map[string]any{
@@ -519,6 +630,8 @@ func (taskUpdateTool) Decode(call Call) (DecodedCall, error) {
 		TaskID:      strings.TrimSpace(call.StringInput("task_id")),
 		Status:      strings.TrimSpace(call.StringInput("status")),
 		Description: strings.TrimSpace(call.StringInput("description")),
+		Owner:       strings.TrimSpace(call.StringInput("owner")),
+		WorktreeID:  strings.TrimSpace(call.StringInput("worktree_id")),
 	}
 	if input.TaskID == "" {
 		return DecodedCall{}, fmt.Errorf("task_id is required")
@@ -529,6 +642,8 @@ func (taskUpdateTool) Decode(call Call) (DecodedCall, error) {
 			"task_id":     input.TaskID,
 			"status":      input.Status,
 			"description": input.Description,
+			"owner":       input.Owner,
+			"worktree_id": input.WorktreeID,
 		},
 	}
 	return DecodedCall{Call: normalized, Input: input}, nil
@@ -543,7 +658,7 @@ func (t taskUpdateTool) Execute(ctx context.Context, call Call, execCtx ExecCont
 	return output.Result, err
 }
 
-func (taskUpdateTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
+func (taskUpdateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
 	manager, err := requireTaskManager(execCtx)
 	if err != nil {
 		return ToolExecutionResult{}, err
@@ -566,6 +681,8 @@ func (taskUpdateTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, exe
 	if err := manager.Update(current.ID, execCtx.WorkspaceRoot, task.UpdateTaskInput{
 		Status:      nextStatus,
 		Description: input.Description,
+		Owner:       input.Owner,
+		WorktreeID:  input.WorktreeID,
 	}); err != nil {
 		return ToolExecutionResult{}, err
 	}
@@ -576,6 +693,23 @@ func (taskUpdateTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, exe
 	}
 
 	text := mustJSON(updated)
+	if execCtx.RuntimeService != nil && execCtx.TurnContext != nil {
+		_ = execCtx.RuntimeService.UpdateTask(ctx, types.Task{
+			ID:              updated.ID,
+			RunID:           currentRunID(execCtx),
+			ParentTaskID:    updated.ParentTaskID,
+			State:           runtimeTaskStateFromTaskStatus(updated.Status),
+			Title:           updated.Command,
+			Description:     updated.Description,
+			Owner:           updated.Owner,
+			Kind:            updated.Kind,
+			ExecutionTaskID: updated.ExecutionTaskID,
+			WorktreeID:      updated.WorktreeID,
+			CreatedAt:       updated.StartTime,
+			UpdatedAt:       timeNowUTC(),
+		})
+	}
+	emitTimelineBlockEvent(ctx, execCtx, types.EventTaskUpdated, timelineBlockFromManagerTask(updated, currentRunID(execCtx)))
 	return ToolExecutionResult{
 		Result: Result{
 			Text:      text,
@@ -584,6 +718,32 @@ func (taskUpdateTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, exe
 		Data:        TaskUpdateOutput{Task: updated},
 		PreviewText: fmt.Sprintf("Task %s updated to %s", updated.ID, updated.Status),
 	}, nil
+}
+
+func runtimeTaskStateFromTaskStatus(status task.TaskStatus) types.TaskState {
+	switch status {
+	case task.TaskStatusRunning:
+		return types.TaskStateRunning
+	case task.TaskStatusCompleted:
+		return types.TaskStateCompleted
+	case task.TaskStatusStopped:
+		return types.TaskStateCancelled
+	case task.TaskStatusFailed:
+		return types.TaskStateFailed
+	default:
+		return types.TaskStatePending
+	}
+}
+
+func timeNowUTC() time.Time {
+	return time.Now().UTC()
+}
+
+func currentRunID(execCtx ExecContext) string {
+	if execCtx.TurnContext == nil {
+		return ""
+	}
+	return strings.TrimSpace(execCtx.TurnContext.CurrentRunID)
 }
 
 func (taskUpdateTool) MapModelResult(output ToolExecutionResult) ModelToolResult {

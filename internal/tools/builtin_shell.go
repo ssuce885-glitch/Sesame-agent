@@ -27,13 +27,21 @@ type shellTool struct{}
 
 type shellCommandInput struct {
 	Command        string
+	Workdir        string
 	TimeoutSeconds int
 	MaxOutputBytes int
 }
 
 type ShellCommandOutput struct {
 	Command        string `json:"command"`
+	Workdir        string `json:"workdir,omitempty"`
 	Output         string `json:"output"`
+	Stdout         string `json:"stdout"`
+	Stderr         string `json:"stderr"`
+	ExitCode       int    `json:"exit_code"`
+	TimedOut       bool   `json:"timed_out"`
+	DurationMs     int64  `json:"duration_ms"`
+	Truncated      bool   `json:"truncated"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	MaxOutputBytes int    `json:"max_output_bytes"`
 	Classification string `json:"classification"`
@@ -51,11 +59,16 @@ const (
 func (shellTool) Definition() Definition {
 	return Definition{
 		Name:        "shell_command",
+		Aliases:     []string{"shell"},
 		Description: "Run a shell command.",
 		InputSchema: objectSchema(map[string]any{
 			"command": map[string]any{
 				"type":        "string",
 				"description": "Shell command to execute.",
+			},
+			"workdir": map[string]any{
+				"type":        "string",
+				"description": "Optional working directory relative to the workspace root.",
 			},
 			"timeout_seconds": map[string]any{
 				"type":        "integer",
@@ -68,11 +81,18 @@ func (shellTool) Definition() Definition {
 		}, "command"),
 		OutputSchema: objectSchema(map[string]any{
 			"command":          map[string]any{"type": "string"},
+			"workdir":          map[string]any{"type": "string"},
 			"output":           map[string]any{"type": "string"},
+			"stdout":           map[string]any{"type": "string"},
+			"stderr":           map[string]any{"type": "string"},
+			"exit_code":        map[string]any{"type": "integer"},
+			"timed_out":        map[string]any{"type": "boolean"},
+			"duration_ms":      map[string]any{"type": "integer"},
+			"truncated":        map[string]any{"type": "boolean"},
 			"timeout_seconds":  map[string]any{"type": "integer"},
 			"max_output_bytes": map[string]any{"type": "integer"},
 			"classification":   map[string]any{"type": "string"},
-		}, "command", "output", "timeout_seconds", "max_output_bytes", "classification"),
+		}, "command", "output", "stdout", "stderr", "exit_code", "timed_out", "duration_ms", "truncated", "timeout_seconds", "max_output_bytes", "classification"),
 	}
 }
 
@@ -86,6 +106,7 @@ func (t shellTool) Decode(call Call) (DecodedCall, error) {
 	if command == "" {
 		return DecodedCall{}, fmt.Errorf("shell command is required")
 	}
+	workdir := strings.TrimSpace(call.StringInput("workdir"))
 
 	timeoutSeconds, err := decodeShellPositiveInt(call.Input["timeout_seconds"], shellCommandTimeoutSeconds)
 	if err != nil {
@@ -107,6 +128,7 @@ func (t shellTool) Decode(call Call) (DecodedCall, error) {
 		Name: call.Name,
 		Input: map[string]any{
 			"command":          command,
+			"workdir":          workdir,
 			"timeout_seconds":  timeoutSeconds,
 			"max_output_bytes": maxOutputBytes,
 		},
@@ -115,6 +137,7 @@ func (t shellTool) Decode(call Call) (DecodedCall, error) {
 		Call: normalized,
 		Input: shellCommandInput{
 			Command:        command,
+			Workdir:        workdir,
 			TimeoutSeconds: timeoutSeconds,
 			MaxOutputBytes: maxOutputBytes,
 		},
@@ -135,6 +158,9 @@ func (shellTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCt
 	if input.Command == "" {
 		input.Command = strings.TrimSpace(decoded.Call.StringInput("command"))
 	}
+	if input.Workdir == "" {
+		input.Workdir = strings.TrimSpace(decoded.Call.StringInput("workdir"))
+	}
 	if input.TimeoutSeconds <= 0 {
 		input.TimeoutSeconds = shellCommandTimeoutSeconds
 	}
@@ -144,28 +170,48 @@ func (shellTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCt
 	shellCtx, cancel := context.WithTimeout(ctx, time.Duration(input.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	output, err := runtime.RunCommand(shellCtx, execCtx.WorkspaceRoot, input.Command, input.MaxOutputBytes)
+	commandWorkdir := execCtx.WorkspaceRoot
+	if input.Workdir != "" {
+		commandWorkdir = resolveWorkspacePath(execCtx.WorkspaceRoot, input.Workdir)
+		if err := runtime.WithinWorkspace(execCtx.WorkspaceRoot, commandWorkdir); err != nil {
+			return ToolExecutionResult{}, err
+		}
+	}
+
+	output, err := runtime.RunCommand(shellCtx, commandWorkdir, input.Command, input.MaxOutputBytes)
 	if err != nil {
 		return ToolExecutionResult{}, err
 	}
 
 	classification := string(classifyShellCommand(input.Command))
-	text := string(output)
+	text := output.AggregatedOutput
+	modelText := renderShellCommandModelText(input.Command, commandWorkdir, input.TimeoutSeconds, input.MaxOutputBytes, classification, output)
+	previewText := renderShellCommandPreview(input.Command, output)
 	return ToolExecutionResult{
 		Result: Result{
 			Text:      text,
-			ModelText: text,
+			ModelText: modelText,
 		},
 		Data: ShellCommandOutput{
 			Command:        input.Command,
+			Workdir:        commandWorkdir,
 			Output:         text,
+			Stdout:         output.Stdout,
+			Stderr:         output.Stderr,
+			ExitCode:       output.ExitCode,
+			TimedOut:       output.TimedOut,
+			DurationMs:     output.Duration.Milliseconds(),
+			Truncated:      output.Truncated,
 			TimeoutSeconds: input.TimeoutSeconds,
 			MaxOutputBytes: input.MaxOutputBytes,
 			Classification: classification,
 		},
-		PreviewText: PreviewText(text, 256),
+		PreviewText: previewText,
 		Metadata: map[string]any{
 			"classification": classification,
+			"exit_code":      output.ExitCode,
+			"timed_out":      output.TimedOut,
+			"truncated":      output.Truncated,
 		},
 	}, nil
 }
@@ -198,6 +244,53 @@ func (shellTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
 		Text:       text,
 		Structured: output.Data,
 	}
+}
+
+func renderShellCommandPreview(command string, output runtime.CommandOutput) string {
+	state := fmt.Sprintf("exit=%d", output.ExitCode)
+	if output.TimedOut {
+		state = "timed_out"
+	}
+	parts := []string{
+		fmt.Sprintf("Command %q finished (%s", command, state),
+	}
+	if output.Duration > 0 {
+		parts[0] += fmt.Sprintf(", %dms", output.Duration.Milliseconds())
+	}
+	parts[0] += ")"
+	if output.Truncated {
+		parts = append(parts, "output truncated")
+	}
+	return strings.Join(parts, "; ")
+}
+
+func renderShellCommandModelText(command, workdir string, timeoutSeconds, maxOutputBytes int, classification string, output runtime.CommandOutput) string {
+	var lines []string
+	lines = append(lines, "Shell command completed.")
+	lines = append(lines, fmt.Sprintf("Command: %s", command))
+	if strings.TrimSpace(workdir) != "" {
+		lines = append(lines, fmt.Sprintf("Working directory: %s", workdir))
+	}
+	lines = append(lines, fmt.Sprintf("Classification: %s", classification))
+	lines = append(lines, fmt.Sprintf("Exit code: %d", output.ExitCode))
+	lines = append(lines, fmt.Sprintf("Timed out: %t", output.TimedOut))
+	lines = append(lines, fmt.Sprintf("Truncated: %t", output.Truncated))
+	lines = append(lines, fmt.Sprintf("Duration: %d ms", output.Duration.Milliseconds()))
+	lines = append(lines, fmt.Sprintf("Timeout limit: %d s", timeoutSeconds))
+	lines = append(lines, fmt.Sprintf("Output limit: %d bytes", maxOutputBytes))
+	lines = append(lines, "stdout:")
+	lines = append(lines, shellOutputBlock(output.Stdout))
+	lines = append(lines, "stderr:")
+	lines = append(lines, shellOutputBlock(output.Stderr))
+	return strings.Join(lines, "\n")
+}
+
+func shellOutputBlock(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "<empty>"
+	}
+	return text
 }
 
 func decodeShellPositiveInt(raw any, fallback int) (int, error) {

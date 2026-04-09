@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,10 +17,13 @@ import (
 
 type StatusResponse struct {
 	Status               string `json:"status"`
+	DaemonID             string `json:"daemon_id,omitempty"`
 	Provider             string `json:"provider,omitempty"`
 	Model                string `json:"model,omitempty"`
 	PermissionProfile    string `json:"permission_profile,omitempty"`
 	ProviderCacheProfile string `json:"provider_cache_profile,omitempty"`
+	ConfigFingerprint    string `json:"config_fingerprint,omitempty"`
+	PID                  int    `json:"pid,omitempty"`
 }
 
 type Client struct {
@@ -70,6 +75,10 @@ func (c *Client) SubmitTurn(ctx context.Context, sessionID string, req types.Sub
 		return types.Turn{}, err
 	}
 	return out, nil
+}
+
+func (c *Client) InterruptTurn(ctx context.Context, sessionID string) error {
+	return c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/sessions/%s/interrupt", sessionID), nil, nil)
 }
 
 func (c *Client) GetTimeline(ctx context.Context, sessionID string) (types.SessionTimelineResponse, error) {
@@ -128,19 +137,29 @@ func (c *Client) StreamEvents(ctx context.Context, sessionID string, afterSeq in
 		defer close(out)
 		defer resp.Body.Close()
 
-		scanner := bufio.NewScanner(resp.Body)
+		reader := bufio.NewReader(resp.Body)
 		var frame bytes.Buffer
-		for scanner.Scan() {
-			line := scanner.Text()
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil && !errors.Is(err, io.EOF) {
+				return
+			}
+			line = strings.TrimRight(line, "\r\n")
 			if line == "" {
 				if event, ok := parseEventFrame(frame.String()); ok {
 					out <- event
 				}
 				frame.Reset()
-				continue
+			} else {
+				frame.WriteString(line)
+				frame.WriteString("\n")
 			}
-			frame.WriteString(line)
-			frame.WriteString("\n")
+			if errors.Is(err, io.EOF) {
+				if event, ok := parseEventFrame(frame.String()); ok {
+					out <- event
+				}
+				return
+			}
 		}
 	}()
 	return out, nil
@@ -187,7 +206,7 @@ func parseEventFrame(frame string) (types.Event, bool) {
 	}
 
 	var eventName string
-	var data string
+	dataLines := make([]string, 0, 1)
 	var seq int64
 	for _, line := range lines {
 		switch {
@@ -199,9 +218,10 @@ func parseEventFrame(frame string) (types.Event, bool) {
 		case strings.HasPrefix(line, "event: "):
 			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event: "))
 		case strings.HasPrefix(line, "data: "):
-			data = strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+			dataLines = append(dataLines, strings.TrimPrefix(line, "data: "))
 		}
 	}
+	data := strings.TrimSpace(strings.Join(dataLines, "\n"))
 	if eventName == "" || eventName == "keepalive" || data == "" {
 		return types.Event{}, false
 	}

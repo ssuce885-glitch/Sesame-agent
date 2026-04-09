@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"go-agent/internal/permissions"
 	"go-agent/internal/types"
 )
 
@@ -21,17 +23,19 @@ type ToolRunStore interface {
 type Runtime struct {
 	registry *Registry
 	store    ToolRunStore
+	locks    *resourceLockManager
 }
 
 type PreparedCall struct {
-	Original     Call
-	Call         Call
-	ResolvedName string
-	Tool         Tool
-	Definition   Definition
-	Decoded      DecodedCall
-	Parallel     bool
-	PrepareErr   error
+	Original       Call
+	Call           Call
+	ResolvedName   string
+	Tool           Tool
+	Definition     Definition
+	Decoded        DecodedCall
+	Parallel       bool
+	ResourceClaims []ResourceClaim
+	PrepareErr     error
 }
 
 type CallBatch struct {
@@ -51,6 +55,7 @@ func NewRuntime(registry *Registry, store ToolRunStore) *Runtime {
 	return &Runtime{
 		registry: registry,
 		store:    store,
+		locks:    defaultResourceLockManager,
 	}
 }
 
@@ -58,7 +63,32 @@ func (r *Runtime) VisibleDefinitions(execCtx ExecContext) []Definition {
 	if r == nil || r.registry == nil {
 		return nil
 	}
-	return r.registry.VisibleDefinitions(execCtx)
+	defs := append([]Definition(nil), r.registry.VisibleDefinitions(execCtx)...)
+	customTools, err := loadCustomTools(r.registry, execCtx)
+	if err == nil {
+		for _, tool := range customTools {
+			if !toolEnabled(tool, execCtx) {
+				continue
+			}
+			if execCtx.PermissionEngine != nil {
+				switch execCtx.PermissionEngine.Decide(tool.spec.Name) {
+				case permissions.DecisionAllow:
+				case permissions.DecisionAsk, permissions.DecisionDeny:
+					continue
+				}
+			}
+			defs = append(defs, cloneDefinition(tool.Definition()))
+		}
+	}
+	sort.Slice(defs, func(i, j int) bool {
+		left := strings.ToLower(defs[i].Name)
+		right := strings.ToLower(defs[j].Name)
+		if left == right {
+			return defs[i].Name < defs[j].Name
+		}
+		return left < right
+	})
+	return defs
 }
 
 func (r *Runtime) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
@@ -78,36 +108,103 @@ func (r *Runtime) prepareCall(call Call, execCtx ExecContext) PreparedCall {
 			PrepareErr: errors.New("tool registry is required"),
 		}
 	}
-	prepared := r.registry.prepareCall(call)
+	prepared := r.prepareRegistryOrCustomCall(call, execCtx)
+	prepared.ResourceClaims = resourceClaimsForPrepared(prepared, execCtx)
 	prepared.Parallel = prepared.PrepareErr == nil &&
 		toolEnabled(prepared.Tool, execCtx) &&
 		toolConcurrencySafe(prepared.Tool, prepared.Decoded, execCtx)
 	return prepared
 }
 
+func (r *Runtime) prepareRegistryOrCustomCall(call Call, execCtx ExecContext) PreparedCall {
+	if tool, def, resolvedName, ok := r.registry.lookup(call.Name); ok {
+		return r.registry.prepareResolvedCall(tool, def, resolvedName, call)
+	}
+
+	customTools, err := loadCustomTools(r.registry, execCtx)
+	if err != nil {
+		return PreparedCall{
+			Original:   call,
+			Call:       call,
+			PrepareErr: err,
+		}
+	}
+	customTool, ok := customTools[strings.ToLower(call.Name)]
+	if !ok {
+		return PreparedCall{
+			Original:   call,
+			Call:       call,
+			PrepareErr: fmt.Errorf("unknown tool %q", call.Name),
+		}
+	}
+	def := customTool.Definition()
+	return r.registry.prepareResolvedCall(customTool, def, def.Name, call)
+}
+
 func (r *Runtime) executePrepared(ctx context.Context, prepared PreparedCall, execCtx ExecContext) (ToolExecutionResult, error) {
 	var (
 		runRecord *types.ToolRun
-		startedAt time.Time
+		lockStats ResourceLockStats
 	)
 	if strings.TrimSpace(prepared.ResolvedName) != "" {
 		runRecord = r.startToolRun(ctx, prepared.ResolvedName, prepared.Call, execCtx)
-		startedAt = time.Now().UTC()
 		if runRecord != nil {
-			runRecord.StartedAt = startedAt
-			runRecord.CreatedAt = startedAt
-			runRecord.UpdatedAt = startedAt
-			runRecord.State = types.ToolRunStateRunning
+			now := time.Now().UTC()
+			runRecord.CreatedAt = now
+			runRecord.UpdatedAt = now
+			runRecord.State = types.ToolRunStatePending
 			if err := r.store.UpsertToolRun(ctx, *runRecord); err != nil {
 				return ToolExecutionResult{}, err
 			}
+			emitTimelineBlockEvent(ctx, execCtx, types.EventToolRunUpdated, types.TimelineBlockFromToolRun(*runRecord))
 		}
+	}
+
+	var releaseLocks func()
+	if r != nil && r.locks != nil && len(prepared.ResourceClaims) > 0 {
+		waitStarted := time.Now()
+		release, err := r.locks.acquire(ctx, prepared.ResourceClaims)
+		if err != nil {
+			if runRecord != nil {
+				runRecord.State = types.ToolRunStateFailed
+				runRecord.Error = err.Error()
+				runRecord.UpdatedAt = time.Now().UTC()
+				runRecord.CompletedAt = runRecord.UpdatedAt
+				_ = r.store.UpsertToolRun(ctx, *runRecord)
+				emitTimelineBlockEvent(ctx, execCtx, types.EventToolRunUpdated, types.TimelineBlockFromToolRun(*runRecord))
+			}
+			return ToolExecutionResult{}, err
+		}
+		releaseLocks = release
+		lockStats = ResourceLockStats{
+			Waited:   time.Since(waitStarted),
+			Acquired: normalizeResourceClaims(prepared.ResourceClaims),
+		}
+	}
+	if releaseLocks != nil {
+		defer releaseLocks()
+	}
+	startedAt := time.Now().UTC()
+	if runRecord != nil {
+		runRecord.StartedAt = startedAt
+		runRecord.UpdatedAt = startedAt
+		runRecord.State = types.ToolRunStateRunning
+		runRecord.LockWaitMs = lockStats.Waited.Milliseconds()
+		runRecord.ResourceKeys = claimKeys(lockStats.Acquired)
+		if err := r.store.UpsertToolRun(ctx, *runRecord); err != nil {
+			return ToolExecutionResult{}, err
+		}
+		emitTimelineBlockEvent(ctx, execCtx, types.EventToolRunUpdated, types.TimelineBlockFromToolRun(*runRecord))
 	}
 
 	output := ToolExecutionResult{}
 	execErr := prepared.PrepareErr
 	if execErr == nil {
-		output, execErr = r.registry.executePreparedRich(ctx, prepared, execCtx)
+		execToolCtx := execCtx
+		if runRecord != nil {
+			execToolCtx.ToolRunID = runRecord.ID
+		}
+		output, execErr = r.registry.executePreparedRich(ctx, prepared, execToolCtx)
 	}
 	if execErr == nil {
 		output = normalizeToolResult(output, prepared.Definition, prepared.ResolvedName, execCtx)
@@ -115,18 +212,32 @@ func (r *Runtime) executePrepared(ctx context.Context, prepared PreparedCall, ex
 	if runRecord != nil {
 		completedAt := time.Now().UTC()
 		runRecord.UpdatedAt = completedAt
-		runRecord.CompletedAt = completedAt
 		if execErr != nil {
 			runRecord.State = types.ToolRunStateFailed
 			runRecord.Error = execErr.Error()
 			runRecord.OutputJSON = ""
+			runRecord.CompletedAt = completedAt
 		} else {
-			runRecord.State = types.ToolRunStateCompleted
 			runRecord.Error = ""
-			runRecord.OutputJSON = marshalToolRunOutput(output)
+			if output.Interrupt != nil && strings.TrimSpace(output.Interrupt.EventType) == types.EventPermissionRequested {
+				runRecord.State = types.ToolRunStateWaitingPermission
+				runRecord.CompletedAt = time.Time{}
+				runRecord.OutputJSON = marshalToolRunOutput(output)
+				runRecord.PermissionRequestID = firstMetadataString(output.Metadata, "permission_request_id")
+			} else {
+				runRecord.State = types.ToolRunStateCompleted
+				runRecord.CompletedAt = completedAt
+				runRecord.OutputJSON = marshalToolRunOutput(output)
+			}
 		}
-		if err := r.store.UpsertToolRun(ctx, *runRecord); err != nil && execErr != nil {
-			execErr = errors.Join(execErr, err)
+		if err := r.store.UpsertToolRun(ctx, *runRecord); err != nil {
+			if execErr != nil {
+				execErr = errors.Join(execErr, err)
+			} else {
+				return ToolExecutionResult{}, err
+			}
+		} else {
+			emitTimelineBlockEvent(ctx, execCtx, types.EventToolRunUpdated, types.TimelineBlockFromToolRun(*runRecord))
 		}
 	}
 
@@ -232,11 +343,12 @@ func (r *Runtime) startToolRun(_ context.Context, resolvedName string, call Call
 	}
 
 	return &types.ToolRun{
-		ID:        types.NewID("tool_run"),
-		RunID:     runID,
-		TaskID:    strings.TrimSpace(execCtx.TurnContext.CurrentTaskID),
-		ToolName:  resolvedName,
-		InputJSON: marshalCallInput(call.Input),
+		ID:         types.NewID("tool_run"),
+		RunID:      runID,
+		TaskID:     strings.TrimSpace(execCtx.TurnContext.CurrentTaskID),
+		ToolName:   resolvedName,
+		ToolCallID: strings.TrimSpace(call.ID),
+		InputJSON:  marshalCallInput(call.Input),
 	}
 }
 
@@ -343,6 +455,27 @@ func marshalToolRunOutput(result ToolExecutionResult) string {
 		return ""
 	}
 	return string(raw)
+}
+
+func claimKeys(claims []ResourceClaim) []string {
+	if len(claims) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(claims))
+	for _, claim := range claims {
+		if strings.TrimSpace(claim.Key) != "" {
+			out = append(out, claim.Key)
+		}
+	}
+	return out
+}
+
+func firstMetadataString(metadata map[string]any, key string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func marshalStructuredPreview(value any, maxBytes int) (any, bool) {

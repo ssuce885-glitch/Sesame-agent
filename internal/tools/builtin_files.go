@@ -34,11 +34,11 @@ type FileReadOutput struct {
 func (fileReadTool) Definition() Definition {
 	return Definition{
 		Name:        "file_read",
-		Description: "Read a file from the workspace.",
+		Description: "Read a file from the workspace or Sesame global config directory.",
 		InputSchema: objectSchema(map[string]any{
 			"path": map[string]any{
 				"type":        "string",
-				"description": "Path to the file to read.",
+				"description": "Path to the file to read. Relative paths resolve from the workspace root; absolute paths may also point under Sesame's global config directory.",
 			},
 		}, "path"),
 		OutputSchema: objectSchema(map[string]any{
@@ -79,9 +79,8 @@ func (t fileReadTool) Execute(ctx context.Context, call Call, execCtx ExecContex
 
 func (fileReadTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
 	input, _ := decoded.Input.(FileReadInput)
-	path := input.Path
-	resolvedPath := resolveWorkspacePath(execCtx.WorkspaceRoot, path)
-	if err := runtime.WithinWorkspace(execCtx.WorkspaceRoot, resolvedPath); err != nil {
+	resolvedPath, err := resolveReadablePath(execCtx, input.Path)
+	if err != nil {
 		return ToolExecutionResult{}, err
 	}
 
@@ -302,7 +301,7 @@ func (globTool) Definition() Definition {
 		InputSchema: objectSchema(map[string]any{
 			"pattern": map[string]any{
 				"type":        "string",
-				"description": "Glob pattern relative to the workspace root.",
+				"description": "Glob pattern relative to the workspace root, or an absolute pattern under Sesame's global config directory.",
 			},
 		}, "pattern"),
 		OutputSchema: objectSchema(map[string]any{
@@ -345,7 +344,7 @@ func (t globTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (
 
 func (globTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
 	input, _ := decoded.Input.(GlobInput)
-	matches, err := globWithinWorkspace(execCtx.WorkspaceRoot, input.Pattern)
+	matches, err := globWithinReadableRoots(execCtx, input.Pattern)
 	if err != nil {
 		return ToolExecutionResult{}, err
 	}
@@ -379,9 +378,9 @@ func (globTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
 	return defaultStructuredModelResult(output)
 }
 
-func globWithinWorkspace(root, pattern string) ([]string, error) {
-	candidate := resolveWorkspacePath(root, pattern)
-	if err := runtime.WithinWorkspace(root, candidate); err != nil {
+func globWithinReadableRoots(execCtx ExecContext, pattern string) ([]string, error) {
+	candidate, err := resolveReadablePath(execCtx, pattern)
+	if err != nil {
 		return nil, err
 	}
 
@@ -392,7 +391,7 @@ func globWithinWorkspace(root, pattern string) ([]string, error) {
 
 	filtered := make([]string, 0, len(matches))
 	for _, match := range matches {
-		if err := runtime.WithinWorkspace(root, match); err != nil {
+		if err := ensureAllowedReadPath(execCtx, match); err != nil {
 			continue
 		}
 		filtered = append(filtered, match)

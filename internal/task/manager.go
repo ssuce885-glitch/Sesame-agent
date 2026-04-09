@@ -75,16 +75,24 @@ func (m *Manager) Create(_ context.Context, in CreateTaskInput) (Task, error) {
 		return Task{}, err
 	}
 
-	taskID := types.NewID("task")
+	taskID := strings.TrimSpace(in.ID)
+	if taskID == "" {
+		taskID = types.NewID("task")
+	}
 	task := &Task{
-		ID:            taskID,
-		Type:          in.Type,
-		Status:        TaskStatusPending,
-		Command:       in.Command,
-		Description:   in.Description,
-		WorkspaceRoot: workspaceRoot,
-		OutputPath:    filepath.Join(state.outputsDir, taskID+".log"),
-		StartTime:     time.Now().UTC(),
+		ID:              taskID,
+		Type:            in.Type,
+		Status:          TaskStatusPending,
+		Command:         in.Command,
+		Description:     in.Description,
+		ParentTaskID:    in.ParentTaskID,
+		Owner:           in.Owner,
+		Kind:            in.Kind,
+		ExecutionTaskID: taskID,
+		WorktreeID:      in.WorktreeID,
+		WorkspaceRoot:   workspaceRoot,
+		OutputPath:      filepath.Join(state.outputsDir, taskID+".log"),
+		StartTime:       time.Now().UTC(),
 	}
 	m.tasks[task.ID] = task
 	if err := m.saveWorkspaceLocked(workspaceRoot); err != nil {
@@ -156,6 +164,12 @@ func (m *Manager) Update(taskID, workspaceRoot string, in UpdateTaskInput) error
 	task.Status = in.Status
 	if in.Description != "" {
 		task.Description = in.Description
+	}
+	if in.Owner != "" {
+		task.Owner = in.Owner
+	}
+	if in.WorktreeID != "" {
+		task.WorktreeID = in.WorktreeID
 	}
 	if isTerminalStatus(task.Status) {
 		now := time.Now().UTC()

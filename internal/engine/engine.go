@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sync"
 
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/model"
@@ -16,6 +17,7 @@ type Input struct {
 	Session types.Session
 	Turn    types.Turn
 	Sink    EventSink
+	Resume  *types.TurnResume
 }
 
 type RuntimeMetadata struct {
@@ -26,14 +28,24 @@ type RuntimeMetadata struct {
 type ConversationStore interface {
 	ListConversationItems(context.Context, string) ([]model.ConversationItem, error)
 	ListConversationSummaries(context.Context, string) ([]model.Summary, error)
+	ListConversationCompactions(context.Context, string) ([]types.ConversationCompaction, error)
+	GetSessionMemory(context.Context, string) (types.SessionMemory, bool, error)
 	InsertConversationItem(context.Context, string, string, int, model.ConversationItem) error
 	InsertConversationSummary(context.Context, string, int, model.Summary) error
 	UpsertTurnUsage(context.Context, types.TurnUsage) error
+	UpsertSessionMemory(context.Context, types.SessionMemory) error
+	UpsertMemoryEntry(context.Context, types.MemoryEntry) error
+	DeleteMemoryEntries(context.Context, []string) error
 	ListMemoryEntriesByWorkspace(context.Context, string) ([]types.MemoryEntry, error)
 	GetProviderCacheHead(context.Context, string, string, string) (types.ProviderCacheHead, bool, error)
 	UpsertProviderCacheHead(context.Context, types.ProviderCacheHead) error
 	InsertProviderCacheEntry(context.Context, types.ProviderCacheEntry) error
 	InsertConversationCompaction(context.Context, types.ConversationCompaction) error
+}
+
+type SessionMemoryWorker interface {
+	Enqueue(context.Context, *Engine, Input)
+	Wait()
 }
 
 type Engine struct {
@@ -46,10 +58,17 @@ type Engine struct {
 	runtime                 *contextstate.Runtime
 	meta                    RuntimeMetadata
 	basePrompt              string
+	globalConfigRoot        string
 	maxWorkspacePromptBytes int
 	maxToolSteps            int
 	taskManager             *task.Manager
 	runtimeService          *runtimegraph.Service
+	sessionMemoryAsync      bool
+	sessionMemoryWorker     SessionMemoryWorker
+	sessionMemoryWG         sync.WaitGroup
+	sessionMemoryMu         sync.Mutex
+	sessionMemoryRunning    map[string]bool
+	sessionMemoryPending    map[string]Input
 }
 
 func New(
@@ -112,6 +131,13 @@ func (e *Engine) SetBaseSystemPrompt(prompt string) {
 	e.basePrompt = prompt
 }
 
+func (e *Engine) SetGlobalConfigRoot(root string) {
+	if e == nil {
+		return
+	}
+	e.globalConfigRoot = root
+}
+
 func (e *Engine) SetMaxWorkspacePromptBytes(n int) {
 	if e == nil {
 		return
@@ -131,4 +157,37 @@ func (e *Engine) SetRuntimeService(service *runtimegraph.Service) {
 		return
 	}
 	e.runtimeService = service
+}
+
+func (e *Engine) SetSessionMemoryAsync(enabled bool) {
+	if e == nil {
+		return
+	}
+	e.sessionMemoryAsync = enabled
+	if enabled && e.sessionMemoryWorker == nil {
+		e.sessionMemoryWorker = NewInProcessSessionMemoryWorker()
+	}
+	if !enabled {
+		e.sessionMemoryWorker = nil
+	}
+}
+
+func (e *Engine) SetSessionMemoryWorker(worker SessionMemoryWorker) {
+	if e == nil {
+		return
+	}
+	e.sessionMemoryWorker = worker
+	if worker != nil {
+		e.sessionMemoryAsync = true
+	}
+}
+
+func (e *Engine) waitBackgroundTasks() {
+	if e == nil {
+		return
+	}
+	if e.sessionMemoryWorker != nil {
+		e.sessionMemoryWorker.Wait()
+	}
+	e.sessionMemoryWG.Wait()
 }

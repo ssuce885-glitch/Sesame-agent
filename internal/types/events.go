@@ -6,20 +6,28 @@ import (
 )
 
 const (
-	EventTurnStarted         = "turn.started"
-	EventTurnCompleted       = "turn.completed"
-	EventTurnFailed          = "turn.failed"
-	EventTurnInterrupted     = "turn.interrupted"
-	EventTurnUsage           = "turn.usage"
-	EventAssistantStarted    = "assistant.started"
-	EventAssistantDelta      = "assistant.delta"
-	EventAssistantCompleted  = "assistant.completed"
-	EventToolStarted         = "tool.started"
-	EventToolProgress        = "tool.progress"
-	EventToolCompleted       = "tool.completed"
-	EventPermissionRequested = "permission.requested"
-	EventContextCompacted    = "context.compacted"
-	EventSystemNotice        = "system.notice"
+	EventTurnStarted            = "turn.started"
+	EventTurnCompleted          = "turn.completed"
+	EventTurnFailed             = "turn.failed"
+	EventTurnInterrupted        = "turn.interrupted"
+	EventTurnUsage              = "turn.usage"
+	EventAssistantStarted       = "assistant.started"
+	EventAssistantDelta         = "assistant.delta"
+	EventAssistantCompleted     = "assistant.completed"
+	EventToolStarted            = "tool.started"
+	EventToolProgress           = "tool.progress"
+	EventToolCompleted          = "tool.completed"
+	EventPermissionRequested    = "permission.requested"
+	EventPermissionResolved     = "permission.resolved"
+	EventPlanUpdated            = "plan.updated"
+	EventTaskUpdated            = "task.updated"
+	EventToolRunUpdated         = "tool_run.updated"
+	EventWorktreeUpdated        = "worktree.updated"
+	EventContextCompacted       = "context.compacted"
+	EventSessionMemoryStarted   = "session_memory.started"
+	EventSessionMemoryCompleted = "session_memory.completed"
+	EventSessionMemoryFailed    = "session_memory.failed"
+	EventSystemNotice           = "system.notice"
 )
 
 type Event struct {
@@ -53,6 +61,39 @@ type ToolEventPayload struct {
 	ToolName      string `json:"tool_name"`
 	Arguments     string `json:"arguments,omitempty"`
 	ResultPreview string `json:"result_preview,omitempty"`
+}
+
+type PermissionRequestedPayload struct {
+	RequestID         string `json:"request_id,omitempty"`
+	ToolRunID         string `json:"tool_run_id,omitempty"`
+	ToolCallID        string `json:"tool_call_id,omitempty"`
+	ToolName          string `json:"tool_name,omitempty"`
+	RequestedProfile string `json:"requested_profile"`
+	Reason           string `json:"reason,omitempty"`
+	TurnID           string `json:"turn_id,omitempty"`
+}
+
+type PermissionResolvedPayload struct {
+	RequestID         string `json:"request_id"`
+	ToolRunID         string `json:"tool_run_id,omitempty"`
+	ToolCallID        string `json:"tool_call_id,omitempty"`
+	ToolName          string `json:"tool_name,omitempty"`
+	RequestedProfile  string `json:"requested_profile"`
+	Decision          string `json:"decision"`
+	DecisionScope     string `json:"decision_scope,omitempty"`
+	EffectiveProfile  string `json:"effective_profile,omitempty"`
+	TurnID            string `json:"turn_id,omitempty"`
+}
+
+type SessionMemoryEventPayload struct {
+	SourceTurnID             string `json:"source_turn_id,omitempty"`
+	WorkspaceRoot            string `json:"workspace_root,omitempty"`
+	Async                    bool   `json:"async,omitempty"`
+	Updated                  bool   `json:"updated,omitempty"`
+	WorkspaceEntriesUpserted int    `json:"workspace_entries_upserted,omitempty"`
+	GlobalEntriesUpserted    int    `json:"global_entries_upserted,omitempty"`
+	WorkspaceEntriesPruned   int    `json:"workspace_entries_pruned,omitempty"`
+	Message                  string `json:"message,omitempty"`
 }
 
 func NewEvent(sessionID, turnID, eventType string, payload any) (Event, error) {

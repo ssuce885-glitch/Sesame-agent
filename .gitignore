@@ -1,17 +1,49 @@
-/agentd.exe
+# Binaries
 /agentd
-.worktrees/
+/agentd.exe
+/sesame
+/sesame.exe
+/sesame-agent
+/sesame-agent.exe
+
+# Runtime data
+.runtime-data/
+.runtime-data-test/
 data/
+data-local/
+.tmp-*/
 tmp/
 *.db
+*.db-shm
+*.db-wal
 *.log
-.venv/
-web/console/node_modules/
-web/console/dist/
-web/console/*.tsbuildinfo
-web/console/vite.config.js
-web/console/vite.config.d.ts
+coverage.out
+
+# Local Sesame state
+.sesame/
+internal/cli/daemons/
+
+# Local workflow / agent metadata
 .claude/
 .codex/
 .superpowers/
-docs/
+.trellis/
+.worktrees/
+
+# Internal planning docs that should not go to the public repo by default
+docs/superpowers/
+docs/specs/
+
+# Frontend
+web/
+
+# Public release excludes Go tests
+*_test.go
+.tmp-public-upload-files.txt
+
+# Editor / OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

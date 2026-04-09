@@ -10,6 +10,7 @@ import (
 
 	"go-agent/internal/cli/client"
 	"go-agent/internal/cli/render"
+	"go-agent/internal/extensions"
 	"go-agent/internal/types"
 )
 
@@ -20,33 +21,43 @@ type RuntimeClient interface {
 	ListSessions(context.Context) (types.ListSessionsResponse, error)
 	SelectSession(context.Context, string) error
 	SubmitTurn(context.Context, string, types.SubmitTurnRequest) (types.Turn, error)
+	InterruptTurn(context.Context, string) error
 	StreamEvents(context.Context, string, int64) (<-chan types.Event, error)
 	GetTimeline(context.Context, string) (types.SessionTimelineResponse, error)
 }
 
 type Options struct {
-	Stdin     io.Reader
-	Stdout    io.Writer
-	SessionID string
-	Client    RuntimeClient
+	Stdin                 io.Reader
+	Stdout                io.Writer
+	SessionID             string
+	WorkspaceRoot         string
+	ShowExtensionsSummary bool
+	Client                RuntimeClient
+	Catalog               extensions.Catalog
 }
 
 type REPL struct {
-	stdin    io.Reader
-	stdout   io.Writer
-	client   RuntimeClient
-	renderer render.Renderer
-	sessionID string
-	lastSeq  int64
+	stdin                 io.Reader
+	stdout                io.Writer
+	client                RuntimeClient
+	renderer              *render.Renderer
+	sessionID             string
+	lastSeq               int64
+	catalog               extensions.Catalog
+	workspaceRoot         string
+	showExtensionsSummary bool
 }
 
 func New(opts Options) *REPL {
 	return &REPL{
-		stdin:     opts.Stdin,
-		stdout:    opts.Stdout,
-		client:    opts.Client,
-		renderer:  render.New(opts.Stdout),
-		sessionID: opts.SessionID,
+		stdin:                 opts.Stdin,
+		stdout:                opts.Stdout,
+		client:                opts.Client,
+		renderer:              render.New(opts.Stdout),
+		sessionID:             opts.SessionID,
+		catalog:               opts.Catalog,
+		workspaceRoot:         opts.WorkspaceRoot,
+		showExtensionsSummary: opts.ShowExtensionsSummary,
 	}
 }
 
@@ -55,6 +66,11 @@ func (r *REPL) Run(ctx context.Context, initialPrompt string) error {
 		return errors.New("runtime client is required")
 	}
 
+	if canUseTUI(r.stdin, r.stdout) {
+		return r.runTUI(ctx, initialPrompt)
+	}
+
+	r.renderWelcome(ctx)
 	if err := r.loadSession(ctx); err != nil {
 		return err
 	}
@@ -74,7 +90,7 @@ func (r *REPL) Run(ctx context.Context, initialPrompt string) error {
 
 	scanner := bufio.NewScanner(r.stdin)
 	for {
-		fmt.Fprint(r.stdout, "> ")
+		fmt.Fprint(r.stdout, r.renderer.Prompt())
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil {
 				return err
@@ -114,7 +130,7 @@ func (r *REPL) HandleLine(ctx context.Context, line string) (bool, error) {
 			r.lastSeq = event.Seq
 		}
 		r.renderer.RenderEvent(event)
-		if event.Type == types.EventTurnCompleted || event.Type == types.EventTurnFailed {
+		if event.Type == types.EventTurnCompleted || event.Type == types.EventTurnFailed || event.Type == types.EventTurnInterrupted {
 			break
 		}
 	}
@@ -134,6 +150,17 @@ func (r *REPL) loadSession(ctx context.Context) error {
 	return nil
 }
 
+func (r *REPL) renderWelcome(ctx context.Context) {
+	status, _ := r.client.Status(ctx)
+	r.renderer.RenderWelcome(render.WelcomeInfo{
+		SessionID:             r.sessionID,
+		WorkspaceRoot:         r.workspaceRoot,
+		Status:                status,
+		Catalog:               r.catalog,
+		ShowExtensionsSummary: r.showExtensionsSummary,
+	})
+}
+
 func (r *REPL) handleCommand(ctx context.Context, line string) error {
 	fields := strings.Fields(strings.TrimPrefix(line, "/"))
 	if len(fields) == 0 {
@@ -142,12 +169,13 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 
 	switch fields[0] {
 	case "help":
-		fmt.Fprintln(r.stdout, "/help /clear /exit /status /session list /session use <id>")
+		fmt.Fprintln(r.stdout, "/help /clear /exit /status /skills /tools /session list /session use <id>")
 		return nil
 	case "exit":
 		return errExitRequested
 	case "clear":
 		r.renderer.Clear()
+		r.renderWelcome(ctx)
 		return nil
 	case "status":
 		status, err := r.client.Status(ctx)
@@ -155,6 +183,12 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 			return err
 		}
 		r.renderer.PrintStatusLine(r.sessionID, status)
+		return nil
+	case "skills":
+		r.renderer.RenderSkillList(r.catalog.Skills)
+		return nil
+	case "tools":
+		r.renderer.RenderToolList(r.catalog.Tools)
 		return nil
 	case "session":
 		return r.handleSessionCommand(ctx, fields[1:])

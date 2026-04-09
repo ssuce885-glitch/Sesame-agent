@@ -9,8 +9,9 @@ import (
 	"time"
 
 	contextstate "go-agent/internal/context"
-	"go-agent/internal/memory"
+	"go-agent/internal/extensions"
 	"go-agent/internal/model"
+	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
@@ -65,12 +66,19 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		CurrentSessionID: sessionID,
 		CurrentTurnID:    in.Turn.ID,
 	}
+	if in.Resume != nil {
+		turnCtx.CurrentRunID = strings.TrimSpace(in.Resume.RunID)
+		turnCtx.CurrentTaskID = strings.TrimSpace(in.Resume.TaskID)
+	}
+	permissionEngine := effectivePermissionEngine(e.permission, in)
 	toolExecCtx := tools.ExecContext{
 		WorkspaceRoot:    in.Session.WorkspaceRoot,
-		PermissionEngine: e.permission,
+		GlobalConfigRoot: e.globalConfigRoot,
+		PermissionEngine: permissionEngine,
 		TaskManager:      e.taskManager,
 		RuntimeService:   e.runtimeService,
 		TurnContext:      turnCtx,
+		EventSink:        in.Sink,
 	}
 	toolRuntime := tools.NewRuntime(e.registry, toolRunStoreFromConversationStore(e.store))
 
@@ -101,11 +109,27 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 		return err
 	}
+	catalog, err := extensions.LoadCatalog(e.globalConfigRoot, in.Session.WorkspaceRoot)
+	if err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
+	extensionPrompt, extensionNotices := extensions.BuildPromptSection(catalog, in.Turn.UserMessage)
+	if strings.TrimSpace(extensionPrompt) != "" {
+		if strings.TrimSpace(instructions.Text) == "" {
+			instructions.Text = extensionPrompt
+		} else {
+			instructions.Text += "\n\n" + extensionPrompt
+		}
+	}
+	instructions.Notices = append(instructions.Notices, extensionNotices...)
 	req := e.runtime.PrepareRequest(
 		working,
 		cacheHead,
 		caps,
-		model.UserMessageItem(in.Turn.UserMessage),
+		resumeAwareUserItem(in),
 		instructions.Text,
 	)
 	for _, notice := range instructions.Notices {
@@ -125,14 +149,27 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	totalCachedTokens := 0
 	hasUsage := false
 
-	userItem := model.UserMessageItem(in.Turn.UserMessage)
-	if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, userItem); err != nil {
-		if emitErr := emitFailed(err.Error()); emitErr != nil {
-			return errors.Join(err, emitErr)
+	if in.Resume == nil {
+		userItem := model.UserMessageItem(in.Turn.UserMessage)
+		if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, userItem); err != nil {
+			if emitErr := emitFailed(err.Error()); emitErr != nil {
+				return errors.Join(err, emitErr)
+			}
+			return err
 		}
-		return err
+		nextPosition++
+	} else {
+		toolResultItem, toolResult := resumeToolResultItem(in.Resume)
+		if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
+			if emitErr := emitFailed(err.Error()); emitErr != nil {
+				return errors.Join(err, emitErr)
+			}
+			return err
+		}
+		req.Items = append(req.Items, toolResultItem)
+		req.ToolResults = append(req.ToolResults, toolResult)
+		nextPosition++
 	}
-	nextPosition++
 
 	for {
 		stream, errs := e.model.Stream(ctx, req)
@@ -271,6 +308,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		callInputs := make([]tools.Call, 0, len(toolCalls))
 		for _, call := range toolCalls {
 			callInputs = append(callInputs, tools.Call{
+				ID:    call.ID,
 				Name:  call.Name,
 				Input: call.Input,
 			})
@@ -371,17 +409,20 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 					StructuredJSON: marshalStructuredToolResult(modelToolResult.Structured),
 					IsError:        toolIsError,
 				}
-				toolResultItem := model.ToolResultItem(toolResult)
-				if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
-					if emitErr := emitFailed(err.Error()); emitErr != nil {
-						return errors.Join(err, emitErr)
+				persistToolResult := output.Interrupt == nil || !output.Interrupt.DeferToolResult
+				if persistToolResult {
+					toolResultItem := model.ToolResultItem(toolResult)
+					if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
+						if emitErr := emitFailed(err.Error()); emitErr != nil {
+							return errors.Join(err, emitErr)
+						}
+						return err
 					}
-					return err
-				}
-				req.Items = append(req.Items, toolResultItem)
-				nextPosition++
+					req.Items = append(req.Items, toolResultItem)
+					nextPosition++
 
-				req.ToolResults = append(req.ToolResults, toolResult)
+					req.ToolResults = append(req.ToolResults, toolResult)
+				}
 
 				for _, item := range output.NewItems {
 					if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, item); err != nil {
@@ -392,6 +433,51 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 					}
 					req.Items = append(req.Items, item)
 					nextPosition++
+				}
+
+				if output.Interrupt != nil {
+					if strings.TrimSpace(output.Interrupt.EventType) == types.EventPermissionRequested {
+						if err := persistPermissionPause(ctx, e, in, turnCtx, call, output); err != nil {
+							if emitErr := emitFailed(err.Error()); emitErr != nil {
+								return errors.Join(err, emitErr)
+							}
+							return err
+						}
+						if payload, ok := output.Interrupt.EventPayload.(types.PermissionRequestedPayload); ok {
+							if payload.ToolCallID == "" {
+								payload.ToolCallID = call.ID
+							}
+							if payload.ToolName == "" {
+								payload.ToolName = call.Name
+							}
+							if payload.TurnID == "" {
+								payload.TurnID = in.Turn.ID
+							}
+							output.Interrupt.EventPayload = payload
+						}
+					}
+					if eventType := strings.TrimSpace(output.Interrupt.EventType); eventType != "" {
+						payload := output.Interrupt.EventPayload
+						if payload == nil {
+							payload = map[string]string{"reason": output.Interrupt.Reason}
+						}
+						if err := emit(eventType, payload); err != nil {
+							return err
+						}
+					}
+					if notice := strings.TrimSpace(output.Interrupt.Notice); notice != "" {
+						if err := emit(types.EventSystemNotice, types.NoticePayload{Text: notice}); err != nil {
+							return err
+						}
+					}
+					reason := strings.TrimSpace(output.Interrupt.Reason)
+					if reason == "" {
+						reason = "tool_interrupted"
+					}
+					if err := emit(types.EventTurnInterrupted, map[string]string{"reason": reason}); err != nil {
+						return err
+					}
+					return nil
 				}
 			}
 
@@ -410,6 +496,57 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	}
 }
 
+func effectivePermissionEngine(base *permissions.Engine, in Input) *permissions.Engine {
+	if in.Resume != nil && strings.TrimSpace(in.Resume.EffectivePermissionProfile) != "" {
+		return permissions.NewEngine(in.Resume.EffectivePermissionProfile)
+	}
+	if strings.TrimSpace(in.Session.PermissionProfile) != "" {
+		return permissions.NewEngine(in.Session.PermissionProfile)
+	}
+	return base
+}
+
+func resumeAwareUserItem(in Input) model.ConversationItem {
+	if in.Resume != nil {
+		return model.ConversationItem{}
+	}
+	return model.UserMessageItem(in.Turn.UserMessage)
+}
+
+func resumeToolResultItem(resume *types.TurnResume) (model.ConversationItem, model.ToolResult) {
+	if resume == nil {
+		return model.ConversationItem{}, model.ToolResult{}
+	}
+	content := fmt.Sprintf("Permission request resolved: %s.", resume.Decision)
+	isError := resume.Decision == types.PermissionDecisionDeny
+	if resume.DecisionScope != "" {
+		content += " Scope: " + resume.DecisionScope + "."
+	}
+	if resume.RequestedProfile != "" {
+		content += " Requested profile: " + resume.RequestedProfile + "."
+	}
+	if resume.Reason != "" {
+		content += " Reason: " + resume.Reason + "."
+	}
+	if resume.EffectivePermissionProfile != "" {
+		content += " Effective profile: " + resume.EffectivePermissionProfile + "."
+	}
+	result := model.ToolResult{
+		ToolCallID: resume.ToolCallID,
+		ToolName:   resume.ToolName,
+		Content:    content,
+		StructuredJSON: marshalStructuredToolResult(map[string]any{
+			"status":                       map[bool]string{true: "denied", false: "resolved"}[isError],
+			"decision":                     resume.Decision,
+			"decision_scope":               resume.DecisionScope,
+			"requested_profile":            resume.RequestedProfile,
+			"effective_permission_profile": resume.EffectivePermissionProfile,
+		}),
+		IsError: isError,
+	}
+	return model.ToolResultItem(result), result
+}
+
 func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string) (int, contextstate.WorkingSet, error) {
 	if e.store == nil || e.ctxManager == nil {
 		return 0, contextstate.WorkingSet{}, nil
@@ -425,39 +562,241 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, err
 	}
+	sessionMemory, hasSessionMemory, err := loadSessionMemorySummary(ctx, e.store, sessionID)
+	if err != nil {
+		return 0, contextstate.WorkingSet{}, err
+	}
+	if hasSessionMemory {
+		summaries = prependSessionMemorySummary(summaries, sessionMemory)
+	}
+	summaries = selectPromptSummaries(summaries, hasSessionMemory)
+	compactions, err := e.store.ListConversationCompactions(ctx, sessionID)
+	if err != nil {
+		return 0, contextstate.WorkingSet{}, err
+	}
 
 	entries, err := e.store.ListMemoryEntriesByWorkspace(ctx, in.Session.WorkspaceRoot)
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, err
 	}
 
-	recalled := memory.Recall(in.Turn.UserMessage, entries, 3)
-	memoryRefs := make([]string, 0, len(recalled))
-	for _, entry := range recalled {
-		memoryRefs = append(memoryRefs, entry.Content)
-	}
+	memoryRefs := buildMemoryRefs(entries, hasSessionMemory, in.Session.WorkspaceRoot, in.Turn.UserMessage)
 
+	persistedMicroItems := activeMicrocompactItems(compactions)
 	working := e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
-	if working.Action.Kind == contextstate.CompactionActionRolling && e.compactor != nil {
-		cutoff := working.CompactionStart
-		if cutoff < 0 {
-			cutoff = 0
+	working = setPromptItems(working, persistedMicroItems, in.Turn.UserMessage)
+	if e.compactor != nil {
+		switch working.Action.Kind {
+		case contextstate.CompactionActionRolling:
+			working, summaries, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaries, memoryRefs, working, len(compactions)+1, types.ConversationCompactionKindRolling, "rolling_summary")
+			if err != nil {
+				return 0, contextstate.WorkingSet{}, err
+			}
+		case contextstate.CompactionActionMicrocompact:
+			candidatePayload, candidatePromptItems, ok := buildAppliedMicrocompact(items, working.Action.MicrocompactPositions, working.CompactionStart)
+			if ok {
+				candidateEstimate := contextstate.EstimatePromptTokens(in.Turn.UserMessage, candidatePromptItems, summaries, memoryRefs)
+				if candidateEstimate <= e.ctxManager.Config().MaxEstimatedTokens {
+					if err := e.store.InsertConversationCompaction(ctx, types.ConversationCompaction{
+						ID:              types.NewID("compact"),
+						SessionID:       sessionID,
+						Kind:            types.ConversationCompactionKindMicro,
+						Generation:      len(compactions) + 1,
+						StartPosition:   firstPayloadPosition(candidatePayload),
+						EndPosition:     lastPayloadPosition(candidatePayload),
+						SummaryPayload:  encodeMicrocompactPayload(candidatePayload),
+						Reason:          "microcompact_tool_results",
+						ProviderProfile: string(e.model.Capabilities().Profile),
+						CreatedAt:       time.Now().UTC(),
+					}); err != nil {
+						return 0, contextstate.WorkingSet{}, err
+					}
+					working = setPromptItems(working, candidatePayload.Items, in.Turn.UserMessage)
+					working.EstimatedTokens = candidateEstimate
+					working.CompactionApplied = true
+					break
+				}
+			}
+			working, summaries, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaries, memoryRefs, working, len(compactions)+1, types.ConversationCompactionKindRolling, "microcompact_escalated_to_rolling")
+			if err != nil {
+				return 0, contextstate.WorkingSet{}, err
+			}
 		}
-		if cutoff > len(items) {
-			cutoff = len(items)
-		}
-		summary, err := e.compactor.Compact(ctx, items[:cutoff])
-		if err != nil {
-			return 0, contextstate.WorkingSet{}, err
-		}
-		if err := e.store.InsertConversationSummary(ctx, sessionID, cutoff, summary); err != nil {
-			return 0, contextstate.WorkingSet{}, err
-		}
-		summaries = append(summaries, summary)
-		working = e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
 	}
 
 	return totalItems, working, nil
+}
+
+func applySummaryCompaction(
+	ctx context.Context,
+	e *Engine,
+	sessionID string,
+	userMessage string,
+	items []model.ConversationItem,
+	summaries []model.Summary,
+	memoryRefs []string,
+	working contextstate.WorkingSet,
+	generation int,
+	kind types.ConversationCompactionKind,
+	reason string,
+) (contextstate.WorkingSet, []model.Summary, error) {
+	cutoff := working.CompactionStart
+	if cutoff < 0 {
+		cutoff = 0
+	}
+	if cutoff > len(items) {
+		cutoff = len(items)
+	}
+	if cutoff == 0 {
+		return working, summaries, nil
+	}
+
+	summary, err := e.compactor.Compact(ctx, items[:cutoff])
+	if err != nil {
+		return contextstate.WorkingSet{}, nil, err
+	}
+	if err := e.store.InsertConversationSummary(ctx, sessionID, cutoff, summary); err != nil {
+		return contextstate.WorkingSet{}, nil, err
+	}
+	if err := e.store.InsertConversationCompaction(ctx, types.ConversationCompaction{
+		ID:              types.NewID("compact"),
+		SessionID:       sessionID,
+		Kind:            kind,
+		Generation:      generation,
+		StartPosition:   0,
+		EndPosition:     cutoff,
+		SummaryPayload:  marshalCompactionSummary(summary),
+		Reason:          reason,
+		ProviderProfile: string(e.model.Capabilities().Profile),
+		CreatedAt:       time.Now().UTC(),
+	}); err != nil {
+		return contextstate.WorkingSet{}, nil, err
+	}
+
+	summaries = append(summaries, summary)
+	working = e.ctxManager.Build(userMessage, items, summaries, memoryRefs)
+	working.CompactionApplied = true
+	return working, summaries, nil
+}
+
+func marshalCompactionSummary(summary model.Summary) string {
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		return summary.RangeLabel
+	}
+	return string(raw)
+}
+
+func setPromptItems(working contextstate.WorkingSet, carryForwardItems []model.ConversationItem, userMessage string) contextstate.WorkingSet {
+	working.PromptItems = appendPromptItems(carryForwardItems, working.RecentItems)
+	working.EstimatedTokens = contextstate.EstimatePromptTokens(userMessage, working.PromptItems, working.Summaries, working.MemoryRefs)
+	return working
+}
+
+func appendPromptItems(carryForwardItems, recentItems []model.ConversationItem) []model.ConversationItem {
+	if len(carryForwardItems) == 0 {
+		return cloneConversationItemsForPrompt(recentItems)
+	}
+
+	out := make([]model.ConversationItem, 0, len(carryForwardItems)+len(recentItems))
+	out = append(out, cloneConversationItemsForPrompt(carryForwardItems)...)
+	out = append(out, cloneConversationItemsForPrompt(recentItems)...)
+	return out
+}
+
+func buildAppliedMicrocompact(items []model.ConversationItem, positions []int, recentStart int) (persistedMicrocompactPayload, []model.ConversationItem, bool) {
+	payload, err := buildMicrocompactPayload(items, positions, recentStart)
+	if err != nil || len(payload.Items) == 0 {
+		return persistedMicrocompactPayload{}, nil, false
+	}
+	promptItems := appendPromptItems(payload.Items, items[recentStart:])
+	return payload, promptItems, len(promptItems) > 0
+}
+
+func firstPayloadPosition(payload persistedMicrocompactPayload) int {
+	if len(payload.SourcePositions) == 0 {
+		return 0
+	}
+	return payload.SourcePositions[0]
+}
+
+type permissionPauseStore interface {
+	UpsertPermissionRequest(context.Context, types.PermissionRequest) error
+	UpsertTurnContinuation(context.Context, types.TurnContinuation) error
+	UpdateTurnState(context.Context, string, types.TurnState) error
+	UpdateSessionState(context.Context, string, types.SessionState, string) error
+}
+
+func persistPermissionPause(ctx context.Context, e *Engine, in Input, turnCtx *runtimegraph.TurnContext, call model.ToolCallChunk, output tools.ToolExecutionResult) error {
+	store, ok := e.store.(permissionPauseStore)
+	if !ok {
+		return nil
+	}
+	payload, ok := output.Interrupt.EventPayload.(types.PermissionRequestedPayload)
+	if !ok {
+		return nil
+	}
+	now := time.Now().UTC()
+	request := types.PermissionRequest{
+		ID:               payload.RequestID,
+		SessionID:        in.Session.ID,
+		TurnID:           in.Turn.ID,
+		RunID:            turnCtx.CurrentRunID,
+		TaskID:           turnCtx.CurrentTaskID,
+		ToolRunID:        payload.ToolRunID,
+		ToolCallID:       firstNonEmpty(payload.ToolCallID, call.ID),
+		ToolName:         firstNonEmpty(payload.ToolName, call.Name),
+		RequestedProfile: payload.RequestedProfile,
+		Reason:           payload.Reason,
+		Status:           types.PermissionRequestStatusRequested,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	if request.ID == "" {
+		request.ID = types.NewID("perm")
+	}
+	if err := store.UpsertPermissionRequest(ctx, request); err != nil {
+		return err
+	}
+	continuation := types.TurnContinuation{
+		ID:                  types.NewID("cont"),
+		SessionID:           in.Session.ID,
+		TurnID:              in.Turn.ID,
+		RunID:               turnCtx.CurrentRunID,
+		TaskID:              turnCtx.CurrentTaskID,
+		PermissionRequestID: request.ID,
+		ToolRunID:           request.ToolRunID,
+		ToolCallID:          request.ToolCallID,
+		ToolName:            request.ToolName,
+		RequestedProfile:    request.RequestedProfile,
+		Reason:              request.Reason,
+		State:               types.TurnContinuationStatePending,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+	if err := store.UpsertTurnContinuation(ctx, continuation); err != nil {
+		return err
+	}
+	if err := store.UpdateTurnState(ctx, in.Turn.ID, types.TurnStateAwaitingPermission); err != nil {
+		return err
+	}
+	return store.UpdateSessionState(ctx, in.Session.ID, types.SessionStateAwaitingPermission, in.Turn.ID)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func lastPayloadPosition(payload persistedMicrocompactPayload) int {
+	if len(payload.SourcePositions) == 0 {
+		return 0
+	}
+	return payload.SourcePositions[len(payload.SourcePositions)-1]
 }
 
 func buildToolSchemas(defs []tools.Definition) []model.ToolSchema {
@@ -558,18 +897,30 @@ func finalizeTurn(ctx context.Context, e *Engine, in Input, usage *types.TurnUsa
 	finalEvents = append(finalEvents, turnCompleted)
 
 	if sink, ok := in.Sink.(TurnFinalizingSink); ok {
-		return sink.FinalizeTurn(ctx, usage, finalEvents)
+		if err := sink.FinalizeTurn(ctx, usage, finalEvents); err != nil {
+			return err
+		}
+	} else {
+		if usage != nil {
+			if err := persistTurnUsage(ctx, e.store, *usage); err != nil {
+				return err
+			}
+		}
+		for _, event := range finalEvents {
+			if err := in.Sink.Emit(ctx, event); err != nil {
+				return err
+			}
+		}
 	}
 
-	if usage != nil {
-		if err := persistTurnUsage(ctx, e.store, *usage); err != nil {
-			return err
+	if e != nil && e.sessionMemoryAsync {
+		if e.sessionMemoryWorker != nil {
+			e.sessionMemoryWorker.Enqueue(ctx, e, in)
+		} else {
+			startAsyncSessionMemoryRefresh(ctx, e, in)
 		}
-	}
-	for _, event := range finalEvents {
-		if err := in.Sink.Emit(ctx, event); err != nil {
-			return err
-		}
+	} else {
+		_ = maybeRefreshSessionMemory(ctx, e, in)
 	}
 	return nil
 }

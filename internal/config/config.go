@@ -1,9 +1,11 @@
 package config
 
 import (
-	"errors"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -13,6 +15,7 @@ type CLIStartupOverrides struct {
 	Addr           string
 	Model          string
 	PermissionMode string
+	WorkspaceRoot  string
 }
 
 type Config struct {
@@ -44,85 +47,63 @@ type Config struct {
 	TaskOutputMaxBytes           int
 	RemoteExecutorShimCommand    string
 	RemoteExecutorTimeoutSeconds int
+	DaemonID                     string
+	Paths                        Paths
+	ConfigFingerprint            string
+}
+
+type CLIConfig struct {
+	ShowExtensionsOnStartup bool
 }
 
 func Load() (Config, error) {
-	uc, err := loadUserConfig()
-	if err != nil {
-		return Config{}, err
-	}
-
-	openAIModelFallback := uc.OpenAI.Model
-	model := envOrDefaultWithFallback("AGENTD_MODEL", openAIModelFallback, "")
-	if model == "" {
-		model = envOrDefaultWithFallback("ANTHROPIC_MODEL", uc.Anthropic.Model, "claude-sonnet-4-5")
-	}
-
-	cfg := Config{
-		Addr:                         envOrDefaultWithFallback("AGENTD_ADDR", uc.Listen.Addr, "127.0.0.1:4317"),
-		DataDir:                      envOrDefault("AGENTD_DATA_DIR", ""),
-		ModelProvider:                envOrDefaultWithFallback("AGENTD_MODEL_PROVIDER", uc.Provider, "anthropic"),
-		Model:                        model,
-		AnthropicAPIKey:              envOrDefaultWithFallback("ANTHROPIC_API_KEY", uc.Anthropic.APIKey, ""),
-		AnthropicBaseURL:             envOrDefaultWithFallback("ANTHROPIC_BASE_URL", uc.Anthropic.BaseURL, "https://api.anthropic.com"),
-		OpenAIAPIKey:                 envOrDefaultWithFallback("OPENAI_API_KEY", uc.OpenAI.APIKey, ""),
-		OpenAIBaseURL:                envOrDefaultWithFallback("OPENAI_BASE_URL", uc.OpenAI.BaseURL, ""),
-		ProviderCacheProfile:         envOrDefault("AGENTD_PROVIDER_CACHE_PROFILE", "none"),
-		CacheExpirySeconds:           intEnvOrDefault("AGENTD_CACHE_EXPIRY_SECONDS", 86400),
-		MicrocompactBytesThreshold:   intEnvOrDefault("AGENTD_MICROCOMPACT_BYTES_THRESHOLD", 4096),
-		LogLevel:                     envOrDefault("AGENTD_LOG_LEVEL", "info"),
-		PermissionProfile:            envOrDefault("AGENTD_PERMISSION_PROFILE", "read_only"),
-		MaxToolSteps:                 intEnvOrDefaultWithFallback("AGENTD_MAX_TOOL_STEPS", uc.MaxToolSteps, 8),
-		MaxShellOutputBytes:          intEnvOrDefault("AGENTD_MAX_SHELL_OUTPUT_BYTES", 4096),
-		ShellTimeoutSeconds:          intEnvOrDefault("AGENTD_SHELL_TIMEOUT_SECONDS", 30),
-		MaxFileWriteBytes:            intEnvOrDefault("AGENTD_MAX_FILE_WRITE_BYTES", 1<<20),
-		MaxRecentItems:               intEnvOrDefault("AGENTD_MAX_RECENT_ITEMS", 8),
-		CompactionThreshold:          intEnvOrDefault("AGENTD_COMPACTION_THRESHOLD", 16),
-		MaxEstimatedTokens:           intEnvOrDefault("AGENTD_MAX_ESTIMATED_TOKENS", 6000),
-		MaxCompactionPasses:          intEnvOrDefault("AGENTD_MAX_COMPACTION_PASSES", 1),
-		SystemPrompt:                 envOrDefault("AGENTD_SYSTEM_PROMPT", ""),
-		SystemPromptFile:             envOrDefault("AGENTD_SYSTEM_PROMPT_FILE", ""),
-		MaxWorkspacePromptBytes:      intEnvOrDefault("AGENTD_MAX_WORKSPACE_PROMPT_BYTES", 32768),
-		MaxConcurrentTasks:           intEnvOrDefault("AGENTD_MAX_CONCURRENT_TASKS", 8),
-		TaskOutputMaxBytes:           intEnvOrDefault("AGENTD_TASK_OUTPUT_MAX_BYTES", 1<<20),
-		RemoteExecutorShimCommand:    envOrDefault("AGENTD_REMOTE_EXECUTOR_SHIM_COMMAND", ""),
-		RemoteExecutorTimeoutSeconds: intEnvOrDefault("AGENTD_REMOTE_EXECUTOR_TIMEOUT_SECONDS", 300),
-	}
-
-	if cfg.DataDir == "" {
-		return Config{}, errors.New("AGENTD_DATA_DIR is required")
-	}
-
-	return cfg, nil
+	return loadConfig(CLIStartupOverrides{})
 }
 
 func ResolveCLIStartupConfig(overrides CLIStartupOverrides) (Config, error) {
-	uc, err := loadUserConfig()
+	return loadConfig(overrides)
+}
+
+func LoadCLIConfig() (CLIConfig, error) {
+	fileCfg, err := loadCLIConfigFile()
 	if err != nil {
-		return Config{}, err
+		return CLIConfig{}, err
+	}
+	cfg := CLIConfig{
+		ShowExtensionsOnStartup: true,
+	}
+	if fileCfg.ShowExtensionsOnStartup != nil {
+		cfg.ShowExtensionsOnStartup = *fileCfg.ShowExtensionsOnStartup
+	}
+	return cfg, nil
+}
+
+func MissingSetupFields(cfg Config) []string {
+	missing := make([]string, 0, 4)
+	if strings.TrimSpace(cfg.ModelProvider) == "" {
+		missing = append(missing, "provider")
+	}
+	if strings.TrimSpace(cfg.Model) == "" {
+		missing = append(missing, "model")
 	}
 
-	dataDir, err := resolveCLIDataDir(strings.TrimSpace(overrides.DataDir))
-	if err != nil {
-		return Config{}, err
+	switch strings.TrimSpace(cfg.ModelProvider) {
+	case "fake":
+		return missing
+	case "openai_compatible":
+		if strings.TrimSpace(cfg.OpenAIBaseURL) == "" {
+			missing = append(missing, "openai.base_url")
+		}
+		if strings.TrimSpace(cfg.OpenAIAPIKey) == "" {
+			missing = append(missing, "openai.api_key")
+		}
+	default:
+		if strings.TrimSpace(cfg.AnthropicAPIKey) == "" {
+			missing = append(missing, "anthropic.api_key")
+		}
 	}
 
-	openAIModelFallback := uc.OpenAI.Model
-	model := firstNonEmpty(
-		strings.TrimSpace(overrides.Model),
-		envOrDefaultWithFallback("AGENTD_MODEL", openAIModelFallback, ""),
-	)
-	if model == "" {
-		model = envOrDefaultWithFallback("ANTHROPIC_MODEL", uc.Anthropic.Model, "claude-sonnet-4-5")
-	}
-
-	return Config{
-		Addr:              firstNonEmpty(strings.TrimSpace(overrides.Addr), envOrDefaultWithFallback("AGENTD_ADDR", uc.Listen.Addr, "127.0.0.1:4317")),
-		DataDir:           dataDir,
-		ModelProvider:     envOrDefaultWithFallback("AGENTD_MODEL_PROVIDER", uc.Provider, "anthropic"),
-		Model:             model,
-		PermissionProfile: firstNonEmpty(strings.TrimSpace(overrides.PermissionMode), envOrDefault("AGENTD_PERMISSION_PROFILE", "read_only")),
-	}, nil
+	return missing
 }
 
 func (c Config) ResolveSystemPrompt() (string, error) {
@@ -139,6 +120,134 @@ func (c Config) ResolveSystemPrompt() (string, error) {
 	}
 
 	return strings.TrimSpace(string(data)), nil
+}
+
+func loadConfig(overrides CLIStartupOverrides) (Config, error) {
+	uc, err := loadUserConfig()
+	if err != nil {
+		return Config{}, err
+	}
+
+	workspaceRoot := strings.TrimSpace(overrides.WorkspaceRoot)
+	if workspaceRoot == "" {
+		if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+			workspaceRoot = cwd
+		}
+	}
+
+	pathDataDir := firstNonEmpty(strings.TrimSpace(overrides.DataDir), envOrDefault("SESAME_DATA_DIR", ""), uc.DataDir)
+	paths, err := ResolvePaths(workspaceRoot, pathDataDir)
+	if err != nil {
+		return Config{}, err
+	}
+
+	modelProvider := firstNonEmpty(
+		envOrDefault("SESAME_MODEL_PROVIDER", ""),
+		uc.Provider,
+		"anthropic",
+	)
+	model := firstNonEmpty(
+		strings.TrimSpace(overrides.Model),
+		envOrDefault("SESAME_MODEL", ""),
+		uc.Model,
+		providerModelFallback(modelProvider, uc),
+	)
+
+	cfg := Config{
+		Addr:                         firstNonEmpty(strings.TrimSpace(overrides.Addr), envOrDefaultWithFallback("SESAME_ADDR", uc.Listen.Addr, "127.0.0.1:4317")),
+		DataDir:                      paths.DataDir,
+		ModelProvider:                modelProvider,
+		Model:                        model,
+		AnthropicAPIKey:              envOrDefaultWithFallback("ANTHROPIC_API_KEY", uc.Anthropic.APIKey, ""),
+		AnthropicBaseURL:             envOrDefaultWithFallback("ANTHROPIC_BASE_URL", uc.Anthropic.BaseURL, "https://api.anthropic.com"),
+		OpenAIAPIKey:                 envOrDefaultWithFallback("OPENAI_API_KEY", uc.OpenAI.APIKey, ""),
+		OpenAIBaseURL:                envOrDefaultWithFallback("OPENAI_BASE_URL", uc.OpenAI.BaseURL, ""),
+		ProviderCacheProfile:         firstNonEmpty(envOrDefault("SESAME_PROVIDER_CACHE_PROFILE", ""), defaultProviderCacheProfile(modelProvider, uc), "none"),
+		CacheExpirySeconds:           intEnvOrDefault("SESAME_CACHE_EXPIRY_SECONDS", 86400),
+		MicrocompactBytesThreshold:   intEnvOrDefaultWithFallback("SESAME_MICROCOMPACT_BYTES_THRESHOLD", uc.MicrocompactBytesThreshold, 8192),
+		LogLevel:                     envOrDefault("SESAME_LOG_LEVEL", "info"),
+		PermissionProfile:            firstNonEmpty(strings.TrimSpace(overrides.PermissionMode), envOrDefaultWithFallback("SESAME_PERMISSION_PROFILE", uc.PermissionProfile, "read_only")),
+		MaxToolSteps:                 intEnvOrDefaultWithFallback("SESAME_MAX_TOOL_STEPS", uc.MaxToolSteps, 8),
+		MaxShellOutputBytes:          intEnvOrDefault("SESAME_MAX_SHELL_OUTPUT_BYTES", 4096),
+		ShellTimeoutSeconds:          intEnvOrDefault("SESAME_SHELL_TIMEOUT_SECONDS", 30),
+		MaxFileWriteBytes:            intEnvOrDefault("SESAME_MAX_FILE_WRITE_BYTES", 1<<20),
+		MaxRecentItems:               intEnvOrDefaultWithFallback("SESAME_MAX_RECENT_ITEMS", uc.MaxRecentItems, 12),
+		CompactionThreshold:          intEnvOrDefaultWithFallback("SESAME_COMPACTION_THRESHOLD", uc.CompactionThreshold, 32),
+		MaxEstimatedTokens:           intEnvOrDefaultWithFallback("SESAME_MAX_ESTIMATED_TOKENS", uc.MaxEstimatedTokens, 16000),
+		MaxCompactionPasses:          intEnvOrDefaultWithFallback("SESAME_MAX_COMPACTION_PASSES", uc.MaxCompactionPasses, 1),
+		SystemPrompt:                 envOrDefaultWithFallback("SESAME_SYSTEM_PROMPT", uc.SystemPrompt, ""),
+		SystemPromptFile:             envOrDefaultWithFallback("SESAME_SYSTEM_PROMPT_FILE", uc.SystemPromptFile, ""),
+		MaxWorkspacePromptBytes:      intEnvOrDefault("SESAME_MAX_WORKSPACE_PROMPT_BYTES", 32768),
+		MaxConcurrentTasks:           intEnvOrDefault("SESAME_MAX_CONCURRENT_TASKS", 8),
+		TaskOutputMaxBytes:           intEnvOrDefault("SESAME_TASK_OUTPUT_MAX_BYTES", 1<<20),
+		RemoteExecutorShimCommand:    envOrDefault("SESAME_REMOTE_EXECUTOR_SHIM_COMMAND", ""),
+		RemoteExecutorTimeoutSeconds: intEnvOrDefault("SESAME_REMOTE_EXECUTOR_TIMEOUT_SECONDS", 300),
+		DaemonID:                     envOrDefault("SESAME_DAEMON_ID", ""),
+		Paths:                        paths,
+	}
+	cfg.ConfigFingerprint = cfg.Fingerprint()
+	return cfg, nil
+}
+
+func (c Config) Fingerprint() string {
+	payload := struct {
+		Addr                         string `json:"addr"`
+		DataDir                      string `json:"data_dir"`
+		ModelProvider                string `json:"provider"`
+		Model                        string `json:"model"`
+		AnthropicAPIKey              string `json:"anthropic_api_key"`
+		AnthropicBaseURL             string `json:"anthropic_base_url"`
+		OpenAIAPIKey                 string `json:"openai_api_key"`
+		OpenAIBaseURL                string `json:"openai_base_url"`
+		ProviderCacheProfile         string `json:"provider_cache_profile"`
+		LogLevel                     string `json:"log_level"`
+		PermissionProfile            string `json:"permission_profile"`
+		MaxToolSteps                 int    `json:"max_tool_steps"`
+		MaxShellOutputBytes          int    `json:"max_shell_output_bytes"`
+		ShellTimeoutSeconds          int    `json:"shell_timeout_seconds"`
+		MaxFileWriteBytes            int    `json:"max_file_write_bytes"`
+		MaxRecentItems               int    `json:"max_recent_items"`
+		CompactionThreshold          int    `json:"compaction_threshold"`
+		MaxEstimatedTokens           int    `json:"max_estimated_tokens"`
+		MaxCompactionPasses          int    `json:"max_compaction_passes"`
+		SystemPrompt                 string `json:"system_prompt"`
+		SystemPromptFile             string `json:"system_prompt_file"`
+		MaxWorkspacePromptBytes      int    `json:"max_workspace_prompt_bytes"`
+		MaxConcurrentTasks           int    `json:"max_concurrent_tasks"`
+		TaskOutputMaxBytes           int    `json:"task_output_max_bytes"`
+		RemoteExecutorShimCommand    string `json:"remote_executor_shim_command"`
+		RemoteExecutorTimeoutSeconds int    `json:"remote_executor_timeout_seconds"`
+	}{
+		Addr:                         c.Addr,
+		DataDir:                      c.DataDir,
+		ModelProvider:                c.ModelProvider,
+		Model:                        c.Model,
+		AnthropicAPIKey:              c.AnthropicAPIKey,
+		AnthropicBaseURL:             c.AnthropicBaseURL,
+		OpenAIAPIKey:                 c.OpenAIAPIKey,
+		OpenAIBaseURL:                c.OpenAIBaseURL,
+		ProviderCacheProfile:         c.ProviderCacheProfile,
+		LogLevel:                     c.LogLevel,
+		PermissionProfile:            c.PermissionProfile,
+		MaxToolSteps:                 c.MaxToolSteps,
+		MaxShellOutputBytes:          c.MaxShellOutputBytes,
+		ShellTimeoutSeconds:          c.ShellTimeoutSeconds,
+		MaxFileWriteBytes:            c.MaxFileWriteBytes,
+		MaxRecentItems:               c.MaxRecentItems,
+		CompactionThreshold:          c.CompactionThreshold,
+		MaxEstimatedTokens:           c.MaxEstimatedTokens,
+		MaxCompactionPasses:          c.MaxCompactionPasses,
+		SystemPrompt:                 c.SystemPrompt,
+		SystemPromptFile:             c.SystemPromptFile,
+		MaxWorkspacePromptBytes:      c.MaxWorkspacePromptBytes,
+		MaxConcurrentTasks:           c.MaxConcurrentTasks,
+		TaskOutputMaxBytes:           c.TaskOutputMaxBytes,
+		RemoteExecutorShimCommand:    c.RemoteExecutorShimCommand,
+		RemoteExecutorTimeoutSeconds: c.RemoteExecutorTimeoutSeconds,
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 func envOrDefaultWithFallback(key, fileFallback, hardDefault string) string {
@@ -187,26 +296,49 @@ func intEnvOrDefaultWithFallback(key string, fileFallback int, hardDefault int) 
 	return hardDefault
 }
 
-func resolveCLIDataDir(explicit string) (string, error) {
-	if explicit != "" {
-		return explicit, nil
-	}
-	if env := envOrDefault("AGENTD_DATA_DIR", ""); env != "" {
-		return env, nil
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".agentd"), nil
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
 			return strings.TrimSpace(value)
 		}
+	}
+	return ""
+}
+
+func providerModelFallback(modelProvider string, uc UserConfig) string {
+	switch strings.TrimSpace(modelProvider) {
+	case "openai_compatible":
+		return firstNonEmpty(uc.OpenAI.Model, "gpt-4.1-mini")
+	case "fake":
+		return "fake-smoke"
+	default:
+		return firstNonEmpty(uc.Anthropic.Model, "claude-sonnet-4-5")
+	}
+}
+
+func defaultProviderCacheProfile(modelProvider string, uc UserConfig) string {
+	return firstNonEmpty(
+		uc.ProviderCacheProfile,
+		inferProviderCacheProfile(modelProvider, uc.OpenAI.BaseURL),
+	)
+}
+
+func inferProviderCacheProfile(modelProvider, baseURL string) string {
+	if strings.TrimSpace(modelProvider) != "openai_compatible" {
+		return ""
+	}
+
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	path := strings.ToLower(parsed.Path)
+	if strings.HasPrefix(host, "ark.") && strings.Contains(host, "volces.com") {
+		return "ark_responses"
+	}
+	if strings.Contains(host, "volces.com") && strings.HasPrefix(path, "/api/") {
+		return "ark_responses"
 	}
 	return ""
 }

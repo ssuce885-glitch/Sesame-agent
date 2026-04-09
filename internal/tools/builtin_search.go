@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"go-agent/internal/runtime"
 )
 
 type grepTool struct{}
@@ -81,8 +79,8 @@ func (t grepTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (
 
 func (grepTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
 	input, _ := decoded.Input.(GrepInput)
-	resolvedPath := resolveWorkspacePath(execCtx.WorkspaceRoot, input.Path)
-	if err := runtime.WithinWorkspace(execCtx.WorkspaceRoot, resolvedPath); err != nil {
+	resolvedPath, err := resolveReadablePath(execCtx, input.Path)
+	if err != nil {
 		return ToolExecutionResult{}, err
 	}
 

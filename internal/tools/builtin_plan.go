@@ -85,6 +85,15 @@ func (enterPlanModeTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall
 	if err != nil {
 		return ToolExecutionResult{}, err
 	}
+	emitTimelineBlockEvent(ctx, execCtx, types.EventPlanUpdated, types.TimelineBlock{
+		ID:     out.PlanID,
+		RunID:  out.RunID,
+		Kind:   "plan_block",
+		Status: string(out.State),
+		Title:  input.PlanFile,
+		PlanID: out.PlanID,
+		Path:   input.PlanFile,
+	})
 
 	text := mustJSON(out)
 	preview := fmt.Sprintf("Plan mode entered: %s", out.State)
@@ -183,6 +192,13 @@ func (exitPlanModeTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall,
 	if err != nil {
 		return ToolExecutionResult{}, err
 	}
+	emitTimelineBlockEvent(ctx, execCtx, types.EventPlanUpdated, types.TimelineBlock{
+		ID:     out.PlanID,
+		RunID:  turnCtx.CurrentRunID,
+		Kind:   "plan_block",
+		Status: string(out.State),
+		PlanID: out.PlanID,
+	})
 
 	text := mustJSON(out)
 	preview := fmt.Sprintf("Plan mode exited: %s", out.State)

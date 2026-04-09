@@ -243,12 +243,19 @@ type anthropicMessage struct {
 type anthropicContentBlock struct {
 	Type      string         `json:"type"`
 	Text      string         `json:"text,omitempty"`
+	Source    *anthropicImageSource `json:"source,omitempty"`
 	ToolUseID string         `json:"tool_use_id,omitempty"`
 	Content   string         `json:"content,omitempty"`
 	IsError   bool           `json:"is_error,omitempty"`
 	ID        string         `json:"id,omitempty"`
 	Name      string         `json:"name,omitempty"`
 	Input     map[string]any `json:"input,omitempty"`
+}
+
+type anthropicImageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type anthropicDelta struct {
@@ -285,40 +292,98 @@ func toAnthropicMessages(items []ConversationItem) []anthropicMessage {
 	}
 
 	out := make([]anthropicMessage, 0, len(items))
+	appendMessageBlock := func(role string, block anthropicContentBlock) {
+		if len(out) > 0 && out[len(out)-1].Role == role {
+			out[len(out)-1].Content = append(out[len(out)-1].Content, block)
+			return
+		}
+		out = append(out, anthropicMessage{
+			Role:    role,
+			Content: []anthropicContentBlock{block},
+		})
+	}
 	for _, item := range items {
 		switch item.Kind {
 		case ConversationItemUserMessage:
-			out = append(out, anthropicMessage{
-				Role: "user",
-				Content: []anthropicContentBlock{{
-					Type: "text",
-					Text: item.Text,
-				}},
-			})
+			for _, block := range toAnthropicUserBlocks(item) {
+				appendMessageBlock("user", block)
+			}
 		case ConversationItemAssistantText:
-			out = append(out, anthropicMessage{
-				Role: "assistant",
-				Content: []anthropicContentBlock{{
-					Type: "text",
-					Text: item.Text,
-				}},
+			if strings.TrimSpace(item.Text) == "" {
+				continue
+			}
+			appendMessageBlock("assistant", anthropicContentBlock{
+				Type: "text",
+				Text: item.Text,
+			})
+		case ConversationItemToolCall:
+			appendMessageBlock("assistant", anthropicContentBlock{
+				Type:  "tool_use",
+				ID:    item.ToolCall.ID,
+				Name:  item.ToolCall.Name,
+				Input: normalizedToolCallInput(item.ToolCall),
 			})
 		case ConversationItemToolResult:
 			if item.Result == nil {
 				continue
 			}
-			out = append(out, anthropicMessage{
-				Role: "user",
-				Content: []anthropicContentBlock{{
-					Type:      "tool_result",
-					ToolUseID: item.Result.ToolCallID,
-					Content:   item.Result.Content,
-					IsError:   item.Result.IsError,
-				}},
+			appendMessageBlock("user", anthropicContentBlock{
+				Type:      "tool_result",
+				ToolUseID: item.Result.ToolCallID,
+				Content:   renderToolResultContent(item.Result),
+				IsError:   item.Result.IsError,
+			})
+		case ConversationItemSummary:
+			content := renderSummaryContent(item.Summary, item.Text)
+			if content == "" {
+				continue
+			}
+			appendMessageBlock("assistant", anthropicContentBlock{
+				Type: "text",
+				Text: content,
 			})
 		}
 	}
 
+	return out
+}
+
+func toAnthropicUserBlocks(item ConversationItem) []anthropicContentBlock {
+	if len(item.Parts) == 0 {
+		if strings.TrimSpace(item.Text) == "" {
+			return nil
+		}
+		return []anthropicContentBlock{{
+			Type: "text",
+			Text: item.Text,
+		}}
+	}
+
+	out := make([]anthropicContentBlock, 0, len(item.Parts))
+	for _, part := range item.Parts {
+		switch part.Type {
+		case ContentPartText:
+			if strings.TrimSpace(part.Text) == "" {
+				continue
+			}
+			out = append(out, anthropicContentBlock{
+				Type: "text",
+				Text: part.Text,
+			})
+		case ContentPartImage:
+			if strings.TrimSpace(part.MimeType) == "" || strings.TrimSpace(part.DataBase64) == "" {
+				continue
+			}
+			out = append(out, anthropicContentBlock{
+				Type: "image",
+				Source: &anthropicImageSource{
+					Type:      "base64",
+					MediaType: part.MimeType,
+					Data:      part.DataBase64,
+				},
+			})
+		}
+	}
 	return out
 }
 
