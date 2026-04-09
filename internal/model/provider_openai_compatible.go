@@ -95,6 +95,7 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 	}
 
 	functionCalls := make(map[string]functionCallMeta)
+	functionCallArgumentDeltas := make(map[string]string)
 	rememberFunctionCall := func(itemID, callID, name string) {
 		if itemID == "" {
 			return
@@ -195,6 +196,9 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 				return err
 			}
 			callID, name := resolveFunctionCall(payload.ItemID, payload.Name)
+			if payload.ItemID != "" && payload.Delta != "" {
+				functionCallArgumentDeltas[payload.ItemID] += payload.Delta
+			}
 			if err := sendStreamEvent(ctx, events, StreamEvent{
 				Kind: StreamEventToolCallDelta,
 				ToolCall: ToolCallChunk{
@@ -215,11 +219,11 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 				return err
 			}
 			callID, name := resolveFunctionCall(payload.ItemID, payload.Name)
-			input := map[string]any{}
-			if payload.Arguments != "" {
-				if err := json.Unmarshal([]byte(payload.Arguments), &input); err != nil {
-					return fmt.Errorf("decode function call arguments (raw=%q): %w", payload.Arguments, err)
-				}
+			input, err := parseFunctionCallArguments(payload.Arguments, functionCallArgumentDeltas[payload.ItemID])
+			delete(functionCalls, payload.ItemID)
+			delete(functionCallArgumentDeltas, payload.ItemID)
+			if err != nil {
+				return err
 			}
 			if err := sendStreamEvent(ctx, events, StreamEvent{
 				Kind: StreamEventToolCallEnd,
@@ -472,14 +476,13 @@ func toResponsesInput(items []ConversationItem) []map[string]any {
 	for _, item := range items {
 		switch item.Kind {
 		case ConversationItemUserMessage:
+			content := toResponsesUserContent(item)
+			if len(content) == 0 {
+				continue
+			}
 			out = append(out, map[string]any{
-				"role": "user",
-				"content": []map[string]any{
-					{
-						"type": "input_text",
-						"text": item.Text,
-					},
-				},
+				"role":    "user",
+				"content": content,
 			})
 		case ConversationItemAssistantText:
 			out = append(out, map[string]any{
@@ -493,6 +496,14 @@ func toResponsesInput(items []ConversationItem) []map[string]any {
 					},
 				},
 			})
+		case ConversationItemToolCall:
+			out = append(out, map[string]any{
+				"type":      "function_call",
+				"call_id":   item.ToolCall.ID,
+				"name":      item.ToolCall.Name,
+				"arguments": normalizedToolCallArguments(item.ToolCall),
+				"status":    "completed",
+			})
 		case ConversationItemToolResult:
 			if item.Result == nil {
 				continue
@@ -500,7 +511,57 @@ func toResponsesInput(items []ConversationItem) []map[string]any {
 			out = append(out, map[string]any{
 				"type":    "function_call_output",
 				"call_id": item.Result.ToolCallID,
-				"output":  item.Result.Content,
+				"output":  renderToolResultContent(item.Result),
+			})
+		case ConversationItemSummary:
+			content := renderSummaryContent(item.Summary, item.Text)
+			if content == "" {
+				continue
+			}
+			out = append(out, map[string]any{
+				"type":   "message",
+				"role":   "assistant",
+				"status": "completed",
+				"content": []map[string]any{
+					{
+						"type": "output_text",
+						"text": content,
+					},
+				},
+			})
+		}
+	}
+	return out
+}
+
+func toResponsesUserContent(item ConversationItem) []map[string]any {
+	if len(item.Parts) == 0 {
+		if strings.TrimSpace(item.Text) == "" {
+			return nil
+		}
+		return []map[string]any{{
+			"type": "input_text",
+			"text": item.Text,
+		}}
+	}
+	out := make([]map[string]any, 0, len(item.Parts))
+	for _, part := range item.Parts {
+		switch part.Type {
+		case ContentPartText:
+			if strings.TrimSpace(part.Text) == "" {
+				continue
+			}
+			out = append(out, map[string]any{
+				"type": "input_text",
+				"text": part.Text,
+			})
+		case ContentPartImage:
+			if strings.TrimSpace(part.DataBase64) == "" || strings.TrimSpace(part.MimeType) == "" {
+				continue
+			}
+			out = append(out, map[string]any{
+				"type":      "input_image",
+				"image_url": "data:" + part.MimeType + ";base64," + part.DataBase64,
 			})
 		}
 	}
@@ -518,4 +579,26 @@ func toResponsesTools(tools []ToolSchema) []map[string]any {
 		})
 	}
 	return out
+}
+
+func parseFunctionCallArguments(raw string, deltaFallback string) (map[string]any, error) {
+	input := map[string]any{}
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" {
+		candidate = strings.TrimSpace(deltaFallback)
+	}
+	if candidate == "" {
+		return input, nil
+	}
+	if err := json.Unmarshal([]byte(candidate), &input); err == nil {
+		return input, nil
+	} else {
+		fallback := strings.TrimSpace(deltaFallback)
+		if fallback != "" && fallback != candidate {
+			if fallbackErr := json.Unmarshal([]byte(fallback), &input); fallbackErr == nil {
+				return input, nil
+			}
+		}
+		return nil, fmt.Errorf("decode function call arguments (raw=%q): %w", candidate, err)
+	}
 }

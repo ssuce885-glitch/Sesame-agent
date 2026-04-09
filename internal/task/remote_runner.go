@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	runtimex "go-agent/internal/runtime"
 )
 
 type RemoteRunner struct {
@@ -32,7 +34,7 @@ func (r RemoteRunner) Run(ctx context.Context, task *Task, sink OutputSink) erro
 	} else {
 		escapedCommand := strings.ReplaceAll(task.Command, `"`, `""`)
 		command := fmt.Sprintf(`%s "%s"`, shimCommand, escapedCommand)
-		cmd = exec.CommandContext(runCtx, "cmd", "/c", command)
+		cmd = runtimex.NewShellCommandContext(runCtx, command)
 	}
 	cmd.Dir = task.WorkspaceRoot
 

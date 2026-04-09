@@ -31,6 +31,11 @@ type Task struct {
 	Status        TaskStatus `json:"status"`
 	Command       string     `json:"command"`
 	Description   string     `json:"description,omitempty"`
+	ParentTaskID  string     `json:"parent_task_id,omitempty"`
+	Owner         string     `json:"owner,omitempty"`
+	Kind          string     `json:"kind,omitempty"`
+	ExecutionTaskID string   `json:"execution_task_id,omitempty"`
+	WorktreeID    string     `json:"worktree_id,omitempty"`
 	WorkspaceRoot string     `json:"workspace_root"`
 	Output        string     `json:"output,omitempty"`
 	OutputPath    string     `json:"output_path,omitempty"`
@@ -46,9 +51,14 @@ type TodoItem struct {
 }
 
 type CreateTaskInput struct {
+	ID            string
 	Type          TaskType
 	Command       string
 	Description   string
+	ParentTaskID  string
+	Owner         string
+	Kind          string
+	WorktreeID    string
 	WorkspaceRoot string
 	Start         bool
 }
@@ -56,6 +66,8 @@ type CreateTaskInput struct {
 type UpdateTaskInput struct {
 	Status      TaskStatus
 	Description string
+	Owner       string
+	WorktreeID  string
 }
 
 func isTerminalStatus(status TaskStatus) bool {

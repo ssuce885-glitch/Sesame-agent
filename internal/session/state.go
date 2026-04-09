@@ -3,6 +3,7 @@ package session
 import "context"
 
 type RuntimeState struct {
-	ActiveTurnID string
-	cancel       context.CancelFunc
+	ActiveTurnID      string
+	RunPermissions    map[string]string
+	cancel            context.CancelFunc
 }

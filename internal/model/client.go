@@ -17,6 +17,7 @@ type Client interface {
 }
 
 type ConversationItemKind string
+type ContentPartType string
 
 const (
 	ConversationItemUserMessage   ConversationItemKind = "user_message"
@@ -24,6 +25,11 @@ const (
 	ConversationItemToolCall      ConversationItemKind = "tool_call"
 	ConversationItemToolResult    ConversationItemKind = "tool_result"
 	ConversationItemSummary       ConversationItemKind = "summary"
+)
+
+const (
+	ContentPartText  ContentPartType = "text"
+	ContentPartImage ContentPartType = "image"
 )
 
 type Summary struct {
@@ -38,13 +44,29 @@ type Summary struct {
 type ConversationItem struct {
 	Kind     ConversationItemKind
 	Text     string
+	Parts    []ContentPart
 	Summary  *Summary
 	ToolCall ToolCallChunk
 	Result   *ToolResult
 }
 
+type ContentPart struct {
+	Type       ContentPartType
+	Text       string
+	MimeType   string
+	DataBase64 string
+	Path       string
+	Width      int
+	Height     int
+	SizeBytes  int64
+}
+
 func UserMessageItem(text string) ConversationItem {
 	return ConversationItem{Kind: ConversationItemUserMessage, Text: text}
+}
+
+func UserMultipartItem(parts []ContentPart) ConversationItem {
+	return ConversationItem{Kind: ConversationItemUserMessage, Parts: cloneContentParts(parts)}
 }
 
 func ToolResultItem(result ToolResult) ConversationItem {

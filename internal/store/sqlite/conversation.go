@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go-agent/internal/model"
+	"go-agent/internal/types"
 )
 
 func (s *Store) InsertConversationItem(ctx context.Context, sessionID, turnID string, position int, item model.ConversationItem) error {
@@ -58,6 +59,39 @@ func (s *Store) ListConversationItems(ctx context.Context, sessionID string) ([]
 			return nil, err
 		}
 		out = append(out, item)
+	}
+
+	return out, rows.Err()
+}
+
+func (s *Store) ListConversationTimelineItems(ctx context.Context, sessionID string) ([]types.ConversationTimelineItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		select turn_id, payload
+		from conversation_items
+		where session_id = ?
+		order by position asc, id asc
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []types.ConversationTimelineItem
+	for rows.Next() {
+		var turnID string
+		var rawPayload string
+		if err := rows.Scan(&turnID, &rawPayload); err != nil {
+			return nil, err
+		}
+
+		var item model.ConversationItem
+		if err := json.Unmarshal([]byte(rawPayload), &item); err != nil {
+			return nil, err
+		}
+		out = append(out, types.ConversationTimelineItem{
+			TurnID: turnID,
+			Item:   item,
+		})
 	}
 
 	return out, rows.Err()

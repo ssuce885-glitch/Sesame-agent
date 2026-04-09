@@ -26,9 +26,13 @@ func NewRegistry() *Registry {
 	r.Register(fileReadTool{})
 	r.Register(fileWriteTool{})
 	r.Register(fileEditTool{})
+	r.Register(applyPatchTool{})
 	r.Register(globTool{})
 	r.Register(grepTool{})
+	r.Register(listDirTool{})
 	r.Register(notebookEditTool{})
+	r.Register(requestPermissionsTool{})
+	r.Register(requestUserInputTool{})
 	r.Register(shellTool{})
 	r.Register(taskCreateTool{})
 	r.Register(taskGetTool{})
@@ -37,6 +41,10 @@ func NewRegistry() *Registry {
 	r.Register(taskStopTool{})
 	r.Register(taskUpdateTool{})
 	r.Register(todoWriteTool{})
+	r.Register(viewImageTool{})
+	r.Register(webFetchTool{})
+	r.Register(enterWorktreeTool{})
+	r.Register(exitWorktreeTool{})
 
 	return r
 }
@@ -198,6 +206,9 @@ func decodeToolCall(tool Tool, call Call) (DecodedCall, error) {
 		}
 		if decoded.Call.Name == "" {
 			decoded.Call.Name = call.Name
+		}
+		if decoded.Call.ID == "" {
+			decoded.Call.ID = call.ID
 		}
 		if decoded.Call.Input == nil {
 			decoded.Call.Input = call.Input

@@ -16,6 +16,7 @@ type Message struct {
 
 type WorkingContext struct {
 	RecentItems    []model.ConversationItem `json:"recent_items"`
+	PromptItems    []model.ConversationItem `json:"prompt_items,omitempty"`
 	Summaries      []model.Summary          `json:"summaries"`
 	MemoryRefs     []string                 `json:"memory_refs"`
 	RecentMessages []Message                `json:"recent_messages,omitempty"`
@@ -34,6 +35,9 @@ func cloneSummary(summary model.Summary) model.Summary {
 
 func cloneConversationItem(item model.ConversationItem) model.ConversationItem {
 	cloned := item
+	if len(item.Parts) > 0 {
+		cloned.Parts = append([]model.ContentPart(nil), item.Parts...)
+	}
 	if item.Summary != nil {
 		summary := cloneSummary(*item.Summary)
 		cloned.Summary = &summary

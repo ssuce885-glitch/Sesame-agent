@@ -1,6 +1,0 @@
-{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
-{"file": ".trellis/spec/internal/backend/index.md", "reason": "Backend development guide"}
-{"file": "internal/tools/", "type": "directory", "reason": "tool contracts, registry, runtime, built-ins"}
-{"file": "internal/engine/", "type": "directory", "reason": "turn loop and tool result propagation"}
-{"file": "internal/model/", "type": "directory", "reason": "provider-facing tool result mapping"}
-{"file": "docs/superpowers/plans/2026-04-06-tool-sync-phase-2-task-management.md", "reason": "existing migration plan"}

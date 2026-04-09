@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"go-agent/internal/types"
@@ -109,6 +110,53 @@ func (s *Store) InsertConversationCompaction(ctx context.Context, compaction typ
 		compaction.CreatedAt.UTC().Format(timeLayout),
 	)
 	return err
+}
+
+func (s *Store) ListConversationCompactions(ctx context.Context, sessionID string) ([]types.ConversationCompaction, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		select id, session_id, kind, generation, start_position, end_position, summary_payload, reason, provider_profile, created_at
+		from conversation_compactions
+		where session_id = ?
+		order by created_at asc, id asc
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []types.ConversationCompaction
+	for rows.Next() {
+		var raw types.ConversationCompaction
+		var createdAt string
+		if err := rows.Scan(
+			&raw.ID,
+			&raw.SessionID,
+			&raw.Kind,
+			&raw.Generation,
+			&raw.StartPosition,
+			&raw.EndPosition,
+			&raw.SummaryPayload,
+			&raw.Reason,
+			&raw.ProviderProfile,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+		parsed, err := time.Parse(timeLayout, createdAt)
+		if err != nil {
+			return nil, err
+		}
+		raw.CreatedAt = parsed
+		out = append(out, raw)
+	}
+
+	return out, rows.Err()
+}
+
+func parseConversationCompactionPayload[T any](payload string) (T, error) {
+	var out T
+	err := json.Unmarshal([]byte(payload), &out)
+	return out, err
 }
 
 func formatOptionalTime(ts *time.Time) string {

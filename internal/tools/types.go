@@ -2,14 +2,17 @@ package tools
 
 import (
 	"context"
+	"time"
 
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
 	"go-agent/internal/task"
+	"go-agent/internal/types"
 )
 
 type Call struct {
+	ID    string
 	Name  string
 	Input map[string]any
 }
@@ -38,6 +41,7 @@ type ToolExecutionResult struct {
 	Artifacts   []ArtifactRef
 	Metadata    map[string]any
 	NewItems    []model.ConversationItem
+	Interrupt   *ToolInterrupt
 }
 
 type ModelToolResult struct {
@@ -46,12 +50,44 @@ type ModelToolResult struct {
 	IsError    bool
 }
 
+type ToolInterrupt struct {
+	Reason          string
+	Notice          string
+	EventType       string
+	EventPayload    any
+	DeferToolResult bool
+}
+
 type ExecContext struct {
 	WorkspaceRoot    string
+	GlobalConfigRoot string
 	PermissionEngine *permissions.Engine
 	TaskManager      *task.Manager
 	RuntimeService   *runtimegraph.Service
 	TurnContext      *runtimegraph.TurnContext
+	ToolRunID        string
+	EventSink        EventSink
+}
+
+type EventSink interface {
+	Emit(context.Context, types.Event) error
+}
+
+type ResourceClaimMode string
+
+const (
+	ResourceClaimShared    ResourceClaimMode = "shared"
+	ResourceClaimExclusive ResourceClaimMode = "exclusive"
+)
+
+type ResourceClaim struct {
+	Key  string
+	Mode ResourceClaimMode
+}
+
+type ResourceLockStats struct {
+	Waited   time.Duration
+	Acquired []ResourceClaim
 }
 
 type DecodedCall struct {
@@ -79,6 +115,10 @@ type decodedExecutor interface {
 
 type concurrencyAwareTool interface {
 	IsConcurrencySafeCall(DecodedCall, ExecContext) bool
+}
+
+type resourceAwareTool interface {
+	ResourceClaims(DecodedCall, ExecContext) []ResourceClaim
 }
 
 type permissionAwareTool interface {

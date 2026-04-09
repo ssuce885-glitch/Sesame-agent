@@ -32,13 +32,21 @@ func NewManager(cfg Config) *Manager {
 	return &Manager{cfg: cfg}
 }
 
+func (m *Manager) Config() Config {
+	if m == nil {
+		return Config{}
+	}
+	return m.cfg
+}
+
 type WorkingSet struct {
 	Instructions string
 	WorkingContext
-	CompactionStart int
-	EstimatedTokens int
-	Action          CompactionAction
-	NeedsCompact    bool
+	CompactionStart   int
+	EstimatedTokens   int
+	Action            CompactionAction
+	NeedsCompact      bool
+	CompactionApplied bool
 }
 
 func (m *Manager) Build(userText string, items []model.ConversationItem, summaries []model.Summary, memoryRefs []string) WorkingSet {
@@ -56,6 +64,7 @@ func (m *Manager) Build(userText string, items []model.ConversationItem, summari
 		Instructions: userText,
 		WorkingContext: WorkingContext{
 			RecentItems:    recentItems,
+			PromptItems:    cloneConversationItems(recentItems),
 			RecentMessages: conversationItemsToMessages(recentItems),
 			Summaries:      cloneSummaries(summaries),
 			MemoryRefs:     cloneStrings(memoryRefs),

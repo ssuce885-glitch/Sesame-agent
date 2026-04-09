@@ -11,6 +11,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			id text primary key,
 			workspace_root text not null,
 			system_prompt text not null default '',
+			permission_profile text not null default '',
 			state text not null,
 			active_turn_id text not null default '',
 			created_at text not null,
@@ -64,6 +65,28 @@ func (s *Store) migrate(ctx context.Context) error {
 			id text primary key,
 			run_id text not null,
 			task_id text not null default '',
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists permission_requests (
+			id text primary key,
+			session_id text not null,
+			turn_id text not null default '',
+			run_id text not null default '',
+			task_id text not null default '',
+			tool_run_id text not null default '',
+			status text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists turn_continuations (
+			id text primary key,
+			session_id text not null,
+			turn_id text not null,
+			permission_request_id text not null default '',
 			state text not null,
 			payload text not null,
 			created_at text not null,
@@ -140,6 +163,16 @@ func (s *Store) migrate(ctx context.Context) error {
 			provider_profile text not null,
 			created_at text not null
 		);`,
+		`create table if not exists session_memories (
+			session_id text primary key,
+			workspace_root text not null default '',
+			source_turn_id text not null default '',
+			up_to_position integer not null default 0,
+			item_count integer not null default 0,
+			summary_payload text not null default '',
+			created_at text not null,
+			updated_at text not null
+		);`,
 		`create table if not exists provider_cache_entries (
 			id text primary key,
 			session_id text not null,
@@ -180,6 +213,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	if err := s.ensureColumn(ctx, "sessions", "system_prompt", `alter table sessions add column system_prompt text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "sessions", "permission_profile", `alter table sessions add column permission_profile text not null default ''`); err != nil {
 		return err
 	}
 

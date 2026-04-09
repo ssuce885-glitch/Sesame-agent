@@ -20,10 +20,17 @@ type SubmitTurnInput struct {
 	Message      string
 }
 
+type ResumeTurnInput struct {
+	TurnID  string
+	Message string
+	Resume  *types.TurnResume
+}
+
 type RunInput struct {
 	Session types.Session
 	TurnID  string
 	Message string
+	Resume  *types.TurnResume
 }
 
 type Manager struct {
@@ -73,6 +80,42 @@ func (m *Manager) GetRuntimeState(sessionID string) (RuntimeState, bool) {
 }
 
 func (m *Manager) SubmitTurn(ctx context.Context, sessionID string, in SubmitTurnInput) (string, error) {
+	return m.startTurn(ctx, sessionID, RunInput{
+		TurnID:  in.TurnID,
+		Message: in.Message,
+	})
+}
+
+func (m *Manager) ResumeTurn(ctx context.Context, sessionID string, in ResumeTurnInput) (string, error) {
+	return m.startTurn(ctx, sessionID, RunInput{
+		TurnID:  in.TurnID,
+		Message: in.Message,
+		Resume:  in.Resume,
+	})
+}
+
+func (m *Manager) InterruptTurn(sessionID, turnID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, ok := m.runtime[sessionID]
+	if !ok || turnID == "" {
+		return false
+	}
+	if state.ActiveTurnID != turnID {
+		return false
+	}
+
+	if state.cancel != nil {
+		state.cancel()
+		state.cancel = nil
+	}
+	state.ActiveTurnID = ""
+	state.RunPermissions = nil
+	return true
+}
+
+func (m *Manager) startTurn(ctx context.Context, sessionID string, in RunInput) (string, error) {
 	m.mu.Lock()
 	session, ok := m.sessions[sessionID]
 	if !ok {
@@ -86,8 +129,21 @@ func (m *Manager) SubmitTurn(ctx context.Context, sessionID string, in SubmitTur
 		return "", errSessionNotFound
 	}
 
+	if in.Resume != nil && in.Resume.DecisionScope == types.PermissionDecisionAllowSession && in.Resume.EffectivePermissionProfile != "" {
+		session.PermissionProfile = in.Resume.EffectivePermissionProfile
+		m.sessions[sessionID] = session
+	}
+
 	if state.cancel != nil {
 		state.cancel()
+	}
+	if state.RunPermissions == nil {
+		state.RunPermissions = make(map[string]string)
+	}
+	if in.Resume != nil && in.Resume.RunID != "" && in.Resume.EffectivePermissionProfile != "" {
+		if in.Resume.DecisionScope == types.PermissionDecisionAllowRun || in.Resume.DecisionScope == types.PermissionDecisionAllowOnce {
+			state.RunPermissions[in.Resume.RunID] = in.Resume.EffectivePermissionProfile
+		}
 	}
 
 	// Background turn execution should not be tied to the lifetime of the
@@ -98,12 +154,31 @@ func (m *Manager) SubmitTurn(ctx context.Context, sessionID string, in SubmitTur
 	m.mu.Unlock()
 
 	go func() {
+		defer m.finishTurn(sessionID, in.TurnID)
 		_ = m.runner.RunTurn(runCtx, RunInput{
 			Session: session,
 			TurnID:  in.TurnID,
 			Message: in.Message,
+			Resume:  in.Resume,
 		})
 	}()
 
 	return in.TurnID, nil
+}
+
+func (m *Manager) finishTurn(sessionID, turnID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, ok := m.runtime[sessionID]
+	if !ok {
+		return
+	}
+	if state.ActiveTurnID != turnID {
+		return
+	}
+
+	state.ActiveTurnID = ""
+	state.cancel = nil
+	state.RunPermissions = nil
 }

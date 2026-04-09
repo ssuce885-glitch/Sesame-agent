@@ -23,11 +23,15 @@ func NewPromptedCompactor(client model.StreamingClient, compactModel string) *Pr
 }
 
 func (p *PromptedCompactor) Compact(ctx context.Context, items []model.ConversationItem) (model.Summary, error) {
+	compactionItems := append(
+		cloneConversationItems(items),
+		model.UserMessageItem(promptedSummaryFollowupPrompt),
+	)
 	req := model.Request{
 		Model:        p.model,
 		Instructions: promptedSummaryInstructions,
 		Stream:       true,
-		Items:        cloneConversationItems(items),
+		Items:        compactionItems,
 	}
 
 	events, errs := p.client.Stream(ctx, req)
@@ -67,7 +71,7 @@ func (p *PromptedCompactor) Compact(ctx context.Context, items []model.Conversat
 		OpenThreads      []string `json:"open_threads"`
 	}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return model.Summary{}, fmt.Errorf("prompted compactor: decode summary JSON: %w; payload=%q", err, raw)
+		return fallbackSummaryFromPlainText(raw), nil
 	}
 
 	return model.Summary{
@@ -80,6 +84,25 @@ func (p *PromptedCompactor) Compact(ctx context.Context, items []model.Conversat
 	}, nil
 }
 
+func fallbackSummaryFromPlainText(raw string) model.Summary {
+	normalized := strings.TrimSpace(raw)
+	if normalized == "" {
+		normalized = "Model returned an empty non-JSON compaction summary."
+	}
+	return model.Summary{
+		RangeLabel:  "compacted conversation",
+		OpenThreads: []string{truncateFallbackSummary(normalized, 240)},
+	}
+}
+
+func truncateFallbackSummary(text string, max int) string {
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) <= max {
+		return string(runes)
+	}
+	return string(runes[:max]) + "..."
+}
+
 const promptedSummaryInstructions = `You are summarizing a conversation into a strict JSON object.
 Return pure JSON only. Do not use markdown, code fences, or commentary.
 The object must contain exactly these keys:
@@ -90,6 +113,8 @@ The object must contain exactly these keys:
 - tool_outcomes
 - open_threads
 Use strings for range_label and arrays of strings for the remaining keys.`
+
+const promptedSummaryFollowupPrompt = "Summarize the conversation above into the required JSON object. Return JSON only."
 
 // extractJSON strips markdown code fences and returns the first JSON object found.
 func extractJSON(s string) string {

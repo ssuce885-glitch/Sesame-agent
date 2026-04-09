@@ -2,6 +2,10 @@ package contextstate
 
 import "go-agent/internal/model"
 
+func EstimatePromptTokens(userText string, items []model.ConversationItem, summaries []model.Summary, memoryRefs []string) int {
+	return estimateConversationTokens(userText, items, summaries, memoryRefs)
+}
+
 func estimateConversationTokens(userText string, recentItems []model.ConversationItem, summaries []model.Summary, memoryRefs []string) int {
 	total := estimateTextTokens(userText) + 2
 

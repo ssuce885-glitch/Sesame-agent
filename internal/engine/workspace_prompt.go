@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"go-agent/internal/config"
 )
 
-const workspacePromptTruncationNotice = "Workspace instructions were truncated at %d bytes; some .agentd rules were omitted."
+const workspacePromptTruncationNotice = "Workspace instructions were truncated at %d bytes; some .sesame rules were omitted."
 
 var readFile = os.ReadFile
 
@@ -23,7 +25,12 @@ func loadWorkspacePromptBundle(workspaceRoot string, maxBytes int) (text string,
 		maxBytes = defaultMaxWorkspacePromptBytes
 	}
 
-	promptPath := filepath.Join(workspaceRoot, ".agentd", "prompt.md")
+	paths, err := config.ResolvePaths(workspaceRoot, "")
+	if err != nil {
+		return "", nil, err
+	}
+
+	promptPath := paths.WorkspacePromptFile
 	if err := validateWorkspacePath(workspaceRoot, promptPath); err != nil {
 		return "", nil, err
 	}
@@ -43,7 +50,7 @@ func loadWorkspacePromptBundle(workspaceRoot string, maxBytes int) (text string,
 		currentBytes = len([]byte(promptText))
 	}
 
-	rulesRoot := filepath.Join(workspaceRoot, ".agentd", "rules")
+	rulesRoot := paths.WorkspaceRulesDir
 	if err := validateWorkspacePath(workspaceRoot, rulesRoot); err != nil {
 		return "", nil, err
 	}

@@ -33,16 +33,23 @@ func (e *Engine) Decide(toolName string) Decision {
 	}
 
 	allowed := map[string]struct{}{
-		"file_read": {},
-		"glob":      {},
-		"grep":      {},
+		"file_read":           {},
+		"glob":                {},
+		"grep":                {},
+		"list_dir":            {},
+		"request_permissions": {},
+		"request_user_input":  {},
+		"view_image":          {},
+		"web_fetch":           {},
 	}
 	switch e.profile {
 	case "workspace_write":
+		allowed["apply_patch"] = struct{}{}
 		allowed["file_write"] = struct{}{}
 		allowed["file_edit"] = struct{}{}
 		allowed["notebook_edit"] = struct{}{}
 	case "trusted_local":
+		allowed["apply_patch"] = struct{}{}
 		allowed["file_write"] = struct{}{}
 		allowed["file_edit"] = struct{}{}
 		allowed["notebook_edit"] = struct{}{}
@@ -54,6 +61,8 @@ func (e *Engine) Decide(toolName string) Decision {
 		allowed["task_output"] = struct{}{}
 		allowed["task_stop"] = struct{}{}
 		allowed["task_update"] = struct{}{}
+		allowed["enter_worktree"] = struct{}{}
+		allowed["exit_worktree"] = struct{}{}
 		allowed["enter_plan_mode"] = struct{}{}
 		allowed["exit_plan_mode"] = struct{}{}
 	case "", "read_only":
@@ -63,6 +72,9 @@ func (e *Engine) Decide(toolName string) Decision {
 	}
 
 	if _, ok := allowed[toolName]; ok {
+		return DecisionAllow
+	}
+	if e.profile == "trusted_local" {
 		return DecisionAllow
 	}
 	return DecisionDeny

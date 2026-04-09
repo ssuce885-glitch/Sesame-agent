@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	_ "modernc.org/sqlite"
 )
@@ -18,6 +19,10 @@ func Open(path string) (*Store, error) {
 	}
 
 	store := &Store{db: db}
+	if err := store.configure(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := store.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -28,4 +33,17 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+func (s *Store) configure(ctx context.Context) error {
+	pragmas := []string{
+		`pragma busy_timeout = 5000`,
+		`pragma journal_mode = wal`,
+	}
+	for _, stmt := range pragmas {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("configure sqlite with %q: %w", stmt, err)
+		}
+	}
+	return nil
 }
