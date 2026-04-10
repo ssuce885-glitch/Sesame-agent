@@ -169,6 +169,21 @@ func (s *Store) UpsertTaskRecord(ctx context.Context, task types.TaskRecord) err
 	return err
 }
 
+func (s *Store) GetTaskRecord(ctx context.Context, id string) (types.TaskRecord, bool, error) {
+	items, err := listRuntimeObjects[types.TaskRecord](ctx, s.db, `
+		select payload, created_at, updated_at
+		from task_records
+		where id = ?
+	`, id)
+	if err != nil {
+		return types.TaskRecord{}, false, err
+	}
+	if len(items) == 0 {
+		return types.TaskRecord{}, false, nil
+	}
+	return items[0], true, nil
+}
+
 func (s *Store) UpsertToolRun(ctx context.Context, toolRun types.ToolRun) error {
 	toolRun = normalizeToolRun(toolRun)
 	payload, err := marshalRuntimePayload(toolRun)

@@ -2,6 +2,7 @@ package runtimegraph
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -55,4 +56,27 @@ type Service struct {
 
 func NewService(store Store) *Service {
 	return &Service{store: store}
+}
+
+func (s *Service) EnsureRun(ctx context.Context, turnCtx *TurnContext, sessionID, turnID, objective string) (string, error) {
+	if s == nil || s.store == nil {
+		return "", fmt.Errorf("runtime service is not configured")
+	}
+	if turnCtx == nil {
+		return "", fmt.Errorf("turn runtime context is not configured")
+	}
+	if current := turnCtx.CurrentRunID; current != "" {
+		return current, nil
+	}
+
+	now := time.Now().UTC()
+	var runID string
+	if err := s.store.WithTx(ctx, func(tx RuntimeTx) error {
+		var err error
+		runID, err = ensureRunLocked(ctx, tx, turnCtx, sessionID, turnID, objective, now)
+		return err
+	}); err != nil {
+		return "", err
+	}
+	return runID, nil
 }

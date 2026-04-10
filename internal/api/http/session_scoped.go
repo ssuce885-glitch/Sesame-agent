@@ -42,6 +42,8 @@ func registerSessionScopedRoutes(mux *http.ServeMux, deps Dependencies) {
 			handleSelectSession(deps, sessionID)(w, r)
 		case "timeline":
 			handleGetTimeline(deps, sessionID)(w, r)
+		case "mailbox":
+			handleGetReportMailbox(deps, sessionID)(w, r)
 		case "runtime_graph":
 			handleGetRuntimeGraph(deps, sessionID)(w, r)
 		case "workspace":

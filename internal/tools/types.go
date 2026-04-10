@@ -7,6 +7,7 @@ import (
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
+	"go-agent/internal/scheduler"
 	"go-agent/internal/task"
 	"go-agent/internal/types"
 )
@@ -64,6 +65,7 @@ type ExecContext struct {
 	PermissionEngine *permissions.Engine
 	TaskManager      *task.Manager
 	RuntimeService   *runtimegraph.Service
+	SchedulerService *scheduler.Service
 	TurnContext      *runtimegraph.TurnContext
 	ToolRunID        string
 	EventSink        EventSink

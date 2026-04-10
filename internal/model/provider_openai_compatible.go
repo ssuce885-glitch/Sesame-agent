@@ -32,6 +32,7 @@ type openAICompatibleRequestBody struct {
 	Instructions       *string                      `json:"instructions,omitempty"`
 	Input              []map[string]any             `json:"input"`
 	Tools              []map[string]any             `json:"tools,omitempty"`
+	ToolChoice         any                          `json:"tool_choice,omitempty"`
 	Stream             bool                         `json:"stream"`
 	Store              *bool                        `json:"store,omitempty"`
 	PreviousResponseID *string                      `json:"previous_response_id,omitempty"`
@@ -301,10 +302,11 @@ func (p *OpenAICompatibleProvider) buildRequestBody(req Request) openAICompatibl
 	}
 
 	body := openAICompatibleRequestBody{
-		Model:  chooseModel(req, p.model),
-		Input:  input,
-		Tools:  toResponsesTools(req.Tools),
-		Stream: req.Stream,
+		Model:      chooseModel(req, p.model),
+		Input:      input,
+		Tools:      toResponsesTools(req.Tools),
+		ToolChoice: toResponsesToolChoice(req.ToolChoice, req.Tools),
+		Stream:     req.Stream,
 	}
 
 	if !useArkCache && req.Instructions != "" {
@@ -319,6 +321,7 @@ func (p *OpenAICompatibleProvider) buildRequestBody(req Request) openAICompatibl
 			previousResponseID := req.Cache.PreviousResponseID
 			body.PreviousResponseID = &previousResponseID
 			body.Tools = nil
+			body.ToolChoice = nil
 		}
 		body.Caching = &openAICompatibleCachingBody{
 			Type: "enabled",
@@ -579,6 +582,25 @@ func toResponsesTools(tools []ToolSchema) []map[string]any {
 		})
 	}
 	return out
+}
+
+func toResponsesToolChoice(choice string, tools []ToolSchema) any {
+	if len(tools) == 0 {
+		return nil
+	}
+	trimmed := strings.TrimSpace(choice)
+	if trimmed == "" {
+		return nil
+	}
+	switch strings.ToLower(trimmed) {
+	case "auto", "none", "required":
+		return strings.ToLower(trimmed)
+	default:
+		return map[string]any{
+			"type": "function",
+			"name": trimmed,
+		}
+	}
 }
 
 func parseFunctionCallArguments(raw string, deltaFallback string) (map[string]any, error) {

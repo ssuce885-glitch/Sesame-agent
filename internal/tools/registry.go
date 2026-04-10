@@ -34,10 +34,13 @@ func NewRegistry() *Registry {
 	r.Register(requestPermissionsTool{})
 	r.Register(requestUserInputTool{})
 	r.Register(shellTool{})
+	r.Register(scheduleReportTool{})
 	r.Register(taskCreateTool{})
 	r.Register(taskGetTool{})
 	r.Register(taskListTool{})
 	r.Register(taskOutputTool{})
+	r.Register(taskResultTool{})
+	r.Register(taskWaitTool{})
 	r.Register(taskStopTool{})
 	r.Register(taskUpdateTool{})
 	r.Register(todoWriteTool{})
@@ -189,8 +192,12 @@ func (r *Registry) executePreparedRich(ctx context.Context, prepared PreparedCal
 	if prepared.PrepareErr != nil {
 		return ToolExecutionResult{}, prepared.PrepareErr
 	}
-	if err := checkToolPermission(ctx, prepared.Tool, prepared.ResolvedName, prepared.Decoded, execCtx); err != nil {
+	interrupt, err := checkToolPermission(ctx, prepared.Tool, prepared.ResolvedName, prepared.Decoded, execCtx)
+	if err != nil {
 		return ToolExecutionResult{}, err
+	}
+	if interrupt != nil {
+		return *interrupt, nil
 	}
 	return executePreparedTool(ctx, prepared, execCtx)
 }
@@ -250,29 +257,34 @@ func mapToolModelResult(tool Tool, output ToolExecutionResult) ModelToolResult {
 	}
 }
 
-func checkToolPermission(ctx context.Context, tool Tool, resolvedName string, decoded DecodedCall, execCtx ExecContext) error {
+func checkToolPermission(ctx context.Context, tool Tool, resolvedName string, decoded DecodedCall, execCtx ExecContext) (*ToolExecutionResult, error) {
 	if execCtx.PermissionEngine != nil {
 		switch execCtx.PermissionEngine.Decide(resolvedName) {
 		case permissions.DecisionAllow:
 		case permissions.DecisionAsk:
-			return permissionDecisionError(resolvedName, permissions.DecisionAsk, "")
+			result := permissionInterruptResult(resolvedName, currentPermissionProfile(execCtx), "additional approval required by permission profile", execCtx)
+			return &result, nil
 		case permissions.DecisionDeny:
-			return permissionDecisionError(resolvedName, permissions.DecisionDeny, "")
+			return nil, permissionDecisionError(resolvedName, permissions.DecisionDeny, "")
 		}
 	}
 	if checker, ok := tool.(permissionAwareTool); ok {
 		decision, reason, err := checker.CheckPermission(ctx, decoded, execCtx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		switch decision {
 		case permissions.DecisionAllow:
-			return nil
+			return nil, nil
 		case permissions.DecisionAsk, permissions.DecisionDeny:
-			return permissionDecisionError(resolvedName, decision, reason)
+			if decision == permissions.DecisionAsk {
+				result := permissionInterruptResult(resolvedName, currentPermissionProfile(execCtx), reason, execCtx)
+				return &result, nil
+			}
+			return nil, permissionDecisionError(resolvedName, decision, reason)
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 func toolConcurrencySafe(tool Tool, decoded DecodedCall, execCtx ExecContext) bool {

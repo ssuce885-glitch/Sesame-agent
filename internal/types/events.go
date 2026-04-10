@@ -21,6 +21,8 @@ const (
 	EventPermissionResolved     = "permission.resolved"
 	EventPlanUpdated            = "plan.updated"
 	EventTaskUpdated            = "task.updated"
+	EventTaskResultReady        = "task.result_ready"
+	EventReportReady            = "report.ready"
 	EventToolRunUpdated         = "tool_run.updated"
 	EventWorktreeUpdated        = "worktree.updated"
 	EventContextCompacted       = "context.compacted"
@@ -64,25 +66,25 @@ type ToolEventPayload struct {
 }
 
 type PermissionRequestedPayload struct {
-	RequestID         string `json:"request_id,omitempty"`
-	ToolRunID         string `json:"tool_run_id,omitempty"`
-	ToolCallID        string `json:"tool_call_id,omitempty"`
-	ToolName          string `json:"tool_name,omitempty"`
+	RequestID        string `json:"request_id,omitempty"`
+	ToolRunID        string `json:"tool_run_id,omitempty"`
+	ToolCallID       string `json:"tool_call_id,omitempty"`
+	ToolName         string `json:"tool_name,omitempty"`
 	RequestedProfile string `json:"requested_profile"`
 	Reason           string `json:"reason,omitempty"`
 	TurnID           string `json:"turn_id,omitempty"`
 }
 
 type PermissionResolvedPayload struct {
-	RequestID         string `json:"request_id"`
-	ToolRunID         string `json:"tool_run_id,omitempty"`
-	ToolCallID        string `json:"tool_call_id,omitempty"`
-	ToolName          string `json:"tool_name,omitempty"`
-	RequestedProfile  string `json:"requested_profile"`
-	Decision          string `json:"decision"`
-	DecisionScope     string `json:"decision_scope,omitempty"`
-	EffectiveProfile  string `json:"effective_profile,omitempty"`
-	TurnID            string `json:"turn_id,omitempty"`
+	RequestID        string `json:"request_id"`
+	ToolRunID        string `json:"tool_run_id,omitempty"`
+	ToolCallID       string `json:"tool_call_id,omitempty"`
+	ToolName         string `json:"tool_name,omitempty"`
+	RequestedProfile string `json:"requested_profile"`
+	Decision         string `json:"decision"`
+	DecisionScope    string `json:"decision_scope,omitempty"`
+	EffectiveProfile string `json:"effective_profile,omitempty"`
+	TurnID           string `json:"turn_id,omitempty"`
 }
 
 type SessionMemoryEventPayload struct {

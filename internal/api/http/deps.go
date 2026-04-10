@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"go-agent/internal/model"
+	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
 	"go-agent/internal/types"
 )
@@ -34,3 +35,12 @@ type Manager interface {
 type Bus interface {
 	Subscribe(sessionID string) (<-chan types.Event, func())
 }
+
+type CronScheduler interface {
+	ListJobs(context.Context, string) ([]types.ScheduledJob, error)
+	GetJob(context.Context, string) (types.ScheduledJob, bool, error)
+	SetJobEnabled(context.Context, string, bool) (types.ScheduledJob, bool, error)
+	DeleteJob(context.Context, string) (bool, error)
+}
+
+var _ CronScheduler = (*scheduler.Service)(nil)

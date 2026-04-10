@@ -22,8 +22,10 @@ import (
 )
 
 const (
-	defaultTUIWidth  = 100
-	defaultTUIHeight = 32
+	defaultTUIWidth           = 100
+	defaultTUIHeight          = 32
+	enableAlternateScrollSeq  = "\x1b[?1007h"
+	disableAlternateScrollSeq = "\x1b[?1007l"
 )
 
 type tuiEntryKind string
@@ -48,7 +50,9 @@ type tuiEntry struct {
 }
 
 type tuiStreamReadyMsg struct {
-	ch <-chan tea.Msg
+	sessionID string
+	ch        <-chan tea.Msg
+	cancel    context.CancelFunc
 }
 
 type tuiQueuePromptMsg struct {
@@ -56,12 +60,15 @@ type tuiQueuePromptMsg struct {
 }
 
 type tuiStreamEventMsg struct {
-	event types.Event
+	sessionID string
+	event     types.Event
 }
 
-type tuiStreamClosedMsg struct{}
+type tuiStreamClosedMsg struct {
+	sessionID string
+}
 
-type tuiStreamErrorMsg struct {
+type tuiSubmitTurnMsg struct {
 	err error
 }
 
@@ -74,6 +81,28 @@ type tuiStatusMsg struct {
 type tuiSessionsMsg struct {
 	resp types.ListSessionsResponse
 	err  error
+}
+
+type tuiMailboxMsg struct {
+	resp types.SessionReportMailboxResponse
+	err  error
+}
+
+type tuiCronListMsg struct {
+	resp types.ListScheduledJobsResponse
+	err  error
+}
+
+type tuiCronJobMsg struct {
+	job    types.ScheduledJob
+	err    error
+	notice string
+}
+
+type tuiCronDeleteMsg struct {
+	jobID  string
+	err    error
+	notice string
 }
 
 type tuiSwitchSessionMsg struct {
@@ -101,14 +130,18 @@ type tuiModel struct {
 	viewport viewport.Model
 	input    textarea.Model
 
-	entries          []tuiEntry
-	toolIndexByCall  map[string]int
-	streamCh         <-chan tea.Msg
-	busy             bool
-	initialPrompt    string
-	initialFocusCmd  tea.Cmd
-	sessionReady     bool
-	statusBarMessage string
+	entries            []tuiEntry
+	toolIndexByCall    map[string]int
+	toolIndexByKey     map[string]int
+	streamCh           <-chan tea.Msg
+	streamSessionID    string
+	streamCancel       context.CancelFunc
+	busy               bool
+	initialPrompt      string
+	initialFocusCmd    tea.Cmd
+	sessionReady       bool
+	statusBarMessage   string
+	pendingReportCount int
 }
 
 func canUseTUI(stdin io.Reader, stdout io.Writer) bool {
@@ -152,19 +185,45 @@ func (r *REPL) runTUI(ctx context.Context, initialPrompt string) error {
 		InitialPrompt: initialPrompt,
 	})
 
-	program := tea.NewProgram(
-		model,
-		tea.WithAltScreen(),
+	programOpts := []tea.ProgramOption{
 		tea.WithContext(ctx),
 		tea.WithInput(r.stdin),
 		tea.WithOutput(r.stdout),
-		tea.WithMouseCellMotion(),
-	)
+	}
+	if shouldUseTUIAltScreen(os.LookupEnv) {
+		writeTUICtrlSeq(r.stdout, enableAlternateScrollSeq)
+		defer writeTUICtrlSeq(r.stdout, disableAlternateScrollSeq)
+		programOpts = append([]tea.ProgramOption{tea.WithAltScreen()}, programOpts...)
+	}
+
+	program := tea.NewProgram(model, programOpts...)
 	_, err := program.Run()
 	if err == tea.ErrProgramKilled {
 		return nil
 	}
 	return err
+}
+
+func shouldUseTUIAltScreen(lookupEnv func(string) (string, bool)) bool {
+	if lookupEnv == nil {
+		return true
+	}
+	if envValueSet(lookupEnv, "ZELLIJ") {
+		return false
+	}
+	return true
+}
+
+func envValueSet(lookupEnv func(string) (string, bool), key string) bool {
+	value, ok := lookupEnv(key)
+	return ok && strings.TrimSpace(value) != ""
+}
+
+func writeTUICtrlSeq(w io.Writer, seq string) {
+	if w == nil || seq == "" {
+		return
+	}
+	_, _ = io.WriteString(w, seq)
 }
 
 type tuiModelOptions struct {
@@ -196,8 +255,6 @@ func newTUIModel(opts tuiModelOptions) tuiModel {
 	focusCmd := input.Focus()
 
 	vp := viewport.New(defaultTUIWidth-2, defaultTUIHeight-10)
-	vp.MouseWheelEnabled = true
-	vp.MouseWheelDelta = 3
 
 	m := tuiModel{
 		ctx:             opts.Context,
@@ -212,13 +269,14 @@ func newTUIModel(opts tuiModelOptions) tuiModel {
 		viewport:        vp,
 		input:           input,
 		toolIndexByCall: make(map[string]int),
+		toolIndexByKey:  make(map[string]int),
 		initialPrompt:   strings.TrimSpace(opts.InitialPrompt),
 		initialFocusCmd: focusCmd,
 	}
 	m.sessionReady = strings.TrimSpace(opts.SessionID) != ""
 	m.applyTimeline(opts.Timeline)
 	m.layout()
-	m.statusBarMessage = "Enter send • Alt+Enter newline • Esc interrupt • Mouse wheel/PgUp/PgDn scroll • Ctrl+C quit"
+	m.statusBarMessage = "Enter send • Alt+Enter newline • Esc interrupt • Drag to select/copy • Mouse wheel/PgUp/PgDn/Home/End scroll • Ctrl+C quit"
 	return m
 }
 
@@ -226,6 +284,9 @@ func (m tuiModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{}
 	if m.initialFocusCmd != nil {
 		cmds = append(cmds, m.initialFocusCmd)
+	}
+	if strings.TrimSpace(m.sessionID) != "" {
+		cmds = append(cmds, m.startSessionStreamCmd(m.sessionID, m.lastSeq))
 	}
 	if strings.TrimSpace(m.initialPrompt) != "" && strings.TrimSpace(m.sessionID) != "" {
 		prompt := m.initialPrompt
@@ -259,6 +320,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "pgdown":
 			m.viewport.HalfViewDown()
+			return m, nil
+		case "up":
+			m.viewport.LineUp(m.viewport.MouseWheelDelta)
+			return m, nil
+		case "down":
+			m.viewport.LineDown(m.viewport.MouseWheelDelta)
 			return m, nil
 		case "home":
 			m.viewport.GotoTop()
@@ -294,23 +361,37 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout()
 		return m, cmd
 	case tuiStreamReadyMsg:
+		if strings.TrimSpace(msg.sessionID) == "" || msg.sessionID != strings.TrimSpace(m.sessionID) {
+			if msg.cancel != nil {
+				msg.cancel()
+			}
+			return m, listenTUIStream(m.streamCh, m.streamSessionID)
+		}
+		if m.streamCancel != nil && strings.TrimSpace(m.streamSessionID) != "" && m.streamSessionID != msg.sessionID {
+			m.streamCancel()
+		}
+		m.streamCancel = msg.cancel
+		m.streamSessionID = msg.sessionID
 		m.streamCh = msg.ch
-		return m, listenTUIStream(msg.ch)
+		return m, listenTUIStream(msg.ch, msg.sessionID)
 	case tuiQueuePromptMsg:
 		return m, m.submitPromptCmd(msg.prompt)
 	case tuiStreamEventMsg:
+		if strings.TrimSpace(msg.sessionID) != strings.TrimSpace(m.streamSessionID) {
+			return m, listenTUIStream(m.streamCh, m.streamSessionID)
+		}
 		m.applyEvent(msg.event)
-		return m, listenTUIStream(m.streamCh)
+		return m, listenTUIStream(m.streamCh, m.streamSessionID)
 	case tuiStreamClosedMsg:
-		m.busy = false
-		m.streamCh = nil
-		m.closeAssistantStream()
-		m.layout()
+		if strings.TrimSpace(msg.sessionID) == strings.TrimSpace(m.streamSessionID) {
+			m.streamCh = nil
+			m.streamSessionID = ""
+			m.streamCancel = nil
+		}
 		return m, nil
-	case tuiStreamErrorMsg:
-		m.busy = false
-		m.streamCh = nil
+	case tuiSubmitTurnMsg:
 		if msg.err != nil {
+			m.busy = false
 			m.appendError(msg.err.Error())
 			m.layout()
 		}
@@ -366,6 +447,72 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendActivity("sessions", strings.Join(lines, "\n"))
 		m.layout()
 		return m, nil
+	case tuiMailboxMsg:
+		if msg.err != nil {
+			m.appendError(msg.err.Error())
+			m.layout()
+			return m, nil
+		}
+		m.pendingReportCount = msg.resp.PendingCount
+		if len(msg.resp.Items) == 0 {
+			m.appendActivity("mailbox", "No reports.")
+			m.layout()
+			return m, nil
+		}
+		lines := make([]string, 0, len(msg.resp.Items))
+		for _, item := range msg.resp.Items {
+			lines = append(lines, formatMailboxItemLine(item))
+		}
+		m.appendActivity("mailbox", strings.Join(lines, "\n\n"))
+		m.layout()
+		return m, nil
+	case tuiCronListMsg:
+		if msg.err != nil {
+			m.appendError(msg.err.Error())
+			m.layout()
+			return m, nil
+		}
+		if len(msg.resp.Jobs) == 0 {
+			m.appendActivity("cron", "No cron jobs.")
+			m.layout()
+			return m, nil
+		}
+		lines := make([]string, 0, len(msg.resp.Jobs))
+		for _, job := range msg.resp.Jobs {
+			lines = append(lines, render.FormatScheduledJobLine(job))
+		}
+		m.appendActivity("cron", strings.Join(lines, "\n"))
+		m.layout()
+		return m, nil
+	case tuiCronJobMsg:
+		if msg.err != nil {
+			m.appendError(msg.err.Error())
+			m.layout()
+			return m, nil
+		}
+		if strings.TrimSpace(msg.notice) != "" {
+			m.appendNotice(msg.notice)
+		}
+		title := strings.TrimSpace(msg.job.Name)
+		if title == "" {
+			title = msg.job.ID
+		}
+		m.appendActivity(title, render.FormatScheduledJobDetail(msg.job))
+		m.layout()
+		return m, nil
+	case tuiCronDeleteMsg:
+		if msg.err != nil {
+			m.appendError(msg.err.Error())
+			m.layout()
+			return m, nil
+		}
+		notice := strings.TrimSpace(msg.notice)
+		if notice == "" {
+			notice = "removed " + msg.jobID
+		}
+		m.appendNotice(notice)
+		m.layout()
+		return m, nil
 	case tuiSwitchSessionMsg:
 		if msg.err != nil {
 			m.appendError(msg.err.Error())
@@ -378,12 +525,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.lastSeq = msg.timeline.LatestSeq
 		m.sessionReady = strings.TrimSpace(msg.sessionID) != ""
+		m.pendingReportCount = msg.timeline.PendingReportCount
 		m.entries = nil
 		m.toolIndexByCall = make(map[string]int)
+		m.toolIndexByKey = make(map[string]int)
 		m.applyTimeline(msg.timeline)
 		m.appendNotice("switched to " + msg.sessionID)
 		m.layout()
-		return m, m.refreshStatusCmd(false)
+		return m, tea.Batch(
+			m.refreshStatusCmd(false),
+			m.startSessionStreamCmd(msg.sessionID, msg.timeline.LatestSeq),
+		)
 	}
 
 	var cmd tea.Cmd
@@ -406,7 +558,7 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 
 	switch fields[0] {
 	case "help":
-		m.appendActivity("commands", "/help\n/status\n/skills\n/tools\n/session list\n/session use <id>\n/clear\n/exit")
+		m.appendActivity("commands", "/help\n/status\n/skills\n/tools\n/mailbox\n/cron list [--all]\n/cron inspect <id>\n/cron pause <id>\n/cron resume <id>\n/cron remove <id>\n/session list\n/session use <id>\n/clear\n/exit")
 		m.layout()
 		return m, nil
 	case "exit":
@@ -414,6 +566,7 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 	case "clear":
 		m.entries = nil
 		m.toolIndexByCall = make(map[string]int)
+		m.toolIndexByKey = make(map[string]int)
 		m.layout()
 		return m, nil
 	case "status":
@@ -448,6 +601,56 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 		m.appendActivity("tools", strings.Join(lines, "\n"))
 		m.layout()
 		return m, nil
+	case "mailbox", "inbox":
+		if strings.TrimSpace(m.sessionID) == "" {
+			m.appendError("session is not selected")
+			m.layout()
+			return m, nil
+		}
+		return m, m.loadMailboxCmd()
+	case "cron":
+		if len(fields) < 2 {
+			m.appendError("usage: /cron list [--all] | inspect <id> | pause <id> | resume <id> | remove <id>")
+			m.layout()
+			return m, nil
+		}
+		switch fields[1] {
+		case "list":
+			allWorkspaces := len(fields) > 2 && strings.TrimSpace(fields[2]) == "--all"
+			return m, m.listCronJobsCmd(allWorkspaces)
+		case "inspect":
+			if len(fields) < 3 {
+				m.appendError("usage: /cron inspect <id>")
+				m.layout()
+				return m, nil
+			}
+			return m, m.inspectCronJobCmd(fields[2])
+		case "pause":
+			if len(fields) < 3 {
+				m.appendError("usage: /cron pause <id>")
+				m.layout()
+				return m, nil
+			}
+			return m, m.setCronJobEnabledCmd(fields[2], false)
+		case "resume":
+			if len(fields) < 3 {
+				m.appendError("usage: /cron resume <id>")
+				m.layout()
+				return m, nil
+			}
+			return m, m.setCronJobEnabledCmd(fields[2], true)
+		case "remove":
+			if len(fields) < 3 {
+				m.appendError("usage: /cron remove <id>")
+				m.layout()
+				return m, nil
+			}
+			return m, m.deleteCronJobCmd(fields[2])
+		default:
+			m.appendError("unknown cron command: " + fields[1])
+			m.layout()
+			return m, nil
+		}
 	case "session":
 		if len(fields) < 2 {
 			m.appendError("usage: /session list|use <id>")
@@ -497,31 +700,15 @@ func (m *tuiModel) submitPromptCmd(prompt string) tea.Cmd {
 	ctx := m.ctx
 	client := m.client
 	sessionID := m.sessionID
-	afterSeq := m.lastSeq
-	return func() tea.Msg {
-		ch := make(chan tea.Msg, 32)
-		go func() {
-			defer close(ch)
-
-			if _, err := client.SubmitTurn(ctx, sessionID, types.SubmitTurnRequest{Message: prompt}); err != nil {
-				ch <- tuiStreamErrorMsg{err: err}
-				return
-			}
-			events, err := client.StreamEvents(ctx, sessionID, afterSeq)
-			if err != nil {
-				ch <- tuiStreamErrorMsg{err: err}
-				return
-			}
-			for event := range events {
-				ch <- tuiStreamEventMsg{event: event}
-				switch event.Type {
-				case types.EventTurnCompleted, types.EventTurnFailed, types.EventTurnInterrupted:
-					return
-				}
-			}
-		}()
-		return tuiStreamReadyMsg{ch: ch}
+	cmds := []tea.Cmd{}
+	if strings.TrimSpace(m.streamSessionID) != strings.TrimSpace(sessionID) || m.streamCh == nil {
+		cmds = append(cmds, m.startSessionStreamCmd(sessionID, m.lastSeq))
 	}
+	cmds = append(cmds, func() tea.Msg {
+		_, err := client.SubmitTurn(ctx, sessionID, types.SubmitTurnRequest{Message: prompt})
+		return tuiSubmitTurnMsg{err: err}
+	})
+	return tea.Batch(cmds...)
 }
 
 func (m tuiModel) interruptTurnCmd() tea.Cmd {
@@ -534,6 +721,66 @@ func (m tuiModel) interruptTurnCmd() tea.Cmd {
 	sessionID := m.sessionID
 	return func() tea.Msg {
 		return tuiInterruptMsg{err: client.InterruptTurn(ctx, sessionID)}
+	}
+}
+
+func (m tuiModel) loadMailboxCmd() tea.Cmd {
+	if strings.TrimSpace(m.sessionID) == "" {
+		return nil
+	}
+	ctx := m.ctx
+	client := m.client
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		resp, err := client.GetReportMailbox(ctx, sessionID)
+		return tuiMailboxMsg{resp: resp, err: err}
+	}
+}
+
+func (m tuiModel) listCronJobsCmd(allWorkspaces bool) tea.Cmd {
+	ctx := m.ctx
+	client := m.client
+	workspaceRoot := m.workspaceRoot
+	if allWorkspaces {
+		workspaceRoot = ""
+	}
+	return func() tea.Msg {
+		resp, err := client.ListCronJobs(ctx, workspaceRoot)
+		return tuiCronListMsg{resp: resp, err: err}
+	}
+}
+
+func (m tuiModel) inspectCronJobCmd(jobID string) tea.Cmd {
+	ctx := m.ctx
+	client := m.client
+	jobID = strings.TrimSpace(jobID)
+	return func() tea.Msg {
+		job, err := client.GetCronJob(ctx, jobID)
+		return tuiCronJobMsg{job: job, err: err}
+	}
+}
+
+func (m tuiModel) setCronJobEnabledCmd(jobID string, enabled bool) tea.Cmd {
+	ctx := m.ctx
+	client := m.client
+	jobID = strings.TrimSpace(jobID)
+	return func() tea.Msg {
+		if enabled {
+			job, err := client.ResumeCronJob(ctx, jobID)
+			return tuiCronJobMsg{job: job, err: err, notice: "resumed " + jobID}
+		}
+		job, err := client.PauseCronJob(ctx, jobID)
+		return tuiCronJobMsg{job: job, err: err, notice: "paused " + jobID}
+	}
+}
+
+func (m tuiModel) deleteCronJobCmd(jobID string) tea.Cmd {
+	ctx := m.ctx
+	client := m.client
+	jobID = strings.TrimSpace(jobID)
+	return func() tea.Msg {
+		err := client.DeleteCronJob(ctx, jobID)
+		return tuiCronDeleteMsg{jobID: jobID, err: err, notice: "removed " + jobID}
 	}
 }
 
@@ -581,20 +828,21 @@ func (m tuiModel) switchSessionCmd(sessionID string) tea.Cmd {
 	}
 }
 
-func listenTUIStream(ch <-chan tea.Msg) tea.Cmd {
+func listenTUIStream(ch <-chan tea.Msg, sessionID string) tea.Cmd {
 	if ch == nil {
 		return nil
 	}
 	return func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {
-			return tuiStreamClosedMsg{}
+			return tuiStreamClosedMsg{sessionID: sessionID}
 		}
 		return msg
 	}
 }
 
 func (m *tuiModel) applyTimeline(timeline types.SessionTimelineResponse) {
+	m.pendingReportCount = timeline.PendingReportCount
 	for _, block := range timeline.Blocks {
 		switch block.Kind {
 		case "user_message":
@@ -613,7 +861,7 @@ func (m *tuiModel) applyTimeline(timeline types.SessionTimelineResponse) {
 					m.appendEntry(tuiEntry{
 						Kind:       tuiEntryTool,
 						Title:      display.Action,
-						Body:       display.Target,
+						Body:       toolDisplayBody(display),
 						Status:     firstNonEmpty(content.Status, "completed"),
 						ToolCallID: content.ToolCallID,
 					})
@@ -642,10 +890,19 @@ func (m *tuiModel) applyEvent(event types.Event) {
 		m.lastSeq = event.Seq
 	}
 	switch event.Type {
+	case types.EventTurnStarted:
+		if m.pendingReportCount > 0 {
+			m.pendingReportCount = 0
+		}
 	case types.EventAssistantDelta:
 		var payload types.AssistantDeltaPayload
 		if err := decodeEventPayload(event.Payload, &payload); err == nil {
 			m.appendAssistantDelta(payload.Text)
+		}
+	case types.EventReportReady:
+		var payload types.ReportMailboxItem
+		if err := decodeEventPayload(event.Payload, &payload); err == nil {
+			m.pendingReportCount++
 		}
 	case types.EventToolStarted:
 		var payload types.ToolEventPayload
@@ -741,6 +998,56 @@ func (m *tuiModel) closeAssistantStream() {
 func (m *tuiModel) upsertToolEntry(payload types.ToolEventPayload, completed bool) {
 	m.closeAssistantStream()
 	display := render.SummarizeToolDisplay(payload.ToolName, payload.Arguments, payload.ResultPreview)
+	status := "running"
+	if completed {
+		status = "completed"
+	}
+	m.upsertToolDisplay(display, payload.ToolCallID, status)
+}
+
+func (m *tuiModel) upsertToolDisplay(display render.ToolDisplay, toolCallID, status string) {
+	body := toolDisplayBody(display)
+
+	if index, ok := m.toolIndexByCall[toolCallID]; ok && index >= 0 && index < len(m.entries) {
+		m.entries[index].Title = display.Action
+		m.entries[index].Body = body
+		m.entries[index].Status = status
+		if display.CoalesceKey != "" {
+			m.toolIndexByKey[display.CoalesceKey] = index
+		}
+		return
+	}
+	if display.CoalesceKey != "" {
+		if index, ok := m.toolIndexByKey[display.CoalesceKey]; ok && index >= 0 && index < len(m.entries) {
+			m.entries[index].Title = display.Action
+			m.entries[index].Body = body
+			m.entries[index].Status = status
+			m.entries[index].ToolCallID = toolCallID
+			if strings.TrimSpace(toolCallID) != "" {
+				m.toolIndexByCall[toolCallID] = index
+			}
+			return
+		}
+	}
+
+	entry := tuiEntry{
+		Kind:       tuiEntryTool,
+		Title:      display.Action,
+		Body:       body,
+		Status:     status,
+		ToolCallID: toolCallID,
+	}
+	m.appendEntry(entry)
+	index := len(m.entries) - 1
+	if strings.TrimSpace(toolCallID) != "" {
+		m.toolIndexByCall[toolCallID] = index
+	}
+	if display.CoalesceKey != "" {
+		m.toolIndexByKey[display.CoalesceKey] = index
+	}
+}
+
+func toolDisplayBody(display render.ToolDisplay) string {
 	body := strings.TrimSpace(display.Target)
 	if strings.TrimSpace(display.Detail) != "" {
 		if body == "" {
@@ -749,30 +1056,7 @@ func (m *tuiModel) upsertToolEntry(payload types.ToolEventPayload, completed boo
 			body += "\n" + display.Detail
 		}
 	}
-
-	status := "running"
-	if completed {
-		status = "completed"
-	}
-
-	if index, ok := m.toolIndexByCall[payload.ToolCallID]; ok && index >= 0 && index < len(m.entries) {
-		m.entries[index].Title = display.Action
-		m.entries[index].Body = body
-		m.entries[index].Status = status
-		return
-	}
-
-	entry := tuiEntry{
-		Kind:       tuiEntryTool,
-		Title:      display.Action,
-		Body:       body,
-		Status:     status,
-		ToolCallID: payload.ToolCallID,
-	}
-	m.appendEntry(entry)
-	if strings.TrimSpace(payload.ToolCallID) != "" {
-		m.toolIndexByCall[payload.ToolCallID] = len(m.entries) - 1
-	}
+	return body
 }
 
 func (m *tuiModel) appendNotice(text string) {
@@ -856,6 +1140,9 @@ func (m tuiModel) renderHeader() string {
 	if strings.TrimSpace(m.status.PermissionProfile) != "" {
 		metaParts = append(metaParts, m.status.PermissionProfile)
 	}
+	if m.pendingReportCount > 0 {
+		metaParts = append(metaParts, fmt.Sprintf("inbox %d", m.pendingReportCount))
+	}
 
 	help := statusStyle.Render(strings.Join(metaParts, " · "))
 	header := lipgloss.JoinVertical(
@@ -888,7 +1175,7 @@ func (m tuiModel) renderFooter() string {
 	hint := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("243")).
 		Padding(0, 1).
-		Render(m.statusBarMessage)
+		Render(m.footerHintText())
 
 	inputBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -898,6 +1185,13 @@ func (m tuiModel) renderFooter() string {
 		Render(m.input.View())
 
 	return lipgloss.JoinVertical(lipgloss.Left, hint, inputBox)
+}
+
+func (m tuiModel) footerHintText() string {
+	if m.pendingReportCount <= 0 {
+		return m.statusBarMessage
+	}
+	return fmt.Sprintf("Inbox %d • %s", m.pendingReportCount, m.statusBarMessage)
 }
 
 func (m tuiModel) renderEntries() string {
@@ -925,13 +1219,7 @@ func renderTUIEntry(entry tuiEntry, width int) string {
 		actionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("69")).Bold(true)
 		targetStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 		statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
-		status := "…"
-		if entry.Status == "completed" {
-			status = "✓"
-		}
-		if entry.Status != "running" && entry.Status != "completed" && strings.TrimSpace(entry.Status) != "" {
-			status = entry.Status
-		}
+		status := toolEntryStatusLabel(entry)
 		lines := []string{
 			lipgloss.JoinHorizontal(
 				lipgloss.Left,
@@ -955,10 +1243,75 @@ func renderTUIEntry(entry tuiEntry, width int) string {
 		if title == "" {
 			title = "activity"
 		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(width).Render(title + "\n" + indentBlock(strings.TrimSpace(entry.Body), "  "))
+		body := strings.TrimSpace(entry.Body)
+		if body == "" {
+			return lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(width).Render(title)
+		}
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(width).Render(title + "\n" + indentBlock(body, "  "))
 	default:
 		return bodyStyle.Render(strings.TrimSpace(entry.Body))
 	}
+}
+
+func formatMailboxItemLine(item types.ReportMailboxItem) string {
+	title := firstNonEmpty(item.Envelope.Title, string(item.SourceKind), item.ID)
+	lines := []string{strings.TrimSpace(title)}
+	if summary := strings.TrimSpace(item.Envelope.Summary); summary != "" {
+		lines = append(lines, summary)
+	}
+	if !item.ObservedAt.IsZero() {
+		lines = append(lines, item.ObservedAt.UTC().Format("2006-01-02 15:04:05Z07:00"))
+	}
+	if item.InjectedTurnID == "" {
+		lines = append(lines, "status: pending")
+	} else {
+		lines = append(lines, "status: delivered to "+item.InjectedTurnID)
+	}
+	for _, section := range item.Envelope.Sections {
+		if text := strings.TrimSpace(section.Text); text != "" {
+			lines = append(lines, text)
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func toolEntryStatusLabel(entry tuiEntry) string {
+	if strings.TrimSpace(entry.Title) == "task status" {
+		if taskState := taskStateFromStatusBody(entry.BodyLine()); taskState != "" {
+			switch taskState {
+			case "completed":
+				return "✓"
+			case "running", "pending":
+				return "…"
+			case "failed":
+				return "failed"
+			case "stopped", "cancelled", "canceled":
+				return "stopped"
+			default:
+				return taskState
+			}
+		}
+	}
+	if entry.Status == "completed" {
+		return "✓"
+	}
+	if entry.Status != "running" && strings.TrimSpace(entry.Status) != "" {
+		return entry.Status
+	}
+	return "…"
+}
+
+func taskStateFromStatusBody(body string) string {
+	body = strings.TrimSpace(body)
+	if !strings.HasSuffix(body, ")") {
+		return ""
+	}
+	start := strings.LastIndex(body, " (")
+	if start < 0 {
+		return ""
+	}
+	return strings.TrimSpace(body[start+2 : len(body)-1])
 }
 
 func (e tuiEntry) BodyLine() string {

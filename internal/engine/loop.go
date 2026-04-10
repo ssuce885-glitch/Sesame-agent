@@ -77,12 +77,20 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		PermissionEngine: permissionEngine,
 		TaskManager:      e.taskManager,
 		RuntimeService:   e.runtimeService,
+		SchedulerService: e.schedulerService,
 		TurnContext:      turnCtx,
 		EventSink:        in.Sink,
 	}
 	toolRuntime := tools.NewRuntime(e.registry, toolRunStoreFromConversationStore(e.store))
 
-	totalItems, working, err := loadConversationState(ctx, e, in, sessionID)
+	totalItems, working, completionNotices, err := loadConversationState(ctx, e, in, sessionID)
+	if err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
+	reportMailboxItems, err := loadPendingReportMailboxItems(ctx, e.store, sessionID, in.Turn.ID)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
@@ -125,6 +133,21 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 	}
 	instructions.Notices = append(instructions.Notices, extensionNotices...)
+	instructions.Notices = append(instructions.Notices, completionNotices...)
+	if completionPrompt := pendingTaskCompletionPromptSection(completionNotices); strings.TrimSpace(completionPrompt) != "" {
+		if strings.TrimSpace(instructions.Text) == "" {
+			instructions.Text = completionPrompt
+		} else {
+			instructions.Text += "\n\n" + completionPrompt
+		}
+	}
+	if reportPrompt := pendingReportMailboxPromptSection(reportMailboxItems); strings.TrimSpace(reportPrompt) != "" {
+		if strings.TrimSpace(instructions.Text) == "" {
+			instructions.Text = reportPrompt
+		} else {
+			instructions.Text += "\n\n" + reportPrompt
+		}
+	}
 	req := e.runtime.PrepareRequest(
 		working,
 		cacheHead,
@@ -312,6 +335,14 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				Name:  call.Name,
 				Input: call.Input,
 			})
+		}
+		if turnCtx.CurrentRunID == "" && e.runtimeService != nil {
+			if _, err := e.runtimeService.EnsureRun(ctx, turnCtx, sessionID, in.Turn.ID, "Turn tool execution"); err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
 		}
 
 		callOffset := 0
@@ -547,24 +578,24 @@ func resumeToolResultItem(resume *types.TurnResume) (model.ConversationItem, mod
 	return model.ToolResultItem(result), result
 }
 
-func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string) (int, contextstate.WorkingSet, error) {
+func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string) (int, contextstate.WorkingSet, []string, error) {
 	if e.store == nil || e.ctxManager == nil {
-		return 0, contextstate.WorkingSet{}, nil
+		return 0, contextstate.WorkingSet{}, nil, nil
 	}
 
 	items, err := e.store.ListConversationItems(ctx, sessionID)
 	if err != nil {
-		return 0, contextstate.WorkingSet{}, err
+		return 0, contextstate.WorkingSet{}, nil, err
 	}
 	totalItems := len(items)
 
 	summaries, err := e.store.ListConversationSummaries(ctx, sessionID)
 	if err != nil {
-		return 0, contextstate.WorkingSet{}, err
+		return 0, contextstate.WorkingSet{}, nil, err
 	}
 	sessionMemory, hasSessionMemory, err := loadSessionMemorySummary(ctx, e.store, sessionID)
 	if err != nil {
-		return 0, contextstate.WorkingSet{}, err
+		return 0, contextstate.WorkingSet{}, nil, err
 	}
 	if hasSessionMemory {
 		summaries = prependSessionMemorySummary(summaries, sessionMemory)
@@ -572,12 +603,12 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	summaries = selectPromptSummaries(summaries, hasSessionMemory)
 	compactions, err := e.store.ListConversationCompactions(ctx, sessionID)
 	if err != nil {
-		return 0, contextstate.WorkingSet{}, err
+		return 0, contextstate.WorkingSet{}, nil, err
 	}
 
 	entries, err := e.store.ListMemoryEntriesByWorkspace(ctx, in.Session.WorkspaceRoot)
 	if err != nil {
-		return 0, contextstate.WorkingSet{}, err
+		return 0, contextstate.WorkingSet{}, nil, err
 	}
 
 	memoryRefs := buildMemoryRefs(entries, hasSessionMemory, in.Session.WorkspaceRoot, in.Turn.UserMessage)
@@ -590,7 +621,7 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 		case contextstate.CompactionActionRolling:
 			working, summaries, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaries, memoryRefs, working, len(compactions)+1, types.ConversationCompactionKindRolling, "rolling_summary")
 			if err != nil {
-				return 0, contextstate.WorkingSet{}, err
+				return 0, contextstate.WorkingSet{}, nil, err
 			}
 		case contextstate.CompactionActionMicrocompact:
 			candidatePayload, candidatePromptItems, ok := buildAppliedMicrocompact(items, working.Action.MicrocompactPositions, working.CompactionStart)
@@ -609,7 +640,7 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 						ProviderProfile: string(e.model.Capabilities().Profile),
 						CreatedAt:       time.Now().UTC(),
 					}); err != nil {
-						return 0, contextstate.WorkingSet{}, err
+						return 0, contextstate.WorkingSet{}, nil, err
 					}
 					working = setPromptItems(working, candidatePayload.Items, in.Turn.UserMessage)
 					working.EstimatedTokens = candidateEstimate
@@ -619,12 +650,17 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 			}
 			working, summaries, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaries, memoryRefs, working, len(compactions)+1, types.ConversationCompactionKindRolling, "microcompact_escalated_to_rolling")
 			if err != nil {
-				return 0, contextstate.WorkingSet{}, err
+				return 0, contextstate.WorkingSet{}, nil, err
 			}
 		}
 	}
 
-	return totalItems, working, nil
+	completionNotices, err := loadPendingTaskCompletionNotices(ctx, e.store, sessionID, in.Turn.ID)
+	if err != nil {
+		return 0, contextstate.WorkingSet{}, nil, err
+	}
+
+	return totalItems, working, completionNotices, nil
 }
 
 func applySummaryCompaction(
@@ -790,6 +826,128 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+type pendingTaskCompletionStore interface {
+	ClaimPendingTaskCompletionsForTurn(context.Context, string, string) ([]types.PendingTaskCompletion, error)
+}
+
+type pendingReportMailboxStore interface {
+	ClaimPendingReportMailboxItemsForTurn(context.Context, string, string) ([]types.ReportMailboxItem, error)
+}
+
+func loadPendingTaskCompletionNotices(ctx context.Context, store ConversationStore, sessionID, turnID string) ([]string, error) {
+	claimStore, ok := store.(pendingTaskCompletionStore)
+	if !ok || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(turnID) == "" {
+		return nil, nil
+	}
+	completions, err := claimStore.ClaimPendingTaskCompletionsForTurn(ctx, sessionID, turnID)
+	if err != nil {
+		return nil, err
+	}
+	return buildPendingTaskCompletionNotices(completions), nil
+}
+
+func loadPendingReportMailboxItems(ctx context.Context, store ConversationStore, sessionID, turnID string) ([]types.ReportMailboxItem, error) {
+	claimStore, ok := store.(pendingReportMailboxStore)
+	if !ok || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(turnID) == "" {
+		return nil, nil
+	}
+	return claimStore.ClaimPendingReportMailboxItemsForTurn(ctx, sessionID, turnID)
+}
+
+func buildPendingTaskCompletionNotices(completions []types.PendingTaskCompletion) []string {
+	if len(completions) == 0 {
+		return nil
+	}
+	notices := make([]string, 0, len(completions))
+	for _, completion := range completions {
+		taskID := firstNonEmpty(completion.TaskID, completion.ID)
+		if taskID == "" {
+			continue
+		}
+		lines := []string{
+			"[Child task completion available]",
+			"Task ID: " + taskID,
+		}
+		if completion.TaskType != "" {
+			lines = append(lines, "Task type: "+completion.TaskType)
+		}
+		if completion.ParentTurnID != "" {
+			lines = append(lines, "Origin turn: "+completion.ParentTurnID)
+		}
+		if !completion.ObservedAt.IsZero() {
+			lines = append(lines, "Observed at: "+completion.ObservedAt.UTC().Format(time.RFC3339))
+		}
+		if preview := firstNonEmpty(completion.ResultPreview, completion.ResultText); preview != "" {
+			lines = append(lines, "Result preview:")
+			lines = append(lines, preview)
+		}
+		lines = append(lines, "Use task_result with this task_id if you need the full final result.")
+		notices = append(notices, strings.Join(lines, "\n"))
+	}
+	return notices
+}
+
+func pendingTaskCompletionPromptSection(notices []string) string {
+	if len(notices) == 0 {
+		return ""
+	}
+	return "Pending child task completions:\n\n" + strings.Join(notices, "\n\n")
+}
+
+func pendingReportMailboxPromptSection(items []types.ReportMailboxItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+
+	sections := make([]string, 0, len(items))
+	for _, item := range items {
+		lines := []string{"[Pending report delivered by runtime]"}
+		if item.ID != "" {
+			lines = append(lines, "Mailbox ID: "+item.ID)
+		}
+		if item.SourceKind != "" {
+			lines = append(lines, "Source kind: "+string(item.SourceKind))
+		}
+		if item.SourceID != "" {
+			lines = append(lines, "Source id: "+item.SourceID)
+		}
+		if !item.ObservedAt.IsZero() {
+			lines = append(lines, "Observed at: "+item.ObservedAt.UTC().Format(time.RFC3339))
+		}
+		if severity := strings.TrimSpace(item.Envelope.Severity); severity != "" {
+			lines = append(lines, "Severity: "+severity)
+		}
+		if title := strings.TrimSpace(item.Envelope.Title); title != "" {
+			lines = append(lines, "Title: "+title)
+		}
+		if summary := strings.TrimSpace(item.Envelope.Summary); summary != "" {
+			lines = append(lines, "Summary:")
+			lines = append(lines, summary)
+		}
+		for _, section := range item.Envelope.Sections {
+			if title := strings.TrimSpace(section.Title); title != "" {
+				lines = append(lines, "Section: "+title)
+			}
+			if text := strings.TrimSpace(section.Text); text != "" {
+				lines = append(lines, text)
+			}
+			if len(section.Items) > 0 {
+				for _, entry := range section.Items {
+					entry = strings.TrimSpace(entry)
+					if entry == "" {
+						continue
+					}
+					lines = append(lines, "- "+entry)
+				}
+			}
+		}
+		lines = append(lines, "This report arrived asynchronously. Use it as background context for the user's current turn when relevant.")
+		sections = append(sections, strings.Join(lines, "\n"))
+	}
+
+	return "Pending reports delivered for this turn:\n\n" + strings.Join(sections, "\n\n")
 }
 
 func lastPayloadPosition(payload persistedMicrocompactPayload) int {

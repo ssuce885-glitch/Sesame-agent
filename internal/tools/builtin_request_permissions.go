@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"go-agent/internal/types"
 )
 
 type requestPermissionsTool struct{}
@@ -84,50 +82,17 @@ func (t requestPermissionsTool) Execute(ctx context.Context, call Call, execCtx 
 
 func (requestPermissionsTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
 	input, _ := decoded.Input.(RequestPermissionsInput)
-	requestID := types.NewID("perm")
-	notice := fmt.Sprintf("Additional permissions requested: %s.", input.Profile)
+	output := permissionInterruptResult(decoded.Call.Name, input.Profile, input.Reason, execCtx)
+	output.Result.Text = fmt.Sprintf("Additional permissions requested: %s.", input.Profile)
 	if input.Reason != "" {
-		notice += " Reason: " + input.Reason
+		output.Result.Text += " Reason: " + input.Reason
 	}
-	modelText := "The tool requested additional permissions and paused the current turn. Wait for the user's next response before continuing.\n\n" + notice
-
-	payload := types.PermissionRequestedPayload{
-		RequestID:         requestID,
-		ToolRunID:         execCtx.ToolRunID,
-		ToolName:          decoded.Call.Name,
-		RequestedProfile: input.Profile,
-		Reason:           input.Reason,
-		TurnID:           "",
+	output.Result.ModelText = "The tool requested additional permissions and paused the current turn. Wait for the user's next response before continuing.\n\n" + output.Result.Text
+	output.PreviewText = output.Result.Text
+	if output.Interrupt != nil {
+		output.Interrupt.Notice = output.Result.Text
 	}
-	if execCtx.TurnContext != nil {
-		payload.TurnID = execCtx.TurnContext.CurrentTurnID
-	}
-
-	return ToolExecutionResult{
-		Result: Result{
-			Text:      notice,
-			ModelText: modelText,
-		},
-		Data: RequestPermissionsOutput{
-			PermissionRequestID: requestID,
-			Status:              "awaiting_permission",
-			Profile:             input.Profile,
-			Reason:              input.Reason,
-		},
-		PreviewText: notice,
-		Metadata: map[string]any{
-			"permission_request_id": requestID,
-			"requested_profile":     input.Profile,
-			"reason":                input.Reason,
-		},
-		Interrupt: &ToolInterrupt{
-			Reason:          "permission_requested",
-			Notice:          notice,
-			EventType:       types.EventPermissionRequested,
-			EventPayload:    payload,
-			DeferToolResult: true,
-		},
-	}, nil
+	return output, nil
 }
 
 func (requestPermissionsTool) MapModelResult(output ToolExecutionResult) ModelToolResult {

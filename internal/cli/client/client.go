@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -87,6 +88,54 @@ func (c *Client) GetTimeline(ctx context.Context, sessionID string) (types.Sessi
 		return types.SessionTimelineResponse{}, err
 	}
 	return out, nil
+}
+
+func (c *Client) GetReportMailbox(ctx context.Context, sessionID string) (types.SessionReportMailboxResponse, error) {
+	var out types.SessionReportMailboxResponse
+	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/sessions/%s/mailbox", sessionID), nil, &out); err != nil {
+		return types.SessionReportMailboxResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ListCronJobs(ctx context.Context, workspaceRoot string) (types.ListScheduledJobsResponse, error) {
+	var out types.ListScheduledJobsResponse
+	path := "/v1/cron"
+	if trimmed := strings.TrimSpace(workspaceRoot); trimmed != "" {
+		path += "?workspace_root=" + url.QueryEscape(trimmed)
+	}
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return types.ListScheduledJobsResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) GetCronJob(ctx context.Context, jobID string) (types.ScheduledJob, error) {
+	var out types.ScheduledJob
+	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/cron/%s", jobID), nil, &out); err != nil {
+		return types.ScheduledJob{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) PauseCronJob(ctx context.Context, jobID string) (types.ScheduledJob, error) {
+	var out types.ScheduledJob
+	if err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/cron/%s/pause", jobID), map[string]any{}, &out); err != nil {
+		return types.ScheduledJob{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ResumeCronJob(ctx context.Context, jobID string) (types.ScheduledJob, error) {
+	var out types.ScheduledJob
+	if err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/cron/%s/resume", jobID), map[string]any{}, &out); err != nil {
+		return types.ScheduledJob{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) DeleteCronJob(ctx context.Context, jobID string) error {
+	return c.doJSON(ctx, http.MethodDelete, fmt.Sprintf("/v1/cron/%s", jobID), nil, nil)
 }
 
 func (c *Client) FindOrCreateWorkspaceSession(ctx context.Context, workspaceRoot string) (string, bool, error) {

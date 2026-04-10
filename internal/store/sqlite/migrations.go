@@ -204,6 +204,91 @@ func (s *Store) migrate(ctx context.Context) error {
 			value text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists child_agent_specs (
+			id text primary key,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists output_contracts (
+			id text primary key,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists scheduled_jobs (
+			id text primary key,
+			workspace_root text not null,
+			owner_session_id text not null,
+			kind text not null,
+			enabled integer not null default 1,
+			next_run_at text not null default '',
+			last_status text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists scheduled_jobs_due_idx
+			on scheduled_jobs(enabled, next_run_at, id asc);`,
+		`create table if not exists report_groups (
+			id text primary key,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create table if not exists child_agent_results (
+			id text primary key,
+			agent_id text not null,
+			status text not null default '',
+			severity text not null default '',
+			observed_at text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists child_agent_results_agent_observed_idx
+			on child_agent_results(agent_id, observed_at desc, id asc);`,
+		`create table if not exists pending_task_completions (
+			id text primary key,
+			session_id text not null,
+			task_id text not null,
+			observed_at text not null default '',
+			injected_turn_id text not null default '',
+			injected_at text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists pending_task_completions_session_injected_idx
+			on pending_task_completions(session_id, injected_turn_id, observed_at desc, id asc);`,
+		`create table if not exists report_mailbox_items (
+			id text primary key,
+			session_id text not null,
+			source_kind text not null,
+			source_id text not null default '',
+			severity text not null default '',
+			observed_at text not null default '',
+			injected_turn_id text not null default '',
+			injected_at text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists report_mailbox_items_session_injected_idx
+			on report_mailbox_items(session_id, injected_turn_id, observed_at desc, id asc);`,
+		`create table if not exists digest_records (
+			id text primary key,
+			group_id text not null,
+			status text not null default '',
+			severity text not null default '',
+			window_start text not null default '',
+			window_end text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists digest_records_group_window_idx
+			on digest_records(group_id, window_end desc, id asc);`,
 	}
 
 	for _, stmt := range stmts {

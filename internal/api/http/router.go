@@ -13,6 +13,7 @@ type Dependencies struct {
 	Bus         Bus
 	Store       Store
 	Manager     Manager
+	Scheduler   CronScheduler
 	Status      StatusPayload
 	ConsoleRoot string
 }
@@ -53,6 +54,8 @@ func NewRouter(deps Dependencies) http.Handler {
 	registerMetricsRoutes(mux, deps)
 	registerPermissionRoutes(mux, deps)
 	registerMemoryRoutes(mux, deps)
+	registerReportingRoutes(mux, deps)
+	registerCronRoutes(mux, deps)
 	registerConsoleRoutes(mux, deps)
 
 	return mux

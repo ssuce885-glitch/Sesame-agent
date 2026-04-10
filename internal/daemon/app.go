@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,6 +19,7 @@ import (
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
+	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
 	"go-agent/internal/store/artifacts"
 	"go-agent/internal/store/sqlite"
@@ -46,11 +46,18 @@ type runtimeWiring struct {
 }
 
 type taskEventSink struct {
-	writer io.Writer
+	observer    task.AgentTaskObserver
+	currentText strings.Builder
 }
 
 type agentTaskExecutor struct {
 	runner *engine.Engine
+}
+
+type taskTerminalNotifier struct {
+	store     *sqlite.Store
+	bus       *stream.Bus
+	scheduler *scheduler.Service
 }
 
 func (s storeAndBusSink) Emit(ctx context.Context, event types.Event) error {
@@ -109,19 +116,23 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	return err
 }
 
-func (s taskEventSink) Emit(_ context.Context, event types.Event) error {
+func (s *taskEventSink) Emit(_ context.Context, event types.Event) error {
 	switch event.Type {
 	case types.EventAssistantDelta:
-		if s.writer == nil {
-			return nil
-		}
-
 		var payload types.AssistantDeltaPayload
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		_, err := io.WriteString(s.writer, payload.Text)
-		return err
+		if s.observer != nil {
+			if err := s.observer.AppendLog([]byte(payload.Text)); err != nil {
+				return err
+			}
+		}
+		s.currentText.WriteString(payload.Text)
+		return nil
+	case types.EventToolStarted:
+		s.currentText.Reset()
+		return nil
 	case types.EventTurnFailed:
 		var payload types.TurnFailedPayload
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
@@ -136,6 +147,13 @@ func (s taskEventSink) Emit(_ context.Context, event types.Event) error {
 	}
 }
 
+func (s *taskEventSink) FinalText() string {
+	if s == nil {
+		return ""
+	}
+	return s.currentText.String()
+}
+
 func buildAgentTaskExecutor(runner *engine.Engine) task.AgentExecutor {
 	if runner == nil {
 		return nil
@@ -143,14 +161,22 @@ func buildAgentTaskExecutor(runner *engine.Engine) task.AgentExecutor {
 	return agentTaskExecutor{runner: runner}
 }
 
-func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, sink io.Writer) error {
+func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus) *taskTerminalNotifier {
+	if store == nil || bus == nil {
+		return nil
+	}
+	return &taskTerminalNotifier{store: store, bus: bus}
+}
+
+func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, observer task.AgentTaskObserver) error {
 	if a.runner == nil {
 		return errors.New("engine runner is not configured")
 	}
 
 	sessionID := types.NewID("task_session")
 	turnID := types.NewID("task_turn")
-	return a.runner.RunTurn(ctx, engine.Input{
+	sink := &taskEventSink{observer: observer}
+	if err := a.runner.RunTurn(ctx, engine.Input{
 		Session: types.Session{
 			ID:            sessionID,
 			WorkspaceRoot: workspaceRoot,
@@ -160,8 +186,248 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, pr
 			SessionID:   sessionID,
 			UserMessage: prompt,
 		},
-		Sink: taskEventSink{writer: sink},
-	})
+		Sink: sink,
+	}); err != nil {
+		return err
+	}
+	if observer == nil {
+		return nil
+	}
+	finalText := sink.FinalText()
+	if strings.TrimSpace(finalText) == "" {
+		return nil
+	}
+	return observer.SetFinalText(finalText)
+}
+
+func (n taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed task.Task) error {
+	if n.store == nil || strings.TrimSpace(completed.ID) == "" {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	runtimeTask, ok, err := n.store.GetTaskRecord(ctx, completed.ID)
+	if err != nil {
+		return err
+	}
+	if ok {
+		runtimeTask.State = runtimeTaskStateFromTaskStatus(completed.Status)
+		runtimeTask.Title = firstNonEmptyTrimmed(runtimeTask.Title, completed.Command, completed.ExecutionTaskID, completed.ID)
+		runtimeTask.Description = firstNonEmptyTrimmed(completed.Description, runtimeTask.Description)
+		runtimeTask.Owner = firstNonEmptyTrimmed(completed.Owner, runtimeTask.Owner)
+		runtimeTask.Kind = firstNonEmptyTrimmed(completed.Kind, runtimeTask.Kind)
+		runtimeTask.ExecutionTaskID = firstNonEmptyTrimmed(runtimeTask.ExecutionTaskID, completed.ExecutionTaskID, completed.ID)
+		runtimeTask.WorktreeID = firstNonEmptyTrimmed(completed.WorktreeID, runtimeTask.WorktreeID)
+		runtimeTask.UpdatedAt = now
+		if err := n.store.UpsertTaskRecord(ctx, runtimeTask); err != nil {
+			return err
+		}
+	}
+	if n.scheduler != nil {
+		if err := n.scheduler.RecordTaskTerminal(ctx, completed); err != nil {
+			return err
+		}
+	}
+
+	if strings.TrimSpace(completed.ParentSessionID) == "" {
+		return nil
+	}
+
+	updatedBlock := timelineBlockFromCompletedTask(completed, runtimeTask, ok)
+	eventSink := storeAndBusSink{store: n.store, bus: n.bus}
+	taskEvent, err := types.NewEvent(completed.ParentSessionID, completed.ParentTurnID, types.EventTaskUpdated, updatedBlock)
+	if err != nil {
+		return err
+	}
+	if err := eventSink.Emit(ctx, taskEvent); err != nil {
+		return err
+	}
+
+	if !shouldNotifyTaskResultReady(completed) {
+		return nil
+	}
+	if shouldQueueReportMailboxItem(completed) {
+		reportItem, ok := reportMailboxItemFromTask(completed, now)
+		if !ok {
+			return nil
+		}
+		if err := n.store.UpsertReportMailboxItem(ctx, reportItem); err != nil {
+			return err
+		}
+		reportEvent, err := types.NewEvent(completed.ParentSessionID, completed.ParentTurnID, types.EventReportReady, reportItem)
+		if err != nil {
+			return err
+		}
+		return eventSink.Emit(ctx, reportEvent)
+	}
+	completion, readyBlock, ok := pendingCompletionFromTask(completed, updatedBlock, now)
+	if !ok {
+		return nil
+	}
+	if err := n.store.UpsertPendingTaskCompletion(ctx, completion); err != nil {
+		return err
+	}
+	readyEvent, err := types.NewEvent(completed.ParentSessionID, completed.ParentTurnID, types.EventTaskResultReady, readyBlock)
+	if err != nil {
+		return err
+	}
+	if err := eventSink.Emit(ctx, readyEvent); err != nil {
+		return err
+	}
+	return nil
+}
+
+func timelineBlockFromCompletedTask(completed task.Task, runtimeTask types.Task, hasRuntimeTask bool) types.TimelineBlock {
+	if hasRuntimeTask {
+		block := types.TimelineBlockFromTask(runtimeTask)
+		if block.Title == "" {
+			block.Title = firstNonEmptyTrimmed(completed.Command, completed.ExecutionTaskID, completed.ID)
+		}
+		if block.Text == "" {
+			block.Text = firstNonEmptyTrimmed(completed.Description, completed.Owner)
+		}
+		return block
+	}
+	return types.TimelineBlock{
+		ID:         completed.ID,
+		TurnID:     completed.ParentTurnID,
+		Kind:       "task_block",
+		Status:     string(runtimeTaskStateFromTaskStatus(completed.Status)),
+		Title:      firstNonEmptyTrimmed(completed.Command, completed.ExecutionTaskID, completed.ID),
+		Text:       firstNonEmptyTrimmed(completed.Description, completed.Owner),
+		TaskID:     completed.ID,
+		WorktreeID: completed.WorktreeID,
+	}
+}
+
+func pendingCompletionFromTask(completed task.Task, block types.TimelineBlock, now time.Time) (types.PendingTaskCompletion, types.TimelineBlock, bool) {
+	result, ready := completed.FinalResult()
+	if !ready {
+		return types.PendingTaskCompletion{}, types.TimelineBlock{}, false
+	}
+	completion := types.PendingTaskCompletion{
+		ID:            completed.ID,
+		SessionID:     completed.ParentSessionID,
+		ParentTurnID:  completed.ParentTurnID,
+		TaskID:        completed.ID,
+		TaskType:      string(completed.Type),
+		Command:       completed.Command,
+		Description:   completed.Description,
+		ResultKind:    string(result.Kind),
+		ResultText:    result.Text,
+		ResultPreview: clampTaskResultPreview(result.Text),
+		ObservedAt:    result.ObservedAt,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	readyBlock := block
+	readyBlock.Status = string(runtimeTaskStateFromTaskStatus(completed.Status))
+	readyBlock.ResultPreview = completion.ResultPreview
+	return completion, readyBlock, true
+}
+
+func runtimeTaskStateFromTaskStatus(status task.TaskStatus) types.TaskState {
+	switch status {
+	case task.TaskStatusRunning:
+		return types.TaskStateRunning
+	case task.TaskStatusCompleted:
+		return types.TaskStateCompleted
+	case task.TaskStatusStopped:
+		return types.TaskStateCancelled
+	case task.TaskStatusFailed:
+		return types.TaskStateFailed
+	default:
+		return types.TaskStatePending
+	}
+}
+
+func shouldNotifyTaskResultReady(completed task.Task) bool {
+	return completed.Status == task.TaskStatusCompleted &&
+		completed.ResultReady() &&
+		strings.TrimSpace(completed.ParentSessionID) != "" &&
+		completed.CompletionNotifiedAt == nil
+}
+
+func shouldQueueReportMailboxItem(completed task.Task) bool {
+	if completed.Status != task.TaskStatusCompleted || !completed.ResultReady() || strings.TrimSpace(completed.ParentSessionID) == "" {
+		return false
+	}
+	switch normalizeTaskKind(completed.Kind) {
+	case "report", "scheduled_report", "digest", "scheduled_digest":
+		return true
+	default:
+		return false
+	}
+}
+
+func reportMailboxItemFromTask(completed task.Task, now time.Time) (types.ReportMailboxItem, bool) {
+	result, ready := completed.FinalResult()
+	if !ready {
+		return types.ReportMailboxItem{}, false
+	}
+
+	title := firstNonEmptyTrimmed(completed.Description, completed.Command, completed.ExecutionTaskID, completed.ID)
+	summary := clampTaskResultPreview(result.Text)
+	envelope := types.ReportEnvelope{
+		Source:   "task_result",
+		Status:   "completed",
+		Severity: mailboxSeverityFromTaskKind(completed.Kind),
+		Title:    title,
+		Summary:  summary,
+	}
+	if strings.TrimSpace(result.Text) != "" {
+		envelope.Sections = []types.ReportSectionContent{{
+			ID:    "report_body",
+			Title: firstNonEmptyTrimmed(title, "Report"),
+			Text:  strings.TrimSpace(result.Text),
+		}}
+	}
+
+	return types.ReportMailboxItem{
+		ID:         fmt.Sprintf("task_result:%s", completed.ID),
+		SessionID:  completed.ParentSessionID,
+		SourceKind: types.ReportMailboxSourceTaskResult,
+		SourceID:   completed.ID,
+		Envelope:   envelope,
+		ObservedAt: result.ObservedAt,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}, true
+}
+
+func normalizeTaskKind(kind string) string {
+	return strings.ToLower(strings.TrimSpace(kind))
+}
+
+func mailboxSeverityFromTaskKind(kind string) string {
+	switch normalizeTaskKind(kind) {
+	case "digest", "scheduled_digest":
+		return "info"
+	default:
+		return ""
+	}
+}
+
+func clampTaskResultPreview(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	const maxLen = 480
+	runes := []rune(trimmed)
+	if len(runes) <= maxLen {
+		return trimmed
+	}
+	return string(runes[:maxLen]) + "..."
+}
+
+func firstNonEmptyTrimmed(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func ensureDataDir(path string) error {
@@ -238,15 +504,22 @@ func Run(ctx context.Context) error {
 	runner.SetSessionMemoryAsync(true)
 	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
 	runner.SetRuntimeService(runtimeService)
+	taskNotifier := buildTaskTerminalNotifier(store, bus)
 	taskManager := task.NewManager(task.Config{
 		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
 		TaskOutputMaxBytes: cfg.TaskOutputMaxBytes,
+		TerminalNotifier:   taskNotifier,
 	}, nil, buildAgentTaskExecutor(runner))
+	schedulerService := scheduler.NewService(store, taskManager)
+	if taskNotifier != nil {
+		taskNotifier.scheduler = schedulerService
+	}
 	taskManager.SetRemoteConfig(task.RemoteExecutorConfig{
 		ShimCommand:    cfg.RemoteExecutorShimCommand,
 		TimeoutSeconds: cfg.RemoteExecutorTimeoutSeconds,
 	})
 	runner.SetTaskManager(taskManager)
+	runner.SetSchedulerService(schedulerService)
 	manager := session.NewManager(sessionRunnerAdapter{
 		engine: runner,
 		sink: storeAndBusSink{
@@ -257,11 +530,17 @@ func Run(ctx context.Context) error {
 	if err := recoverRuntimeState(ctx, store, manager); err != nil {
 		return err
 	}
+	go func() {
+		if err := schedulerService.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("scheduler loop exited", "error", err)
+		}
+	}()
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
 		Bus:         bus,
 		Store:       store,
 		Manager:     manager,
+		Scheduler:   schedulerService,
 		Status:      buildStatusPayload(cfg),
 		ConsoleRoot: filepath.Join("web", "console", "dist"),
 	})

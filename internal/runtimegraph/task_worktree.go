@@ -10,16 +10,16 @@ import (
 )
 
 type CreateTaskInput struct {
-	SessionID        string
-	TurnID           string
-	PlanID           string
-	ParentTaskID     string
-	Title            string
-	Description      string
-	Owner            string
-	Kind             string
-	ExecutionTaskID  string
-	WorktreeID       string
+	SessionID       string
+	TurnID          string
+	PlanID          string
+	ParentTaskID    string
+	Title           string
+	Description     string
+	Owner           string
+	Kind            string
+	ExecutionTaskID string
+	WorktreeID      string
 }
 
 type UpsertWorktreeInput struct {
@@ -64,7 +64,7 @@ func (s *Service) CreateTask(ctx context.Context, turnCtx *TurnContext, in Creat
 	}
 
 	err := s.store.WithTx(ctx, func(tx RuntimeTx) error {
-		runID, err := ensureRunLocked(ctx, tx, turnCtx, in.SessionID, in.TurnID, now)
+		runID, err := ensureRunLocked(ctx, tx, turnCtx, in.SessionID, in.TurnID, "Runtime orchestration", now)
 		if err != nil {
 			return err
 		}
@@ -116,7 +116,7 @@ func (s *Service) UpsertWorktree(ctx context.Context, turnCtx *TurnContext, in U
 		worktree.State = types.WorktreeStateActive
 	}
 	err := s.store.WithTx(ctx, func(tx RuntimeTx) error {
-		runID, err := ensureRunLocked(ctx, tx, turnCtx, in.SessionID, in.TurnID, now)
+		runID, err := ensureRunLocked(ctx, tx, turnCtx, in.SessionID, in.TurnID, "Runtime orchestration", now)
 		if err != nil {
 			return err
 		}
@@ -129,9 +129,13 @@ func (s *Service) UpsertWorktree(ctx context.Context, turnCtx *TurnContext, in U
 	return worktree, nil
 }
 
-func ensureRunLocked(ctx context.Context, tx RuntimeTx, turnCtx *TurnContext, sessionID, turnID string, now time.Time) (string, error) {
+func ensureRunLocked(ctx context.Context, tx RuntimeTx, turnCtx *TurnContext, sessionID, turnID, objective string, now time.Time) (string, error) {
 	if strings.TrimSpace(turnCtx.CurrentRunID) != "" {
 		return turnCtx.CurrentRunID, nil
+	}
+	objective = strings.TrimSpace(objective)
+	if objective == "" {
+		objective = "Runtime orchestration"
 	}
 	runID := types.NewID("run")
 	if err := tx.InsertRun(ctx, types.Run{
@@ -139,7 +143,7 @@ func ensureRunLocked(ctx context.Context, tx RuntimeTx, turnCtx *TurnContext, se
 		SessionID: strings.TrimSpace(sessionID),
 		TurnID:    strings.TrimSpace(turnID),
 		State:     types.RunStateRunning,
-		Objective: "Runtime orchestration",
+		Objective: objective,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}); err != nil {

@@ -49,8 +49,9 @@ type TimelineContentBlock struct {
 }
 
 type SessionTimelineResponse struct {
-	Blocks    []TimelineBlock `json:"blocks"`
-	LatestSeq int64           `json:"latest_seq"`
+	Blocks             []TimelineBlock `json:"blocks"`
+	LatestSeq          int64           `json:"latest_seq"`
+	PendingReportCount int             `json:"pending_report_count"`
 }
 
 type ConversationTimelineItem struct {
