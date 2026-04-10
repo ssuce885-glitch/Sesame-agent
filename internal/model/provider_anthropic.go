@@ -77,20 +77,22 @@ func (p *AnthropicProvider) stream(ctx context.Context, req Request, events chan
 	toolCalls := make(map[int]*anthropicToolCallState)
 
 	body := struct {
-		Model     string             `json:"model"`
-		MaxTokens int                `json:"max_tokens"`
-		Stream    bool               `json:"stream"`
-		System    string             `json:"system,omitempty"`
-		Tools     []anthropicTool    `json:"tools,omitempty"`
-		Messages  []anthropicMessage `json:"messages"`
+		Model      string             `json:"model"`
+		MaxTokens  int                `json:"max_tokens"`
+		Stream     bool               `json:"stream"`
+		System     string             `json:"system,omitempty"`
+		Tools      []anthropicTool    `json:"tools,omitempty"`
+		ToolChoice map[string]any     `json:"tool_choice,omitempty"`
+		Messages   []anthropicMessage `json:"messages"`
 	}{
 		Model:     chooseModel(req, p.model),
 		MaxTokens: anthropicMaxTokens,
 		Stream:    req.Stream,
 		System:    req.Instructions,
-		Tools:     toAnthropicTools(req.Tools),
+		Tools:     toAnthropicTools(req.Tools, req.ToolChoice),
 		Messages:  toAnthropicMessages(req.Items),
 	}
+	body.ToolChoice = toAnthropicToolChoice(req.ToolChoice, body.Tools)
 	if len(body.Messages) == 0 && strings.TrimSpace(req.UserMessage) != "" {
 		body.Messages = toAnthropicMessages([]ConversationItem{UserMessageItem(req.UserMessage)})
 	}
@@ -241,15 +243,15 @@ type anthropicMessage struct {
 }
 
 type anthropicContentBlock struct {
-	Type      string         `json:"type"`
-	Text      string         `json:"text,omitempty"`
+	Type      string                `json:"type"`
+	Text      string                `json:"text,omitempty"`
 	Source    *anthropicImageSource `json:"source,omitempty"`
-	ToolUseID string         `json:"tool_use_id,omitempty"`
-	Content   string         `json:"content,omitempty"`
-	IsError   bool           `json:"is_error,omitempty"`
-	ID        string         `json:"id,omitempty"`
-	Name      string         `json:"name,omitempty"`
-	Input     map[string]any `json:"input,omitempty"`
+	ToolUseID string                `json:"tool_use_id,omitempty"`
+	Content   string                `json:"content,omitempty"`
+	IsError   bool                  `json:"is_error,omitempty"`
+	ID        string                `json:"id,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Input     map[string]any        `json:"input,omitempty"`
 }
 
 type anthropicImageSource struct {
@@ -270,7 +272,10 @@ type anthropicToolCallState struct {
 	Input strings.Builder
 }
 
-func toAnthropicTools(tools []ToolSchema) []anthropicTool {
+func toAnthropicTools(tools []ToolSchema, choice string) []anthropicTool {
+	if strings.EqualFold(strings.TrimSpace(choice), "none") {
+		return nil
+	}
 	if len(tools) == 0 {
 		return nil
 	}
@@ -284,6 +289,29 @@ func toAnthropicTools(tools []ToolSchema) []anthropicTool {
 		})
 	}
 	return out
+}
+
+func toAnthropicToolChoice(choice string, tools []anthropicTool) map[string]any {
+	if len(tools) == 0 {
+		return nil
+	}
+	trimmed := strings.TrimSpace(choice)
+	if trimmed == "" {
+		return map[string]any{"type": "auto"}
+	}
+	switch strings.ToLower(trimmed) {
+	case "auto":
+		return map[string]any{"type": "auto"}
+	case "required":
+		return map[string]any{"type": "any"}
+	case "none":
+		return nil
+	default:
+		return map[string]any{
+			"type": "tool",
+			"name": trimmed,
+		}
+	}
 }
 
 func toAnthropicMessages(items []ConversationItem) []anthropicMessage {

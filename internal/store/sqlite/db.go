@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -12,8 +14,10 @@ type Store struct {
 	db *sql.DB
 }
 
+const sqliteBusyTimeoutMillis = 5000
+
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, err
 	}
@@ -36,14 +40,20 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) configure(ctx context.Context) error {
-	pragmas := []string{
-		`pragma busy_timeout = 5000`,
-		`pragma journal_mode = wal`,
-	}
-	for _, stmt := range pragmas {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("configure sqlite with %q: %w", stmt, err)
-		}
+	if err := s.db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping sqlite: %w", err)
 	}
 	return nil
+}
+
+func sqliteDSN(path string) string {
+	query := url.Values{}
+	query.Add("_pragma", fmt.Sprintf("busy_timeout=%d", sqliteBusyTimeoutMillis))
+	query.Add("_pragma", "journal_mode(WAL)")
+
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return path + separator + query.Encode()
 }

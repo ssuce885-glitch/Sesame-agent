@@ -6,6 +6,7 @@ import (
 )
 
 var errAgentExecutorNotConfigured = errors.New("agent executor is not configured")
+var errAgentFinalResultSinkNotConfigured = errors.New("agent final result sink is not configured")
 
 type AgentRunner struct {
 	executor AgentExecutor
@@ -21,21 +22,39 @@ func (r AgentRunner) Run(ctx context.Context, task *Task, sink OutputSink) error
 	if r.executor == nil {
 		return errAgentExecutorNotConfigured
 	}
-
-	writer := outputSinkWriter{
-		taskID: task.ID,
-		sink:   sink,
+	resultSink, ok := sink.(interface {
+		SetFinalText(taskID, text string) error
+	})
+	if !ok {
+		return errAgentFinalResultSinkNotConfigured
 	}
-	return r.executor.RunTask(ctx, task.WorkspaceRoot, task.Command, writer)
+
+	observer := outputSinkObserver{
+		taskID:     task.ID,
+		sink:       sink,
+		resultSink: resultSink,
+	}
+	return r.executor.RunTask(ctx, task.WorkspaceRoot, task.Command, observer)
 }
 
-type outputSinkWriter struct {
-	taskID string
-	sink   OutputSink
+type outputSinkObserver struct {
+	taskID     string
+	sink       OutputSink
+	resultSink interface {
+		SetFinalText(taskID, text string) error
+	}
 }
 
-func (w outputSinkWriter) Write(p []byte) (int, error) {
-	if err := w.sink.Append(w.taskID, p); err != nil {
+func (w outputSinkObserver) AppendLog(chunk []byte) error {
+	return w.sink.Append(w.taskID, chunk)
+}
+
+func (w outputSinkObserver) SetFinalText(text string) error {
+	return w.resultSink.SetFinalText(w.taskID, text)
+}
+
+func (w outputSinkObserver) Write(p []byte) (int, error) {
+	if err := w.AppendLog(p); err != nil {
 		return 0, err
 	}
 	return len(p), nil

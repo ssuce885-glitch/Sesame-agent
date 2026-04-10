@@ -55,6 +55,25 @@ type TaskOutputResult struct {
 	Output string `json:"output"`
 }
 
+type TaskWaitInput struct {
+	TaskID    string `json:"task_id"`
+	TimeoutMS int    `json:"timeout_ms"`
+}
+
+type TaskWaitOutput struct {
+	Task        task.Task `json:"task"`
+	TimedOut    bool      `json:"timed_out"`
+	ResultReady bool      `json:"result_ready"`
+}
+
+type TaskResultOutput struct {
+	TaskID     string     `json:"task_id"`
+	Status     string     `json:"status"`
+	Kind       string     `json:"kind,omitempty"`
+	Text       string     `json:"text,omitempty"`
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
+}
+
 type TaskStopOutput struct {
 	TaskID string `json:"task_id"`
 }
@@ -70,6 +89,13 @@ type TaskUpdateInput struct {
 type TaskUpdateOutput struct {
 	Task task.Task `json:"task"`
 }
+
+const (
+	defaultTaskWaitTimeoutMS = 30000
+	maxTaskWaitTimeoutMS     = 300000
+	taskResultStatusReady    = "ready"
+	taskResultStatusMissing  = "not_available"
+)
 
 func (taskCreateTool) IsEnabled(execCtx ExecContext) bool {
 	return execCtx.TaskManager != nil
@@ -130,14 +156,14 @@ func (taskCreateTool) IsConcurrencySafe() bool { return false }
 
 func (taskCreateTool) Decode(call Call) (DecodedCall, error) {
 	input := TaskCreateInput{
-		Type:        strings.TrimSpace(call.StringInput("type")),
-		Command:     strings.TrimSpace(call.StringInput("command")),
-		Description: strings.TrimSpace(call.StringInput("description")),
-		PlanID:      strings.TrimSpace(call.StringInput("plan_id")),
+		Type:         strings.TrimSpace(call.StringInput("type")),
+		Command:      strings.TrimSpace(call.StringInput("command")),
+		Description:  strings.TrimSpace(call.StringInput("description")),
+		PlanID:       strings.TrimSpace(call.StringInput("plan_id")),
 		ParentTaskID: strings.TrimSpace(call.StringInput("parent_task_id")),
-		Owner:       strings.TrimSpace(call.StringInput("owner")),
-		Kind:        strings.TrimSpace(call.StringInput("kind")),
-		WorktreeID:  strings.TrimSpace(call.StringInput("worktree_id")),
+		Owner:        strings.TrimSpace(call.StringInput("owner")),
+		Kind:         strings.TrimSpace(call.StringInput("kind")),
+		WorktreeID:   strings.TrimSpace(call.StringInput("worktree_id")),
 	}
 	if start, ok := call.Input["start"].(bool); ok {
 		input.Start = &start
@@ -195,15 +221,17 @@ func (taskCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		taskKind = string(taskType)
 	}
 	created, err := manager.Create(ctx, task.CreateTaskInput{
-		Type:          taskType,
-		Command:       input.Command,
-		Description:   input.Description,
-		ParentTaskID:  input.ParentTaskID,
-		Owner:         input.Owner,
-		Kind:          taskKind,
-		WorktreeID:    input.WorktreeID,
-		WorkspaceRoot: execCtx.WorkspaceRoot,
-		Start:         start,
+		Type:            taskType,
+		Command:         input.Command,
+		Description:     input.Description,
+		ParentTaskID:    input.ParentTaskID,
+		ParentSessionID: currentSessionID(execCtx),
+		ParentTurnID:    currentTurnID(execCtx),
+		Owner:           input.Owner,
+		Kind:            taskKind,
+		WorktreeID:      input.WorktreeID,
+		WorkspaceRoot:   execCtx.WorkspaceRoot,
+		Start:           start,
 	})
 	if err != nil {
 		return ToolExecutionResult{}, err
@@ -222,6 +250,14 @@ func (taskCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 			ExecutionTaskID: created.ID,
 			WorktreeID:      input.WorktreeID,
 		}); err == nil {
+			runtimeTask.State = runtimeTaskStateFromTaskStatus(created.Status)
+			runtimeTask.Description = firstNonEmptyString(created.Description, runtimeTask.Description)
+			runtimeTask.Owner = firstNonEmptyString(created.Owner, runtimeTask.Owner)
+			runtimeTask.Kind = firstNonEmptyString(created.Kind, runtimeTask.Kind)
+			runtimeTask.ExecutionTaskID = firstNonEmptyString(created.ExecutionTaskID, runtimeTask.ExecutionTaskID, created.ID)
+			runtimeTask.WorktreeID = firstNonEmptyString(created.WorktreeID, runtimeTask.WorktreeID)
+			runtimeTask.UpdatedAt = timeNowUTC()
+			_ = execCtx.RuntimeService.UpdateTask(ctx, runtimeTask)
 			execCtx.TurnContext.CurrentTaskID = runtimeTask.ID
 			emitTimelineBlockEvent(ctx, execCtx, types.EventTaskUpdated, types.TimelineBlockFromTask(runtimeTask))
 			emittedRuntimeBlock = true
@@ -430,7 +466,7 @@ func (taskOutputTool) IsEnabled(execCtx ExecContext) bool {
 func (taskOutputTool) Definition() Definition {
 	return Definition{
 		Name:        "task_output",
-		Description: "Read task output.",
+		Description: "Read raw task output logs. This is not a final-result channel.",
 		InputSchema: objectSchema(map[string]any{
 			"task_id": map[string]any{
 				"type":        "string",
@@ -490,6 +526,212 @@ func (taskOutputTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, exe
 }
 
 func (taskOutputTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
+	return defaultStructuredModelResult(output)
+}
+
+type taskWaitTool struct{}
+
+func (taskWaitTool) IsEnabled(execCtx ExecContext) bool {
+	return execCtx.TaskManager != nil
+}
+
+func (taskWaitTool) Definition() Definition {
+	return Definition{
+		Name:        "task_wait",
+		Description: "Wait for a task to reach a terminal status. Use this instead of guessing completion from task_output logs.",
+		InputSchema: objectSchema(map[string]any{
+			"task_id": map[string]any{
+				"type":        "string",
+				"description": "Task identifier.",
+			},
+			"timeout_ms": map[string]any{
+				"type":        "integer",
+				"description": "Optional wait timeout in milliseconds. Defaults to 30000.",
+			},
+		}, "task_id"),
+		OutputSchema: objectSchema(map[string]any{
+			"task":         map[string]any{"type": "object", "additionalProperties": true},
+			"timed_out":    map[string]any{"type": "boolean"},
+			"result_ready": map[string]any{"type": "boolean"},
+		}, "task", "timed_out", "result_ready"),
+	}
+}
+
+func (taskWaitTool) IsConcurrencySafe() bool { return true }
+
+func (taskWaitTool) Decode(call Call) (DecodedCall, error) {
+	taskID := strings.TrimSpace(call.StringInput("task_id"))
+	if taskID == "" {
+		return DecodedCall{}, fmt.Errorf("task_id is required")
+	}
+	timeoutMS, err := decodeShellPositiveInt(call.Input["timeout_ms"], defaultTaskWaitTimeoutMS)
+	if err != nil {
+		return DecodedCall{}, fmt.Errorf("timeout_ms %w", err)
+	}
+	if timeoutMS > maxTaskWaitTimeoutMS {
+		return DecodedCall{}, fmt.Errorf("timeout_ms exceeds max allowed (%d)", maxTaskWaitTimeoutMS)
+	}
+	normalized := Call{
+		Name: call.Name,
+		Input: map[string]any{
+			"task_id":    taskID,
+			"timeout_ms": timeoutMS,
+		},
+	}
+	return DecodedCall{
+		Call: normalized,
+		Input: TaskWaitInput{
+			TaskID:    taskID,
+			TimeoutMS: timeoutMS,
+		},
+	}, nil
+}
+
+func (t taskWaitTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
+	decoded, err := t.Decode(call)
+	if err != nil {
+		return Result{}, err
+	}
+	output, err := t.ExecuteDecoded(ctx, decoded, execCtx)
+	return output.Result, err
+}
+
+func (taskWaitTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
+	manager, err := requireTaskManager(execCtx)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+
+	input, _ := decoded.Input.(TaskWaitInput)
+	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(input.TimeoutMS)*time.Millisecond)
+	defer cancel()
+
+	got, timedOut, err := manager.Wait(waitCtx, input.TaskID, execCtx.WorkspaceRoot)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+
+	output := TaskWaitOutput{
+		Task:        got,
+		TimedOut:    timedOut,
+		ResultReady: got.ResultReady(),
+	}
+	text := mustJSON(output)
+	modelText := fmt.Sprintf("Task %s reached %s", got.ID, got.Status)
+	if timedOut {
+		modelText = fmt.Sprintf("Task %s still %s (timed out)", got.ID, got.Status)
+	}
+	return ToolExecutionResult{
+		Result: Result{
+			Text:      text,
+			ModelText: modelText,
+		},
+		Data:        output,
+		PreviewText: modelText,
+	}, nil
+}
+
+func (taskWaitTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
+	return defaultStructuredModelResult(output)
+}
+
+type taskResultTool struct{}
+
+func (taskResultTool) IsEnabled(execCtx ExecContext) bool {
+	return execCtx.TaskManager != nil
+}
+
+func (taskResultTool) Definition() Definition {
+	return Definition{
+		Name:        "task_result",
+		Description: "Read the final result of an agent task. Unlike task_output, this is the final-result channel.",
+		InputSchema: objectSchema(map[string]any{
+			"task_id": map[string]any{
+				"type":        "string",
+				"description": "Task identifier.",
+			},
+		}, "task_id"),
+		OutputSchema: objectSchema(map[string]any{
+			"task_id":     map[string]any{"type": "string"},
+			"status":      map[string]any{"type": "string"},
+			"kind":        map[string]any{"type": "string"},
+			"text":        map[string]any{"type": "string"},
+			"observed_at": map[string]any{"type": "string"},
+		}, "task_id", "status"),
+	}
+}
+
+func (taskResultTool) IsConcurrencySafe() bool { return true }
+
+func (taskResultTool) Decode(call Call) (DecodedCall, error) {
+	taskID := strings.TrimSpace(call.StringInput("task_id"))
+	if taskID == "" {
+		return DecodedCall{}, fmt.Errorf("task_id is required")
+	}
+	normalized := Call{Name: call.Name, Input: map[string]any{"task_id": taskID}}
+	return DecodedCall{Call: normalized, Input: TaskIDInput{TaskID: taskID}}, nil
+}
+
+func (t taskResultTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
+	decoded, err := t.Decode(call)
+	if err != nil {
+		return Result{}, err
+	}
+	output, err := t.ExecuteDecoded(ctx, decoded, execCtx)
+	return output.Result, err
+}
+
+func (taskResultTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
+	manager, err := requireTaskManager(execCtx)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+
+	input, _ := decoded.Input.(TaskIDInput)
+	finalResult, ready, err := manager.ReadResult(input.TaskID, execCtx.WorkspaceRoot)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+
+	if !ready {
+		output := TaskResultOutput{
+			TaskID: input.TaskID,
+			Status: taskResultStatusMissing,
+		}
+		text := mustJSON(output)
+		modelText := fmt.Sprintf("Task %s result not available", input.TaskID)
+		return ToolExecutionResult{
+			Result: Result{
+				Text:      text,
+				ModelText: text,
+			},
+			Data:        output,
+			PreviewText: modelText,
+		}, nil
+	}
+
+	output := TaskResultOutput{
+		TaskID:     input.TaskID,
+		Status:     taskResultStatusReady,
+		Kind:       string(finalResult.Kind),
+		Text:       finalResult.Text,
+		ObservedAt: &finalResult.ObservedAt,
+	}
+	modelText := finalResult.Text
+	if strings.TrimSpace(modelText) == "" {
+		modelText = mustJSON(output)
+	}
+	return ToolExecutionResult{
+		Result: Result{
+			Text:      finalResult.Text,
+			ModelText: modelText,
+		},
+		Data:        output,
+		PreviewText: fmt.Sprintf("Task %s result ready", input.TaskID),
+	}, nil
+}
+
+func (taskResultTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
 	return defaultStructuredModelResult(output)
 }
 
@@ -737,6 +979,20 @@ func runtimeTaskStateFromTaskStatus(status task.TaskStatus) types.TaskState {
 
 func timeNowUTC() time.Time {
 	return time.Now().UTC()
+}
+
+func currentSessionID(execCtx ExecContext) string {
+	if execCtx.TurnContext == nil {
+		return ""
+	}
+	return strings.TrimSpace(execCtx.TurnContext.CurrentSessionID)
+}
+
+func currentTurnID(execCtx ExecContext) string {
+	if execCtx.TurnContext == nil {
+		return ""
+	}
+	return strings.TrimSpace(execCtx.TurnContext.CurrentTurnID)
 }
 
 func currentRunID(execCtx ExecContext) string {

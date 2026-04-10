@@ -37,6 +37,14 @@ func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		pendingReportCount := 0
+		if mailboxStore, ok := deps.Store.(reportMailboxStore); ok {
+			pendingReportCount, err = mailboxStore.CountPendingReportMailboxItems(r.Context(), sessionID)
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+		}
 
 		blocks := normalizeTimelineBlocks(items, events)
 		if graphStore, ok := deps.Store.(runtimeGraphStore); ok {
@@ -49,8 +57,9 @@ func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(types.SessionTimelineResponse{
-			Blocks:    blocks,
-			LatestSeq: latestSeq,
+			Blocks:             blocks,
+			LatestSeq:          latestSeq,
+			PendingReportCount: pendingReportCount,
 		})
 	}
 }
@@ -228,6 +237,12 @@ func normalizeTimelineBlocks(items []types.ConversationTimelineItem, events []ty
 				DecisionScope:       p.DecisionScope,
 				Text:                clampPreview("Resolved " + p.Decision + " · " + p.RequestedProfile),
 			})
+		case types.EventTaskResultReady:
+			var block types.TimelineBlock
+			if err := json.Unmarshal(event.Payload, &block); err != nil {
+				continue
+			}
+			blocks = mergeRuntimeTimelineBlocks(blocks, []types.TimelineBlock{block})
 		}
 	}
 

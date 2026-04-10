@@ -17,7 +17,6 @@ import (
 type runningTask struct {
 	workspaceRoot string
 	cancel        context.CancelFunc
-	done          chan struct{}
 }
 
 type workspaceState struct {
@@ -30,25 +29,30 @@ type workspaceState struct {
 type Config struct {
 	MaxConcurrentTasks int
 	TaskOutputMaxBytes int
+	TerminalNotifier   TerminalNotifier
 }
 
 type Manager struct {
-	mu         sync.RWMutex
-	tasks      map[string]*Task
-	workspaces map[string]*workspaceState
-	running    map[string]*runningTask
-	runners    map[TaskType]Runner
-	cfg        Config
-	remote     RemoteExecutorConfig
+	mu               sync.RWMutex
+	tasks            map[string]*Task
+	workspaces       map[string]*workspaceState
+	running          map[string]*runningTask
+	waiters          map[string]chan struct{}
+	runners          map[TaskType]Runner
+	cfg              Config
+	remote           RemoteExecutorConfig
+	terminalNotifier TerminalNotifier
 }
 
 func NewManager(cfg Config, runners map[TaskType]Runner, agentExecutor AgentExecutor) *Manager {
 	manager := &Manager{
-		tasks:      make(map[string]*Task),
-		workspaces: make(map[string]*workspaceState),
-		running:    make(map[string]*runningTask),
-		runners:    make(map[TaskType]Runner),
-		cfg:        cfg,
+		tasks:            make(map[string]*Task),
+		workspaces:       make(map[string]*workspaceState),
+		running:          make(map[string]*runningTask),
+		waiters:          make(map[string]chan struct{}),
+		runners:          make(map[TaskType]Runner),
+		cfg:              cfg,
+		terminalNotifier: cfg.TerminalNotifier,
 	}
 	manager.registerDefaultRunners(agentExecutor)
 	for taskType, runner := range runners {
@@ -86,22 +90,29 @@ func (m *Manager) Create(_ context.Context, in CreateTaskInput) (Task, error) {
 		Command:         in.Command,
 		Description:     in.Description,
 		ParentTaskID:    in.ParentTaskID,
+		ParentSessionID: in.ParentSessionID,
+		ParentTurnID:    in.ParentTurnID,
 		Owner:           in.Owner,
 		Kind:            in.Kind,
 		ExecutionTaskID: taskID,
 		WorktreeID:      in.WorktreeID,
+		ScheduledJobID:  in.ScheduledJobID,
 		WorkspaceRoot:   workspaceRoot,
 		OutputPath:      filepath.Join(state.outputsDir, taskID+".log"),
+		TimeoutSeconds:  in.TimeoutSeconds,
 		StartTime:       time.Now().UTC(),
 	}
 	m.tasks[task.ID] = task
+	m.waiterLocked(task)
 	if err := m.saveWorkspaceLocked(workspaceRoot); err != nil {
 		delete(m.tasks, task.ID)
+		delete(m.waiters, task.ID)
 		return Task{}, err
 	}
 	if in.Start {
 		if err := m.startLocked(task); err != nil {
 			delete(m.tasks, task.ID)
+			delete(m.waiters, task.ID)
 			_ = m.saveWorkspaceLocked(workspaceRoot)
 			return Task{}, err
 		}
@@ -174,6 +185,7 @@ func (m *Manager) Update(taskID, workspaceRoot string, in UpdateTaskInput) error
 	if isTerminalStatus(task.Status) {
 		now := time.Now().UTC()
 		task.EndTime = &now
+		m.markTerminalLocked(task)
 	}
 	return m.saveWorkspaceLocked(workspaceRoot)
 }
@@ -199,6 +211,7 @@ func (m *Manager) Stop(taskID, workspaceRoot string) error {
 		task.Status = TaskStatusStopped
 		now := time.Now().UTC()
 		task.EndTime = &now
+		m.markTerminalLocked(task)
 		err := m.saveWorkspaceLocked(workspaceRoot)
 		m.mu.Unlock()
 		return err
@@ -240,6 +253,49 @@ func (m *Manager) ReadOutput(taskID, workspaceRoot string) (string, error) {
 	return task.Output, nil
 }
 
+func (m *Manager) Wait(ctx context.Context, taskID, workspaceRoot string) (Task, bool, error) {
+	workspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
+	for {
+		m.mu.Lock()
+		if _, err := m.ensureWorkspaceLocked(workspaceRoot); err != nil {
+			m.mu.Unlock()
+			return Task{}, false, err
+		}
+		task, ok := m.tasks[taskID]
+		if !ok || task.WorkspaceRoot != workspaceRoot {
+			m.mu.Unlock()
+			return Task{}, false, fmt.Errorf("task %q not found", taskID)
+		}
+		snapshot := copyTask(*task)
+		if isTerminalStatus(task.Status) {
+			m.mu.Unlock()
+			return snapshot, false, nil
+		}
+		waiter := m.waiterLocked(task)
+		m.mu.Unlock()
+
+		select {
+		case <-waiter:
+			continue
+		case <-ctx.Done():
+			current, ok, err := m.Get(taskID, workspaceRoot)
+			if err != nil {
+				return Task{}, false, err
+			}
+			if !ok {
+				return Task{}, false, fmt.Errorf("task %q not found", taskID)
+			}
+			if isTerminalStatus(current.Status) {
+				return current, false, nil
+			}
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return current, true, nil
+			}
+			return Task{}, false, ctx.Err()
+		}
+	}
+}
+
 func (m *Manager) WriteTodos(workspaceRoot string, todos []TodoItem) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -251,6 +307,25 @@ func (m *Manager) WriteTodos(workspaceRoot string, todos []TodoItem) error {
 	}
 
 	return writeTodosFile(state.todosFile, todos)
+}
+
+func (m *Manager) ReadResult(taskID, workspaceRoot string) (FinalResult, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	workspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
+	if _, err := m.ensureWorkspaceLocked(workspaceRoot); err != nil {
+		return FinalResult{}, false, err
+	}
+	task, ok := m.tasks[taskID]
+	if !ok || task.WorkspaceRoot != workspaceRoot {
+		return FinalResult{}, false, fmt.Errorf("task %q not found", taskID)
+	}
+	result, ready := task.FinalResult()
+	if !ready {
+		return FinalResult{}, false, nil
+	}
+	return result, true, nil
 }
 
 func (m *Manager) SetRemoteConfig(cfg RemoteExecutorConfig) {
@@ -265,6 +340,21 @@ func (m *Manager) SetRemoteConfig(cfg RemoteExecutorConfig) {
 			m.runners[TaskTypeRemote] = remoteRunner
 		}
 	}
+}
+
+func (m *Manager) SetFinalText(taskID, text string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	task, ok := m.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task %q not found", taskID)
+	}
+	now := time.Now().UTC()
+	task.FinalResultKind = FinalResultKindAssistantText
+	task.FinalResultText = text
+	task.FinalResultReadyAt = &now
+	return m.saveWorkspaceLocked(task.WorkspaceRoot)
 }
 
 func (m *Manager) Append(taskID string, chunk []byte) error {
@@ -320,6 +410,10 @@ func (m *Manager) ensureWorkspaceLocked(workspaceRoot string) (*workspaceState, 
 			needsSave = true
 		}
 		m.tasks[taskCopy.ID] = &taskCopy
+		waiter := m.waiterLocked(&taskCopy)
+		if isTerminalStatus(taskCopy.Status) {
+			closeWaiter(waiter)
+		}
 	}
 
 	state.loaded = true
@@ -355,11 +449,19 @@ func (m *Manager) startLocked(task *Task) error {
 		return fmt.Errorf("remote runner is not configured")
 	}
 
-	runCtx, cancel := context.WithCancel(context.Background())
+	baseCtx := context.Background()
+	var (
+		runCtx context.Context
+		cancel context.CancelFunc
+	)
+	if task.TimeoutSeconds > 0 {
+		runCtx, cancel = context.WithTimeout(baseCtx, time.Duration(task.TimeoutSeconds)*time.Second)
+	} else {
+		runCtx, cancel = context.WithCancel(baseCtx)
+	}
 	handle := &runningTask{
 		workspaceRoot: task.WorkspaceRoot,
 		cancel:        cancel,
-		done:          make(chan struct{}),
 	}
 	m.running[task.ID] = handle
 	task.Status = TaskStatusRunning
@@ -378,17 +480,12 @@ func (m *Manager) startLocked(task *Task) error {
 
 func (m *Manager) finishRun(taskID, workspaceRoot string, runErr error, ctxErr error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	task, ok := m.tasks[taskID]
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
-	handle := m.running[taskID]
 	delete(m.running, taskID)
-	if handle != nil && handle.done != nil {
-		close(handle.done)
-	}
 
 	now := time.Now().UTC()
 	task.EndTime = &now
@@ -401,7 +498,65 @@ func (m *Manager) finishRun(taskID, workspaceRoot string, runErr error, ctxErr e
 	default:
 		task.Status = TaskStatusCompleted
 	}
+	m.markTerminalLocked(task)
+	snapshot := copyTask(*task)
+	notifier := m.terminalNotifier
 	_ = m.saveWorkspaceLocked(workspaceRoot)
+	m.mu.Unlock()
+
+	if notifier == nil {
+		return
+	}
+	if err := notifier.NotifyTaskTerminal(context.Background(), snapshot); err != nil {
+		return
+	}
+	if !shouldMarkCompletionNotified(snapshot) {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.tasks[taskID]
+	if !ok || current.CompletionNotifiedAt != nil {
+		return
+	}
+	notifiedAt := time.Now().UTC()
+	current.CompletionNotifiedAt = &notifiedAt
+	_ = m.saveWorkspaceLocked(current.WorkspaceRoot)
+}
+
+func (m *Manager) waiterLocked(task *Task) chan struct{} {
+	if task == nil {
+		return nil
+	}
+	if waiter, ok := m.waiters[task.ID]; ok {
+		return waiter
+	}
+	waiter := make(chan struct{})
+	if isTerminalStatus(task.Status) {
+		close(waiter)
+	}
+	m.waiters[task.ID] = waiter
+	return waiter
+}
+
+func (m *Manager) markTerminalLocked(task *Task) {
+	if task == nil {
+		return
+	}
+	closeWaiter(m.waiterLocked(task))
+}
+
+func closeWaiter(waiter chan struct{}) {
+	if waiter == nil {
+		return
+	}
+	select {
+	case <-waiter:
+		return
+	default:
+		close(waiter)
+	}
 }
 
 func normalizeWorkspaceRoot(workspaceRoot string) string {
@@ -414,5 +569,20 @@ func copyTask(task Task) Task {
 		end := *task.EndTime
 		copy.EndTime = &end
 	}
+	if task.FinalResultReadyAt != nil {
+		readyAt := *task.FinalResultReadyAt
+		copy.FinalResultReadyAt = &readyAt
+	}
+	if task.CompletionNotifiedAt != nil {
+		notifiedAt := *task.CompletionNotifiedAt
+		copy.CompletionNotifiedAt = &notifiedAt
+	}
 	return copy
+}
+
+func shouldMarkCompletionNotified(task Task) bool {
+	return task.Status == TaskStatusCompleted &&
+		task.ResultReady() &&
+		task.ParentSessionID != "" &&
+		task.CompletionNotifiedAt == nil
 }

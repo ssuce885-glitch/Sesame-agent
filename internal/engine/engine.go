@@ -8,6 +8,7 @@ import (
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
+	"go-agent/internal/scheduler"
 	"go-agent/internal/task"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
@@ -63,6 +64,7 @@ type Engine struct {
 	maxToolSteps            int
 	taskManager             *task.Manager
 	runtimeService          *runtimegraph.Service
+	schedulerService        *scheduler.Service
 	sessionMemoryAsync      bool
 	sessionMemoryWorker     SessionMemoryWorker
 	sessionMemoryWG         sync.WaitGroup
@@ -157,6 +159,13 @@ func (e *Engine) SetRuntimeService(service *runtimegraph.Service) {
 		return
 	}
 	e.runtimeService = service
+}
+
+func (e *Engine) SetSchedulerService(service *scheduler.Service) {
+	if e == nil {
+		return
+	}
+	e.schedulerService = service
 }
 
 func (e *Engine) SetSessionMemoryAsync(enabled bool) {

@@ -12,6 +12,11 @@ type RuntimeTx interface {
 	UpsertPlan(context.Context, types.Plan) error
 	UpsertTaskRecord(context.Context, types.TaskRecord) error
 	UpsertWorktree(context.Context, types.Worktree) error
+	UpsertChildAgentSpec(context.Context, types.ChildAgentSpec) error
+	UpsertOutputContract(context.Context, types.OutputContract) error
+	UpsertReportGroup(context.Context, types.ReportGroup) error
+	UpsertChildAgentResult(context.Context, types.ChildAgentResult) error
+	UpsertDigestRecord(context.Context, types.DigestRecord) error
 	ListActivePlansForSession(context.Context, string) ([]types.Plan, error)
 }
 

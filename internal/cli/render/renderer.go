@@ -6,6 +6,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"go-agent/internal/cli/client"
 	"go-agent/internal/extensions"
@@ -61,7 +62,7 @@ func (r *Renderer) RenderWelcome(info WelcomeInfo) {
 		}
 	}
 	lines = append(lines,
-		"commands     /help  /status  /session list",
+		"commands     /help  /status  /session list  /cron list",
 		"hint         paste a prompt, a GitHub link, or a slash command",
 	)
 	r.renderPanel("Sesame", lines)
@@ -160,6 +161,35 @@ func (r *Renderer) RenderTimeline(resp types.SessionTimelineResponse) {
 				r.renderDetail("Notice", "", block.Text)
 			}
 		}
+	}
+}
+
+func (r *Renderer) RenderReportMailbox(resp types.SessionReportMailboxResponse) {
+	if len(resp.Items) == 0 {
+		r.renderDetail("Mailbox", "", "No reports.")
+		return
+	}
+	for _, item := range resp.Items {
+		title := firstNonEmpty(item.Envelope.Title, string(item.SourceKind), item.ID)
+		bodyParts := []string{}
+		if summary := strings.TrimSpace(item.Envelope.Summary); summary != "" {
+			bodyParts = append(bodyParts, summary)
+		}
+		if !item.ObservedAt.IsZero() {
+			bodyParts = append(bodyParts, item.ObservedAt.UTC().Format(time.RFC3339))
+		}
+		if item.InjectedTurnID == "" {
+			bodyParts = append(bodyParts, "pending")
+		} else {
+			bodyParts = append(bodyParts, "delivered to "+item.InjectedTurnID)
+		}
+		for _, section := range item.Envelope.Sections {
+			if text := strings.TrimSpace(section.Text); text != "" {
+				bodyParts = append(bodyParts, text)
+				break
+			}
+		}
+		r.renderDetail("Mailbox", title, strings.Join(bodyParts, "\n"))
 	}
 }
 

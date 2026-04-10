@@ -8,20 +8,22 @@ import (
 )
 
 type ToolDisplay struct {
-	Action string
-	Target string
-	Detail string
+	Action      string
+	Target      string
+	Detail      string
+	CoalesceKey string
 }
 
 func SummarizeToolDisplay(toolName, arguments, resultPreview string) ToolDisplay {
 	args := parseToolArguments(arguments)
 	action := compactToolAction(toolName)
-	target := compactToolTarget(toolName, args)
-	detail := compactToolDetail(toolName, resultPreview, target)
+	target := compactToolTarget(toolName, args, resultPreview)
+	detail := compactToolDetail(toolName, args, resultPreview, target)
 	return ToolDisplay{
-		Action: action,
-		Target: target,
-		Detail: detail,
+		Action:      action,
+		Target:      target,
+		Detail:      detail,
+		CoalesceKey: compactToolCoalesceKey(toolName, args),
 	}
 }
 
@@ -35,10 +37,26 @@ func compactToolAction(toolName string) string {
 		return "edit"
 	case "shell_command":
 		return "shell"
+	case "schedule_report":
+		return "cron"
 	case "view_image":
 		return "image"
-	case "task_create", "task_get", "task_list", "task_output", "task_stop", "task_update":
-		return "task"
+	case "task_create":
+		return "task create"
+	case "task_get":
+		return "task status"
+	case "task_list":
+		return "task list"
+	case "task_output":
+		return "task output"
+	case "task_result":
+		return "task result"
+	case "task_wait":
+		return "task wait"
+	case "task_stop":
+		return "task stop"
+	case "task_update":
+		return "task update"
 	case "request_permissions":
 		return "permissions"
 	default:
@@ -50,7 +68,7 @@ func compactToolAction(toolName string) string {
 	}
 }
 
-func compactToolTarget(toolName string, args map[string]any) string {
+func compactToolTarget(toolName string, args map[string]any, resultPreview string) string {
 	switch strings.TrimSpace(toolName) {
 	case "file_read", "file_write":
 		return compactPathLabel(asString(args["path"]))
@@ -76,12 +94,52 @@ func compactToolTarget(toolName string, args map[string]any) string {
 		return compactURLLabel(asString(args["url"]))
 	case "shell_command":
 		return compactCommandLabel(asString(args["command"]))
-	case "task_get", "task_output", "task_stop":
+	case "task_get":
+		taskID := asString(args["task_id"])
+		if status := extractTaskGetStatus(resultPreview, taskID); status != "" {
+			return compactPlainLabel(taskID + " (" + status + ")")
+		}
+		return compactPlainLabel(taskID)
+	case "task_output", "task_stop":
 		return compactPlainLabel(asString(args["task_id"]))
+	case "task_result":
+		taskID := asString(args["task_id"])
+		if status := extractTaskResultStatus(resultPreview, taskID); status != "" {
+			return compactPlainLabel(taskID + " (" + status + ")")
+		}
+		return compactPlainLabel(taskID)
+	case "task_wait":
+		taskID := asString(args["task_id"])
+		if status, timedOut := extractTaskWaitStatus(resultPreview, taskID); status != "" {
+			if timedOut {
+				return compactPlainLabel(taskID + " (" + status + ", timed out)")
+			}
+			return compactPlainLabel(taskID + " (" + status + ")")
+		}
+		return compactPlainLabel(taskID)
 	case "task_update":
-		return compactPlainLabel(asString(args["task_id"]))
+		taskID := asString(args["task_id"])
+		if status := extractTaskUpdateStatus(resultPreview, taskID); status != "" {
+			return compactPlainLabel(taskID + " -> " + status)
+		}
+		return compactPlainLabel(taskID)
 	case "task_create":
-		return compactPlainLabel(asString(args["description"]))
+		return compactPlainLabel(firstNonEmpty(
+			asString(args["description"]),
+			asString(args["command"]),
+			asString(args["type"]),
+		))
+	case "schedule_report":
+		return compactPlainLabel(firstNonEmpty(
+			asString(args["name"]),
+			asString(args["prompt"]),
+			asString(args["cron"]),
+		))
+	case "task_list":
+		if status := asString(args["status"]); status != "" {
+			return compactPlainLabel("status=" + status)
+		}
+		return "all"
 	}
 
 	for _, key := range []string{"path", "file_path", "notebook_path"} {
@@ -97,9 +155,13 @@ func compactToolTarget(toolName string, args map[string]any) string {
 	return ""
 }
 
-func compactToolDetail(toolName, resultPreview, target string) string {
+func compactToolDetail(toolName string, args map[string]any, resultPreview, target string) string {
 	preview := compactPlainLabel(resultPreview)
 	if preview == "" {
+		return ""
+	}
+	switch strings.TrimSpace(toolName) {
+	case "task_get", "task_result", "task_stop", "task_update", "task_wait":
 		return ""
 	}
 	switch compactToolAction(toolName) {
@@ -116,6 +178,24 @@ func compactToolDetail(toolName, resultPreview, target string) string {
 		}
 		return preview
 	}
+}
+
+func compactToolCoalesceKey(toolName string, args map[string]any) string {
+	switch strings.TrimSpace(toolName) {
+	case "task_get":
+		if taskID := compactPlainLabel(asString(args["task_id"])); taskID != "" {
+			return "task_get:" + taskID
+		}
+	case "task_result":
+		if taskID := compactPlainLabel(asString(args["task_id"])); taskID != "" {
+			return "task_result:" + taskID
+		}
+	case "task_wait":
+		if taskID := compactPlainLabel(asString(args["task_id"])); taskID != "" {
+			return "task_wait:" + taskID
+		}
+	}
+	return ""
 }
 
 func parseToolArguments(arguments string) map[string]any {
@@ -205,6 +285,63 @@ func firstNonEmpty(values ...string) string {
 		if strings.TrimSpace(value) != "" {
 			return strings.TrimSpace(value)
 		}
+	}
+	return ""
+}
+
+func extractTaskGetStatus(resultPreview, taskID string) string {
+	resultPreview = strings.TrimSpace(resultPreview)
+	taskID = strings.TrimSpace(taskID)
+	if resultPreview == "" || taskID == "" {
+		return ""
+	}
+	prefix := "Task " + taskID + " ("
+	if !strings.HasPrefix(resultPreview, prefix) || !strings.HasSuffix(resultPreview, ")") {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(resultPreview, prefix), ")")
+}
+
+func extractTaskUpdateStatus(resultPreview, taskID string) string {
+	resultPreview = strings.TrimSpace(resultPreview)
+	taskID = strings.TrimSpace(taskID)
+	if resultPreview == "" || taskID == "" {
+		return ""
+	}
+	prefix := "Task " + taskID + " updated to "
+	if !strings.HasPrefix(resultPreview, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(resultPreview, prefix))
+}
+
+func extractTaskWaitStatus(resultPreview, taskID string) (string, bool) {
+	resultPreview = strings.TrimSpace(resultPreview)
+	taskID = strings.TrimSpace(taskID)
+	if resultPreview == "" || taskID == "" {
+		return "", false
+	}
+	reachedPrefix := "Task " + taskID + " reached "
+	if strings.HasPrefix(resultPreview, reachedPrefix) {
+		return strings.TrimSpace(strings.TrimPrefix(resultPreview, reachedPrefix)), false
+	}
+	timedOutPrefix := "Task " + taskID + " still "
+	if strings.HasPrefix(resultPreview, timedOutPrefix) && strings.HasSuffix(resultPreview, " (timed out)") {
+		status := strings.TrimSuffix(strings.TrimPrefix(resultPreview, timedOutPrefix), " (timed out)")
+		return strings.TrimSpace(status), true
+	}
+	return "", false
+}
+
+func extractTaskResultStatus(resultPreview, taskID string) string {
+	resultPreview = strings.TrimSpace(resultPreview)
+	taskID = strings.TrimSpace(taskID)
+	if resultPreview == "" || taskID == "" {
+		return ""
+	}
+	readyPrefix := "Task " + taskID + " result "
+	if strings.HasPrefix(resultPreview, readyPrefix) {
+		return strings.TrimSpace(strings.TrimPrefix(resultPreview, readyPrefix))
 	}
 	return ""
 }

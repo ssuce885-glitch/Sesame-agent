@@ -27,6 +27,13 @@ func NewEngine(profile ...string) *Engine {
 	return &Engine{profile: selected}
 }
 
+func (e *Engine) Profile() string {
+	if e == nil || strings.TrimSpace(e.profile) == "" {
+		return "read_only"
+	}
+	return e.profile
+}
+
 func (e *Engine) Decide(toolName string) Decision {
 	if e == nil {
 		return DecisionDeny
@@ -59,6 +66,8 @@ func (e *Engine) Decide(toolName string) Decision {
 		allowed["task_get"] = struct{}{}
 		allowed["task_list"] = struct{}{}
 		allowed["task_output"] = struct{}{}
+		allowed["task_result"] = struct{}{}
+		allowed["task_wait"] = struct{}{}
 		allowed["task_stop"] = struct{}{}
 		allowed["task_update"] = struct{}{}
 		allowed["enter_worktree"] = struct{}{}

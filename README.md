@@ -13,6 +13,8 @@ Sesame 是一个面向终端的本地代码代理。
 - 自动为当前工作区选择或创建 session
 - 支持 shell、读写文件、搜索、补丁、任务、权限等工具
 - 支持全局和工作区 skill 发现与安装
+- 支持真实定时/周期自动汇报任务
+- 支持 mailbox 收件箱和 cron 任务管理
 - 支持 `Esc` 中断当前对话
 - 支持鼠标滚轮和 `PgUp` / `PgDn` 滚动
 - 支持通过 `~/.sesame/config.json` 配置模型与运行参数
@@ -116,6 +118,12 @@ TUI 快捷键：
 - `/status`
 - `/skills`
 - `/tools`
+- `/mailbox`
+- `/cron list`
+- `/cron inspect <id>`
+- `/cron pause <id>`
+- `/cron resume <id>`
+- `/cron remove <id>`
 - `/session list`
 - `/session use <id>`
 - `/clear`
@@ -148,19 +156,10 @@ go run ./cmd/sesame skill remove parallel
 
 ## 下一步计划
 
-项目目前能力：
+下一阶段重点会放在两类能力上：
 
-- 已具备本地 daemon、session 持久化和终端 TUI 对话能力
-- 已支持 shell、文件读写、搜索、补丁、任务、权限控制等基础工具链
-- 已支持 skill 发现、安装和工作区级扩展
-- 已支持 turn 中断、上下文压缩和基础运行时状态管理
-
-下一阶段我准备把 Sesame 往自动化方向再推进一层，重点包括：
-
-- 集成 Harness，作为更稳定的任务编排和执行承载层
-- 增加定时自动任务能力，比如按时间调度 workspace 巡检、自动总结、周期性执行命令
-- 打通后台任务与 session / timeline / memory 的关联，让自动任务结果能自然回流到对话上下文
-- 补充更清晰的任务可视化与停止/重试控制
+- 正在思考如何做自动化任务报告的推送
+- 继续强化多 agent 协作，包括 skill 调用约束、子代理工具边界和报告汇总策略
 
 定位：自用 agent。
 

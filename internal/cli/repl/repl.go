@@ -24,6 +24,12 @@ type RuntimeClient interface {
 	InterruptTurn(context.Context, string) error
 	StreamEvents(context.Context, string, int64) (<-chan types.Event, error)
 	GetTimeline(context.Context, string) (types.SessionTimelineResponse, error)
+	GetReportMailbox(context.Context, string) (types.SessionReportMailboxResponse, error)
+	ListCronJobs(context.Context, string) (types.ListScheduledJobsResponse, error)
+	GetCronJob(context.Context, string) (types.ScheduledJob, error)
+	PauseCronJob(context.Context, string) (types.ScheduledJob, error)
+	ResumeCronJob(context.Context, string) (types.ScheduledJob, error)
+	DeleteCronJob(context.Context, string) error
 }
 
 type Options struct {
@@ -169,7 +175,7 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 
 	switch fields[0] {
 	case "help":
-		fmt.Fprintln(r.stdout, "/help /clear /exit /status /skills /tools /session list /session use <id>")
+		fmt.Fprintln(r.stdout, "/help /clear /exit /status /skills /tools /mailbox /cron list [--all] /cron inspect <id> /cron pause <id> /cron resume <id> /cron remove <id> /session list /session use <id>")
 		return nil
 	case "exit":
 		return errExitRequested
@@ -190,10 +196,84 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 	case "tools":
 		r.renderer.RenderToolList(r.catalog.Tools)
 		return nil
+	case "mailbox", "inbox":
+		if strings.TrimSpace(r.sessionID) == "" {
+			return errors.New("session is not selected")
+		}
+		resp, err := r.client.GetReportMailbox(ctx, r.sessionID)
+		if err != nil {
+			return err
+		}
+		r.renderer.RenderReportMailbox(resp)
+		return nil
+	case "cron":
+		return r.handleCronCommand(ctx, fields[1:])
 	case "session":
 		return r.handleSessionCommand(ctx, fields[1:])
 	default:
 		return fmt.Errorf("unknown command: /%s", fields[0])
+	}
+}
+
+func (r *REPL) handleCronCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: /cron list [--all] | inspect <id> | pause <id> | resume <id> | remove <id>")
+	}
+
+	switch args[0] {
+	case "list":
+		workspaceRoot := r.workspaceRoot
+		if len(args) > 1 && strings.TrimSpace(args[1]) == "--all" {
+			workspaceRoot = ""
+		}
+		resp, err := r.client.ListCronJobs(ctx, workspaceRoot)
+		if err != nil {
+			return err
+		}
+		r.renderer.RenderCronList(resp)
+		return nil
+	case "inspect":
+		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+			return fmt.Errorf("usage: /cron inspect <id>")
+		}
+		job, err := r.client.GetCronJob(ctx, strings.TrimSpace(args[1]))
+		if err != nil {
+			return err
+		}
+		r.renderer.RenderCronJob(job)
+		return nil
+	case "pause":
+		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+			return fmt.Errorf("usage: /cron pause <id>")
+		}
+		job, err := r.client.PauseCronJob(ctx, strings.TrimSpace(args[1]))
+		if err != nil {
+			return err
+		}
+		r.renderer.RenderCronJob(job)
+		return nil
+	case "resume":
+		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+			return fmt.Errorf("usage: /cron resume <id>")
+		}
+		job, err := r.client.ResumeCronJob(ctx, strings.TrimSpace(args[1]))
+		if err != nil {
+			return err
+		}
+		r.renderer.RenderCronJob(job)
+		return nil
+	case "remove":
+		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+			return fmt.Errorf("usage: /cron remove <id>")
+		}
+		jobID := strings.TrimSpace(args[1])
+		if err := r.client.DeleteCronJob(ctx, jobID); err != nil {
+			return err
+		}
+		fmt.Fprintf(r.stdout, "Removed cron job %s\n", jobID)
+		return nil
+	default:
+		return fmt.Errorf("unknown cron command: %s", args[0])
 	}
 }
 
