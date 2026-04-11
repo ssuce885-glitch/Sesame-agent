@@ -7,23 +7,37 @@ import (
 )
 
 func NewFromConfig(cfg config.Config) (StreamingClient, error) {
-	switch cfg.ModelProvider {
-	case "fake":
-		return NewFakeStreaming(nil), nil
-	case "anthropic":
+	resolved, err := ResolveProviderConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := newTransportFromResolved(resolved)
+	if err != nil {
+		return nil, err
+	}
+	return NewAdaptiveProvider(resolved, transport), nil
+}
+
+func newTransportFromResolved(resolved ResolvedProviderConfig) (StreamingClient, error) {
+	switch resolved.APIFamily {
+	case APIFamilyAnthropicMessages:
 		return NewAnthropicProvider(Config{
-			APIKey:  cfg.AnthropicAPIKey,
-			Model:   cfg.Model,
-			BaseURL: cfg.AnthropicBaseURL,
+			APIKey:  resolved.APIKey,
+			Model:   resolved.Model,
+			BaseURL: resolved.BaseURL,
 		})
-	case "openai_compatible":
+	case APIFamilyOpenAIChatCompletions, APIFamilyOpenAIResponses:
 		return NewOpenAICompatibleProvider(Config{
-			APIKey:       cfg.OpenAIAPIKey,
-			Model:        cfg.Model,
-			BaseURL:      cfg.OpenAIBaseURL,
-			CacheProfile: CapabilityProfile(cfg.ProviderCacheProfile),
+			APIKey:       resolved.APIKey,
+			Model:        resolved.Model,
+			BaseURL:      resolved.BaseURL,
+			CacheProfile: resolved.CacheProfile,
 		})
 	default:
-		return nil, fmt.Errorf("unsupported model provider %q", cfg.ModelProvider)
+		return nil, fmt.Errorf("unsupported api family %q", resolved.APIFamily)
 	}
+}
+
+func NewAdaptiveProvider(_ ResolvedProviderConfig, transport StreamingClient) StreamingClient {
+	return transport
 }
