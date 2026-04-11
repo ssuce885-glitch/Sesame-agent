@@ -132,6 +132,9 @@ func MissingSetupFields(cfg Config) []string {
 	if strings.TrimSpace(provider.APIFamily) == "" {
 		missing = append(missing, "model_providers.<active>.api_family")
 	}
+	if runtimeModelProviderFromAPIFamily(provider.APIFamily) == "fake" {
+		return missing
+	}
 	if strings.TrimSpace(provider.APIKeyEnv) == "" {
 		missing = append(missing, "model_providers.<active>.api_key_env")
 	}

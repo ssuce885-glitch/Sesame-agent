@@ -106,6 +106,30 @@ func TestResolveCLIStartupConfigBuildsRuntimeCompatibilityFieldsFromActiveProfil
 	}
 }
 
+func TestMissingSetupFieldsAllowsFakeProviderWithoutAuthFields(t *testing.T) {
+	cfg := Config{
+		ActiveProfile: "smoke",
+		ModelProviders: map[string]ModelProviderConfig{
+			"fake-provider": {
+				ID:        "fake-provider",
+				APIFamily: "fake",
+			},
+		},
+		Profiles: map[string]ProfileConfig{
+			"smoke": {
+				ID:            "smoke",
+				Model:         "fake-smoke",
+				ModelProvider: "fake-provider",
+			},
+		},
+	}
+
+	missing := MissingSetupFields(cfg)
+	if len(missing) != 0 {
+		t.Fatalf("MissingSetupFields() = %v, want none for fake provider", missing)
+	}
+}
+
 func writeConfigFile(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
