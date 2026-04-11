@@ -20,22 +20,29 @@ type Bundle struct {
 }
 
 func Compile(in CompileInput) (Bundle, error) {
+	sections := make([]string, 0, 2)
+	if section := renderCatalogSection(in.Catalog); strings.TrimSpace(section) != "" {
+		sections = append(sections, section)
+	}
+
 	if len(in.Active) == 0 {
-		section := renderCatalogSection(in.Catalog)
-		if strings.TrimSpace(section) == "" {
+		if len(sections) == 0 {
 			return Bundle{}, nil
 		}
-		return Bundle{sections: []string{section}}, nil
+		return Bundle{sections: sections}, nil
 	}
 
 	activeSection, err := renderActiveSkillSection(in.Catalog, in.Active, in.NewlyActivated, in.PreviouslyTools)
 	if err != nil {
 		return Bundle{}, err
 	}
-	if strings.TrimSpace(activeSection) == "" {
+	if strings.TrimSpace(activeSection) != "" {
+		sections = append(sections, activeSection)
+	}
+	if len(sections) == 0 {
 		return Bundle{}, nil
 	}
-	return Bundle{sections: []string{activeSection}}, nil
+	return Bundle{sections: sections}, nil
 }
 
 func (b Bundle) Render() string {
@@ -114,9 +121,6 @@ func newlyEnabledTools(newlyActivated []skills.ActivatedSkill, previouslyTools [
 
 	for _, activated := range newlyActivated {
 		for _, tool := range activated.Skill.ToolDependencies {
-			appendTool(tool)
-		}
-		for _, tool := range activated.Skill.PreferredTools {
 			appendTool(tool)
 		}
 	}
