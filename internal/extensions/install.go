@@ -73,6 +73,18 @@ type InstallPlan struct {
 	ManualReason          string
 }
 
+type skillMetadata struct {
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	WhenToUse        string   `json:"when_to_use"`
+	ToolDependencies []string `json:"tool_dependencies"`
+	PreferredTools   []string `json:"preferred_tools"`
+	ExecutionMode    string   `json:"execution_mode"`
+	AgentType        string   `json:"agent_type"`
+	EnvDependencies  []string `json:"env_dependencies"`
+	Enabled          *bool    `json:"enabled"`
+}
+
 type resolvedInstallSource struct {
 	localPath     string
 	owner         string
@@ -140,10 +152,11 @@ func InstallSkill(globalRoot, workspaceRoot string, req InstallRequest) (Install
 	}
 	defer func() { _ = os.RemoveAll(cleanupRoot) }()
 
-	displayName, _, _, err := loadSkillMetadata(skillDir)
+	meta, err := loadSkillMetadata(skillDir)
 	if err != nil {
 		return InstallResult{}, err
 	}
+	displayName := meta.Name
 	directoryName, err := determineInstallDirectoryName(req.Name, source.suggestedName)
 	if err != nil {
 		return InstallResult{}, err
@@ -198,7 +211,7 @@ func InspectSkillSource(globalRoot, workspaceRoot string, req InstallRequest) (I
 			Source:          source.localPath,
 			Path:            source.localPath,
 			AutoInstallable: true,
-			Notes:           []string{"Local skill directory already contains SKILL.md."},
+			Notes:           []string{"Local skill directory already contains SKILL.json and SKILL.md."},
 		}
 		return plan, nil
 	}
@@ -341,7 +354,7 @@ func inspectGitHubSource(scope string, source resolvedInstallSource) (InstallPla
 			if len(buckets.Foreign) > 0 {
 				plan.ManualReason = "repository only exposes platform-specific skill directories such as .claude/.codex; do not copy those into Sesame directly"
 			} else {
-				plan.ManualReason = "no Sesame-compatible SKILL.md directories were found in the repository tree"
+				plan.ManualReason = "no Sesame-compatible SKILL.json + SKILL.md directories were found in the repository tree"
 			}
 		}
 	case len(plan.CandidatePaths) == 1:
@@ -350,7 +363,7 @@ func inspectGitHubSource(scope string, source resolvedInstallSource) (InstallPla
 		if plan.ManualReason == "" {
 			plan.AutoInstallable = true
 			if candidate == "" {
-				plan.Notes = append(plan.Notes, "Repository root contains SKILL.md, so it can be installed directly.")
+				plan.Notes = append(plan.Notes, "Repository root contains SKILL.json and SKILL.md, so it can be installed directly.")
 			} else {
 				plan.Notes = append(plan.Notes, fmt.Sprintf("Single candidate skill path detected: %s", candidate))
 			}
@@ -432,23 +445,34 @@ func resolveInstalledSkillPath(root, name string) (string, string, error) {
 }
 
 func installedSkillDisplayName(skillDir string) (string, error) {
-	name, _, _, err := loadSkillMetadata(skillDir)
+	meta, err := loadSkillMetadata(skillDir)
 	if err != nil {
 		return "", err
 	}
+	name := meta.Name
 	if strings.TrimSpace(name) == "" {
 		name = filepath.Base(skillDir)
 	}
 	return name, nil
 }
 
-func loadSkillMetadata(skillDir string) (string, string, string, error) {
-	data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
-	if err != nil {
-		return "", "", "", fmt.Errorf("read SKILL.md: %w", err)
+func loadSkillMetadata(skillRoot string) (skillMetadata, error) {
+	metaPath := skillRoot
+	if filepath.Base(metaPath) != "SKILL.json" {
+		metaPath = filepath.Join(skillRoot, "SKILL.json")
 	}
-	name, description, body := parseSkillDocument(filepath.Base(skillDir), string(data))
-	return name, description, body, nil
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return skillMetadata{}, fmt.Errorf("read SKILL.json: %w", err)
+	}
+	var meta skillMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return skillMetadata{}, fmt.Errorf("decode SKILL.json: %w", err)
+	}
+	if strings.TrimSpace(meta.Name) == "" {
+		return skillMetadata{}, fmt.Errorf("SKILL.json missing required field %q", "name")
+	}
+	return meta, nil
 }
 
 func determineInstallDirectoryName(explicitName, fallback string) (string, error) {
@@ -635,10 +659,14 @@ func validateSkillDir(skillDir string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("skill source must be a directory")
 	}
-	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
-		return fmt.Errorf("SKILL.md not found in skill directory")
+	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.json")); err != nil {
+		return fmt.Errorf("skill directory is missing SKILL.json")
 	}
-	return nil
+	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
+		return fmt.Errorf("skill directory is missing SKILL.md")
+	}
+	_, err = loadSkillMetadata(skillDir)
+	return err
 }
 
 func copyDir(srcDir, destDir string) error {
@@ -783,14 +811,27 @@ func skillPathBucketsFromTree(tree []githubTreeItem) skillPathBuckets {
 	candidateSet := make(map[string]struct{})
 	foreignSet := make(map[string]struct{})
 	ignoredSet := make(map[string]struct{})
+	hasMarkdown := make(map[string]struct{})
+	hasMetadata := make(map[string]struct{})
 	var buckets skillPathBuckets
 	for _, item := range tree {
-		if item.Type != "blob" || path.Base(item.Path) != "SKILL.md" {
+		if item.Type != "blob" {
 			continue
 		}
 		skillPath := path.Dir(item.Path)
 		if skillPath == "." {
 			skillPath = ""
+		}
+		switch path.Base(item.Path) {
+		case "SKILL.md":
+			hasMarkdown[skillPath] = struct{}{}
+		case "SKILL.json":
+			hasMetadata[skillPath] = struct{}{}
+		}
+	}
+	for skillPath := range hasMarkdown {
+		if _, ok := hasMetadata[skillPath]; !ok {
+			continue
 		}
 		switch classifySkillPathForSesame(skillPath) {
 		case "candidate":
@@ -943,8 +984,8 @@ func analyzeReadme(readme string) ([]string, []string, string) {
 		}
 	}
 	if manualReason == "" {
-		if strings.Contains(lower, "skill.md") {
-			notes = append(notes, "README explicitly references SKILL.md.")
+		if strings.Contains(lower, "skill.json") || strings.Contains(lower, "skill.md") {
+			notes = append(notes, "README explicitly references the skill manifest files.")
 		}
 		if strings.Contains(lower, ".sesame/skills") || strings.Contains(lower, ".codex/skills") || strings.Contains(lower, "copy") || strings.Contains(lower, "clone") {
 			notes = append(notes, "README looks compatible with a standard copy/clone style skill install.")

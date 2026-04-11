@@ -1,0 +1,10 @@
+{
+  "name": "skill-installer",
+  "description": "Install, inspect, list, and remove Sesame skills with the sesame skill CLI.",
+  "when_to_use": "Use this skill when the user asks to inspect, install, update, or remove Sesame skills.",
+  "tool_dependencies": [],
+  "preferred_tools": [],
+  "execution_mode": "foreground",
+  "env_dependencies": [],
+  "enabled": true
+}

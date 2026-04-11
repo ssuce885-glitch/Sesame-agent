@@ -12,11 +12,17 @@ import (
 var skillRefPattern = regexp.MustCompile(`\$([A-Za-z0-9._-]+)`)
 
 type Skill struct {
-	Name        string
-	Description string
-	Path        string
-	Scope       string
-	Body        string
+	Name             string
+	Description      string
+	Path             string
+	Scope            string
+	WhenToUse        string
+	ToolDependencies []string
+	PreferredTools   []string
+	ExecutionMode    string
+	AgentType        string
+	EnvDependencies  []string
+	Enabled          bool
 }
 
 type ToolAsset struct {
@@ -116,7 +122,12 @@ func BuildPromptSection(catalog Catalog, userMessage string) (string, []string) 
 		detail := make([]string, 0, len(activated))
 		for _, skill := range activated {
 			notices = append(notices, fmt.Sprintf("Activated local skill: %s", skill.Name))
-			detail = append(detail, fmt.Sprintf("## %s (%s)\n%s", skill.Name, skill.Scope, strings.TrimSpace(skill.Body)))
+			body := readSkillBody(skill.Path)
+			if body == "" {
+				detail = append(detail, fmt.Sprintf("## %s (%s)", skill.Name, skill.Scope))
+				continue
+			}
+			detail = append(detail, fmt.Sprintf("## %s (%s)\n%s", skill.Name, skill.Scope, body))
 		}
 		parts = append(parts, "Activated local skills:\n\n"+strings.Join(detail, "\n\n"))
 	}
@@ -204,54 +215,74 @@ func readSkillsDir(root string, scope string) ([]Skill, error) {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		skillPath := filepath.Join(root, entry.Name(), "SKILL.md")
-		data, err := os.ReadFile(skillPath)
+		dir := filepath.Join(root, entry.Name())
+		meta, err := loadSkillMetadata(filepath.Join(dir, "SKILL.json"))
 		if err != nil {
 			continue
 		}
-		name, description, body := parseSkillDocument(entry.Name(), string(data))
+		if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
+			continue
+		}
+		enabled := meta.Enabled == nil || *meta.Enabled
+		if !enabled {
+			continue
+		}
 		skills = append(skills, Skill{
-			Name:        name,
-			Description: description,
-			Path:        filepath.Join(root, entry.Name()),
-			Scope:       scope,
-			Body:        body,
+			Name:             firstNonEmptyString(meta.Name, entry.Name()),
+			Description:      meta.Description,
+			Path:             dir,
+			Scope:            scope,
+			WhenToUse:        strings.TrimSpace(meta.WhenToUse),
+			ToolDependencies: normalizeToolIDs(meta.ToolDependencies),
+			PreferredTools:   normalizeToolIDs(meta.PreferredTools),
+			ExecutionMode:    strings.TrimSpace(meta.ExecutionMode),
+			AgentType:        strings.TrimSpace(meta.AgentType),
+			EnvDependencies:  normalizeNames(meta.EnvDependencies),
+			Enabled:          enabled,
 		})
 	}
 	return skills, nil
 }
 
-func parseSkillDocument(defaultName, raw string) (string, string, string) {
-	name := strings.TrimSpace(defaultName)
-	description := ""
-	body := strings.TrimSpace(raw)
-	if !strings.HasPrefix(raw, "---\n") {
-		return name, description, body
+func readSkillBody(skillDir string) string {
+	data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+	if err != nil {
+		return ""
 	}
-	rest := raw[len("---\n"):]
-	end := strings.Index(rest, "\n---\n")
-	if end < 0 {
-		return name, description, body
-	}
-	frontmatter := rest[:end]
-	body = strings.TrimSpace(rest[end+len("\n---\n"):])
-	for _, line := range strings.Split(frontmatter, "\n") {
-		key, value, ok := strings.Cut(line, ":")
-		if !ok {
+	return strings.TrimSpace(string(data))
+}
+
+func normalizeToolIDs(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
 			continue
 		}
-		key = strings.TrimSpace(strings.ToLower(key))
-		value = strings.Trim(strings.TrimSpace(value), `"'`)
-		switch key {
-		case "name":
-			if value != "" {
-				name = value
-			}
-		case "description":
-			if value != "" {
-				description = value
-			}
+		if _, ok := seen[value]; ok {
+			continue
 		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
 	}
-	return name, description, body
+	return normalized
+}
+
+func normalizeNames(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	return normalized
 }

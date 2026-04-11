@@ -1,8 +1,3 @@
----
-name: skill-installer
-description: Install, inspect, list, and remove Sesame skills with the `sesame skill` CLI.
----
-
 # Skill Installer
 
 Use this skill when the user asks to inspect, install, update, or remove Sesame skills.
@@ -17,7 +12,7 @@ Repository paths are only **source candidates**. They do **not** change the Sesa
 Use this workflow:
 
 1. **Direct install**
-   - Use this when the source already points to a concrete skill directory containing `SKILL.md`.
+   - Use this when the source already points to a concrete skill directory containing both `SKILL.json` and `SKILL.md`.
 2. **Inspect first**
    - Use this when the user gives a repo root or a general GitHub link.
    - Inspect the repo first, then decide whether to install directly with `--path` or tell the user about additional manual steps.
@@ -47,7 +42,7 @@ Use this workflow:
   - `skills/...`
   - `.agents/skills/...`
   - `marketplace/skills/...`
-  - repo root when `SKILL.md` exists there
+  - repo root when both `SKILL.json` and `SKILL.md` exist there
 - The chosen source is copied into Sesame's own directory. Do not mirror the repository's folder layout literally into external platform directories.
 
 ## Preferred commands
@@ -86,5 +81,5 @@ Use this workflow:
 ## Notes
 
 - In a source checkout, `sesame` might not be installed on `PATH`. If CLI access is required, use the repo-local launcher (for example `go run ./cmd/sesame ...`) from the repo root after verifying it exists, instead of assuming a globally installed binary.
-- A skill install source must contain `SKILL.md`.
+- A skill install source must contain both `SKILL.json` and `SKILL.md`.
 - After installing or removing a skill, restart Sesame or start a new session to reload the catalog.
