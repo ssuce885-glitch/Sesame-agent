@@ -4,12 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 )
-
-var skillRefPattern = regexp.MustCompile(`\$([A-Za-z0-9._-]+)`)
 
 type Skill struct {
 	Name             string
@@ -111,60 +108,6 @@ func Discover(globalRoot, workspaceRoot string) (Catalog, error) {
 	}, nil
 }
 
-func BuildPromptSection(catalog Catalog, userMessage string) (string, []string) {
-	parts := make([]string, 0, 2)
-	notices := make([]string, 0, 4)
-	if summary := skillsSummary(catalog); summary != "" {
-		parts = append(parts, summary)
-	}
-	activated := activatedSkills(catalog.Skills, userMessage)
-	if len(activated) > 0 {
-		detail := make([]string, 0, len(activated))
-		for _, skill := range activated {
-			notices = append(notices, fmt.Sprintf("Activated local skill: %s", skill.Name))
-			body := readSkillBody(skill.Path)
-			if body == "" {
-				detail = append(detail, fmt.Sprintf("## %s (%s)", skill.Name, skill.Scope))
-				continue
-			}
-			detail = append(detail, fmt.Sprintf("## %s (%s)\n%s", skill.Name, skill.Scope, body))
-		}
-		parts = append(parts, "Activated local skills:\n\n"+strings.Join(detail, "\n\n"))
-	}
-	return strings.Join(parts, "\n\n"), notices
-}
-
-func activatedSkills(skills []Skill, userMessage string) []Skill {
-	if len(skills) == 0 || strings.TrimSpace(userMessage) == "" {
-		return nil
-	}
-	names := make(map[string]Skill, len(skills))
-	for _, skill := range skills {
-		names[strings.ToLower(skill.Name)] = skill
-	}
-	seen := make(map[string]struct{})
-	out := make([]Skill, 0, 4)
-	for _, match := range skillRefPattern.FindAllStringSubmatch(userMessage, -1) {
-		if len(match) < 2 {
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(match[1]))
-		if key == "" {
-			continue
-		}
-		skill, ok := names[key]
-		if !ok {
-			continue
-		}
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, skill)
-	}
-	return out
-}
-
 func skillsSummary(catalog Catalog) string {
 	lines := make([]string, 0, len(catalog.Skills)+8)
 	if catalog.SkillDirs.Global != "" || catalog.SkillDirs.Workspace != "" || catalog.SkillDirs.System != "" {
@@ -242,14 +185,6 @@ func readSkillsDir(root string, scope string) ([]Skill, error) {
 		})
 	}
 	return skills, nil
-}
-
-func readSkillBody(skillDir string) string {
-	data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
 }
 
 func normalizeToolIDs(values []string) []string {

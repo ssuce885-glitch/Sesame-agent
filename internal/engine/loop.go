@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	contextstate "go-agent/internal/context"
-	"go-agent/internal/extensions"
+	"go-agent/internal/instructions"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
+	"go-agent/internal/skills"
+	"go-agent/internal/toolrouter"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
 )
@@ -117,37 +120,28 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 		return err
 	}
-	catalog, err := extensions.LoadCatalog(e.globalConfigRoot, in.Session.WorkspaceRoot)
+	catalog, err := skills.LoadCatalog(e.globalConfigRoot, in.Session.WorkspaceRoot)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
 		}
 		return err
 	}
-	extensionPrompt, extensionNotices := extensions.BuildPromptSection(catalog, in.Turn.UserMessage)
-	if strings.TrimSpace(extensionPrompt) != "" {
-		if strings.TrimSpace(instructions.Text) == "" {
-			instructions.Text = extensionPrompt
-		} else {
-			instructions.Text += "\n\n" + extensionPrompt
-		}
-	}
-	instructions.Notices = append(instructions.Notices, extensionNotices...)
 	instructions.Notices = append(instructions.Notices, completionNotices...)
-	if completionPrompt := pendingTaskCompletionPromptSection(completionNotices); strings.TrimSpace(completionPrompt) != "" {
-		if strings.TrimSpace(instructions.Text) == "" {
-			instructions.Text = completionPrompt
-		} else {
-			instructions.Text += "\n\n" + completionPrompt
+	baseRuntimeInstructions := instructions.Text
+	completionPrompt := pendingTaskCompletionPromptSection(completionNotices)
+	reportPrompt := pendingReportMailboxPromptSection(reportMailboxItems)
+	requestProfile := detectRequestShapeProfile(in.Turn.UserMessage)
+	skillState, err := buildTurnSkillState(catalog, requestProfile, toolRuntime, toolExecCtx, nil, nil)
+	if err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
 		}
+		return err
 	}
-	if reportPrompt := pendingReportMailboxPromptSection(reportMailboxItems); strings.TrimSpace(reportPrompt) != "" {
-		if strings.TrimSpace(instructions.Text) == "" {
-			instructions.Text = reportPrompt
-		} else {
-			instructions.Text += "\n\n" + reportPrompt
-		}
-	}
+	toolExecCtx.ActiveSkillNames = skills.ActiveSkillNames(skillState.Active)
+	toolExecCtx.KnownToolNames = skillState.KnownToolNames
+	instructions.Text = composeTurnInstructions(baseRuntimeInstructions, skillState.SkillPrompt, completionPrompt, reportPrompt)
 	req := e.runtime.PrepareRequest(
 		working,
 		cacheHead,
@@ -161,7 +155,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 	}
 	req.Stream = true
-	req.Tools = buildToolSchemas(toolRuntime.VisibleDefinitions(toolExecCtx))
+	req.Tools = buildToolSchemas(skillState.VisibleDefs)
 	req.ToolChoice = "auto"
 	nativeContinuation := req.Cache != nil && caps.Profile != model.CapabilityProfileNone
 	assistantStarted := false
@@ -510,6 +504,28 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 					}
 					return nil
 				}
+
+				activatedNames := activatedSkillNamesFromMetadata(output.Metadata)
+				if !toolIsError && len(activatedNames) > 0 {
+					skillState, err = buildTurnSkillState(
+						catalog,
+						requestProfile,
+						toolRuntime,
+						toolExecCtx,
+						append(append([]string(nil), toolExecCtx.ActiveSkillNames...), activatedNames...),
+						skillState.VisibleToolNames,
+					)
+					if err != nil {
+						if emitErr := emitFailed(err.Error()); emitErr != nil {
+							return errors.Join(err, emitErr)
+						}
+						return err
+					}
+					toolExecCtx.ActiveSkillNames = skills.ActiveSkillNames(skillState.Active)
+					toolExecCtx.KnownToolNames = skillState.KnownToolNames
+					req.Instructions = composeTurnInstructions(baseRuntimeInstructions, skillState.SkillPrompt, completionPrompt, reportPrompt)
+					req.Tools = buildToolSchemas(skillState.VisibleDefs)
+				}
 			}
 
 			callOffset += len(batch.Calls)
@@ -525,6 +541,179 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			}
 		}
 	}
+}
+
+type turnSkillState struct {
+	Active           []skills.ActivatedSkill
+	VisibleDefs      []tools.Definition
+	VisibleToolNames []string
+	KnownToolNames   []string
+	SkillPrompt      string
+}
+
+func buildTurnSkillState(
+	catalog skills.Catalog,
+	requestProfile string,
+	toolRuntime *tools.Runtime,
+	execCtx tools.ExecContext,
+	activeNames []string,
+	previousVisibleTools []string,
+) (turnSkillState, error) {
+	active, err := skills.ActivateByNames(catalog, activeNames)
+	if err != nil {
+		return turnSkillState{}, err
+	}
+
+	runtimeVisibleDefs := toolRuntime.VisibleDefinitions(execCtx)
+	knownToolNames := definitionNames(runtimeVisibleDefs)
+
+	allowedToolNames := toolrouter.Decide(toolrouter.DecideInput{
+		Profile:      requestProfile,
+		ActiveSkills: active,
+	})
+	visibleDefs := filterDefinitionsByName(runtimeVisibleDefs, allowedToolNames)
+	visibleToolNames := definitionNames(visibleDefs)
+
+	bundle, err := instructions.Compile(instructions.CompileInput{
+		Catalog:              catalog,
+		Active:               active,
+		VisibleTools:         visibleToolNames,
+		PreviousVisibleTools: previousVisibleTools,
+	})
+	if err != nil {
+		return turnSkillState{}, err
+	}
+
+	return turnSkillState{
+		Active:           active,
+		VisibleDefs:      visibleDefs,
+		VisibleToolNames: visibleToolNames,
+		KnownToolNames:   knownToolNames,
+		SkillPrompt:      bundle.Render(),
+	}, nil
+}
+
+func composeTurnInstructions(baseRuntimeInstructions string, extraSections ...string) string {
+	sections := make([]string, 0, len(extraSections)+1)
+	if trimmed := strings.TrimSpace(baseRuntimeInstructions); trimmed != "" {
+		sections = append(sections, trimmed)
+	}
+	for _, section := range extraSections {
+		if trimmed := strings.TrimSpace(section); trimmed != "" {
+			sections = append(sections, trimmed)
+		}
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+func detectRequestShapeProfile(userMessage string) string {
+	text := strings.ToLower(strings.TrimSpace(userMessage))
+	if text == "" {
+		return "codebase-edit"
+	}
+
+	webSignals := []string{
+		"http://", "https://", "www.", "web", "website", "browse", "search",
+		"look up", "lookup", "fetch", "image", "news", "internet",
+	}
+	for _, signal := range webSignals {
+		if strings.Contains(text, signal) {
+			return "web-lookup"
+		}
+	}
+
+	systemSignals := []string{
+		"shell", "terminal", "command", "system", "process", "environment",
+		"env ", "logs", "inspect runtime", "service", "daemon",
+	}
+	for _, signal := range systemSignals {
+		if strings.Contains(text, signal) {
+			return "system-inspect"
+		}
+	}
+
+	return "codebase-edit"
+}
+
+func activatedSkillNamesFromMetadata(metadata map[string]any) []string {
+	if len(metadata) == 0 {
+		return nil
+	}
+
+	raw, ok := metadata["activated_skill_names"]
+	if !ok {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	names := make([]string, 0, 4)
+	appendName := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, exists := seen[value]; exists {
+			return
+		}
+		seen[value] = struct{}{}
+		names = append(names, value)
+	}
+
+	switch typed := raw.(type) {
+	case []string:
+		for _, value := range typed {
+			appendName(value)
+		}
+	case []any:
+		for _, value := range typed {
+			text, _ := value.(string)
+			appendName(text)
+		}
+	case string:
+		appendName(typed)
+	}
+
+	return names
+}
+
+func filterDefinitionsByName(defs []tools.Definition, allowedNames []string) []tools.Definition {
+	if len(defs) == 0 || len(allowedNames) == 0 {
+		return nil
+	}
+
+	allowed := make(map[string]struct{}, len(allowedNames))
+	for _, name := range allowedNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		allowed[name] = struct{}{}
+	}
+
+	filtered := make([]tools.Definition, 0, len(defs))
+	for _, def := range defs {
+		if _, ok := allowed[def.Name]; !ok {
+			continue
+		}
+		filtered = append(filtered, def)
+	}
+	return filtered
+}
+
+func definitionNames(defs []tools.Definition) []string {
+	if len(defs) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(defs))
+	for _, def := range defs {
+		if strings.TrimSpace(def.Name) == "" {
+			continue
+		}
+		names = append(names, def.Name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func effectivePermissionEngine(base *permissions.Engine, in Input) *permissions.Engine {
