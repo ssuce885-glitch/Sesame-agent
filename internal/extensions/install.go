@@ -216,6 +216,9 @@ func InspectSkillSource(globalRoot, workspaceRoot string, req InstallRequest) (I
 		return plan, nil
 	}
 	if strings.TrimSpace(source.repoPath) != "" {
+		if err := validateRemoteSkillDir(source.owner, source.repo, source.ref, source.repoPath); err != nil {
+			return InstallPlan{}, err
+		}
 		plan := InstallPlan{
 			Track:           InstallTrackDirect,
 			Scope:           scope,
@@ -667,6 +670,68 @@ func validateSkillDir(skillDir string) error {
 	}
 	_, err = loadSkillMetadata(skillDir)
 	return err
+}
+
+func validateRemoteSkillDir(owner, repo, ref, repoPath string) error {
+	normalizedPath := normalizeRepoPath(repoPath)
+	switch path.Base(normalizedPath) {
+	case "SKILL.md", "SKILL.json":
+		return fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md")
+	}
+
+	apiURL := fmt.Sprintf(
+		"https://api.github.com/repos/%s/%s/contents/%s?ref=%s",
+		owner,
+		repo,
+		escapeGitHubContentPath(normalizedPath),
+		url.QueryEscape(ref),
+	)
+	payload, err := githubRequestFunc(apiURL, "application/vnd.github+json")
+	if err != nil {
+		return err
+	}
+
+	var items []githubContentsItem
+	if err := json.Unmarshal(payload, &items); err != nil {
+		var item githubContentsItem
+		if json.Unmarshal(payload, &item) == nil {
+			return fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md")
+		}
+		return fmt.Errorf("decode GitHub contents response: %w", err)
+	}
+
+	hasMarkdown := false
+	hasMetadata := false
+	for _, item := range items {
+		if item.Type != "file" && item.Type != "blob" {
+			continue
+		}
+		switch item.Name {
+		case "SKILL.md":
+			hasMarkdown = true
+		case "SKILL.json":
+			hasMetadata = true
+		}
+	}
+	if !hasMetadata {
+		return fmt.Errorf("remote skill directory is missing SKILL.json")
+	}
+	if !hasMarkdown {
+		return fmt.Errorf("remote skill directory is missing SKILL.md")
+	}
+
+	payload, err = fetchGitHubFile(owner, repo, ref, path.Join(normalizedPath, "SKILL.json"))
+	if err != nil {
+		return err
+	}
+	var meta skillMetadata
+	if err := json.Unmarshal(payload, &meta); err != nil {
+		return fmt.Errorf("decode SKILL.json: %w", err)
+	}
+	if strings.TrimSpace(meta.Name) == "" {
+		return fmt.Errorf("SKILL.json missing required field %q", "name")
+	}
+	return nil
 }
 
 func copyDir(srcDir, destDir string) error {
