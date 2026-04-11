@@ -35,7 +35,14 @@ func ensureRuntimeConfigured(stdin io.Reader, stdout io.Writer, cfg config.Confi
 	fmt.Fprintf(stdout, "Sesame setup is required.\nConfig file: %s\n", configPath)
 	fmt.Fprintf(stdout, "Missing fields: %s\n\n", strings.Join(missing, ", "))
 
-	provider, err := promptRequired(reader, stdout, "Provider [anthropic/openai_compatible/fake]", firstNonEmptyLocal(fileCfg.Provider, cfg.ModelProvider))
+	activeProfile := firstNonEmptyLocal(fileCfg.ActiveProfile, cfg.ActiveProfile, "default")
+	currentProfile := fileCfg.Profiles[activeProfile]
+	providerDefault := firstNonEmptyLocal(
+		cfg.ModelProvider,
+		providerTypeForProfile(fileCfg, activeProfile),
+		"anthropic",
+	)
+	provider, err := promptRequired(reader, stdout, "Provider [anthropic/openai_compatible/fake]", providerDefault)
 	if err != nil {
 		return err
 	}
@@ -46,50 +53,63 @@ func ensureRuntimeConfigured(stdin io.Reader, stdout io.Writer, cfg config.Confi
 		}
 	}
 
-	modelDefault := firstNonEmptyLocal(fileCfg.Model, cfg.Model)
+	modelDefault := firstNonEmptyLocal(currentProfile.Model, cfg.Model, defaultModelForProvider(provider))
 	model, err := promptRequired(reader, stdout, "Model", modelDefault)
 	if err != nil {
 		return err
 	}
 
-	next := fileCfg
-	next.Provider = provider
-	next.Model = model
-
+	baseURL := ""
+	apiKeyEnv := ""
 	switch provider {
 	case "openai_compatible":
-		baseURL, err := promptRequired(reader, stdout, "OpenAI-compatible base URL", firstNonEmptyLocal(fileCfg.OpenAI.BaseURL, cfg.OpenAIBaseURL))
+		baseURL, err = promptRequired(reader, stdout, "OpenAI-compatible base URL", firstNonEmptyLocal(baseURLForProviderType(fileCfg, provider), cfg.OpenAIBaseURL, "https://api.openai.com/v1"))
 		if err != nil {
 			return err
 		}
-		apiKey, err := promptRequired(reader, stdout, "OpenAI-compatible API key", firstNonEmptyLocal(fileCfg.OpenAI.APIKey, cfg.OpenAIAPIKey))
+		apiKeyEnv, err = promptRequired(reader, stdout, "OpenAI-compatible API key env var", firstNonEmptyLocal(apiKeyEnvForProviderType(fileCfg, provider), "OPENAI_API_KEY"))
 		if err != nil {
 			return err
 		}
-		next.OpenAI.BaseURL = baseURL
-		next.OpenAI.APIKey = apiKey
-		next.OpenAI.Model = model
 	case "anthropic":
-		baseURL, err := promptRequired(reader, stdout, "Anthropic base URL", firstNonEmptyLocal(fileCfg.Anthropic.BaseURL, cfg.AnthropicBaseURL, "https://api.anthropic.com"))
+		baseURL, err = promptRequired(reader, stdout, "Anthropic base URL", firstNonEmptyLocal(baseURLForProviderType(fileCfg, provider), cfg.AnthropicBaseURL, "https://api.anthropic.com"))
 		if err != nil {
 			return err
 		}
-		apiKey, err := promptRequired(reader, stdout, "Anthropic API key", firstNonEmptyLocal(fileCfg.Anthropic.APIKey, cfg.AnthropicAPIKey))
+		apiKeyEnv, err = promptRequired(reader, stdout, "Anthropic API key env var", firstNonEmptyLocal(apiKeyEnvForProviderType(fileCfg, provider), "ANTHROPIC_API_KEY"))
 		if err != nil {
 			return err
 		}
-		next.Anthropic.BaseURL = baseURL
-		next.Anthropic.APIKey = apiKey
-		next.Anthropic.Model = model
 	case "fake":
-		next.OpenAI = config.UserConfigOpenAI{}
-		next.Anthropic.APIKey = ""
-		next.Anthropic.Model = ""
+		baseURL = ""
+		apiKeyEnv = ""
 	}
+
 	permissionProfile, err := promptRequired(reader, stdout, "Permission profile", firstNonEmptyLocal(fileCfg.PermissionProfile, cfg.PermissionProfile, "trusted_local"))
 	if err != nil {
 		return err
 	}
+
+	next := fileCfg
+	if next.ModelProviders == nil {
+		next.ModelProviders = make(map[string]config.UserConfigModelProvider)
+	}
+	if next.Profiles == nil {
+		next.Profiles = make(map[string]config.UserConfigProfile)
+	}
+	providerID := providerIDForSetup(provider, currentProfile.ModelProvider)
+	next.ModelProviders[providerID] = config.UserConfigModelProvider{
+		APIFamily: apiFamilyForProvider(provider),
+		BaseURL:   strings.TrimSpace(baseURL),
+		APIKeyEnv: strings.TrimSpace(apiKeyEnv),
+	}
+	profile := currentProfile
+	profile.Model = strings.TrimSpace(model)
+	profile.ModelProvider = providerID
+	profile.CacheProfile = cacheProfileForProvider(provider)
+
+	next.ActiveProfile = activeProfile
+	next.Profiles[activeProfile] = profile
 	next.PermissionProfile = permissionProfile
 
 	if err := config.WriteUserConfig(next); err != nil {
@@ -130,4 +150,94 @@ func firstNonEmptyLocal(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func providerTypeForProfile(cfg config.UserConfig, activeProfile string) string {
+	profile, ok := cfg.Profiles[strings.TrimSpace(activeProfile)]
+	if !ok {
+		return ""
+	}
+	provider, ok := cfg.ModelProviders[strings.TrimSpace(profile.ModelProvider)]
+	if !ok {
+		return ""
+	}
+	return providerTypeFromAPIFamily(provider.APIFamily)
+}
+
+func baseURLForProviderType(cfg config.UserConfig, providerType string) string {
+	for _, provider := range cfg.ModelProviders {
+		if providerTypeFromAPIFamily(provider.APIFamily) == strings.TrimSpace(providerType) {
+			return strings.TrimSpace(provider.BaseURL)
+		}
+	}
+	return ""
+}
+
+func apiKeyEnvForProviderType(cfg config.UserConfig, providerType string) string {
+	for _, provider := range cfg.ModelProviders {
+		if providerTypeFromAPIFamily(provider.APIFamily) == strings.TrimSpace(providerType) {
+			return strings.TrimSpace(provider.APIKeyEnv)
+		}
+	}
+	return ""
+}
+
+func providerTypeFromAPIFamily(apiFamily string) string {
+	switch strings.ToLower(strings.TrimSpace(apiFamily)) {
+	case "anthropic", "anthropic_messages":
+		return "anthropic"
+	case "openai", "openai_compatible", "openai_chat_completions", "openai_responses":
+		return "openai_compatible"
+	case "fake":
+		return "fake"
+	default:
+		return ""
+	}
+}
+
+func defaultModelForProvider(provider string) string {
+	switch strings.TrimSpace(provider) {
+	case "openai_compatible":
+		return "gpt-5.4"
+	case "fake":
+		return "fake-smoke"
+	default:
+		return "claude-sonnet-4-5"
+	}
+}
+
+func apiFamilyForProvider(provider string) string {
+	switch strings.TrimSpace(provider) {
+	case "openai_compatible":
+		return "openai_chat_completions"
+	case "fake":
+		return "fake"
+	default:
+		return "anthropic_messages"
+	}
+}
+
+func cacheProfileForProvider(provider string) string {
+	switch strings.TrimSpace(provider) {
+	case "openai_compatible":
+		return "openai_responses"
+	case "fake":
+		return "none"
+	default:
+		return "anthropic_default"
+	}
+}
+
+func providerIDForSetup(provider, current string) string {
+	if strings.TrimSpace(current) != "" {
+		return strings.TrimSpace(current)
+	}
+	switch strings.TrimSpace(provider) {
+	case "openai_compatible":
+		return "openai"
+	case "fake":
+		return "fake"
+	default:
+		return "anthropic"
+	}
 }
