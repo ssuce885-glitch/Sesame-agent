@@ -46,6 +46,7 @@ func (e *Engine) Decide(toolName string) Decision {
 		"list_dir":            {},
 		"request_permissions": {},
 		"request_user_input":  {},
+		"skill_use":           {},
 		"view_image":          {},
 		"web_fetch":           {},
 	}

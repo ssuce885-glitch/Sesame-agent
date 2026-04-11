@@ -62,6 +62,8 @@ type ToolInterrupt struct {
 type ExecContext struct {
 	WorkspaceRoot    string
 	GlobalConfigRoot string
+	ActiveSkillNames []string
+	KnownToolNames   []string
 	PermissionEngine *permissions.Engine
 	TaskManager      *task.Manager
 	RuntimeService   *runtimegraph.Service
