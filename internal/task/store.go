@@ -24,6 +24,7 @@ type persistedTask struct {
 	WorktreeID           string          `json:"worktree_id,omitempty"`
 	ScheduledJobID       string          `json:"scheduled_job_id,omitempty"`
 	ActivatedSkillNames  []string        `json:"activated_skill_names,omitempty"`
+	PermissionProfile    string          `json:"permission_profile,omitempty"`
 	WorkspaceRoot        string          `json:"workspace_root"`
 	Output               string          `json:"output,omitempty"`
 	OutputPath           string          `json:"output_path,omitempty"`
@@ -53,6 +54,7 @@ func toPersistedTask(task Task) persistedTask {
 		WorktreeID:           task.WorktreeID,
 		ScheduledJobID:       task.ScheduledJobID,
 		ActivatedSkillNames:  append([]string(nil), task.ActivatedSkillNames...),
+		PermissionProfile:    task.PermissionProfile,
 		WorkspaceRoot:        task.WorkspaceRoot,
 		Output:               task.Output,
 		OutputPath:           task.OutputPath,
@@ -83,6 +85,7 @@ func (task persistedTask) toTask() Task {
 		WorktreeID:           task.WorktreeID,
 		ScheduledJobID:       task.ScheduledJobID,
 		ActivatedSkillNames:  append([]string(nil), task.ActivatedSkillNames...),
+		PermissionProfile:    task.PermissionProfile,
 		WorkspaceRoot:        task.WorkspaceRoot,
 		Output:               task.Output,
 		OutputPath:           task.OutputPath,

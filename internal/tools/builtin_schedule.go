@@ -193,6 +193,7 @@ func (scheduleReportTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 		OwnerSessionID:      sessionID,
 		Prompt:              input.Prompt,
 		ActivatedSkillNames: explicitActiveSkillNames(execCtx),
+		PermissionProfile:   currentPermissionProfile(execCtx),
 		RunAt:               runAt,
 		DelayMinutes:        input.DelayMinutes,
 		EveryMinutes:        input.EveryMinutes,

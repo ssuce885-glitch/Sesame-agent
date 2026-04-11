@@ -231,6 +231,7 @@ func (taskCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		Kind:                taskKind,
 		WorktreeID:          input.WorktreeID,
 		ActivatedSkillNames: explicitActiveSkillNames(execCtx),
+		PermissionProfile:   currentPermissionProfile(execCtx),
 		WorkspaceRoot:       execCtx.WorkspaceRoot,
 		Start:               start,
 	})

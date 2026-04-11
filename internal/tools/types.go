@@ -64,6 +64,7 @@ type ExecContext struct {
 	GlobalConfigRoot string
 	ActiveSkillNames []string
 	KnownToolNames   []string
+	VisibleToolNames []string
 	PermissionEngine *permissions.Engine
 	TaskManager      *task.Manager
 	RuntimeService   *runtimegraph.Service

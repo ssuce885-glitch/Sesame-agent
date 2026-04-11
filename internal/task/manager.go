@@ -98,6 +98,7 @@ func (m *Manager) Create(_ context.Context, in CreateTaskInput) (Task, error) {
 		WorktreeID:          in.WorktreeID,
 		ScheduledJobID:      in.ScheduledJobID,
 		ActivatedSkillNames: append([]string(nil), in.ActivatedSkillNames...),
+		PermissionProfile:   in.PermissionProfile,
 		WorkspaceRoot:       workspaceRoot,
 		OutputPath:          filepath.Join(state.outputsDir, taskID+".log"),
 		TimeoutSeconds:      in.TimeoutSeconds,
