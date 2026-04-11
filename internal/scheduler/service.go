@@ -30,6 +30,7 @@ type CreateJobInput struct {
 	OwnerSessionID      string
 	Prompt              string
 	ActivatedSkillNames []string
+	PermissionProfile   string
 	RunAt               time.Time
 	DelayMinutes        int
 	EveryMinutes        int
@@ -257,6 +258,7 @@ func (s *Service) handleDueJob(ctx context.Context, job types.ScheduledJob, now 
 		ScheduledJobID:      job.ID,
 		ParentSessionID:     job.OwnerSessionID,
 		ActivatedSkillNames: append([]string(nil), job.ActivatedSkillNames...),
+		PermissionProfile:   job.PermissionProfile,
 		WorkspaceRoot:       job.WorkspaceRoot,
 		TimeoutSeconds:      normalizedTimeout(job.TimeoutSeconds),
 		Start:               true,
@@ -309,6 +311,7 @@ func buildScheduledJob(now time.Time, in CreateJobInput) (types.ScheduledJob, er
 		OwnerSessionID:      strings.TrimSpace(in.OwnerSessionID),
 		Prompt:              strings.TrimSpace(in.Prompt),
 		ActivatedSkillNames: append([]string(nil), in.ActivatedSkillNames...),
+		PermissionProfile:   strings.TrimSpace(in.PermissionProfile),
 		CronExpr:            strings.TrimSpace(in.CronExpr),
 		EveryMinutes:        in.EveryMinutes,
 		Timezone:            strings.TrimSpace(in.Timezone),

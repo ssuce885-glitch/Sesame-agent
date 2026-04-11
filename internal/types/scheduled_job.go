@@ -20,6 +20,7 @@ type ScheduledJob struct {
 	Kind                ScheduleKind       `json:"kind"`
 	Prompt              string             `json:"prompt"`
 	ActivatedSkillNames []string           `json:"activated_skill_names,omitempty"`
+	PermissionProfile   string             `json:"permission_profile,omitempty"`
 	CronExpr            string             `json:"cron_expr,omitempty"`
 	EveryMinutes        int                `json:"every_minutes,omitempty"`
 	Timezone            string             `json:"timezone,omitempty"`

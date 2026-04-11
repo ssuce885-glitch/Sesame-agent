@@ -168,7 +168,7 @@ func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus) *taskTermin
 	return &taskTerminalNotifier{store: store, bus: bus}
 }
 
-func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, observer task.AgentTaskObserver) error {
+func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, permissionProfile string, observer task.AgentTaskObserver) error {
 	if a.runner == nil {
 		return errors.New("engine runner is not configured")
 	}
@@ -178,8 +178,9 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, pr
 	sink := &taskEventSink{observer: observer}
 	if err := a.runner.RunTurn(ctx, engine.Input{
 		Session: types.Session{
-			ID:            sessionID,
-			WorkspaceRoot: workspaceRoot,
+			ID:                sessionID,
+			WorkspaceRoot:     workspaceRoot,
+			PermissionProfile: permissionProfile,
 		},
 		Turn: types.Turn{
 			ID:          turnID,

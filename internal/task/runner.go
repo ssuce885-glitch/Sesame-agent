@@ -34,7 +34,7 @@ func (r AgentRunner) Run(ctx context.Context, task *Task, sink OutputSink) error
 		sink:       sink,
 		resultSink: resultSink,
 	}
-	return r.executor.RunTask(ctx, task.WorkspaceRoot, task.Command, task.ActivatedSkillNames, observer)
+	return r.executor.RunTask(ctx, task.WorkspaceRoot, task.Command, task.ActivatedSkillNames, task.PermissionProfile, observer)
 }
 
 type outputSinkObserver struct {

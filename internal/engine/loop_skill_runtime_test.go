@@ -147,6 +147,20 @@ func TestBuildTurnSkillStateRebuildsAfterActivatedSkill(t *testing.T) {
 	}
 }
 
+func TestDetectRequestShapeProfilePrefersCodebaseEditForCodingPrompts(t *testing.T) {
+	cases := []string{
+		"edit the website header",
+		"update the website homepage CSS",
+		"change the web app header component",
+	}
+
+	for _, input := range cases {
+		if got := detectRequestShapeProfile(input); got != "codebase-edit" {
+			t.Fatalf("detectRequestShapeProfile(%q) = %q, want %q", input, got, "codebase-edit")
+		}
+	}
+}
+
 func writeLoopSkillRuntimeFile(t *testing.T, path string, contents string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

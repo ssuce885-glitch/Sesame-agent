@@ -141,6 +141,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	}
 	toolExecCtx.ActiveSkillNames = skills.ActiveSkillNames(skillState.Active)
 	toolExecCtx.KnownToolNames = skillState.KnownToolNames
+	toolExecCtx.VisibleToolNames = skillState.VisibleToolNames
 	instructions.Text = composeTurnInstructions(baseRuntimeInstructions, skillState.SkillPrompt, completionPrompt, reportPrompt)
 	req := e.runtime.PrepareRequest(
 		working,
@@ -523,6 +524,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 					}
 					toolExecCtx.ActiveSkillNames = skills.ActiveSkillNames(skillState.Active)
 					toolExecCtx.KnownToolNames = skillState.KnownToolNames
+					toolExecCtx.VisibleToolNames = skillState.VisibleToolNames
 					req.Instructions = composeTurnInstructions(baseRuntimeInstructions, skillState.SkillPrompt, completionPrompt, reportPrompt)
 					req.Tools = buildToolSchemas(skillState.VisibleDefs)
 				}
@@ -612,6 +614,10 @@ func detectRequestShapeProfile(userMessage string) string {
 		return "codebase-edit"
 	}
 
+	if looksLikeCodebaseEditRequest(text) {
+		return "codebase-edit"
+	}
+
 	webSignals := []string{
 		"http://", "https://", "www.", "web", "website", "browse", "search",
 		"look up", "lookup", "fetch", "image", "news", "internet",
@@ -633,6 +639,35 @@ func detectRequestShapeProfile(userMessage string) string {
 	}
 
 	return "codebase-edit"
+}
+
+func looksLikeCodebaseEditRequest(text string) bool {
+	editSignals := []string{
+		"edit", "update", "change", "modify", "fix", "refactor",
+		"implement", "add", "remove", "rename",
+	}
+	targetSignals := []string{
+		"app", "code", "component", "css", "file", "footer", "function",
+		"header", "homepage", "html", "layout", "page", "repo", "test",
+		"ui", "web app", "website",
+	}
+
+	hasEditSignal := false
+	for _, signal := range editSignals {
+		if strings.Contains(text, signal) {
+			hasEditSignal = true
+			break
+		}
+	}
+	if !hasEditSignal {
+		return false
+	}
+	for _, signal := range targetSignals {
+		if strings.Contains(text, signal) {
+			return true
+		}
+	}
+	return false
 }
 
 func activatedSkillNamesFromMetadata(metadata map[string]any) []string {
