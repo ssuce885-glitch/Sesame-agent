@@ -168,7 +168,7 @@ func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus) *taskTermin
 	return &taskTerminalNotifier{store: store, bus: bus}
 }
 
-func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, observer task.AgentTaskObserver) error {
+func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, observer task.AgentTaskObserver) error {
 	if a.runner == nil {
 		return errors.New("engine runner is not configured")
 	}
@@ -186,7 +186,8 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, pr
 			SessionID:   sessionID,
 			UserMessage: prompt,
 		},
-		Sink: sink,
+		Sink:                sink,
+		ActivatedSkillNames: append([]string(nil), activatedSkillNames...),
 	}); err != nil {
 		return err
 	}
@@ -705,6 +706,7 @@ func resumeResolvedContinuations(ctx context.Context, store *sqlite.Store, manag
 			EffectivePermissionProfile: effectiveProfile,
 			RunID:                      continuation.RunID,
 			TaskID:                     continuation.TaskID,
+			ActivatedSkillNames:        append([]string(nil), continuation.ActivatedSkillNames...),
 		}
 		if _, err := manager.ResumeTurn(ctx, sessionRow.ID, session.ResumeTurnInput{
 			TurnID:  turn.ID,

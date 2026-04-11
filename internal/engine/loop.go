@@ -132,7 +132,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	completionPrompt := pendingTaskCompletionPromptSection(completionNotices)
 	reportPrompt := pendingReportMailboxPromptSection(reportMailboxItems)
 	requestProfile := detectRequestShapeProfile(in.Turn.UserMessage)
-	skillState, err := buildTurnSkillState(catalog, requestProfile, toolRuntime, toolExecCtx, nil, nil)
+	skillState, err := buildTurnSkillState(catalog, requestProfile, toolRuntime, toolExecCtx, initialActivatedSkillNames(in), nil)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
@@ -462,7 +462,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 
 				if output.Interrupt != nil {
 					if strings.TrimSpace(output.Interrupt.EventType) == types.EventPermissionRequested {
-						if err := persistPermissionPause(ctx, e, in, turnCtx, call, output); err != nil {
+						if err := persistPermissionPause(ctx, e, in, turnCtx, call, output, toolExecCtx.ActiveSkillNames); err != nil {
 							if emitErr := emitFailed(err.Error()); emitErr != nil {
 								return errors.Join(err, emitErr)
 							}
@@ -673,6 +673,39 @@ func activatedSkillNamesFromMetadata(metadata map[string]any) []string {
 	}
 
 	return names
+}
+
+func initialActivatedSkillNames(in Input) []string {
+	if names := dedupeActivatedSkillNames(in.ActivatedSkillNames); len(names) > 0 {
+		return names
+	}
+	if in.Resume != nil {
+		return dedupeActivatedSkillNames(in.Resume.ActivatedSkillNames)
+	}
+	return nil
+}
+
+func dedupeActivatedSkillNames(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(names))
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func filterDefinitionsByName(defs []tools.Definition, allowedNames []string) []tools.Definition {
@@ -947,7 +980,7 @@ type permissionPauseStore interface {
 	UpdateSessionState(context.Context, string, types.SessionState, string) error
 }
 
-func persistPermissionPause(ctx context.Context, e *Engine, in Input, turnCtx *runtimegraph.TurnContext, call model.ToolCallChunk, output tools.ToolExecutionResult) error {
+func persistPermissionPause(ctx context.Context, e *Engine, in Input, turnCtx *runtimegraph.TurnContext, call model.ToolCallChunk, output tools.ToolExecutionResult, activatedSkillNames []string) error {
 	store, ok := e.store.(permissionPauseStore)
 	if !ok {
 		return nil
@@ -984,6 +1017,7 @@ func persistPermissionPause(ctx context.Context, e *Engine, in Input, turnCtx *r
 		TurnID:              in.Turn.ID,
 		RunID:               turnCtx.CurrentRunID,
 		TaskID:              turnCtx.CurrentTaskID,
+		ActivatedSkillNames: dedupeActivatedSkillNames(activatedSkillNames),
 		PermissionRequestID: request.ID,
 		ToolRunID:           request.ToolRunID,
 		ToolCallID:          request.ToolCallID,

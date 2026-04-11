@@ -221,17 +221,18 @@ func (taskCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		taskKind = string(taskType)
 	}
 	created, err := manager.Create(ctx, task.CreateTaskInput{
-		Type:            taskType,
-		Command:         input.Command,
-		Description:     input.Description,
-		ParentTaskID:    input.ParentTaskID,
-		ParentSessionID: currentSessionID(execCtx),
-		ParentTurnID:    currentTurnID(execCtx),
-		Owner:           input.Owner,
-		Kind:            taskKind,
-		WorktreeID:      input.WorktreeID,
-		WorkspaceRoot:   execCtx.WorkspaceRoot,
-		Start:           start,
+		Type:                taskType,
+		Command:             input.Command,
+		Description:         input.Description,
+		ParentTaskID:        input.ParentTaskID,
+		ParentSessionID:     currentSessionID(execCtx),
+		ParentTurnID:        currentTurnID(execCtx),
+		Owner:               input.Owner,
+		Kind:                taskKind,
+		WorktreeID:          input.WorktreeID,
+		ActivatedSkillNames: explicitActiveSkillNames(execCtx),
+		WorkspaceRoot:       execCtx.WorkspaceRoot,
+		Start:               start,
 	})
 	if err != nil {
 		return ToolExecutionResult{}, err

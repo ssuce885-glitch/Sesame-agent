@@ -15,10 +15,11 @@ import (
 )
 
 type Input struct {
-	Session types.Session
-	Turn    types.Turn
-	Sink    EventSink
-	Resume  *types.TurnResume
+	Session             types.Session
+	Turn                types.Turn
+	Sink                EventSink
+	Resume              *types.TurnResume
+	ActivatedSkillNames []string
 }
 
 type RuntimeMetadata struct {

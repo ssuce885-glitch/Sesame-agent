@@ -1,15 +1,19 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"go-agent/internal/model"
 	"go-agent/internal/permissions"
+	"go-agent/internal/runtimegraph"
 	"go-agent/internal/skills"
 	"go-agent/internal/tools"
+	"go-agent/internal/types"
 )
 
 func TestBuildTurnSkillStateStartsMetadataOnly(t *testing.T) {
@@ -160,4 +164,163 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+type permissionPauseCaptureStore struct {
+	request       types.PermissionRequest
+	continuation  types.TurnContinuation
+	turnState     types.TurnState
+	sessionState  types.SessionState
+	sessionTurnID string
+}
+
+func (s *permissionPauseCaptureStore) UpsertPermissionRequest(_ context.Context, request types.PermissionRequest) error {
+	s.request = request
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) UpsertTurnContinuation(_ context.Context, continuation types.TurnContinuation) error {
+	s.continuation = continuation
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) UpdateTurnState(_ context.Context, _ string, state types.TurnState) error {
+	s.turnState = state
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) UpdateSessionState(_ context.Context, _ string, state types.SessionState, turnID string) error {
+	s.sessionState = state
+	s.sessionTurnID = turnID
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) ListConversationItems(context.Context, string) ([]model.ConversationItem, error) {
+	return nil, nil
+}
+
+func (s *permissionPauseCaptureStore) ListConversationSummaries(context.Context, string) ([]model.Summary, error) {
+	return nil, nil
+}
+
+func (s *permissionPauseCaptureStore) ListConversationCompactions(context.Context, string) ([]types.ConversationCompaction, error) {
+	return nil, nil
+}
+
+func (s *permissionPauseCaptureStore) GetSessionMemory(context.Context, string) (types.SessionMemory, bool, error) {
+	return types.SessionMemory{}, false, nil
+}
+
+func (s *permissionPauseCaptureStore) InsertConversationItem(context.Context, string, string, int, model.ConversationItem) error {
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) InsertConversationSummary(context.Context, string, int, model.Summary) error {
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) UpsertTurnUsage(context.Context, types.TurnUsage) error {
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) UpsertSessionMemory(context.Context, types.SessionMemory) error {
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) UpsertMemoryEntry(context.Context, types.MemoryEntry) error {
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) DeleteMemoryEntries(context.Context, []string) error {
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) ListMemoryEntriesByWorkspace(context.Context, string) ([]types.MemoryEntry, error) {
+	return nil, nil
+}
+
+func (s *permissionPauseCaptureStore) GetProviderCacheHead(context.Context, string, string, string) (types.ProviderCacheHead, bool, error) {
+	return types.ProviderCacheHead{}, false, nil
+}
+
+func (s *permissionPauseCaptureStore) UpsertProviderCacheHead(context.Context, types.ProviderCacheHead) error {
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) InsertProviderCacheEntry(context.Context, types.ProviderCacheEntry) error {
+	return nil
+}
+
+func (s *permissionPauseCaptureStore) InsertConversationCompaction(context.Context, types.ConversationCompaction) error {
+	return nil
+}
+
+func TestPersistPermissionPauseCarriesActivatedSkillNames(t *testing.T) {
+	store := &permissionPauseCaptureStore{}
+	e := &Engine{store: store}
+
+	err := persistPermissionPause(
+		context.Background(),
+		e,
+		Input{
+			Session: types.Session{ID: "session-1"},
+			Turn:    types.Turn{ID: "turn-1"},
+		},
+		&runtimegraph.TurnContext{
+			CurrentRunID:  "run-1",
+			CurrentTaskID: "task-1",
+		},
+		model.ToolCallChunk{ID: "call-1", Name: "shell_command"},
+		tools.ToolExecutionResult{
+			Interrupt: &tools.ToolInterrupt{
+				EventPayload: types.PermissionRequestedPayload{
+					RequestID:        "perm-1",
+					ToolRunID:        "toolrun-1",
+					RequestedProfile: "trusted_local",
+					Reason:           "needs approval",
+				},
+			},
+		},
+		[]string{
+			"brainstorming",
+			"",
+			"writing-plans",
+			"brainstorming",
+		},
+	)
+	if err != nil {
+		t.Fatalf("persistPermissionPause() error = %v", err)
+	}
+
+	want := []string{"brainstorming", "writing-plans"}
+	if !reflect.DeepEqual(store.continuation.ActivatedSkillNames, want) {
+		t.Fatalf("continuation.ActivatedSkillNames = %v, want %v", store.continuation.ActivatedSkillNames, want)
+	}
+}
+
+func TestInitialActivatedSkillNamesFallsBackToResume(t *testing.T) {
+	got := initialActivatedSkillNames(Input{
+		Resume: &types.TurnResume{
+			ActivatedSkillNames: []string{
+				"brainstorming",
+				"",
+				"writing-plans",
+				"brainstorming",
+			},
+		},
+	})
+	want := []string{"brainstorming", "writing-plans"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("initialActivatedSkillNames(resume only) = %v, want %v", got, want)
+	}
+
+	got = initialActivatedSkillNames(Input{
+		ActivatedSkillNames: []string{"explicit-skill"},
+		Resume: &types.TurnResume{
+			ActivatedSkillNames: []string{"resume-skill"},
+		},
+	})
+	if want := []string{"explicit-skill"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("initialActivatedSkillNames(input preferred) = %v, want %v", got, want)
+	}
 }

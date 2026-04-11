@@ -60,6 +60,7 @@ type TurnContinuation struct {
 	TurnID              string                `json:"turn_id"`
 	RunID               string                `json:"run_id,omitempty"`
 	TaskID              string                `json:"task_id,omitempty"`
+	ActivatedSkillNames []string              `json:"activated_skill_names,omitempty"`
 	PermissionRequestID string                `json:"permission_request_id,omitempty"`
 	ToolRunID           string                `json:"tool_run_id,omitempty"`
 	ToolCallID          string                `json:"tool_call_id,omitempty"`
@@ -74,16 +75,17 @@ type TurnContinuation struct {
 }
 
 type TurnResume struct {
-	ContinuationID            string `json:"continuation_id"`
-	PermissionRequestID       string `json:"permission_request_id,omitempty"`
-	ToolRunID                 string `json:"tool_run_id,omitempty"`
-	ToolCallID                string `json:"tool_call_id,omitempty"`
-	ToolName                  string `json:"tool_name,omitempty"`
-	RequestedProfile          string `json:"requested_profile,omitempty"`
-	Reason                    string `json:"reason,omitempty"`
-	Decision                  string `json:"decision,omitempty"`
-	DecisionScope             string `json:"decision_scope,omitempty"`
-	EffectivePermissionProfile string `json:"effective_permission_profile,omitempty"`
-	RunID                     string `json:"run_id,omitempty"`
-	TaskID                    string `json:"task_id,omitempty"`
+	ContinuationID             string   `json:"continuation_id"`
+	PermissionRequestID        string   `json:"permission_request_id,omitempty"`
+	ToolRunID                  string   `json:"tool_run_id,omitempty"`
+	ToolCallID                 string   `json:"tool_call_id,omitempty"`
+	ToolName                   string   `json:"tool_name,omitempty"`
+	RequestedProfile           string   `json:"requested_profile,omitempty"`
+	Reason                     string   `json:"reason,omitempty"`
+	Decision                   string   `json:"decision,omitempty"`
+	DecisionScope              string   `json:"decision_scope,omitempty"`
+	EffectivePermissionProfile string   `json:"effective_permission_profile,omitempty"`
+	RunID                      string   `json:"run_id,omitempty"`
+	TaskID                     string   `json:"task_id,omitempty"`
+	ActivatedSkillNames        []string `json:"activated_skill_names,omitempty"`
 }

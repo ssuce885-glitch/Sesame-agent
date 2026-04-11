@@ -171,6 +171,7 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 			EffectivePermissionProfile: effectiveProfile,
 			RunID:                      continuation.RunID,
 			TaskID:                     continuation.TaskID,
+			ActivatedSkillNames:        append([]string(nil), continuation.ActivatedSkillNames...),
 		}
 		if _, err := deps.Manager.ResumeTurn(r.Context(), sessionRow.ID, session.ResumeTurnInput{
 			TurnID:  turn.ID,
@@ -257,12 +258,12 @@ func appendRuntimeTimelineEvent(ctx context.Context, deps Dependencies, sessionI
 
 func marshalPermissionToolRunOutput(request types.PermissionRequest, effectiveProfile string) string {
 	payload, _ := json.Marshal(map[string]any{
-		"status":                    request.Status,
-		"decision":                  request.Decision,
-		"decision_scope":            request.DecisionScope,
-		"requested_profile":         request.RequestedProfile,
+		"status":                       request.Status,
+		"decision":                     request.Decision,
+		"decision_scope":               request.DecisionScope,
+		"requested_profile":            request.RequestedProfile,
 		"effective_permission_profile": effectiveProfile,
-		"reason":                    request.Reason,
+		"reason":                       request.Reason,
 	})
 	return string(payload)
 }
