@@ -7,10 +7,15 @@ import (
 )
 
 func NewFromConfig(cfg config.Config) (StreamingClient, error) {
+	if cfg.ModelProvider == "fake" {
+		return NewFakeStreaming(nil), nil
+	}
+
 	resolved, err := ResolveProviderConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
+
 	transport, err := newTransportFromResolved(resolved)
 	if err != nil {
 		return nil, err
@@ -26,7 +31,7 @@ func newTransportFromResolved(resolved ResolvedProviderConfig) (StreamingClient,
 			Model:   resolved.Model,
 			BaseURL: resolved.BaseURL,
 		})
-	case APIFamilyOpenAIResponses:
+	case APIFamilyOpenAIResponsesCompatible:
 		return NewOpenAICompatibleProvider(Config{
 			APIKey:       resolved.APIKey,
 			Model:        resolved.Model,
@@ -36,8 +41,4 @@ func newTransportFromResolved(resolved ResolvedProviderConfig) (StreamingClient,
 	default:
 		return nil, fmt.Errorf("unsupported api family %q", resolved.APIFamily)
 	}
-}
-
-func NewAdaptiveProvider(_ ResolvedProviderConfig, transport StreamingClient) StreamingClient {
-	return transport
 }

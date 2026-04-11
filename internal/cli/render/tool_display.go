@@ -31,8 +31,10 @@ func compactToolAction(toolName string) string {
 	switch strings.TrimSpace(toolName) {
 	case "file_read":
 		return "read"
-	case "grep", "glob", "list_dir", "web_fetch":
+	case "grep", "glob", "list_dir":
 		return "search"
+	case "web_fetch":
+		return "web"
 	case "file_write", "file_edit", "apply_patch", "notebook_edit":
 		return "edit"
 	case "shell_command":
@@ -130,11 +132,16 @@ func compactToolTarget(toolName string, args map[string]any, resultPreview strin
 			asString(args["type"]),
 		))
 	case "schedule_report":
-		return compactPlainLabel(firstNonEmpty(
+		base := compactPlainLabel(firstNonEmpty(
 			asString(args["name"]),
 			asString(args["prompt"]),
 			asString(args["cron"]),
 		))
+		group := compactPlainLabel(firstNonEmpty(asString(args["report_group_title"]), asString(args["report_group_id"])))
+		if base != "" && group != "" {
+			return base + " [" + group + "]"
+		}
+		return firstNonEmpty(base, group)
 	case "task_list":
 		if status := asString(args["status"]); status != "" {
 			return compactPlainLabel("status=" + status)
@@ -166,6 +173,8 @@ func compactToolDetail(toolName string, args map[string]any, resultPreview, targ
 	}
 	switch compactToolAction(toolName) {
 	case "read", "search":
+		return ""
+	case "web":
 		return ""
 	case "shell", "edit", "task", "image", "permissions":
 		if preview == target {

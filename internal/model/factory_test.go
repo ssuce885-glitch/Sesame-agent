@@ -1,161 +1,93 @@
 package model
 
 import (
-	"strings"
 	"testing"
 
 	"go-agent/internal/config"
 )
 
-func TestResolveProviderConfigUsesExplicitProviderEntry(t *testing.T) {
-	cfg := config.Config{
-		ActiveProfile: "coding",
-		ModelProviders: map[string]config.ModelProviderConfig{
-			"anthropic-prod": {
-				ID:        "anthropic-prod",
-				APIFamily: "anthropic_messages",
-				BaseURL:   "https://api.anthropic.com",
-				APIKeyEnv: "ANTHROPIC_API_KEY",
-			},
-		},
-		Profiles: map[string]config.ProfileConfig{
-			"coding": {
-				ID:            "coding",
-				Model:         "claude-sonnet-4-5",
-				ModelProvider: "anthropic-prod",
-				CacheProfile:  "anthropic_default",
-			},
-		},
-	}
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
-
-	resolved, err := ResolveProviderConfig(cfg)
-	if err != nil {
-		t.Fatalf("ResolveProviderConfig() error = %v", err)
-	}
-	if resolved.ProviderID != "anthropic-prod" {
-		t.Fatalf("ProviderID = %q, want anthropic-prod", resolved.ProviderID)
-	}
-	if resolved.APIFamily != APIFamilyAnthropicMessages {
-		t.Fatalf("APIFamily = %q, want %q", resolved.APIFamily, APIFamilyAnthropicMessages)
-	}
-}
-
-func TestResolveProviderConfigRejectsMissingProviderReference(t *testing.T) {
-	cfg := config.Config{
-		ActiveProfile:  "coding",
-		ModelProviders: map[string]config.ModelProviderConfig{},
-		Profiles: map[string]config.ProfileConfig{
-			"coding": {ID: "coding", Model: "claude-sonnet-4-5", ModelProvider: "missing"},
-		},
-	}
-
-	_, err := ResolveProviderConfig(cfg)
+func TestNewFromConfigRejectsEmptyProvider(t *testing.T) {
+	_, err := NewFromConfig(config.Config{})
 	if err == nil {
-		t.Fatal("ResolveProviderConfig() error = nil, want missing provider failure")
-	}
-	if !strings.Contains(err.Error(), `profile "coding" references unknown model_provider "missing"`) {
-		t.Fatalf("error = %v", err)
+		t.Fatal("NewFromConfig() error = nil, want error")
 	}
 }
 
-func TestResolveProviderConfigUsesActiveProfileModelOnly(t *testing.T) {
-	cfg := config.Config{
-		ActiveProfile: "coding",
-		Model:         "compat-shadow-model",
-		ModelProviders: map[string]config.ModelProviderConfig{
-			"anthropic-prod": {
-				ID:        "anthropic-prod",
-				APIFamily: "anthropic_messages",
-				BaseURL:   "https://api.anthropic.com",
-				APIKeyEnv: "ANTHROPIC_API_KEY",
-			},
-		},
-		Profiles: map[string]config.ProfileConfig{
-			"coding": {
-				ID:            "coding",
-				Model:         "profile-model",
-				ModelProvider: "anthropic-prod",
-				CacheProfile:  "anthropic_default",
-			},
-		},
-	}
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
-
-	resolved, err := ResolveProviderConfig(cfg)
-	if err != nil {
-		t.Fatalf("ResolveProviderConfig() error = %v", err)
-	}
-	if resolved.Model != "profile-model" {
-		t.Fatalf("Model = %q, want profile-model", resolved.Model)
-	}
-}
-
-func TestResolveProviderConfigRejectsOpenAIChatCompletionsFamily(t *testing.T) {
-	cfg := config.Config{
-		ActiveProfile: "coding",
-		ModelProviders: map[string]config.ModelProviderConfig{
-			"openai-prod": {
-				ID:        "openai-prod",
-				APIFamily: "openai_chat_completions",
-				BaseURL:   "https://api.openai.com/v1",
-				APIKeyEnv: "OPENAI_API_KEY",
-			},
-		},
-		Profiles: map[string]config.ProfileConfig{
-			"coding": {
-				ID:            "coding",
-				Model:         "gpt-5.4",
-				ModelProvider: "openai-prod",
-				CacheProfile:  "openai_responses",
-			},
-		},
-	}
-	t.Setenv("OPENAI_API_KEY", "test-key")
-
-	_, err := ResolveProviderConfig(cfg)
-	if err == nil {
-		t.Fatal("ResolveProviderConfig() error = nil, want unsupported openai_chat_completions")
-	}
-	if !strings.Contains(err.Error(), `uses unsupported api_family "openai_chat_completions"`) {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestNewFromConfigOpenAIResponsesCapabilities(t *testing.T) {
-	cfg := config.Config{
-		ActiveProfile: "coding",
-		ModelProviders: map[string]config.ModelProviderConfig{
-			"openai-prod": {
-				ID:        "openai-prod",
-				APIFamily: "openai_responses",
-				BaseURL:   "https://api.openai.com/v1",
-				APIKeyEnv: "OPENAI_API_KEY",
-			},
-		},
-		Profiles: map[string]config.ProfileConfig{
-			"coding": {
-				ID:            "coding",
-				Model:         "gpt-5.4",
-				ModelProvider: "openai-prod",
-				CacheProfile:  "openai_responses",
-			},
-		},
-	}
-	t.Setenv("OPENAI_API_KEY", "test-key")
-
-	client, err := NewFromConfig(cfg)
+func TestNewFromConfigSelectsOpenAICompatibleProvider(t *testing.T) {
+	got, err := NewFromConfig(config.Config{
+		ModelProvider: "openai_compatible",
+		Model:         "gpt-4.1-mini",
+		OpenAIAPIKey:  "test-key",
+		OpenAIBaseURL: "https://example.com",
+	})
 	if err != nil {
 		t.Fatalf("NewFromConfig() error = %v", err)
 	}
-	caps := client.Capabilities()
-	if caps.Profile != CapabilityProfileOpenAIResponses {
-		t.Fatalf("Capabilities().Profile = %q, want %q", caps.Profile, CapabilityProfileOpenAIResponses)
+
+	adaptive, ok := got.(*AdaptiveProvider)
+	if !ok {
+		t.Fatalf("NewFromConfig() type = %T, want *AdaptiveProvider", got)
 	}
-	if !caps.SupportsSessionCache {
-		t.Fatal("Capabilities().SupportsSessionCache = false, want true")
+	if adaptive.ResolvedConfig().APIFamily != APIFamilyOpenAIResponsesCompatible {
+		t.Fatalf("ResolvedConfig().APIFamily = %q, want %q", adaptive.ResolvedConfig().APIFamily, APIFamilyOpenAIResponsesCompatible)
 	}
-	if !caps.CachesToolResults {
-		t.Fatal("Capabilities().CachesToolResults = false, want true")
+}
+
+func TestNewFromConfigPassesCacheProfileToOpenAICompatible(t *testing.T) {
+	got, err := NewFromConfig(config.Config{
+		ModelProvider:        "openai_compatible",
+		Model:                "gpt-4.1-mini",
+		OpenAIAPIKey:         "test-key",
+		OpenAIBaseURL:        "https://example.com",
+		ProviderCacheProfile: "ark_responses",
+	})
+	if err != nil {
+		t.Fatalf("NewFromConfig() error = %v", err)
+	}
+
+	provider, ok := got.(*AdaptiveProvider)
+	if !ok {
+		t.Fatalf("NewFromConfig() type = %T, want *AdaptiveProvider", got)
+	}
+	if provider.ResolvedConfig().CacheProfile != CapabilityProfileArkResponses {
+		t.Fatalf("cacheProfile = %q, want %q", provider.ResolvedConfig().CacheProfile, CapabilityProfileArkResponses)
+	}
+}
+
+func TestResolveProviderConfigInfersMiniMaxProfile(t *testing.T) {
+	resolved, err := ResolveProviderConfig(config.Config{
+		ModelProvider:    "anthropic",
+		Model:            "MiniMax-M2.7",
+		AnthropicAPIKey:  "test-key",
+		AnthropicBaseURL: "https://api.minimaxi.com/anthropic",
+	})
+	if err != nil {
+		t.Fatalf("ResolveProviderConfig() error = %v", err)
+	}
+
+	if resolved.Profile.ID != ProviderProfileMiniMax {
+		t.Fatalf("Profile.ID = %q, want %q", resolved.Profile.ID, ProviderProfileMiniMax)
+	}
+	if resolved.Profile.Vendor != "minimax" {
+		t.Fatalf("Profile.Vendor = %q, want minimax", resolved.Profile.Vendor)
+	}
+}
+
+func TestResolveProviderConfigInfersVolcengineCodingProfile(t *testing.T) {
+	resolved, err := ResolveProviderConfig(config.Config{
+		ModelProvider: "openai_compatible",
+		Model:         "ark-code-latest",
+		OpenAIAPIKey:  "test-key",
+		OpenAIBaseURL: "https://ark.cn-beijing.volces.com/api/coding/v3",
+	})
+	if err != nil {
+		t.Fatalf("ResolveProviderConfig() error = %v", err)
+	}
+
+	if resolved.Profile.ID != ProviderProfileVolcengineCoding {
+		t.Fatalf("Profile.ID = %q, want %q", resolved.Profile.ID, ProviderProfileVolcengineCoding)
+	}
+	if resolved.Profile.Vendor != "volcengine" {
+		t.Fatalf("Profile.Vendor = %q, want volcengine", resolved.Profile.Vendor)
 	}
 }

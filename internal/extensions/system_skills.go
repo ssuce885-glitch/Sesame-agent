@@ -35,7 +35,7 @@ func LoadCatalog(globalRoot, workspaceRoot string) (Catalog, error) {
 	if err := EnsureSystemSkills(paths.GlobalRoot); err != nil {
 		return Catalog{}, err
 	}
-	return Discover(paths.GlobalRoot, workspaceRoot)
+	return loadCatalogWithCache(paths)
 }
 
 func EnsureSystemSkills(globalRoot string) error {

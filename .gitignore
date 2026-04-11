@@ -29,6 +29,7 @@ internal/cli/daemons/
 .superpowers/
 .trellis/
 .worktrees/
+claude-code-skill-scrapling/
 
 # Internal planning docs that should not go to the public repo by default
 docs/superpowers/

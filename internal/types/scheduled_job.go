@@ -17,10 +17,11 @@ type ScheduledJob struct {
 	Name                string             `json:"name"`
 	WorkspaceRoot       string             `json:"workspace_root"`
 	OwnerSessionID      string             `json:"owner_session_id"`
+	ActivatedSkillNames []string           `json:"activated_skill_names,omitempty"`
+	ReportGroupID       string             `json:"report_group_id,omitempty"`
+	ReportGroupTitle    string             `json:"report_group_title,omitempty"`
 	Kind                ScheduleKind       `json:"kind"`
 	Prompt              string             `json:"prompt"`
-	ActivatedSkillNames []string           `json:"activated_skill_names,omitempty"`
-	PermissionProfile   string             `json:"permission_profile,omitempty"`
 	CronExpr            string             `json:"cron_expr,omitempty"`
 	EveryMinutes        int                `json:"every_minutes,omitempty"`
 	Timezone            string             `json:"timezone,omitempty"`

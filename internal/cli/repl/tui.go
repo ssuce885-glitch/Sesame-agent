@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -26,9 +27,11 @@ const (
 	defaultTUIHeight          = 32
 	enableAlternateScrollSeq  = "\x1b[?1007h"
 	disableAlternateScrollSeq = "\x1b[?1007l"
+	defaultStatusBarMessage   = "Tab/Shift+Tab views • Enter send • Alt+Enter newline • Esc interrupt • Drag to select/copy • Mouse wheel/PgUp/PgDn/Home/End scroll • Ctrl+C quit"
 )
 
 type tuiEntryKind string
+type tuiView string
 
 const (
 	tuiEntryUser      tuiEntryKind = "user"
@@ -37,6 +40,11 @@ const (
 	tuiEntryNotice    tuiEntryKind = "notice"
 	tuiEntryError     tuiEntryKind = "error"
 	tuiEntryActivity  tuiEntryKind = "activity"
+
+	tuiViewChat    tuiView = "chat"
+	tuiViewAgents  tuiView = "agents"
+	tuiViewMailbox tuiView = "mailbox"
+	tuiViewCron    tuiView = "cron"
 )
 
 type tuiEntry struct {
@@ -89,8 +97,9 @@ type tuiMailboxMsg struct {
 }
 
 type tuiCronListMsg struct {
-	resp types.ListScheduledJobsResponse
-	err  error
+	resp          types.ListScheduledJobsResponse
+	err           error
+	allWorkspaces bool
 }
 
 type tuiCronJobMsg struct {
@@ -105,6 +114,16 @@ type tuiCronDeleteMsg struct {
 	notice string
 }
 
+type tuiRuntimeGraphMsg struct {
+	resp types.SessionRuntimeGraphResponse
+	err  error
+}
+
+type tuiReportingOverviewMsg struct {
+	resp types.ReportingOverview
+	err  error
+}
+
 type tuiSwitchSessionMsg struct {
 	sessionID     string
 	workspaceRoot string
@@ -116,14 +135,21 @@ type tuiInterruptMsg struct {
 	err error
 }
 
+type tuiPermissionDecisionMsg struct {
+	requestID string
+	err       error
+}
+
 type tuiModel struct {
-	ctx           context.Context
-	client        RuntimeClient
-	sessionID     string
-	workspaceRoot string
-	status        clientapi.StatusResponse
-	catalog       extensions.Catalog
-	lastSeq       int64
+	ctx                     context.Context
+	client                  RuntimeClient
+	sessionID               string
+	workspaceRoot           string
+	status                  clientapi.StatusResponse
+	catalog                 extensions.Catalog
+	catalogLoader           func() (extensions.Catalog, error)
+	lastSeq                 int64
+	lastPermissionRequestID string
 
 	width    int
 	height   int
@@ -140,8 +166,31 @@ type tuiModel struct {
 	initialPrompt      string
 	initialFocusCmd    tea.Cmd
 	sessionReady       bool
+	activeView         tuiView
 	statusBarMessage   string
+	statusFlash        string
 	pendingReportCount int
+
+	mailbox       types.SessionReportMailboxResponse
+	mailboxLoaded bool
+	mailboxErr    string
+	mailboxPushes []types.ReportMailboxItem
+
+	cronList     types.ListScheduledJobsResponse
+	cronLoaded   bool
+	cronErr      string
+	cronScopeAll bool
+	cronDetail   *types.ScheduledJob
+
+	runtimeGraph       types.SessionRuntimeGraphResponse
+	runtimeGraphLoaded bool
+	runtimeGraphErr    string
+	runtimeGraphStale  bool
+
+	reportingOverview types.ReportingOverview
+	reportingLoaded   bool
+	reportingErr      string
+	reportingStale    bool
 }
 
 func canUseTUI(stdin io.Reader, stdout io.Writer) bool {
@@ -181,6 +230,7 @@ func (r *REPL) runTUI(ctx context.Context, initialPrompt string) error {
 		WorkspaceRoot: r.workspaceRoot,
 		Status:        status,
 		Catalog:       r.catalog,
+		CatalogLoader: r.catalogLoader,
 		Timeline:      timeline,
 		InitialPrompt: initialPrompt,
 	})
@@ -233,6 +283,7 @@ type tuiModelOptions struct {
 	WorkspaceRoot string
 	Status        clientapi.StatusResponse
 	Catalog       extensions.Catalog
+	CatalogLoader func() (extensions.Catalog, error)
 	Timeline      types.SessionTimelineResponse
 	InitialPrompt string
 }
@@ -257,26 +308,30 @@ func newTUIModel(opts tuiModelOptions) tuiModel {
 	vp := viewport.New(defaultTUIWidth-2, defaultTUIHeight-10)
 
 	m := tuiModel{
-		ctx:             opts.Context,
-		client:          opts.Client,
-		sessionID:       opts.SessionID,
-		workspaceRoot:   opts.WorkspaceRoot,
-		status:          opts.Status,
-		catalog:         opts.Catalog,
-		lastSeq:         opts.Timeline.LatestSeq,
-		width:           defaultTUIWidth,
-		height:          defaultTUIHeight,
-		viewport:        vp,
-		input:           input,
-		toolIndexByCall: make(map[string]int),
-		toolIndexByKey:  make(map[string]int),
-		initialPrompt:   strings.TrimSpace(opts.InitialPrompt),
-		initialFocusCmd: focusCmd,
+		ctx:               opts.Context,
+		client:            opts.Client,
+		sessionID:         opts.SessionID,
+		workspaceRoot:     opts.WorkspaceRoot,
+		status:            opts.Status,
+		catalog:           opts.Catalog,
+		catalogLoader:     opts.CatalogLoader,
+		lastSeq:           opts.Timeline.LatestSeq,
+		width:             defaultTUIWidth,
+		height:            defaultTUIHeight,
+		viewport:          vp,
+		input:             input,
+		toolIndexByCall:   make(map[string]int),
+		toolIndexByKey:    make(map[string]int),
+		initialPrompt:     strings.TrimSpace(opts.InitialPrompt),
+		initialFocusCmd:   focusCmd,
+		activeView:        tuiViewChat,
+		runtimeGraphStale: true,
+		reportingStale:    true,
 	}
 	m.sessionReady = strings.TrimSpace(opts.SessionID) != ""
 	m.applyTimeline(opts.Timeline)
 	m.layout()
-	m.statusBarMessage = "Enter send • Alt+Enter newline • Esc interrupt • Drag to select/copy • Mouse wheel/PgUp/PgDn/Home/End scroll • Ctrl+C quit"
+	m.statusBarMessage = defaultStatusBarMessage
 	return m
 }
 
@@ -287,6 +342,7 @@ func (m tuiModel) Init() tea.Cmd {
 	}
 	if strings.TrimSpace(m.sessionID) != "" {
 		cmds = append(cmds, m.startSessionStreamCmd(m.sessionID, m.lastSeq))
+		cmds = append(cmds, m.loadMailboxCmd(), m.listCronJobsCmd(false), m.loadRuntimeGraphCmd(), m.loadReportingOverviewCmd())
 	}
 	if strings.TrimSpace(m.initialPrompt) != "" && strings.TrimSpace(m.sessionID) != "" {
 		prompt := m.initialPrompt
@@ -333,6 +389,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "end":
 			m.viewport.GotoBottom()
 			return m, nil
+		case "tab":
+			return m.switchViewByOffset(1)
+		case "shift+tab":
+			return m.switchViewByOffset(-1)
 		case "alt+enter":
 			m.input.InsertString("\n")
 			m.layout()
@@ -380,8 +440,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(msg.sessionID) != strings.TrimSpace(m.streamSessionID) {
 			return m, listenTUIStream(m.streamCh, m.streamSessionID)
 		}
-		m.applyEvent(msg.event)
-		return m, listenTUIStream(m.streamCh, m.streamSessionID)
+		cmd := m.applyEvent(msg.event)
+		return m, tea.Batch(cmd, listenTUIStream(m.streamCh, m.streamSessionID))
 	case tuiStreamClosedMsg:
 		if strings.TrimSpace(msg.sessionID) == strings.TrimSpace(m.streamSessionID) {
 			m.streamCh = nil
@@ -402,6 +462,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.busy {
 			m.appendNotice("interrupt requested")
 		}
+		m.layout()
+		return m, nil
+	case tuiPermissionDecisionMsg:
+		if msg.err != nil {
+			m.appendError(msg.err.Error())
+			m.layout()
+			return m, nil
+		}
+		if strings.TrimSpace(msg.requestID) != "" && msg.requestID == m.lastPermissionRequestID {
+			m.lastPermissionRequestID = ""
+		}
+		m.setStatusFlash("permission decision sent")
 		m.layout()
 		return m, nil
 	case tuiStatusMsg:
@@ -449,60 +521,56 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tuiMailboxMsg:
 		if msg.err != nil {
-			m.appendError(msg.err.Error())
+			m.mailboxErr = msg.err.Error()
+			m.setStatusFlash("Mailbox refresh failed")
 			m.layout()
 			return m, nil
 		}
+		m.mailbox = msg.resp
+		m.mailboxLoaded = true
+		m.mailboxErr = ""
 		m.pendingReportCount = msg.resp.PendingCount
-		if len(msg.resp.Items) == 0 {
-			m.appendActivity("mailbox", "No reports.")
-			m.layout()
-			return m, nil
+		if m.activeView == tuiViewMailbox {
+			m.clearMailboxPushes()
 		}
-		lines := make([]string, 0, len(msg.resp.Items))
-		for _, item := range msg.resp.Items {
-			lines = append(lines, formatMailboxItemLine(item))
-		}
-		m.appendActivity("mailbox", strings.Join(lines, "\n\n"))
 		m.layout()
 		return m, nil
 	case tuiCronListMsg:
 		if msg.err != nil {
-			m.appendError(msg.err.Error())
+			m.cronErr = msg.err.Error()
+			m.setStatusFlash("Cron refresh failed")
 			m.layout()
 			return m, nil
 		}
-		if len(msg.resp.Jobs) == 0 {
-			m.appendActivity("cron", "No cron jobs.")
-			m.layout()
-			return m, nil
+		m.cronList = msg.resp
+		m.cronLoaded = true
+		m.cronErr = ""
+		m.cronScopeAll = msg.allWorkspaces
+		if m.cronDetail != nil {
+			m.cronDetail = findScheduledJob(msg.resp.Jobs, m.cronDetail.ID)
 		}
-		lines := make([]string, 0, len(msg.resp.Jobs))
-		for _, job := range msg.resp.Jobs {
-			lines = append(lines, render.FormatScheduledJobLine(job))
-		}
-		m.appendActivity("cron", strings.Join(lines, "\n"))
 		m.layout()
 		return m, nil
 	case tuiCronJobMsg:
 		if msg.err != nil {
-			m.appendError(msg.err.Error())
+			m.cronErr = msg.err.Error()
+			m.setStatusFlash("Cron job update failed")
 			m.layout()
 			return m, nil
 		}
+		m.cronErr = ""
+		job := msg.job
+		m.cronDetail = &job
+		m.upsertScheduledJob(job)
 		if strings.TrimSpace(msg.notice) != "" {
-			m.appendNotice(msg.notice)
+			m.setStatusFlash(msg.notice)
 		}
-		title := strings.TrimSpace(msg.job.Name)
-		if title == "" {
-			title = msg.job.ID
-		}
-		m.appendActivity(title, render.FormatScheduledJobDetail(msg.job))
 		m.layout()
 		return m, nil
 	case tuiCronDeleteMsg:
 		if msg.err != nil {
-			m.appendError(msg.err.Error())
+			m.cronErr = msg.err.Error()
+			m.setStatusFlash("Cron job removal failed")
 			m.layout()
 			return m, nil
 		}
@@ -510,7 +578,37 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if notice == "" {
 			notice = "removed " + msg.jobID
 		}
-		m.appendNotice(notice)
+		m.removeScheduledJob(msg.jobID)
+		if m.cronDetail != nil && m.cronDetail.ID == msg.jobID {
+			m.cronDetail = nil
+		}
+		m.setStatusFlash(notice)
+		m.layout()
+		return m, nil
+	case tuiRuntimeGraphMsg:
+		if msg.err != nil {
+			m.runtimeGraphErr = msg.err.Error()
+			m.setStatusFlash("Agents refresh failed")
+			m.layout()
+			return m, nil
+		}
+		m.runtimeGraph = msg.resp
+		m.runtimeGraphLoaded = true
+		m.runtimeGraphErr = ""
+		m.runtimeGraphStale = false
+		m.layout()
+		return m, nil
+	case tuiReportingOverviewMsg:
+		if msg.err != nil {
+			m.reportingErr = msg.err.Error()
+			m.setStatusFlash("Reporting refresh failed")
+			m.layout()
+			return m, nil
+		}
+		m.reportingOverview = msg.resp
+		m.reportingLoaded = true
+		m.reportingErr = ""
+		m.reportingStale = false
 		m.layout()
 		return m, nil
 	case tuiSwitchSessionMsg:
@@ -529,12 +627,33 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entries = nil
 		m.toolIndexByCall = make(map[string]int)
 		m.toolIndexByKey = make(map[string]int)
+		m.mailbox = types.SessionReportMailboxResponse{}
+		m.mailboxLoaded = false
+		m.mailboxErr = ""
+		m.mailboxPushes = nil
+		m.cronList = types.ListScheduledJobsResponse{}
+		m.cronLoaded = false
+		m.cronErr = ""
+		m.cronScopeAll = false
+		m.cronDetail = nil
+		m.runtimeGraph = types.SessionRuntimeGraphResponse{}
+		m.runtimeGraphLoaded = false
+		m.runtimeGraphErr = ""
+		m.runtimeGraphStale = true
+		m.reportingOverview = types.ReportingOverview{}
+		m.reportingLoaded = false
+		m.reportingErr = ""
+		m.reportingStale = true
 		m.applyTimeline(msg.timeline)
-		m.appendNotice("switched to " + msg.sessionID)
+		m.setStatusFlash("Switched to " + msg.sessionID)
 		m.layout()
 		return m, tea.Batch(
 			m.refreshStatusCmd(false),
 			m.startSessionStreamCmd(msg.sessionID, msg.timeline.LatestSeq),
+			m.loadMailboxCmd(),
+			m.listCronJobsCmd(false),
+			m.loadRuntimeGraphCmd(),
+			m.loadReportingOverviewCmd(),
 		)
 	}
 
@@ -558,9 +677,13 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 
 	switch fields[0] {
 	case "help":
-		m.appendActivity("commands", "/help\n/status\n/skills\n/tools\n/mailbox\n/cron list [--all]\n/cron inspect <id>\n/cron pause <id>\n/cron resume <id>\n/cron remove <id>\n/session list\n/session use <id>\n/clear\n/exit")
+		m.appendActivity("commands", "/help\n/chat\n/agents\n/mailbox\n/cron list [--all]\n/cron inspect <id>\n/cron pause <id>\n/cron resume <id>\n/cron remove <id>\n/status\n/skills\n/tools\n/approve [<request_id>] [once|run|session]\n/deny [<request_id>]\n/session list\n/session use <id>\n/clear\n/exit")
 		m.layout()
 		return m, nil
+	case "chat":
+		return m.switchView(tuiViewChat, nil)
+	case "agents":
+		return m.switchView(tuiViewAgents, m.loadAgentsCmd())
 	case "exit":
 		return m, tea.Quit
 	case "clear":
@@ -572,6 +695,11 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 	case "status":
 		return m, m.refreshStatusCmd(true)
 	case "skills":
+		if err := m.refreshCatalog(); err != nil {
+			m.appendError(err.Error())
+			m.layout()
+			return m, nil
+		}
 		lines := make([]string, 0, len(m.catalog.Skills))
 		for _, skill := range m.catalog.Skills {
 			line := fmt.Sprintf("%s [%s]", skill.Name, skill.Scope)
@@ -587,6 +715,11 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 		m.layout()
 		return m, nil
 	case "tools":
+		if err := m.refreshCatalog(); err != nil {
+			m.appendError(err.Error())
+			m.layout()
+			return m, nil
+		}
 		lines := make([]string, 0, len(m.catalog.Tools))
 		for _, tool := range m.catalog.Tools {
 			line := fmt.Sprintf("%s [%s]", tool.Name, tool.Scope)
@@ -601,13 +734,22 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 		m.appendActivity("tools", strings.Join(lines, "\n"))
 		m.layout()
 		return m, nil
-	case "mailbox", "inbox":
-		if strings.TrimSpace(m.sessionID) == "" {
-			m.appendError("session is not selected")
+	case "approve", "allow", "deny":
+		cmd, err := m.permissionDecisionCmd(fields[0], fields[1:])
+		if err != nil {
+			m.appendError(err.Error())
 			m.layout()
 			return m, nil
 		}
-		return m, m.loadMailboxCmd()
+		return m, cmd
+	case "mailbox", "inbox":
+		if strings.TrimSpace(m.sessionID) == "" {
+			m.mailboxErr = "session is not selected"
+			m.setStatusFlash("Mailbox unavailable")
+			m.layout()
+			return m, nil
+		}
+		return m.switchView(tuiViewMailbox, m.loadMailboxCmd())
 	case "cron":
 		if len(fields) < 2 {
 			m.appendError("usage: /cron list [--all] | inspect <id> | pause <id> | resume <id> | remove <id>")
@@ -617,35 +759,35 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 		switch fields[1] {
 		case "list":
 			allWorkspaces := len(fields) > 2 && strings.TrimSpace(fields[2]) == "--all"
-			return m, m.listCronJobsCmd(allWorkspaces)
+			return m.switchView(tuiViewCron, m.listCronJobsCmd(allWorkspaces))
 		case "inspect":
 			if len(fields) < 3 {
 				m.appendError("usage: /cron inspect <id>")
 				m.layout()
 				return m, nil
 			}
-			return m, m.inspectCronJobCmd(fields[2])
+			return m.switchView(tuiViewCron, m.inspectCronJobCmd(fields[2]))
 		case "pause":
 			if len(fields) < 3 {
 				m.appendError("usage: /cron pause <id>")
 				m.layout()
 				return m, nil
 			}
-			return m, m.setCronJobEnabledCmd(fields[2], false)
+			return m.switchView(tuiViewCron, m.setCronJobEnabledCmd(fields[2], false))
 		case "resume":
 			if len(fields) < 3 {
 				m.appendError("usage: /cron resume <id>")
 				m.layout()
 				return m, nil
 			}
-			return m, m.setCronJobEnabledCmd(fields[2], true)
+			return m.switchView(tuiViewCron, m.setCronJobEnabledCmd(fields[2], true))
 		case "remove":
 			if len(fields) < 3 {
 				m.appendError("usage: /cron remove <id>")
 				m.layout()
 				return m, nil
 			}
-			return m, m.deleteCronJobCmd(fields[2])
+			return m.switchView(tuiViewCron, m.deleteCronJobCmd(fields[2]))
 		default:
 			m.appendError("unknown cron command: " + fields[1])
 			m.layout()
@@ -682,6 +824,72 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 		m.layout()
 		return m, nil
 	}
+}
+
+func (m *tuiModel) refreshCatalog() error {
+	if m.catalogLoader == nil {
+		return nil
+	}
+	catalog, err := m.catalogLoader()
+	if err != nil {
+		return err
+	}
+	m.catalog = catalog
+	return nil
+}
+
+func (m *tuiModel) switchViewByOffset(offset int) (tea.Model, tea.Cmd) {
+	views := orderedTUIViews()
+	current := 0
+	for i, view := range views {
+		if view == m.activeView {
+			current = i
+			break
+		}
+	}
+	next := (current + offset + len(views)) % len(views)
+	return m.switchView(views[next], nil)
+}
+
+func (m *tuiModel) switchView(view tuiView, override tea.Cmd) (tea.Model, tea.Cmd) {
+	m.activeView = view
+	if view == tuiViewMailbox {
+		m.clearMailboxPushes()
+	}
+	switch view {
+	case tuiViewChat:
+		m.viewport.GotoBottom()
+	default:
+		m.viewport.GotoTop()
+	}
+	m.layout()
+	if override != nil {
+		return m, override
+	}
+	return m, m.defaultViewLoadCmd(view)
+}
+
+func (m *tuiModel) defaultViewLoadCmd(view tuiView) tea.Cmd {
+	switch view {
+	case tuiViewMailbox:
+		if strings.TrimSpace(m.sessionID) == "" || m.mailboxLoaded {
+			return nil
+		}
+		return m.loadMailboxCmd()
+	case tuiViewCron:
+		if m.cronLoaded && !m.cronScopeAll {
+			return nil
+		}
+		return m.listCronJobsCmd(false)
+	case tuiViewAgents:
+		if strings.TrimSpace(m.sessionID) == "" {
+			return nil
+		}
+		if !m.runtimeGraphLoaded || m.runtimeGraphStale || !m.reportingLoaded || m.reportingStale {
+			return m.loadAgentsCmd()
+		}
+	}
+	return nil
 }
 
 func (m *tuiModel) submitPromptCmd(prompt string) tea.Cmd {
@@ -724,6 +932,22 @@ func (m tuiModel) interruptTurnCmd() tea.Cmd {
 	}
 }
 
+func (m tuiModel) permissionDecisionCmd(command string, args []string) (tea.Cmd, error) {
+	req, err := buildPermissionDecisionRequest(command, args, m.lastPermissionRequestID)
+	if err != nil {
+		return nil, err
+	}
+	ctx := m.ctx
+	client := m.client
+	return func() tea.Msg {
+		_, err := client.DecidePermission(ctx, req)
+		return tuiPermissionDecisionMsg{
+			requestID: req.RequestID,
+			err:       err,
+		}
+	}, nil
+}
+
 func (m tuiModel) loadMailboxCmd() tea.Cmd {
 	if strings.TrimSpace(m.sessionID) == "" {
 		return nil
@@ -746,8 +970,35 @@ func (m tuiModel) listCronJobsCmd(allWorkspaces bool) tea.Cmd {
 	}
 	return func() tea.Msg {
 		resp, err := client.ListCronJobs(ctx, workspaceRoot)
-		return tuiCronListMsg{resp: resp, err: err}
+		return tuiCronListMsg{resp: resp, err: err, allWorkspaces: allWorkspaces}
 	}
+}
+
+func (m tuiModel) loadRuntimeGraphCmd() tea.Cmd {
+	if strings.TrimSpace(m.sessionID) == "" {
+		return nil
+	}
+	ctx := m.ctx
+	client := m.client
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		resp, err := client.GetRuntimeGraph(ctx, sessionID)
+		return tuiRuntimeGraphMsg{resp: resp, err: err}
+	}
+}
+
+func (m tuiModel) loadReportingOverviewCmd() tea.Cmd {
+	ctx := m.ctx
+	client := m.client
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		resp, err := client.GetReportingOverview(ctx, sessionID)
+		return tuiReportingOverviewMsg{resp: resp, err: err}
+	}
+}
+
+func (m tuiModel) loadAgentsCmd() tea.Cmd {
+	return tea.Batch(m.loadRuntimeGraphCmd(), m.loadReportingOverviewCmd())
 }
 
 func (m tuiModel) inspectCronJobCmd(jobID string) tea.Cmd {
@@ -877,6 +1128,9 @@ func (m *tuiModel) applyTimeline(timeline types.SessionTimelineResponse) {
 		case "task_block", "plan_block", "worktree_block", "permission_block", "tool_run_block":
 			body := strings.TrimSpace(firstNonEmpty(block.Text, block.Path))
 			title := strings.TrimSpace(firstNonEmpty(block.Title, block.Kind))
+			if block.Kind == "permission_block" && strings.EqualFold(block.Status, string(types.PermissionRequestStatusRequested)) && strings.TrimSpace(block.PermissionRequestID) != "" {
+				m.lastPermissionRequestID = strings.TrimSpace(block.PermissionRequestID)
+			}
 			if body == "" && title == "" {
 				continue
 			}
@@ -885,15 +1139,15 @@ func (m *tuiModel) applyTimeline(timeline types.SessionTimelineResponse) {
 	}
 }
 
-func (m *tuiModel) applyEvent(event types.Event) {
+func (m *tuiModel) applyEvent(event types.Event) tea.Cmd {
 	if event.Seq > m.lastSeq {
 		m.lastSeq = event.Seq
 	}
+	refreshAgents := false
+	refreshMailbox := false
 	switch event.Type {
 	case types.EventTurnStarted:
-		if m.pendingReportCount > 0 {
-			m.pendingReportCount = 0
-		}
+		refreshAgents = true
 	case types.EventAssistantDelta:
 		var payload types.AssistantDeltaPayload
 		if err := decodeEventPayload(event.Payload, &payload); err == nil {
@@ -903,7 +1157,12 @@ func (m *tuiModel) applyEvent(event types.Event) {
 		var payload types.ReportMailboxItem
 		if err := decodeEventPayload(event.Payload, &payload); err == nil {
 			m.pendingReportCount++
+			if m.activeView != tuiViewMailbox {
+				m.enqueueMailboxPush(payload)
+			}
+			m.setStatusFlash("Mailbox updated")
 		}
+		refreshMailbox = true
 	case types.EventToolStarted:
 		var payload types.ToolEventPayload
 		if err := decodeEventPayload(event.Payload, &payload); err == nil {
@@ -924,6 +1183,7 @@ func (m *tuiModel) applyEvent(event types.Event) {
 		var payload types.PermissionRequestedPayload
 		if err := decodeEventPayload(event.Payload, &payload); err == nil {
 			m.closeAssistantStream()
+			m.lastPermissionRequestID = strings.TrimSpace(payload.RequestID)
 			label := "permission requested"
 			if strings.TrimSpace(payload.ToolName) != "" {
 				label += " · " + payload.ToolName
@@ -931,22 +1191,33 @@ func (m *tuiModel) applyEvent(event types.Event) {
 			if strings.TrimSpace(payload.RequestedProfile) != "" {
 				label += " · " + payload.RequestedProfile
 			}
+			if strings.TrimSpace(payload.RequestID) != "" {
+				label += " · " + payload.RequestID
+				label += "\nUse /approve " + payload.RequestID + " [once|run|session] or /deny " + payload.RequestID
+			}
 			m.appendNotice(label)
 		}
+		refreshAgents = true
 	case types.EventPermissionResolved:
 		var payload types.PermissionResolvedPayload
 		if err := decodeEventPayload(event.Payload, &payload); err == nil {
 			m.closeAssistantStream()
+			if strings.TrimSpace(payload.RequestID) != "" && payload.RequestID == m.lastPermissionRequestID {
+				m.lastPermissionRequestID = ""
+			}
 			label := "permission " + firstNonEmpty(payload.Decision, "updated")
 			if strings.TrimSpace(payload.ToolName) != "" {
 				label += " · " + payload.ToolName
 			}
 			m.appendNotice(label)
 		}
+		refreshAgents = true
+	case types.EventTaskUpdated, types.EventToolRunUpdated, types.EventWorktreeUpdated:
+		refreshAgents = true
 	case types.EventSessionMemoryStarted:
-		return
+		return nil
 	case types.EventSessionMemoryCompleted:
-		return
+		return nil
 	case types.EventSessionMemoryFailed:
 		var payload types.SessionMemoryEventPayload
 		if err := decodeEventPayload(event.Payload, &payload); err == nil && strings.TrimSpace(payload.Message) != "" {
@@ -960,11 +1231,25 @@ func (m *tuiModel) applyEvent(event types.Event) {
 			m.appendError(payload.Message)
 		}
 		m.busy = false
+		refreshAgents = true
 	case types.EventTurnCompleted, types.EventTurnInterrupted:
 		m.closeAssistantStream()
 		m.busy = false
+		refreshAgents = true
+	}
+	if refreshAgents {
+		m.runtimeGraphStale = true
+		m.reportingStale = true
 	}
 	m.layout()
+	cmds := []tea.Cmd{}
+	if refreshMailbox {
+		cmds = append(cmds, m.loadMailboxCmd())
+	}
+	if refreshAgents && m.activeView == tuiViewAgents {
+		cmds = append(cmds, m.loadAgentsCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *tuiModel) appendAssistantDelta(text string) {
@@ -1110,9 +1395,16 @@ func (m *tuiModel) layout() {
 
 func (m *tuiModel) refreshViewport() {
 	atBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(m.renderEntries())
-	if atBottom || m.viewport.YOffset == 0 {
-		m.viewport.GotoBottom()
+	atTop := m.viewport.YOffset == 0
+	m.viewport.SetContent(m.renderViewportContent())
+	if m.activeView == tuiViewChat {
+		if atBottom || atTop {
+			m.viewport.GotoBottom()
+		}
+		return
+	}
+	if atTop {
+		m.viewport.GotoTop()
 	}
 }
 
@@ -1140,14 +1432,11 @@ func (m tuiModel) renderHeader() string {
 	if strings.TrimSpace(m.status.PermissionProfile) != "" {
 		metaParts = append(metaParts, m.status.PermissionProfile)
 	}
-	if m.pendingReportCount > 0 {
-		metaParts = append(metaParts, fmt.Sprintf("inbox %d", m.pendingReportCount))
-	}
-
 	help := statusStyle.Render(strings.Join(metaParts, " · "))
 	header := lipgloss.JoinVertical(
 		lipgloss.Left,
 		lipgloss.NewStyle().Padding(0, 1).Width(m.width).Render(top),
+		lipgloss.NewStyle().Padding(0, 1).Width(m.width).Render(m.renderViewTabs()),
 		lipgloss.NewStyle().Padding(0, 1).Width(m.width).Render(metaStyle.Render(help)),
 	)
 	return lipgloss.NewStyle().
@@ -1161,14 +1450,7 @@ func (m tuiModel) renderHeader() string {
 }
 
 func (m tuiModel) renderBody() string {
-	if len(m.entries) == 0 {
-		empty := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243")).
-			Padding(1, 2).
-			Render("Start chatting below. Use /help for commands.")
-		return lipgloss.NewStyle().Width(m.width).Height(m.viewport.Height).Render(empty)
-	}
-	return lipgloss.NewStyle().Width(m.width).Render(m.viewport.View())
+	return lipgloss.NewStyle().Width(m.width).Height(m.viewport.Height).Render(m.viewport.View())
 }
 
 func (m tuiModel) renderFooter() string {
@@ -1184,22 +1466,226 @@ func (m tuiModel) renderFooter() string {
 		Width(m.width).
 		Render(m.input.View())
 
-	return lipgloss.JoinVertical(lipgloss.Left, hint, inputBox)
+	parts := []string{hint}
+	if pushBar := m.renderMailboxPushBar(); strings.TrimSpace(pushBar) != "" {
+		parts = append(parts, pushBar)
+	}
+	parts = append(parts, inputBox)
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m tuiModel) footerHintText() string {
-	if m.pendingReportCount <= 0 {
-		return m.statusBarMessage
+	parts := []string{m.activeView.title()}
+	if m.pendingReportCount > 0 {
+		parts = append(parts, fmt.Sprintf("Mailbox %d", m.pendingReportCount))
 	}
-	return fmt.Sprintf("Inbox %d • %s", m.pendingReportCount, m.statusBarMessage)
+	if strings.TrimSpace(m.statusFlash) != "" {
+		parts = append(parts, strings.TrimSpace(m.statusFlash))
+	}
+	parts = append(parts, m.statusBarMessage)
+	return strings.Join(parts, " • ")
 }
 
-func (m tuiModel) renderEntries() string {
+func (m tuiModel) renderViewportContent() string {
 	contentWidth := max(20, m.viewport.Width-4)
+	switch m.activeView {
+	case tuiViewMailbox:
+		return m.renderMailboxContent(contentWidth)
+	case tuiViewCron:
+		return m.renderCronContent(contentWidth)
+	case tuiViewAgents:
+		return m.renderAgentsContent(contentWidth)
+	default:
+		return m.renderChatContent(contentWidth)
+	}
+}
+
+func (m tuiModel) renderViewTabs() string {
+	tabs := make([]string, 0, len(orderedTUIViews()))
+	for _, view := range orderedTUIViews() {
+		label := view.title()
+		if view == tuiViewMailbox && m.pendingReportCount > 0 {
+			label += fmt.Sprintf(" %d", m.pendingReportCount)
+		}
+		style := lipgloss.NewStyle().
+			Padding(0, 1).
+			Foreground(lipgloss.Color("245")).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("239"))
+		if view == m.activeView {
+			style = style.
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("63")).
+				BorderForeground(lipgloss.Color("63"))
+		}
+		tabs = append(tabs, style.Render(label))
+	}
+	return strings.Join(tabs, " ")
+}
+
+func (m tuiModel) renderChatContent(width int) string {
+	if len(m.entries) == 0 {
+		return renderMutedBlock("Start chatting below. Use /help for commands.", width)
+	}
 	parts := make([]string, 0, len(m.entries))
 	for _, entry := range m.entries {
-		parts = append(parts, renderTUIEntry(entry, contentWidth))
+		parts = append(parts, renderTUIEntry(entry, width))
 	}
+	return strings.Join(parts, "\n\n")
+}
+
+func (m tuiModel) renderMailboxContent(width int) string {
+	parts := []string{
+		renderSectionHeading("Mailbox", fmt.Sprintf("%d items · %d pending", len(m.mailbox.Items), m.pendingReportCount), width),
+	}
+	if strings.TrimSpace(m.sessionID) == "" {
+		parts = append(parts, renderMutedBlock("Select a session to receive async reports.", width))
+		return strings.Join(parts, "\n\n")
+	}
+	if strings.TrimSpace(m.mailboxErr) != "" {
+		parts = append(parts, renderErrorBlock(m.mailboxErr, width))
+	}
+	if !m.mailboxLoaded {
+		parts = append(parts, renderMutedBlock("Loading mailbox...", width))
+		return strings.Join(parts, "\n\n")
+	}
+	if len(m.mailbox.Items) == 0 {
+		parts = append(parts, renderMutedBlock("No async reports yet. Background results will appear here automatically.", width))
+		return strings.Join(parts, "\n\n")
+	}
+	parts = append(parts, renderMailboxSummaryCard(m.mailbox.Items, width))
+
+	pendingItems := reportMailboxItemsByDeliveryState(m.mailbox.Items, true)
+	deliveredItems := reportMailboxItemsByDeliveryState(m.mailbox.Items, false)
+	parts = append(parts, renderMailboxSection("Pending Delivery", pendingItems, "No pending reports.", width))
+	parts = append(parts, renderMailboxSection("Delivered To Session", deliveredItems, "No delivered reports yet.", width))
+	return strings.Join(parts, "\n\n")
+}
+
+func (m tuiModel) renderMailboxPushBar() string {
+	if m.activeView == tuiViewMailbox || len(m.mailboxPushes) == 0 {
+		return ""
+	}
+	width := max(30, m.width-2)
+	lines := []string{
+		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("221")).Render("Mailbox Push"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Width(width).Render(mailboxPushSummary(m.mailboxPushes)),
+	}
+	for _, item := range topMailboxItems(m.mailboxPushes, 2) {
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Width(width).Render("• "+mailboxPushPreview(item)))
+	}
+	lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("Tab to Mailbox to inspect and manage these reports."))
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("221")).
+		Padding(0, 1).
+		Width(m.width).
+		Render(strings.Join(lines, "\n"))
+}
+
+func (m tuiModel) renderCronContent(width int) string {
+	scope := "current workspace"
+	if m.cronScopeAll {
+		scope = "all workspaces"
+	}
+	parts := []string{
+		renderSectionHeading("Cron", fmt.Sprintf("%d jobs · %s", len(m.cronList.Jobs), scope), width),
+	}
+	if strings.TrimSpace(m.cronErr) != "" {
+		parts = append(parts, renderErrorBlock(m.cronErr, width))
+	}
+	if !m.cronLoaded {
+		parts = append(parts, renderMutedBlock("Loading cron jobs...", width))
+		return strings.Join(parts, "\n\n")
+	}
+	if len(m.cronList.Jobs) == 0 {
+		parts = append(parts, renderMutedBlock("No scheduled jobs.", width))
+		return strings.Join(parts, "\n\n")
+	}
+	for _, job := range m.cronList.Jobs {
+		selected := m.cronDetail != nil && m.cronDetail.ID == job.ID
+		parts = append(parts, renderCronJobCard(job, width, selected))
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func (m tuiModel) renderAgentsContent(width int) string {
+	graph := m.runtimeGraph.Graph
+	parts := []string{
+		renderSectionHeading(
+			"Agents",
+			fmt.Sprintf("%d runs · %d tasks · %d workers · %d groups · %d agent results · %d digests · %d tool runs · %d worktrees · %d permissions", len(graph.Runs), len(graph.Tasks), len(m.reportingOverview.ChildAgents), len(m.reportingOverview.ReportGroups), len(m.reportingOverview.ChildResults), len(m.reportingOverview.Digests), len(graph.ToolRuns), len(graph.Worktrees), len(graph.PermissionRequests)),
+			width,
+		),
+	}
+	if strings.TrimSpace(m.sessionID) == "" {
+		parts = append(parts, renderMutedBlock("Select a session to inspect multi-agent runtime state.", width))
+		return strings.Join(parts, "\n\n")
+	}
+	if strings.TrimSpace(m.runtimeGraphErr) != "" {
+		parts = append(parts, renderErrorBlock(m.runtimeGraphErr, width))
+	}
+	if !m.runtimeGraphLoaded {
+		parts = append(parts, renderMutedBlock("Loading runtime graph...", width))
+		if !m.reportingLoaded {
+			return strings.Join(parts, "\n\n")
+		}
+	}
+	if strings.TrimSpace(m.reportingErr) != "" {
+		parts = append(parts, renderErrorBlock(m.reportingErr, width))
+	}
+	if !m.reportingLoaded {
+		parts = append(parts, renderMutedBlock("Loading reporting overview...", width))
+	}
+
+	runLines := make([]string, 0, len(graph.Runs))
+	for _, run := range graph.Runs {
+		runLines = append(runLines, formatRunLine(run))
+	}
+	taskLines := make([]string, 0, len(graph.Tasks))
+	for _, task := range graph.Tasks {
+		taskLines = append(taskLines, formatTaskLine(task))
+	}
+	workerLines := make([]string, 0, len(m.reportingOverview.ChildAgents))
+	for _, worker := range m.reportingOverview.ChildAgents {
+		workerLines = append(workerLines, formatChildAgentSpecLine(worker))
+	}
+	groupLines := make([]string, 0, len(m.reportingOverview.ReportGroups))
+	for _, group := range m.reportingOverview.ReportGroups {
+		groupLines = append(groupLines, formatReportGroupLine(group))
+	}
+	resultLines := make([]string, 0, len(m.reportingOverview.ChildResults))
+	for _, result := range m.reportingOverview.ChildResults {
+		resultLines = append(resultLines, formatChildAgentResultLine(result))
+	}
+	digestLines := make([]string, 0, len(m.reportingOverview.Digests))
+	for _, digest := range m.reportingOverview.Digests {
+		digestLines = append(digestLines, formatDigestLine(digest))
+	}
+	toolLines := make([]string, 0, len(graph.ToolRuns))
+	for _, toolRun := range graph.ToolRuns {
+		toolLines = append(toolLines, formatToolRunLine(toolRun))
+	}
+	worktreeLines := make([]string, 0, len(graph.Worktrees))
+	for _, worktree := range graph.Worktrees {
+		worktreeLines = append(worktreeLines, formatWorktreeLine(worktree))
+	}
+	permissionLines := make([]string, 0, len(graph.PermissionRequests))
+	for _, request := range graph.PermissionRequests {
+		permissionLines = append(permissionLines, formatPermissionLine(request))
+	}
+
+	parts = append(parts,
+		renderLineSection("Runs", runLines, "No runs recorded for this session.", width),
+		renderLineSection("Tasks", taskLines, "No runtime tasks.", width),
+		renderLineSection("Background Workers", workerLines, "No background workers registered.", width),
+		renderLineSection("Report Groups", groupLines, "No report groups configured.", width),
+		renderLineSection("Agent Results", resultLines, "No child-agent results yet.", width),
+		renderLineSection("Digests", digestLines, "No digests yet.", width),
+		renderLineSection("Tool Runs", toolLines, "No tool runs yet.", width),
+		renderLineSection("Worktrees", worktreeLines, "No worktrees attached.", width),
+		renderLineSection("Permissions", permissionLines, "No pending permission requests.", width),
+	)
 	return strings.Join(parts, "\n\n")
 }
 
@@ -1253,27 +1739,478 @@ func renderTUIEntry(entry tuiEntry, width int) string {
 	}
 }
 
-func formatMailboxItemLine(item types.ReportMailboxItem) string {
-	title := firstNonEmpty(item.Envelope.Title, string(item.SourceKind), item.ID)
-	lines := []string{strings.TrimSpace(title)}
-	if summary := strings.TrimSpace(item.Envelope.Summary); summary != "" {
-		lines = append(lines, summary)
+func renderSectionHeading(title, meta string, width int) string {
+	line := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86")).Render(title)
+	if strings.TrimSpace(meta) != "" {
+		line += "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(strings.TrimSpace(meta))
+	}
+	return lipgloss.NewStyle().Width(width).Render(line)
+}
+
+func renderMutedBlock(text string, width int) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Width(width).Render(strings.TrimSpace(text))
+}
+
+func renderErrorBlock(text string, width int) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Width(width).Render("error   " + strings.TrimSpace(text))
+}
+
+func renderLineSection(title string, lines []string, empty string, width int) string {
+	if len(lines) == 0 {
+		return renderSectionHeading(title, "", width) + "\n" + indentBlock(renderMutedBlock(empty, width-2), "  ")
+	}
+	body := make([]string, 0, len(lines))
+	for _, line := range lines {
+		body = append(body, lipgloss.NewStyle().Width(max(20, width-2)).Render(line))
+	}
+	return renderSectionHeading(title, fmt.Sprintf("%d", len(lines)), width) + "\n" + indentBlock(strings.Join(body, "\n\n"), "  ")
+}
+
+func renderMailboxItemCard(item types.ReportMailboxItem, width int) string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("221")).Render(firstNonEmpty(item.Envelope.Title, string(item.SourceKind), item.ID))
+	metaParts := []string{mailboxSourceLabel(item.SourceKind, 1)}
+	if source := strings.TrimSpace(item.Envelope.Source); source != "" {
+		metaParts = append(metaParts, source)
+	}
+	if status := strings.TrimSpace(item.Envelope.Status); status != "" {
+		metaParts = append(metaParts, status)
+	}
+	if severity := strings.TrimSpace(item.Envelope.Severity); severity != "" {
+		metaParts = append(metaParts, severity)
 	}
 	if !item.ObservedAt.IsZero() {
-		lines = append(lines, item.ObservedAt.UTC().Format("2006-01-02 15:04:05Z07:00"))
+		metaParts = append(metaParts, item.ObservedAt.Local().Format("2006-01-02 15:04:05"))
 	}
 	if item.InjectedTurnID == "" {
-		lines = append(lines, "status: pending")
+		metaParts = append(metaParts, "pending")
 	} else {
-		lines = append(lines, "status: delivered to "+item.InjectedTurnID)
+		metaParts = append(metaParts, "delivered "+shortID(item.InjectedTurnID))
+	}
+	lines := []string{title}
+	if len(metaParts) > 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Width(width).Render(strings.Join(metaParts, " · ")))
+	}
+	if summary := strings.TrimSpace(item.Envelope.Summary); summary != "" {
+		lines = append(lines, lipgloss.NewStyle().Width(width).Render(summary))
 	}
 	for _, section := range item.Envelope.Sections {
-		if text := strings.TrimSpace(section.Text); text != "" {
-			lines = append(lines, text)
-			break
+		if sectionLine := renderReportSection(section, width); sectionLine != "" {
+			lines = append(lines, sectionLine)
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func renderMailboxSummaryCard(items []types.ReportMailboxItem, width int) string {
+	pendingCount := 0
+	deliveredCount := 0
+	sourceCounts := map[types.ReportMailboxSourceKind]int{}
+	var latestObserved time.Time
+	for _, item := range items {
+		sourceCounts[item.SourceKind]++
+		if item.InjectedTurnID == "" {
+			pendingCount++
+		} else {
+			deliveredCount++
+		}
+		if item.ObservedAt.After(latestObserved) {
+			latestObserved = item.ObservedAt
+		}
+	}
+
+	lines := []string{
+		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86")).Render("Overview"),
+		fmt.Sprintf("%d total · %d pending · %d delivered", len(items), pendingCount, deliveredCount),
+	}
+	if sourceLine := mailboxSourceSummary(sourceCounts); sourceLine != "" {
+		lines = append(lines, sourceLine)
+	}
+	if !latestObserved.IsZero() {
+		lines = append(lines, "latest "+latestObserved.Local().Format("2006-01-02 15:04:05"))
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("63")).
+		Padding(0, 1).
+		Width(width).
+		Render(strings.Join(lines, "\n"))
+}
+
+func renderMailboxSection(title string, items []types.ReportMailboxItem, empty string, width int) string {
+	parts := []string{renderSectionHeading(title, fmt.Sprintf("%d", len(items)), width)}
+	if len(items) == 0 {
+		parts = append(parts, renderMutedBlock(empty, width))
+		return strings.Join(parts, "\n")
+	}
+	for _, item := range items {
+		parts = append(parts, renderMailboxItemCard(item, width))
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func renderReportSection(section types.ReportSectionContent, width int) string {
+	parts := []string{}
+	if text := strings.TrimSpace(section.Text); text != "" {
+		if title := strings.TrimSpace(section.Title); title != "" {
+			parts = append(parts, title+": "+text)
+		} else {
+			parts = append(parts, text)
+		}
+	}
+	for _, item := range section.Items {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			parts = append(parts, "- "+trimmed)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Width(width).Render(strings.Join(parts, "\n"))
+}
+
+func renderCronJobCard(job types.ScheduledJob, width int, selected bool) string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("110"))
+	if selected {
+		titleStyle = titleStyle.Foreground(lipgloss.Color("221"))
+	}
+	lines := []string{
+		titleStyle.Width(width).Render(firstNonEmpty(job.Name, job.ID)),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Width(width).Render(render.FormatScheduledJobLine(job)),
+	}
+	detail := cronJobPreview(job)
+	if selected {
+		detail = render.FormatScheduledJobDetail(job)
+	}
+	if strings.TrimSpace(detail) != "" {
+		lines = append(lines, lipgloss.NewStyle().Width(width).Render(detail))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func cronJobPreview(job types.ScheduledJob) string {
+	lines := strings.Split(render.FormatScheduledJobDetail(job), "\n")
+	if len(lines) > 3 {
+		lines = lines[:3]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatRunLine(run types.Run) string {
+	parts := []string{shortID(run.ID), string(run.State)}
+	if objective := clampText(run.Objective, 120); objective != "" {
+		parts = append(parts, objective)
+	}
+	if result := clampText(run.Result, 120); result != "" {
+		parts = append(parts, "result: "+result)
+	}
+	if errText := clampText(run.Error, 120); errText != "" {
+		parts = append(parts, "error: "+errText)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatTaskLine(task types.Task) string {
+	parts := []string{string(task.State), firstNonEmpty(task.Title, task.ID)}
+	if owner := strings.TrimSpace(task.Owner); owner != "" {
+		parts = append(parts, owner)
+	}
+	if kind := strings.TrimSpace(task.Kind); kind != "" {
+		parts = append(parts, kind)
+	}
+	if detail := clampText(firstNonEmpty(task.Description, task.ExecutionTaskID), 100); detail != "" {
+		parts = append(parts, detail)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatChildAgentSpecLine(spec types.ChildAgentSpec) string {
+	parts := []string{firstNonEmpty(spec.Purpose, spec.AgentID)}
+	if mode := strings.TrimSpace(string(spec.Mode)); mode != "" {
+		parts = append(parts, mode)
+	}
+	if schedule := childAgentScheduleLabel(spec.Schedule); schedule != "" {
+		parts = append(parts, schedule)
+	}
+	if agentID := strings.TrimSpace(spec.AgentID); agentID != "" {
+		parts = append(parts, shortID(agentID))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatChildAgentResultLine(result types.ChildAgentResult) string {
+	parts := []string{firstNonEmpty(result.Envelope.Title, result.AgentID, result.ResultID)}
+	if status := strings.TrimSpace(result.Envelope.Status); status != "" {
+		parts = append(parts, status)
+	}
+	if severity := strings.TrimSpace(result.Envelope.Severity); severity != "" {
+		parts = append(parts, severity)
+	}
+	if summary := clampText(result.Envelope.Summary, 100); summary != "" {
+		parts = append(parts, summary)
+	}
+	if agentID := strings.TrimSpace(result.AgentID); agentID != "" {
+		parts = append(parts, shortID(agentID))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatReportGroupLine(group types.ReportGroup) string {
+	parts := []string{firstNonEmpty(group.Title, group.GroupID)}
+	if schedule := childAgentScheduleLabel(group.Schedule); schedule != "" {
+		parts = append(parts, schedule)
+	}
+	if len(group.Sources) > 0 {
+		parts = append(parts, fmt.Sprintf("%d sources", len(group.Sources)))
+	}
+	if groupID := strings.TrimSpace(group.GroupID); groupID != "" {
+		parts = append(parts, groupID)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatDigestLine(digest types.DigestRecord) string {
+	parts := []string{firstNonEmpty(digest.Envelope.Title, digest.GroupID, digest.DigestID)}
+	if status := strings.TrimSpace(digest.Envelope.Status); status != "" {
+		parts = append(parts, status)
+	}
+	if severity := strings.TrimSpace(digest.Envelope.Severity); severity != "" {
+		parts = append(parts, severity)
+	}
+	if summary := clampText(digest.Envelope.Summary, 100); summary != "" {
+		parts = append(parts, summary)
+	}
+	if groupID := strings.TrimSpace(digest.GroupID); groupID != "" {
+		parts = append(parts, groupID)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func childAgentScheduleLabel(schedule types.ScheduleSpec) string {
+	switch schedule.Kind {
+	case types.ScheduleKindCron:
+		if expr := strings.TrimSpace(schedule.Expr); expr != "" {
+			if tz := strings.TrimSpace(schedule.Timezone); tz != "" {
+				return fmt.Sprintf("cron %s (%s)", expr, tz)
+			}
+			return "cron " + expr
+		}
+		return "cron"
+	case types.ScheduleKindEvery:
+		if schedule.EveryMinutes > 0 {
+			return fmt.Sprintf("every %d min", schedule.EveryMinutes)
+		}
+		return "every"
+	case types.ScheduleKindAt:
+		if at := strings.TrimSpace(schedule.At); at != "" {
+			return "at " + at
+		}
+		return "one-shot"
+	default:
+		return ""
+	}
+}
+
+func formatToolRunLine(toolRun types.ToolRun) string {
+	parts := []string{string(toolRun.State), toolRun.ToolName}
+	if taskID := strings.TrimSpace(toolRun.TaskID); taskID != "" {
+		parts = append(parts, shortID(taskID))
+	}
+	if toolCallID := strings.TrimSpace(toolRun.ToolCallID); toolCallID != "" {
+		parts = append(parts, shortID(toolCallID))
+	}
+	if preview := clampText(firstNonEmpty(toolRun.Error, toolRun.OutputJSON, toolRun.InputJSON), 100); preview != "" {
+		parts = append(parts, preview)
+	}
+	if toolRun.LockWaitMs > 0 {
+		parts = append(parts, fmt.Sprintf("lock %dms", toolRun.LockWaitMs))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatWorktreeLine(worktree types.Worktree) string {
+	parts := []string{string(worktree.State), firstNonEmpty(worktree.WorktreeBranch, shortID(worktree.ID))}
+	if path := strings.TrimSpace(worktree.WorktreePath); path != "" {
+		parts = append(parts, path)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatPermissionLine(request types.PermissionRequest) string {
+	parts := []string{string(request.Status), firstNonEmpty(request.ToolName, request.ID)}
+	if profile := strings.TrimSpace(request.RequestedProfile); profile != "" {
+		parts = append(parts, profile)
+	}
+	if reason := clampText(firstNonEmpty(request.Decision, request.Reason), 100); reason != "" {
+		parts = append(parts, reason)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func orderedTUIViews() []tuiView {
+	return []tuiView{tuiViewChat, tuiViewAgents, tuiViewMailbox, tuiViewCron}
+}
+
+func (v tuiView) title() string {
+	switch v {
+	case tuiViewAgents:
+		return "Agents"
+	case tuiViewMailbox:
+		return "Mailbox"
+	case tuiViewCron:
+		return "Cron"
+	default:
+		return "Chat"
+	}
+}
+
+func (m *tuiModel) setStatusFlash(text string) {
+	m.statusFlash = strings.TrimSpace(text)
+}
+
+func (m *tuiModel) enqueueMailboxPush(item types.ReportMailboxItem) {
+	if strings.TrimSpace(item.ID) == "" {
+		return
+	}
+	filtered := make([]types.ReportMailboxItem, 0, len(m.mailboxPushes)+1)
+	filtered = append(filtered, item)
+	for _, existing := range m.mailboxPushes {
+		if existing.ID == item.ID {
+			continue
+		}
+		filtered = append(filtered, existing)
+		if len(filtered) >= 5 {
+			break
+		}
+	}
+	m.mailboxPushes = filtered
+}
+
+func (m *tuiModel) clearMailboxPushes() {
+	m.mailboxPushes = nil
+}
+
+func (m *tuiModel) upsertScheduledJob(job types.ScheduledJob) {
+	for i := range m.cronList.Jobs {
+		if m.cronList.Jobs[i].ID == job.ID {
+			m.cronList.Jobs[i] = job
+			m.cronLoaded = true
+			return
+		}
+	}
+	m.cronList.Jobs = append(m.cronList.Jobs, job)
+	m.cronLoaded = true
+}
+
+func (m *tuiModel) removeScheduledJob(jobID string) {
+	filtered := m.cronList.Jobs[:0]
+	for _, job := range m.cronList.Jobs {
+		if job.ID != jobID {
+			filtered = append(filtered, job)
+		}
+	}
+	m.cronList.Jobs = filtered
+}
+
+func findScheduledJob(jobs []types.ScheduledJob, jobID string) *types.ScheduledJob {
+	for i := range jobs {
+		if jobs[i].ID == jobID {
+			job := jobs[i]
+			return &job
+		}
+	}
+	return nil
+}
+
+func clampText(text string, maxLen int) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || maxLen <= 0 {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= maxLen {
+		return trimmed
+	}
+	return string(runes[:maxLen]) + "..."
+}
+
+func topMailboxItems(items []types.ReportMailboxItem, limit int) []types.ReportMailboxItem {
+	if limit <= 0 || len(items) == 0 {
+		return nil
+	}
+	if len(items) <= limit {
+		return items
+	}
+	return items[:limit]
+}
+
+func reportMailboxItemsByDeliveryState(items []types.ReportMailboxItem, pending bool) []types.ReportMailboxItem {
+	out := make([]types.ReportMailboxItem, 0, len(items))
+	for _, item := range items {
+		isPending := strings.TrimSpace(item.InjectedTurnID) == ""
+		if isPending == pending {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func mailboxPushSummary(items []types.ReportMailboxItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	if len(items) == 1 {
+		item := items[0]
+		return "1 new report · " + mailboxPushPreview(item)
+	}
+	sourceCounts := map[types.ReportMailboxSourceKind]int{}
+	for _, item := range items {
+		sourceCounts[item.SourceKind]++
+	}
+	parts := []string{fmt.Sprintf("%d new reports", len(items))}
+	if sourceLine := mailboxSourceSummary(sourceCounts); sourceLine != "" {
+		parts = append(parts, sourceLine)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func mailboxPushPreview(item types.ReportMailboxItem) string {
+	title := firstNonEmpty(item.Envelope.Title, item.Envelope.Summary, string(item.SourceKind), item.ID)
+	return clampText(title, 96)
+}
+
+func mailboxSourceSummary(sourceCounts map[types.ReportMailboxSourceKind]int) string {
+	order := []types.ReportMailboxSourceKind{
+		types.ReportMailboxSourceDigest,
+		types.ReportMailboxSourceChildAgentResult,
+		types.ReportMailboxSourceTaskResult,
+	}
+	parts := []string{}
+	for _, kind := range order {
+		if count := sourceCounts[kind]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", count, mailboxSourceLabel(kind, count)))
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+func mailboxSourceLabel(kind types.ReportMailboxSourceKind, count int) string {
+	switch kind {
+	case types.ReportMailboxSourceDigest:
+		if count == 1 {
+			return "digest"
+		}
+		return "digests"
+	case types.ReportMailboxSourceChildAgentResult:
+		if count == 1 {
+			return "agent result"
+		}
+		return "agent results"
+	default:
+		if count == 1 {
+			return "task report"
+		}
+		return "task reports"
+	}
 }
 
 func toolEntryStatusLabel(entry tuiEntry) string {

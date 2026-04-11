@@ -33,7 +33,6 @@ var skillDirNameSanitizer = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 var readmePathPattern = regexp.MustCompile(`(?i)^readme(?:\.[a-z0-9._-]+)?$`)
 
 var githubRequestFunc = githubRequest
-var errRemoteSkillContract = errors.New("remote skill does not satisfy SKILL.json + SKILL.md contract")
 
 type InstallRequest struct {
 	Scope  string
@@ -72,18 +71,6 @@ type InstallPlan struct {
 	IgnoredCandidatePaths []string
 	Notes                 []string
 	ManualReason          string
-}
-
-type skillMetadata struct {
-	Name             string   `json:"name"`
-	Description      string   `json:"description"`
-	WhenToUse        string   `json:"when_to_use"`
-	ToolDependencies []string `json:"tool_dependencies"`
-	PreferredTools   []string `json:"preferred_tools"`
-	ExecutionMode    string   `json:"execution_mode"`
-	AgentType        string   `json:"agent_type"`
-	EnvDependencies  []string `json:"env_dependencies"`
-	Enabled          *bool    `json:"enabled"`
 }
 
 type resolvedInstallSource struct {
@@ -153,11 +140,10 @@ func InstallSkill(globalRoot, workspaceRoot string, req InstallRequest) (Install
 	}
 	defer func() { _ = os.RemoveAll(cleanupRoot) }()
 
-	meta, err := loadSkillMetadata(skillDir)
+	displayName, _, _, err := loadSkillMetadata(skillDir)
 	if err != nil {
 		return InstallResult{}, err
 	}
-	displayName := meta.Name
 	directoryName, err := determineInstallDirectoryName(req.Name, source.suggestedName)
 	if err != nil {
 		return InstallResult{}, err
@@ -177,6 +163,7 @@ func InstallSkill(globalRoot, workspaceRoot string, req InstallRequest) (Install
 	if strings.TrimSpace(displayName) == "" {
 		displayName = directoryName
 	}
+	InvalidateCatalogCache(paths.GlobalRoot, workspaceRoot)
 	return InstallResult{
 		Name:          displayName,
 		DirectoryName: directoryName,
@@ -212,14 +199,11 @@ func InspectSkillSource(globalRoot, workspaceRoot string, req InstallRequest) (I
 			Source:          source.localPath,
 			Path:            source.localPath,
 			AutoInstallable: true,
-			Notes:           []string{"Local skill directory already contains SKILL.json and SKILL.md."},
+			Notes:           []string{"Local skill directory already contains SKILL.md."},
 		}
 		return plan, nil
 	}
 	if strings.TrimSpace(source.repoPath) != "" {
-		if err := validateRemoteSkillDir(source.owner, source.repo, source.ref, source.repoPath); err != nil {
-			return InstallPlan{}, err
-		}
 		plan := InstallPlan{
 			Track:           InstallTrackDirect,
 			Scope:           scope,
@@ -251,6 +235,7 @@ func RemoveSkill(globalRoot, workspaceRoot, scopeRaw, name string) (RemoveResult
 	if err := os.RemoveAll(targetPath); err != nil {
 		return RemoveResult{}, err
 	}
+	InvalidateCatalogCache(paths.GlobalRoot, workspaceRoot)
 	return RemoveResult{Name: resolvedName, Scope: scope, Path: targetPath}, nil
 }
 
@@ -286,7 +271,7 @@ func ListRemoteSkillNames(repo, repoPath, ref string) ([]string, error) {
 		return nil, err
 	}
 	ref = defaultRef(ref)
-	apiURL := githubContentsURL(owner, repoName, repoPath, ref)
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s?ref=%s", owner, repoName, escapeGitHubContentPath(repoPath), url.QueryEscape(ref))
 	payload, err := githubRequestFunc(apiURL, "application/vnd.github+json")
 	if err != nil {
 		return nil, err
@@ -297,21 +282,9 @@ func ListRemoteSkillNames(repo, repoPath, ref string) ([]string, error) {
 	}
 	names := make([]string, 0, len(items))
 	for _, item := range items {
-		if item.Type != "dir" || strings.TrimSpace(item.Name) == "" {
-			continue
+		if item.Type == "dir" && strings.TrimSpace(item.Name) != "" {
+			names = append(names, item.Name)
 		}
-		childPath := path.Join(repoPath, item.Name)
-		meta, err := loadRemoteSkillMetadata(owner, repoName, ref, childPath)
-		if err != nil {
-			if errors.Is(err, errRemoteSkillContract) {
-				continue
-			}
-			return nil, fmt.Errorf("validate remote skill child %s: %w", childPath, err)
-		}
-		if !remoteSkillEnabled(meta) {
-			continue
-		}
-		names = append(names, item.Name)
 	}
 	sort.Strings(names)
 	return names, nil
@@ -332,17 +305,7 @@ func inspectGitHubSource(scope string, source resolvedInstallSource) (InstallPla
 		return InstallPlan{}, err
 	}
 	buckets := skillPathBucketsFromTree(tree.Tree)
-	plan.CandidatePaths = make([]string, 0, len(buckets.Candidate))
-	for _, candidate := range buckets.Candidate {
-		meta, err := loadRemoteSkillMetadata(source.owner, source.repo, source.ref, candidate)
-		if err != nil {
-			return InstallPlan{}, fmt.Errorf("validate remote skill candidate %s: %w", candidate, err)
-		}
-		if !remoteSkillEnabled(meta) {
-			continue
-		}
-		plan.CandidatePaths = append(plan.CandidatePaths, candidate)
-	}
+	plan.CandidatePaths = buckets.Candidate
 	plan.IgnoredCandidatePaths = append(plan.IgnoredCandidatePaths, buckets.Foreign...)
 	plan.IgnoredCandidatePaths = append(plan.IgnoredCandidatePaths, buckets.Ignored...)
 	if len(buckets.Foreign) > 0 {
@@ -380,7 +343,7 @@ func inspectGitHubSource(scope string, source resolvedInstallSource) (InstallPla
 			if len(buckets.Foreign) > 0 {
 				plan.ManualReason = "repository only exposes platform-specific skill directories such as .claude/.codex; do not copy those into Sesame directly"
 			} else {
-				plan.ManualReason = "no Sesame-compatible SKILL.json + SKILL.md directories were found in the repository tree"
+				plan.ManualReason = "no Sesame-compatible SKILL.md directories were found in the repository tree"
 			}
 		}
 	case len(plan.CandidatePaths) == 1:
@@ -389,7 +352,7 @@ func inspectGitHubSource(scope string, source resolvedInstallSource) (InstallPla
 		if plan.ManualReason == "" {
 			plan.AutoInstallable = true
 			if candidate == "" {
-				plan.Notes = append(plan.Notes, "Repository root contains SKILL.json and SKILL.md, so it can be installed directly.")
+				plan.Notes = append(plan.Notes, "Repository root contains SKILL.md, so it can be installed directly.")
 			} else {
 				plan.Notes = append(plan.Notes, fmt.Sprintf("Single candidate skill path detected: %s", candidate))
 			}
@@ -471,34 +434,23 @@ func resolveInstalledSkillPath(root, name string) (string, string, error) {
 }
 
 func installedSkillDisplayName(skillDir string) (string, error) {
-	meta, err := loadSkillMetadata(skillDir)
+	name, _, _, err := loadSkillMetadata(skillDir)
 	if err != nil {
 		return "", err
 	}
-	name := meta.Name
 	if strings.TrimSpace(name) == "" {
 		name = filepath.Base(skillDir)
 	}
 	return name, nil
 }
 
-func loadSkillMetadata(skillRoot string) (skillMetadata, error) {
-	metaPath := skillRoot
-	if filepath.Base(metaPath) != "SKILL.json" {
-		metaPath = filepath.Join(skillRoot, "SKILL.json")
-	}
-	data, err := os.ReadFile(metaPath)
+func loadSkillMetadata(skillDir string) (string, string, string, error) {
+	data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 	if err != nil {
-		return skillMetadata{}, fmt.Errorf("read SKILL.json: %w", err)
+		return "", "", "", fmt.Errorf("read SKILL.md: %w", err)
 	}
-	var meta skillMetadata
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return skillMetadata{}, fmt.Errorf("decode SKILL.json: %w", err)
-	}
-	if strings.TrimSpace(meta.Name) == "" {
-		return skillMetadata{}, fmt.Errorf("SKILL.json missing required field %q", "name")
-	}
-	return meta, nil
+	parsed := parseSkillDocument(filepath.Base(skillDir), string(data))
+	return parsed.Name, parsed.Description, parsed.Body, nil
 }
 
 func determineInstallDirectoryName(explicitName, fallback string) (string, error) {
@@ -685,78 +637,10 @@ func validateSkillDir(skillDir string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("skill source must be a directory")
 	}
-	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.json")); err != nil {
-		return fmt.Errorf("skill directory is missing SKILL.json")
-	}
 	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
-		return fmt.Errorf("skill directory is missing SKILL.md")
+		return fmt.Errorf("SKILL.md not found in skill directory")
 	}
-	_, err = loadSkillMetadata(skillDir)
-	return err
-}
-
-func validateRemoteSkillDir(owner, repo, ref, repoPath string) error {
-	_, err := loadRemoteSkillMetadata(owner, repo, ref, repoPath)
-	return err
-}
-
-func loadRemoteSkillMetadata(owner, repo, ref, repoPath string) (skillMetadata, error) {
-	normalizedPath := normalizeRepoPath(repoPath)
-	switch path.Base(normalizedPath) {
-	case "SKILL.md", "SKILL.json":
-		return skillMetadata{}, fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md: %w", errRemoteSkillContract)
-	}
-
-	payload, err := githubRequestFunc(githubContentsURL(owner, repo, normalizedPath, ref), "application/vnd.github+json")
-	if err != nil {
-		return skillMetadata{}, err
-	}
-
-	var items []githubContentsItem
-	if err := json.Unmarshal(payload, &items); err != nil {
-		var item githubContentsItem
-		if json.Unmarshal(payload, &item) == nil {
-			return skillMetadata{}, fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md: %w", errRemoteSkillContract)
-		}
-		return skillMetadata{}, fmt.Errorf("decode GitHub contents response: %w", err)
-	}
-
-	hasMarkdown := false
-	hasMetadata := false
-	for _, item := range items {
-		if item.Type != "file" && item.Type != "blob" {
-			continue
-		}
-		switch item.Name {
-		case "SKILL.md":
-			hasMarkdown = true
-		case "SKILL.json":
-			hasMetadata = true
-		}
-	}
-	if !hasMetadata {
-		return skillMetadata{}, fmt.Errorf("remote skill directory is missing SKILL.json: %w", errRemoteSkillContract)
-	}
-	if !hasMarkdown {
-		return skillMetadata{}, fmt.Errorf("remote skill directory is missing SKILL.md: %w", errRemoteSkillContract)
-	}
-
-	payload, err = fetchGitHubFile(owner, repo, ref, path.Join(normalizedPath, "SKILL.json"))
-	if err != nil {
-		return skillMetadata{}, err
-	}
-	var meta skillMetadata
-	if err := json.Unmarshal(payload, &meta); err != nil {
-		return skillMetadata{}, fmt.Errorf("decode SKILL.json: %w", err)
-	}
-	if strings.TrimSpace(meta.Name) == "" {
-		return skillMetadata{}, fmt.Errorf("SKILL.json missing required field %q", "name")
-	}
-	return meta, nil
-}
-
-func remoteSkillEnabled(meta skillMetadata) bool {
-	return meta.Enabled == nil || *meta.Enabled
+	return nil
 }
 
 func copyDir(srcDir, destDir string) error {
@@ -893,7 +777,7 @@ func fetchGitHubTree(owner, repo, ref string) (githubTreeResponse, error) {
 }
 
 func fetchGitHubFile(owner, repo, ref, repoPath string) ([]byte, error) {
-	apiURL := githubContentsURL(owner, repo, repoPath, ref)
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s?ref=%s", owner, repo, escapeGitHubContentPath(repoPath), url.QueryEscape(ref))
 	return githubRequestFunc(apiURL, "application/vnd.github.raw")
 }
 
@@ -901,27 +785,14 @@ func skillPathBucketsFromTree(tree []githubTreeItem) skillPathBuckets {
 	candidateSet := make(map[string]struct{})
 	foreignSet := make(map[string]struct{})
 	ignoredSet := make(map[string]struct{})
-	hasMarkdown := make(map[string]struct{})
-	hasMetadata := make(map[string]struct{})
 	var buckets skillPathBuckets
 	for _, item := range tree {
-		if item.Type != "blob" {
+		if item.Type != "blob" || path.Base(item.Path) != "SKILL.md" {
 			continue
 		}
 		skillPath := path.Dir(item.Path)
 		if skillPath == "." {
 			skillPath = ""
-		}
-		switch path.Base(item.Path) {
-		case "SKILL.md":
-			hasMarkdown[skillPath] = struct{}{}
-		case "SKILL.json":
-			hasMetadata[skillPath] = struct{}{}
-		}
-	}
-	for skillPath := range hasMarkdown {
-		if _, ok := hasMetadata[skillPath]; !ok {
-			continue
 		}
 		switch classifySkillPathForSesame(skillPath) {
 		case "candidate":
@@ -1074,8 +945,8 @@ func analyzeReadme(readme string) ([]string, []string, string) {
 		}
 	}
 	if manualReason == "" {
-		if strings.Contains(lower, "skill.json") || strings.Contains(lower, "skill.md") {
-			notes = append(notes, "README explicitly references the skill manifest files.")
+		if strings.Contains(lower, "skill.md") {
+			notes = append(notes, "README explicitly references SKILL.md.")
 		}
 		if strings.Contains(lower, ".sesame/skills") || strings.Contains(lower, ".codex/skills") || strings.Contains(lower, "copy") || strings.Contains(lower, "clone") {
 			notes = append(notes, "README looks compatible with a standard copy/clone style skill install.")
@@ -1240,14 +1111,6 @@ func escapeGitHubContentPath(repoPath string) string {
 		parts[idx] = url.PathEscape(part)
 	}
 	return strings.Join(parts, "/")
-}
-
-func githubContentsURL(owner, repo, repoPath, ref string) string {
-	base := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents", owner, repo)
-	if escapedPath := escapeGitHubContentPath(repoPath); escapedPath != "" {
-		base += "/" + escapedPath
-	}
-	return base + "?ref=" + url.QueryEscape(ref)
 }
 
 func splitGitHubRepo(repo string) (string, string, error) {

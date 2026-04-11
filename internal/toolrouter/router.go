@@ -1,97 +1,400 @@
 package toolrouter
 
 import (
-	"slices"
+	"sort"
+	"strings"
 
 	"go-agent/internal/skills"
+	"go-agent/internal/tools"
 )
 
-// DecideInput describes the request-shape profile and explicit active skills.
-type DecideInput struct {
-	Profile      string
-	ActiveSkills []skills.ActivatedSkill
+type CapabilityProfile string
+
+const (
+	ProfileCodebaseEdit      CapabilityProfile = "codebase_edit"
+	ProfileSystemInspect     CapabilityProfile = "system_inspect"
+	ProfileWebLookup         CapabilityProfile = "web_lookup"
+	ProfileBrowserAutomation CapabilityProfile = "browser_automation"
+	ProfileScheduledReport   CapabilityProfile = "scheduled_report"
+)
+
+type PolicySummary struct {
+	Profile          CapabilityProfile
+	Guidance         []string
+	PreferredTools   []string
+	VisibleTools     []string
+	HiddenTools      []string
+	MaxSteps         int
+	MaxFetches       int
+	ForbiddenActions []string
+	StopConditions   []string
+	SkillTags        []string
 }
 
-// Decide returns the visible runtime tools for the request profile plus active skill overlays.
-func Decide(in DecideInput) []string {
-	base := profileTools[in.Profile]
-	visible := make(map[string]struct{}, len(base)+4)
-	for _, toolName := range base {
-		visible[toolName] = struct{}{}
+type Decision struct {
+	Summary    PolicySummary
+	visibleSet map[string]struct{}
+	hiddenSet  map[string]struct{}
+}
+
+type profileSpec struct {
+	Guidance         []string
+	VisibleTools     []string
+	HiddenTools      []string
+	PreferredTools   []string
+	MaxSteps         int
+	MaxFetches       int
+	ForbiddenActions []string
+	StopConditions   []string
+	SkillTags        []string
+	ExposeSkillUse   bool
+	AllowSkillGrants bool
+}
+
+var (
+	metaTools = []string{
+		"skill_use",
+	}
+	readOnlyTools = []string{
+		"file_read",
+		"glob",
+		"grep",
+		"list_dir",
+		"request_permissions",
+		"request_user_input",
+		"view_image",
+		"web_fetch",
+	}
+	editTools = []string{
+		"apply_patch",
+		"file_edit",
+		"file_write",
+		"notebook_edit",
+		"todo_write",
+	}
+	taskTools = []string{
+		"task_create",
+		"task_get",
+		"task_list",
+		"task_output",
+		"task_result",
+		"task_stop",
+		"task_update",
+		"task_wait",
+	}
+)
+
+func Decide(userMessage string, activated []skills.ActivatedSkill) Decision {
+	profile := detectProfile(userMessage)
+	spec := profileFor(profile)
+	visibleTools := normalizeToolList(spec.VisibleTools)
+	if spec.ExposeSkillUse {
+		visibleTools = normalizeToolList(append(append([]string(nil), visibleTools...), metaTools...))
+	}
+	preferredTools := normalizeToolList(append(append([]string(nil), spec.PreferredTools...), skills.PreferredTools(activated)...))
+	hiddenTools := normalizeToolList(spec.HiddenTools)
+	if spec.AllowSkillGrants {
+		grantedTools := skills.GrantedTools(activated)
+		visibleTools = normalizeToolList(append(append([]string(nil), visibleTools...), grantedTools...))
+		hiddenTools = removeTools(hiddenTools, grantedTools)
 	}
 
-	// skill_use must stay visible for every profile.
-	visible["skill_use"] = struct{}{}
+	visibleSet := make(map[string]struct{}, len(visibleTools))
+	for _, name := range visibleTools {
+		visibleSet[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
+	hiddenSet := make(map[string]struct{}, len(hiddenTools))
+	for _, name := range hiddenTools {
+		hiddenSet[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
 
-	for _, activated := range in.ActiveSkills {
-		for _, dep := range activated.Skill.ToolDependencies {
-			visible[dep] = struct{}{}
+	return Decision{
+		Summary: PolicySummary{
+			Profile:          profile,
+			Guidance:         append([]string(nil), spec.Guidance...),
+			PreferredTools:   preferredTools,
+			VisibleTools:     visibleTools,
+			HiddenTools:      hiddenTools,
+			MaxSteps:         spec.MaxSteps,
+			MaxFetches:       spec.MaxFetches,
+			ForbiddenActions: append([]string(nil), spec.ForbiddenActions...),
+			StopConditions:   append([]string(nil), spec.StopConditions...),
+			SkillTags:        append([]string(nil), spec.SkillTags...),
+		},
+		visibleSet: visibleSet,
+		hiddenSet:  hiddenSet,
+	}
+}
+
+func (d Decision) FilterDefinitions(defs []tools.Definition) []tools.Definition {
+	if len(defs) == 0 {
+		return nil
+	}
+	out := make([]tools.Definition, 0, len(defs))
+	for _, def := range defs {
+		name := strings.ToLower(strings.TrimSpace(def.Name))
+		if len(d.visibleSet) > 0 {
+			if _, ok := d.visibleSet[name]; !ok {
+				continue
+			}
+		}
+		if _, hidden := d.hiddenSet[name]; hidden {
+			continue
+		}
+		out = append(out, def)
+	}
+	return out
+}
+
+func detectProfile(userMessage string) CapabilityProfile {
+	text := strings.ToLower(strings.TrimSpace(userMessage))
+	if text == "" {
+		return ProfileCodebaseEdit
+	}
+	if isScheduledReportRequest(text) {
+		return ProfileScheduledReport
+	}
+	if isBrowserAutomationRequest(text) {
+		return ProfileBrowserAutomation
+	}
+	if isWebLookupRequest(text) {
+		return ProfileWebLookup
+	}
+	if isSystemInspectRequest(text) {
+		return ProfileSystemInspect
+	}
+	return ProfileCodebaseEdit
+}
+
+func profileFor(profile CapabilityProfile) profileSpec {
+	switch profile {
+	case ProfileSystemInspect:
+		return profileSpec{
+			Guidance: []string{
+				"Inspect the local environment directly when the user asks about the current system, binaries, versions, or runtime state.",
+			},
+			VisibleTools: append(append([]string(nil), readOnlyTools...), "shell_command"),
+			HiddenTools:  append(append([]string(nil), editTools...), append(append([]string(nil), taskTools...), "schedule_report")...),
+			PreferredTools: []string{
+				"shell_command",
+			},
+			MaxSteps:         6,
+			ExposeSkillUse:   true,
+			AllowSkillGrants: true,
+			ForbiddenActions: []string{
+				"Do not modify files unless the user explicitly asks for changes.",
+			},
+			StopConditions: []string{
+				"Stop after the requested system facts are verified.",
+			},
+		}
+	case ProfileWebLookup:
+		return profileSpec{
+			Guidance: []string{
+				"Use direct web fetching for public web pages, news, weather, and webpage summaries.",
+				"Prefer answering directly from fetched pages instead of probing the local environment.",
+			},
+			VisibleTools: append([]string(nil), readOnlyTools...),
+			HiddenTools:  normalizeToolList(append(append([]string(nil), editTools...), append(append([]string(nil), taskTools...), "schedule_report", "shell_command")...)),
+			PreferredTools: []string{
+				"web_fetch",
+			},
+			MaxSteps:         4,
+			MaxFetches:       3,
+			ExposeSkillUse:   true,
+			AllowSkillGrants: true,
+			ForbiddenActions: []string{
+				"Do not use shell_command for environment probes during ordinary web lookup.",
+				"Do not use task_create or schedule_report for a direct lookup request.",
+			},
+			StopConditions: []string{
+				"Stop once fetched pages are sufficient to answer the request.",
+			},
+		}
+	case ProfileBrowserAutomation:
+		return profileSpec{
+			Guidance: []string{
+				"Use browser-oriented skills only when the user explicitly asks for webpage interaction, login, clicking, screenshots, or form submission.",
+			},
+			VisibleTools: append([]string(nil), readOnlyTools...),
+			HiddenTools:  normalizeToolList(append(append([]string(nil), editTools...), append(append([]string(nil), taskTools...), "schedule_report", "shell_command")...)),
+			PreferredTools: []string{
+				"web_fetch",
+			},
+			MaxSteps:         6,
+			MaxFetches:       2,
+			ExposeSkillUse:   true,
+			AllowSkillGrants: true,
+			ForbiddenActions: []string{
+				"Do not fall back to local environment probing for browser tasks.",
+			},
+			StopConditions: []string{
+				"Stop after the requested webpage interaction path is identified or the limitation is clear.",
+			},
+			SkillTags: []string{
+				"browser_automation",
+			},
+		}
+	case ProfileScheduledReport:
+		return profileSpec{
+			Guidance: []string{
+				"This request is a delayed or recurring report. Use schedule_report.",
+				"Do not fake delayed reporting with task_create.",
+				"Do not pre-create a background task for the future run; the scheduled job will create its own execution when it fires.",
+				"Do not fetch web data, inspect the local environment, or gather report contents now unless the user explicitly asks for an immediate preview in addition to the scheduled run.",
+			},
+			VisibleTools: []string{"schedule_report"},
+			HiddenTools:  normalizeToolList(append(append(append([]string(nil), readOnlyTools...), editTools...), append(append([]string(nil), taskTools...), "shell_command")...)),
+			PreferredTools: []string{
+				"schedule_report",
+			},
+			MaxSteps: 4,
+			ForbiddenActions: []string{
+				"Do not combine task_create and schedule_report for the same delayed objective.",
+				"Do not fetch report data during scheduling unless the user explicitly asked for both schedule creation and an immediate answer.",
+			},
+			StopConditions: []string{
+				"Stop after the scheduled job is created or the missing scheduling details are clarified.",
+			},
+		}
+	default:
+		return profileSpec{
+			Guidance: []string{
+				"Treat this as a codebase task: inspect relevant files before editing or answering.",
+			},
+			VisibleTools: normalizeToolList(append(append(append([]string(nil), readOnlyTools...), editTools...), append(append([]string(nil), taskTools...), "schedule_report", "shell_command")...)),
+			HiddenTools:  nil,
+			PreferredTools: []string{
+				"file_read",
+				"grep",
+				"glob",
+				"apply_patch",
+			},
+			MaxSteps:         12,
+			ExposeSkillUse:   true,
+			AllowSkillGrants: true,
+			StopConditions: []string{
+				"Stop after the requested code or workspace change is verified.",
+			},
 		}
 	}
+}
 
-	names := make([]string, 0, len(visible))
-	for name := range visible {
-		names = append(names, name)
+func isScheduledReportRequest(text string) bool {
+	delayedMarkers := []string{
+		"分钟后", "小时后", "天后", "稍后", "晚点", "定时", "cron",
+		"later", "tomorrow", "in 5 minutes", "in 10 minutes", "in two minutes",
 	}
-	slices.Sort(names)
-	return names
+	recurringMarkers := []string{
+		"每天", "每周", "每月", "日报", "周报", "月报", "巡检", "周期",
+		"every day", "every week", "every month", "recurring", "daily report",
+	}
+	deliveryMarkers := []string{
+		"告诉我", "给我", "汇报", "报告", "提醒我", "通知我",
+		"tell me", "report", "notify me", "remind me",
+	}
+
+	hasDelayed := containsAny(text, delayedMarkers)
+	hasRecurring := containsAny(text, recurringMarkers)
+	hasDelivery := containsAny(text, deliveryMarkers)
+	if hasRecurring {
+		return true
+	}
+	if hasDelayed && hasDelivery {
+		return true
+	}
+	return hasDelayed && containsAny(text, []string{"天气", "weather"})
 }
 
-var profileTools = map[string][]string{
-	"codebase-edit": composeProfileTools(
-		commonOrchestrationTools,
-		[]string{
-			"apply_patch",
-			"file_edit",
-			"file_read",
-			"file_write",
-			"glob",
-			"grep",
-			"list_dir",
-			"notebook_edit",
-		},
-	),
-	"web-lookup": composeProfileTools(
-		commonOrchestrationTools,
-		[]string{
-			"file_read",
-			"glob",
-			"grep",
-			"list_dir",
-			"view_image",
-			"web_fetch",
-		},
-	),
-	"system-inspect": composeProfileTools(
-		commonOrchestrationTools,
-		[]string{
-			"file_read",
-			"glob",
-			"grep",
-			"list_dir",
-			"shell_command",
-		},
-	),
+func isBrowserAutomationRequest(text string) bool {
+	actionMarkers := []string{
+		"打开", "点击", "登录", "登上", "截图", "表单", "填写", "提交", "上传", "下载页面",
+		"open", "click", "log in", "login", "sign in", "screenshot", "form", "submit", "fill",
+	}
+	webMarkers := []string{
+		"http://", "https://", "网址", "网站", "网页", "页面",
+		"url", "site", "website", "web page", "page", "browser",
+	}
+	return containsAny(text, actionMarkers) && containsAny(text, webMarkers)
 }
 
-var commonOrchestrationTools = []string{
-	"request_permissions",
-	"request_user_input",
-	"schedule_report",
-	"skill_use",
-	"task_create",
-	"task_get",
-	"task_list",
-	"task_output",
-	"task_result",
-	"task_stop",
-	"task_update",
-	"task_wait",
+func isWebLookupRequest(text string) bool {
+	webLookupMarkers := []string{
+		"http://", "https://", "网址", "网站", "网页", "页面摘要", "网页总结",
+		"新闻", "热门新闻", "热点", "天气", "股价", "汇率",
+		"url", "website", "web page", "news", "headline", "weather", "web summary",
+	}
+	return containsAny(text, webLookupMarkers)
 }
 
-func composeProfileTools(shared []string, specific []string) []string {
-	combined := make([]string, 0, len(shared)+len(specific))
-	combined = append(combined, shared...)
-	combined = append(combined, specific...)
-	return combined
+func isSystemInspectRequest(text string) bool {
+	systemMarkers := []string{
+		"系统", "环境", "版本", "路径", "进程", "端口", "wsl", "which ",
+		"system", "environment", "version", "binary", "process", "port", "which ", "uname",
+	}
+	return containsAny(text, systemMarkers)
+}
+
+func containsAny(text string, candidates []string) bool {
+	for _, candidate := range candidates {
+		if candidate != "" && strings.Contains(text, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeToolList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		left := strings.ToLower(out[i])
+		right := strings.ToLower(out[j])
+		if left == right {
+			return out[i] < out[j]
+		}
+		return left < right
+	})
+	return out
+}
+
+func removeTools(values []string, remove []string) []string {
+	if len(values) == 0 || len(remove) == 0 {
+		return values
+	}
+	blocked := make(map[string]struct{}, len(remove))
+	for _, value := range remove {
+		key := strings.ToLower(strings.TrimSpace(value))
+		if key == "" {
+			continue
+		}
+		blocked[key] = struct{}{}
+	}
+	if len(blocked) == 0 {
+		return values
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		key := strings.ToLower(strings.TrimSpace(value))
+		if _, ok := blocked[key]; ok {
+			continue
+		}
+		out = append(out, value)
+	}
+	return normalizeToolList(out)
 }

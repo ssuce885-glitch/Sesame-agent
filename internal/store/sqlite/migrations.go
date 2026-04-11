@@ -2,7 +2,11 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
+
+	"go-agent/internal/types"
 )
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -206,6 +210,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		);`,
 		`create table if not exists child_agent_specs (
 			id text primary key,
+			session_id text not null default '',
 			payload text not null,
 			created_at text not null,
 			updated_at text not null
@@ -232,12 +237,14 @@ func (s *Store) migrate(ctx context.Context) error {
 			on scheduled_jobs(enabled, next_run_at, id asc);`,
 		`create table if not exists report_groups (
 			id text primary key,
+			session_id text not null default '',
 			payload text not null,
 			created_at text not null,
 			updated_at text not null
 		);`,
 		`create table if not exists child_agent_results (
 			id text primary key,
+			session_id text not null default '',
 			agent_id text not null,
 			status text not null default '',
 			severity text not null default '',
@@ -261,6 +268,34 @@ func (s *Store) migrate(ctx context.Context) error {
 		);`,
 		`create index if not exists pending_task_completions_session_injected_idx
 			on pending_task_completions(session_id, injected_turn_id, observed_at desc, id asc);`,
+		`create table if not exists reports (
+			id text primary key,
+			session_id text not null,
+			source_kind text not null,
+			source_id text not null default '',
+			severity text not null default '',
+			observed_at text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists reports_session_observed_idx
+			on reports(session_id, observed_at desc, id asc);`,
+		`create table if not exists report_deliveries (
+			id text primary key,
+			session_id text not null,
+			report_id text not null,
+			channel text not null,
+			state text not null default '',
+			observed_at text not null default '',
+			injected_turn_id text not null default '',
+			injected_at text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists report_deliveries_session_channel_state_idx
+			on report_deliveries(session_id, channel, state, observed_at desc, id asc);`,
 		`create table if not exists report_mailbox_items (
 			id text primary key,
 			session_id text not null,
@@ -278,6 +313,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			on report_mailbox_items(session_id, injected_turn_id, observed_at desc, id asc);`,
 		`create table if not exists digest_records (
 			id text primary key,
+			session_id text not null default '',
 			group_id text not null,
 			status text not null default '',
 			severity text not null default '',
@@ -303,6 +339,39 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "sessions", "permission_profile", `alter table sessions add column permission_profile text not null default ''`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "child_agent_specs", "session_id", `alter table child_agent_specs add column session_id text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "report_groups", "session_id", `alter table report_groups add column session_id text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "child_agent_results", "session_id", `alter table child_agent_results add column session_id text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "digest_records", "session_id", `alter table digest_records add column session_id text not null default ''`); err != nil {
+		return err
+	}
+	indexStmts := []string{
+		`create index if not exists child_agent_specs_session_idx
+			on child_agent_specs(session_id, updated_at desc, id asc);`,
+		`create index if not exists report_groups_session_idx
+			on report_groups(session_id, updated_at desc, id asc);`,
+		`create index if not exists child_agent_results_session_observed_idx
+			on child_agent_results(session_id, observed_at desc, id asc);`,
+		`create index if not exists digest_records_session_group_window_idx
+			on digest_records(session_id, group_id, window_end desc, id asc);`,
+	}
+	for _, stmt := range indexStmts {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	if err := s.backfillLegacyReportingSessions(ctx); err != nil {
+		return err
+	}
+	if err := s.backfillLegacyReportMailboxItems(ctx); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -318,4 +387,298 @@ func (s *Store) ensureColumn(ctx context.Context, table, column, alterStmt strin
 	}
 	_, err := s.db.ExecContext(ctx, alterStmt)
 	return err
+}
+
+func (s *Store) backfillLegacyReportingSessions(ctx context.Context) error {
+	if err := s.backfillLegacyChildAgentSpecs(ctx); err != nil {
+		return err
+	}
+	if err := s.backfillLegacyReportGroups(ctx); err != nil {
+		return err
+	}
+	if err := s.backfillLegacyChildAgentResults(ctx); err != nil {
+		return err
+	}
+	if err := s.backfillLegacyDigestRecords(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) backfillLegacyChildAgentSpecs(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+		select id, payload, created_at, updated_at
+		from child_agent_specs
+		where session_id = ''
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id        string
+			payload   string
+			createdAt string
+			updatedAt string
+		)
+		if err := rows.Scan(&id, &payload, &createdAt, &updatedAt); err != nil {
+			return err
+		}
+		var spec types.ChildAgentSpec
+		if err := json.Unmarshal([]byte(payload), &spec); err != nil {
+			return err
+		}
+		spec.AgentID = firstNonEmptyReportingString(spec.AgentID, id)
+		applyLegacyReportingTimestamps(&spec, createdAt, updatedAt)
+		if strings.TrimSpace(spec.SessionID) == "" {
+			spec.SessionID = s.scheduledJobOwnerSession(ctx, spec.AgentID)
+		}
+		if strings.TrimSpace(spec.SessionID) == "" {
+			continue
+		}
+		if err := s.UpsertChildAgentSpec(ctx, spec); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) backfillLegacyReportGroups(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+		select id, payload, created_at, updated_at
+		from report_groups
+		where session_id = ''
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id        string
+			payload   string
+			createdAt string
+			updatedAt string
+		)
+		if err := rows.Scan(&id, &payload, &createdAt, &updatedAt); err != nil {
+			return err
+		}
+		var group types.ReportGroup
+		if err := json.Unmarshal([]byte(payload), &group); err != nil {
+			return err
+		}
+		group.GroupID = firstNonEmptyReportingString(group.GroupID, id)
+		applyLegacyReportingTimestamps(&group, createdAt, updatedAt)
+		if strings.TrimSpace(group.SessionID) == "" {
+			for _, source := range group.Sources {
+				group.SessionID = s.scheduledJobOwnerSession(ctx, source)
+				if strings.TrimSpace(group.SessionID) != "" {
+					break
+				}
+			}
+		}
+		if strings.TrimSpace(group.SessionID) == "" {
+			continue
+		}
+		if err := s.UpsertReportGroup(ctx, group); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) backfillLegacyChildAgentResults(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+		select id, payload, created_at, updated_at
+		from child_agent_results
+		where session_id = ''
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id        string
+			payload   string
+			createdAt string
+			updatedAt string
+		)
+		if err := rows.Scan(&id, &payload, &createdAt, &updatedAt); err != nil {
+			return err
+		}
+		var result types.ChildAgentResult
+		if err := json.Unmarshal([]byte(payload), &result); err != nil {
+			return err
+		}
+		result.ResultID = firstNonEmptyReportingString(result.ResultID, id)
+		applyLegacyReportingTimestamps(&result, createdAt, updatedAt)
+		if strings.TrimSpace(result.SessionID) == "" {
+			result.SessionID = s.scheduledJobOwnerSession(ctx, result.AgentID)
+		}
+		if strings.TrimSpace(result.SessionID) == "" {
+			for _, groupID := range result.ReportGroupRefs {
+				group, ok, err := s.GetReportGroup(ctx, groupID)
+				if err != nil {
+					return err
+				}
+				if ok && strings.TrimSpace(group.SessionID) != "" {
+					result.SessionID = strings.TrimSpace(group.SessionID)
+					break
+				}
+			}
+		}
+		if strings.TrimSpace(result.SessionID) == "" {
+			continue
+		}
+		if err := s.UpsertChildAgentResult(ctx, result); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) backfillLegacyDigestRecords(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+		select id, payload, created_at, updated_at
+		from digest_records
+		where session_id = ''
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id        string
+			payload   string
+			createdAt string
+			updatedAt string
+		)
+		if err := rows.Scan(&id, &payload, &createdAt, &updatedAt); err != nil {
+			return err
+		}
+		var digest types.DigestRecord
+		if err := json.Unmarshal([]byte(payload), &digest); err != nil {
+			return err
+		}
+		digest.DigestID = firstNonEmptyReportingString(digest.DigestID, id)
+		applyLegacyReportingTimestamps(&digest, createdAt, updatedAt)
+		if strings.TrimSpace(digest.SessionID) == "" && strings.TrimSpace(digest.GroupID) != "" {
+			group, ok, err := s.GetReportGroup(ctx, digest.GroupID)
+			if err != nil {
+				return err
+			}
+			if ok {
+				digest.SessionID = strings.TrimSpace(group.SessionID)
+			}
+		}
+		if strings.TrimSpace(digest.SessionID) == "" {
+			continue
+		}
+		if err := s.UpsertDigestRecord(ctx, digest); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) backfillLegacyReportMailboxItems(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+		select payload, observed_at, injected_turn_id, injected_at, created_at, updated_at
+		from report_mailbox_items
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			payload        string
+			observedAt     string
+			injectedTurnID string
+			injectedAt     string
+			createdAt      string
+			updatedAt      string
+		)
+		if err := rows.Scan(&payload, &observedAt, &injectedTurnID, &injectedAt, &createdAt, &updatedAt); err != nil {
+			return err
+		}
+		var item types.ReportMailboxItem
+		if err := json.Unmarshal([]byte(payload), &item); err != nil {
+			return err
+		}
+		applyLegacyReportMailboxTimes(&item, observedAt, injectedTurnID, injectedAt, createdAt, updatedAt)
+		report, delivery := mailboxItemToRecordDelivery(item)
+		if err := s.UpsertReport(ctx, report); err != nil {
+			return err
+		}
+		if err := s.UpsertReportDelivery(ctx, delivery); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) scheduledJobOwnerSession(ctx context.Context, jobID string) string {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return ""
+	}
+	var ownerSessionID string
+	err := s.db.QueryRowContext(ctx, `
+		select owner_session_id
+		from scheduled_jobs
+		where id = ?
+	`, jobID).Scan(&ownerSessionID)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(ownerSessionID)
+}
+
+func applyLegacyReportingTimestamps(value any, createdAtRaw, updatedAtRaw string) {
+	createdAt, err := parsePendingOptionalTime(createdAtRaw)
+	if err != nil {
+		return
+	}
+	updatedAt, err := parsePendingOptionalTime(updatedAtRaw)
+	if err != nil {
+		updatedAt = createdAt
+	}
+	applyReportingTimestamps(value, createdAt, updatedAt)
+}
+
+func applyLegacyReportMailboxTimes(item *types.ReportMailboxItem, observedAtRaw, injectedTurnID, injectedAtRaw, createdAtRaw, updatedAtRaw string) {
+	if item == nil {
+		return
+	}
+	if parsed, err := parsePendingOptionalTime(observedAtRaw); err == nil {
+		item.ObservedAt = parsed
+	}
+	item.InjectedTurnID = strings.TrimSpace(injectedTurnID)
+	if parsed, err := parsePendingOptionalTime(injectedAtRaw); err == nil {
+		item.InjectedAt = parsed
+	}
+	if parsed, err := parsePendingOptionalTime(createdAtRaw); err == nil {
+		item.CreatedAt = parsed
+	}
+	if parsed, err := parsePendingOptionalTime(updatedAtRaw); err == nil {
+		item.UpdatedAt = parsed
+	}
+}
+
+func firstNonEmptyReportingString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

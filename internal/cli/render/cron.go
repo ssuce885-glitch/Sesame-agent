@@ -31,6 +31,11 @@ func FormatScheduledJobLine(job types.ScheduledJob) string {
 	if schedule := scheduledJobScheduleLabel(job); schedule != "" {
 		parts = append(parts, schedule)
 	}
+	if group := strings.TrimSpace(job.ReportGroupTitle); group != "" {
+		parts = append(parts, "group "+group)
+	} else if groupID := strings.TrimSpace(job.ReportGroupID); groupID != "" {
+		parts = append(parts, "group "+groupID)
+	}
 	parts = append(parts, scheduledJobDisplayStatus(job))
 	if !job.NextRunAt.IsZero() {
 		parts = append(parts, "next "+job.NextRunAt.Format(time.RFC3339))
@@ -47,6 +52,11 @@ func FormatScheduledJobDetail(job types.ScheduledJob) string {
 	}
 	if strings.TrimSpace(job.Prompt) != "" {
 		lines = append(lines, "prompt: "+trimPreview(job.Prompt))
+	}
+	if group := strings.TrimSpace(job.ReportGroupTitle); group != "" {
+		lines = append(lines, "group: "+group)
+	} else if groupID := strings.TrimSpace(job.ReportGroupID); groupID != "" {
+		lines = append(lines, "group: "+groupID)
 	}
 	if !job.NextRunAt.IsZero() {
 		lines = append(lines, "next run: "+job.NextRunAt.Format(time.RFC3339))

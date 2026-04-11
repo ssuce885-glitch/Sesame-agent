@@ -11,17 +11,58 @@ import (
 	"go-agent/internal/types"
 )
 
+func (s *Store) UpsertReport(ctx context.Context, report types.ReportRecord) error {
+	return upsertReportWithExec(ctx, s.db, report)
+}
+
+func (s *Store) UpsertReportDelivery(ctx context.Context, delivery types.ReportDelivery) error {
+	return upsertReportDeliveryWithExec(ctx, s.db, delivery)
+}
+
+func (s *Store) ListReports(ctx context.Context, sessionID string) ([]types.ReportRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		select payload, observed_at, created_at, updated_at
+		from reports
+		where session_id = ?
+		order by observed_at desc, created_at desc, id asc
+	`, strings.TrimSpace(sessionID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanReportRows(rows)
+}
+
+func (s *Store) ListReportDeliveries(ctx context.Context, sessionID string, channel types.ReportChannel) ([]types.ReportDelivery, error) {
+	return listReportDeliveriesWithQuery(ctx, s.db, sessionID, channel)
+}
+
 func (s *Store) UpsertReportMailboxItem(ctx context.Context, item types.ReportMailboxItem) error {
-	return upsertReportMailboxItemWithExec(ctx, s.db, item)
+	report, delivery := mailboxItemToRecordDelivery(item)
+	if err := s.UpsertReport(ctx, report); err != nil {
+		return err
+	}
+	return s.UpsertReportDelivery(ctx, delivery)
 }
 
 func (s *Store) ListReportMailboxItems(ctx context.Context, sessionID string) ([]types.ReportMailboxItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select payload, observed_at, injected_turn_id, injected_at, created_at, updated_at
-		from report_mailbox_items
-		where session_id = ?
-		order by observed_at desc, created_at desc, id asc
-	`, strings.TrimSpace(sessionID))
+		select
+			d.payload,
+			d.observed_at,
+			d.injected_turn_id,
+			d.injected_at,
+			d.created_at,
+			d.updated_at,
+			r.payload,
+			r.observed_at,
+			r.created_at,
+			r.updated_at
+		from report_deliveries d
+		join reports r on r.id = d.report_id
+		where d.session_id = ? and d.channel = ?
+		order by d.observed_at desc, d.created_at desc, d.id asc
+	`, strings.TrimSpace(sessionID), string(types.ReportChannelMailbox))
 	if err != nil {
 		return nil, err
 	}
@@ -33,9 +74,9 @@ func (s *Store) CountPendingReportMailboxItems(ctx context.Context, sessionID st
 	var count int
 	if err := s.db.QueryRowContext(ctx, `
 		select count(*)
-		from report_mailbox_items
-		where session_id = ? and injected_turn_id = ''
-	`, strings.TrimSpace(sessionID)).Scan(&count); err != nil {
+		from report_deliveries
+		where session_id = ? and channel = ? and state = ?
+	`, strings.TrimSpace(sessionID), string(types.ReportChannelMailbox), string(types.ReportDeliveryStatePending)).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -67,7 +108,7 @@ func (s *Store) ClaimPendingReportMailboxItemsForTurn(ctx context.Context, sessi
 		return claimed, nil
 	}
 
-	pending, err := listReportMailboxItemsWithQuery(ctx, tx, sessionID, "")
+	pending, err := listPendingMailboxDeliveriesWithQuery(ctx, tx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -80,18 +121,23 @@ func (s *Store) ClaimPendingReportMailboxItemsForTurn(ctx context.Context, sessi
 
 	now := time.Now().UTC()
 	for index := range pending {
+		pending[index].State = types.ReportDeliveryStateDelivered
 		pending[index].InjectedTurnID = turnID
 		pending[index].InjectedAt = now
 		pending[index].UpdatedAt = now
-		if err := upsertReportMailboxItemWithExec(ctx, tx, pending[index]); err != nil {
+		if err := upsertReportDeliveryWithExec(ctx, tx, pending[index]); err != nil {
 			return nil, err
 		}
 	}
 
+	claimed, err = listReportMailboxItemsWithQuery(ctx, tx, sessionID, turnID)
+	if err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return pending, nil
+	return claimed, nil
 }
 
 type reportMailboxQueryer interface {
@@ -100,11 +146,22 @@ type reportMailboxQueryer interface {
 
 func listReportMailboxItemsWithQuery(ctx context.Context, queryer reportMailboxQueryer, sessionID, injectedTurnID string) ([]types.ReportMailboxItem, error) {
 	rows, err := queryer.QueryContext(ctx, `
-		select payload, observed_at, injected_turn_id, injected_at, created_at, updated_at
-		from report_mailbox_items
-		where session_id = ? and injected_turn_id = ?
-		order by observed_at asc, created_at asc, id asc
-	`, strings.TrimSpace(sessionID), strings.TrimSpace(injectedTurnID))
+		select
+			d.payload,
+			d.observed_at,
+			d.injected_turn_id,
+			d.injected_at,
+			d.created_at,
+			d.updated_at,
+			r.payload,
+			r.observed_at,
+			r.created_at,
+			r.updated_at
+		from report_deliveries d
+		join reports r on r.id = d.report_id
+		where d.session_id = ? and d.channel = ? and d.injected_turn_id = ?
+		order by d.observed_at asc, d.created_at asc, d.id asc
+	`, strings.TrimSpace(sessionID), string(types.ReportChannelMailbox), strings.TrimSpace(injectedTurnID))
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +169,97 @@ func listReportMailboxItemsWithQuery(ctx context.Context, queryer reportMailboxQ
 	return scanReportMailboxRows(rows)
 }
 
+func listPendingMailboxDeliveriesWithQuery(ctx context.Context, queryer reportMailboxQueryer, sessionID string) ([]types.ReportDelivery, error) {
+	rows, err := queryer.QueryContext(ctx, `
+		select payload, observed_at, injected_turn_id, injected_at, created_at, updated_at
+		from report_deliveries
+		where session_id = ? and channel = ? and state = ?
+		order by observed_at asc, created_at asc, id asc
+	`, strings.TrimSpace(sessionID), string(types.ReportChannelMailbox), string(types.ReportDeliveryStatePending))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanReportDeliveryRows(rows)
+}
+
 func scanReportMailboxRows(rows *sql.Rows) ([]types.ReportMailboxItem, error) {
 	out := make([]types.ReportMailboxItem, 0)
+	for rows.Next() {
+		var (
+			rawDelivery      string
+			deliveryObserved string
+			injectedTurnID   string
+			injectedAt       string
+			deliveryCreated  string
+			deliveryUpdated  string
+			rawReport        string
+			reportObserved   string
+			reportCreated    string
+			reportUpdated    string
+		)
+		if err := rows.Scan(
+			&rawDelivery,
+			&deliveryObserved,
+			&injectedTurnID,
+			&injectedAt,
+			&deliveryCreated,
+			&deliveryUpdated,
+			&rawReport,
+			&reportObserved,
+			&reportCreated,
+			&reportUpdated,
+		); err != nil {
+			return nil, err
+		}
+
+		var delivery types.ReportDelivery
+		if err := json.Unmarshal([]byte(rawDelivery), &delivery); err != nil {
+			return nil, err
+		}
+		applyReportDeliveryTimes(&delivery, deliveryObserved, injectedTurnID, injectedAt, deliveryCreated, deliveryUpdated)
+
+		var report types.ReportRecord
+		if err := json.Unmarshal([]byte(rawReport), &report); err != nil {
+			return nil, err
+		}
+		applyReportTimes(&report, reportObserved, reportCreated, reportUpdated)
+
+		out = append(out, types.ReportMailboxItemFromRecordDelivery(report, delivery))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func scanReportRows(rows *sql.Rows) ([]types.ReportRecord, error) {
+	out := make([]types.ReportRecord, 0)
+	for rows.Next() {
+		var (
+			rawPayload string
+			observedAt string
+			createdAt  string
+			updatedAt  string
+		)
+		if err := rows.Scan(&rawPayload, &observedAt, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		var report types.ReportRecord
+		if err := json.Unmarshal([]byte(rawPayload), &report); err != nil {
+			return nil, err
+		}
+		applyReportTimes(&report, observedAt, createdAt, updatedAt)
+		out = append(out, report)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func scanReportDeliveryRows(rows *sql.Rows) ([]types.ReportDelivery, error) {
+	out := make([]types.ReportDelivery, 0)
 	for rows.Next() {
 		var (
 			rawPayload     string
@@ -126,13 +272,12 @@ func scanReportMailboxRows(rows *sql.Rows) ([]types.ReportMailboxItem, error) {
 		if err := rows.Scan(&rawPayload, &observedAt, &injectedTurnID, &injectedAt, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
-
-		var item types.ReportMailboxItem
-		if err := json.Unmarshal([]byte(rawPayload), &item); err != nil {
+		var delivery types.ReportDelivery
+		if err := json.Unmarshal([]byte(rawPayload), &delivery); err != nil {
 			return nil, err
 		}
-		applyReportMailboxTimes(&item, observedAt, injectedTurnID, injectedAt, createdAt, updatedAt)
-		out = append(out, item)
+		applyReportDeliveryTimes(&delivery, observedAt, injectedTurnID, injectedAt, createdAt, updatedAt)
+		out = append(out, delivery)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -140,101 +285,272 @@ func scanReportMailboxRows(rows *sql.Rows) ([]types.ReportMailboxItem, error) {
 	return out, nil
 }
 
-func upsertReportMailboxItemWithExec(ctx context.Context, execer execContexter, item types.ReportMailboxItem) error {
-	item = normalizeReportMailboxItem(item)
-	payload, err := json.Marshal(item)
+func upsertReportWithExec(ctx context.Context, execer execContexter, report types.ReportRecord) error {
+	report = normalizeReport(report)
+	payload, err := json.Marshal(report)
 	if err != nil {
 		return err
 	}
 
 	_, err = execer.ExecContext(ctx, `
-		insert into report_mailbox_items (
-			id, session_id, source_kind, source_id, severity, observed_at, injected_turn_id, injected_at, payload, created_at, updated_at
+		insert into reports (
+			id, session_id, source_kind, source_id, severity, observed_at, payload, created_at, updated_at
 		)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set
 			session_id = excluded.session_id,
 			source_kind = excluded.source_kind,
 			source_id = excluded.source_id,
 			severity = excluded.severity,
 			observed_at = excluded.observed_at,
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+	`,
+		report.ID,
+		report.SessionID,
+		report.SourceKind,
+		report.SourceID,
+		strings.TrimSpace(report.Envelope.Severity),
+		formatPendingOptionalTime(report.ObservedAt),
+		string(payload),
+		report.CreatedAt.Format(timeLayout),
+		report.UpdatedAt.Format(timeLayout),
+	)
+	return err
+}
+
+func upsertReportDeliveryWithExec(ctx context.Context, execer execContexter, delivery types.ReportDelivery) error {
+	delivery = normalizeReportDelivery(delivery)
+	payload, err := json.Marshal(delivery)
+	if err != nil {
+		return err
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		insert into report_deliveries (
+			id, session_id, report_id, channel, state, observed_at, injected_turn_id, injected_at, payload, created_at, updated_at
+		)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		on conflict(id) do update set
+			session_id = excluded.session_id,
+			report_id = excluded.report_id,
+			channel = excluded.channel,
+			state = excluded.state,
+			observed_at = excluded.observed_at,
 			injected_turn_id = excluded.injected_turn_id,
 			injected_at = excluded.injected_at,
 			payload = excluded.payload,
 			updated_at = excluded.updated_at
 	`,
-		item.ID,
-		item.SessionID,
-		item.SourceKind,
-		item.SourceID,
-		strings.TrimSpace(item.Envelope.Severity),
-		formatPendingOptionalTime(item.ObservedAt),
-		item.InjectedTurnID,
-		formatPendingOptionalTime(item.InjectedAt),
+		delivery.ID,
+		delivery.SessionID,
+		delivery.ReportID,
+		delivery.Channel,
+		delivery.State,
+		formatPendingOptionalTime(delivery.ObservedAt),
+		delivery.InjectedTurnID,
+		formatPendingOptionalTime(delivery.InjectedAt),
 		string(payload),
-		item.CreatedAt.Format(timeLayout),
-		item.UpdatedAt.Format(timeLayout),
+		delivery.CreatedAt.Format(timeLayout),
+		delivery.UpdatedAt.Format(timeLayout),
 	)
 	return err
 }
 
-func normalizeReportMailboxItem(item types.ReportMailboxItem) types.ReportMailboxItem {
-	now := time.Now().UTC()
-	item.SessionID = strings.TrimSpace(item.SessionID)
-	item.SourceKind = types.ReportMailboxSourceKind(strings.TrimSpace(string(item.SourceKind)))
-	item.SourceID = strings.TrimSpace(item.SourceID)
-	item.InjectedTurnID = strings.TrimSpace(item.InjectedTurnID)
-	item.Envelope.Source = strings.TrimSpace(item.Envelope.Source)
-	item.Envelope.Status = strings.TrimSpace(item.Envelope.Status)
-	item.Envelope.Severity = strings.TrimSpace(item.Envelope.Severity)
-	item.Envelope.Title = strings.TrimSpace(item.Envelope.Title)
-	item.Envelope.Summary = strings.TrimSpace(item.Envelope.Summary)
-	if strings.TrimSpace(item.ID) == "" {
-		switch {
-		case item.SourceKind != "" && item.SourceID != "":
-			item.ID = fmt.Sprintf("%s:%s", item.SourceKind, item.SourceID)
-		case item.SourceID != "":
-			item.ID = item.SourceID
-		default:
-			item.ID = types.NewID("report_mailbox")
-		}
+func listReportDeliveriesWithQuery(ctx context.Context, queryer reportMailboxQueryer, sessionID string, channel types.ReportChannel) ([]types.ReportDelivery, error) {
+	query := `
+		select payload, observed_at, injected_turn_id, injected_at, created_at, updated_at
+		from report_deliveries
+		where session_id = ?
+	`
+	args := []any{strings.TrimSpace(sessionID)}
+	if strings.TrimSpace(string(channel)) != "" {
+		query += ` and channel = ?`
+		args = append(args, string(channel))
 	}
-	if item.CreatedAt.IsZero() {
-		item.CreatedAt = now
-	} else {
-		item.CreatedAt = item.CreatedAt.UTC()
+	query += ` order by observed_at desc, created_at desc, id asc`
+	rows, err := queryer.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
 	}
-	if item.UpdatedAt.IsZero() {
-		item.UpdatedAt = item.CreatedAt
-	} else {
-		item.UpdatedAt = item.UpdatedAt.UTC()
-	}
-	if item.ObservedAt.IsZero() {
-		item.ObservedAt = item.UpdatedAt
-	} else {
-		item.ObservedAt = item.ObservedAt.UTC()
-	}
-	if !item.InjectedAt.IsZero() {
-		item.InjectedAt = item.InjectedAt.UTC()
-	}
-	return item
+	defer rows.Close()
+	return scanReportDeliveryRows(rows)
 }
 
-func applyReportMailboxTimes(item *types.ReportMailboxItem, observedAtRaw, injectedTurnID, injectedAtRaw, createdAtRaw, updatedAtRaw string) {
-	if item == nil {
+func normalizeReport(report types.ReportRecord) types.ReportRecord {
+	now := time.Now().UTC()
+	report.SessionID = strings.TrimSpace(report.SessionID)
+	report.SourceKind = types.ReportMailboxSourceKind(strings.TrimSpace(string(report.SourceKind)))
+	report.SourceID = strings.TrimSpace(report.SourceID)
+	report.Envelope.Source = strings.TrimSpace(report.Envelope.Source)
+	report.Envelope.Status = strings.TrimSpace(report.Envelope.Status)
+	report.Envelope.Severity = strings.TrimSpace(report.Envelope.Severity)
+	report.Envelope.Title = strings.TrimSpace(report.Envelope.Title)
+	report.Envelope.Summary = strings.TrimSpace(report.Envelope.Summary)
+	if strings.TrimSpace(report.ID) == "" {
+		switch {
+		case report.SourceKind != "" && report.SourceID != "":
+			report.ID = fmt.Sprintf("%s:%s", report.SourceKind, report.SourceID)
+		case report.SourceID != "":
+			report.ID = report.SourceID
+		default:
+			report.ID = types.NewID("report")
+		}
+	}
+	if report.CreatedAt.IsZero() {
+		report.CreatedAt = now
+	} else {
+		report.CreatedAt = report.CreatedAt.UTC()
+	}
+	if report.UpdatedAt.IsZero() {
+		report.UpdatedAt = report.CreatedAt
+	} else {
+		report.UpdatedAt = report.UpdatedAt.UTC()
+	}
+	if report.ObservedAt.IsZero() {
+		report.ObservedAt = report.UpdatedAt
+	} else {
+		report.ObservedAt = report.ObservedAt.UTC()
+	}
+	return report
+}
+
+func normalizeReportDelivery(delivery types.ReportDelivery) types.ReportDelivery {
+	now := time.Now().UTC()
+	delivery.SessionID = strings.TrimSpace(delivery.SessionID)
+	delivery.ReportID = strings.TrimSpace(delivery.ReportID)
+	delivery.Channel = types.ReportChannel(strings.TrimSpace(string(delivery.Channel)))
+	delivery.State = types.ReportDeliveryState(strings.TrimSpace(string(delivery.State)))
+	delivery.InjectedTurnID = strings.TrimSpace(delivery.InjectedTurnID)
+	if delivery.Channel == "" {
+		delivery.Channel = types.ReportChannelMailbox
+	}
+	if delivery.State == "" {
+		delivery.State = types.ReportDeliveryStatePending
+	}
+	if strings.TrimSpace(delivery.ID) == "" {
+		delivery.ID = firstNonEmptyReportString(delivery.ReportID, types.NewID("report_delivery"))
+	}
+	if delivery.CreatedAt.IsZero() {
+		delivery.CreatedAt = now
+	} else {
+		delivery.CreatedAt = delivery.CreatedAt.UTC()
+	}
+	if delivery.UpdatedAt.IsZero() {
+		delivery.UpdatedAt = delivery.CreatedAt
+	} else {
+		delivery.UpdatedAt = delivery.UpdatedAt.UTC()
+	}
+	if delivery.ObservedAt.IsZero() {
+		delivery.ObservedAt = delivery.UpdatedAt
+	} else {
+		delivery.ObservedAt = delivery.ObservedAt.UTC()
+	}
+	if !delivery.InjectedAt.IsZero() {
+		delivery.InjectedAt = delivery.InjectedAt.UTC()
+	}
+	return delivery
+}
+
+func applyReportTimes(report *types.ReportRecord, observedAtRaw, createdAtRaw, updatedAtRaw string) {
+	if report == nil {
 		return
 	}
 	if parsed, err := parsePendingOptionalTime(observedAtRaw); err == nil {
-		item.ObservedAt = parsed
-	}
-	item.InjectedTurnID = strings.TrimSpace(injectedTurnID)
-	if parsed, err := parsePendingOptionalTime(injectedAtRaw); err == nil {
-		item.InjectedAt = parsed
+		report.ObservedAt = parsed
 	}
 	if parsed, err := parsePendingOptionalTime(createdAtRaw); err == nil {
-		item.CreatedAt = parsed
+		report.CreatedAt = parsed
 	}
 	if parsed, err := parsePendingOptionalTime(updatedAtRaw); err == nil {
-		item.UpdatedAt = parsed
+		report.UpdatedAt = parsed
 	}
+}
+
+func applyReportDeliveryTimes(delivery *types.ReportDelivery, observedAtRaw, injectedTurnID, injectedAtRaw, createdAtRaw, updatedAtRaw string) {
+	if delivery == nil {
+		return
+	}
+	if parsed, err := parsePendingOptionalTime(observedAtRaw); err == nil {
+		delivery.ObservedAt = parsed
+	}
+	delivery.InjectedTurnID = strings.TrimSpace(injectedTurnID)
+	if parsed, err := parsePendingOptionalTime(injectedAtRaw); err == nil {
+		delivery.InjectedAt = parsed
+	}
+	if parsed, err := parsePendingOptionalTime(createdAtRaw); err == nil {
+		delivery.CreatedAt = parsed
+	}
+	if parsed, err := parsePendingOptionalTime(updatedAtRaw); err == nil {
+		delivery.UpdatedAt = parsed
+	}
+}
+
+func mailboxItemToRecordDelivery(item types.ReportMailboxItem) (types.ReportRecord, types.ReportDelivery) {
+	report := normalizeReport(types.ReportRecord{
+		ID:         firstNonEmptyReportString(item.ReportID, item.ID),
+		SessionID:  item.SessionID,
+		SourceKind: item.SourceKind,
+		SourceID:   item.SourceID,
+		Envelope:   item.Envelope,
+		ObservedAt: item.ObservedAt,
+		CreatedAt:  item.CreatedAt,
+		UpdatedAt:  item.UpdatedAt,
+	})
+	delivery := normalizeReportDelivery(types.ReportDelivery{
+		ID:             firstNonEmptyReportString(item.DeliveryID, item.ID, report.ID),
+		SessionID:      item.SessionID,
+		ReportID:       report.ID,
+		Channel:        firstNonEmptyReportChannel(item.Channel, types.ReportChannelMailbox),
+		State:          firstNonEmptyReportState(item.DeliveryState, reportDeliveryStateFromInjection(item.InjectedTurnID)),
+		ObservedAt:     firstNonEmptyReportTime(item.ObservedAt, report.ObservedAt),
+		InjectedTurnID: item.InjectedTurnID,
+		InjectedAt:     item.InjectedAt,
+		CreatedAt:      item.CreatedAt,
+		UpdatedAt:      item.UpdatedAt,
+	})
+	return report, delivery
+}
+
+func reportDeliveryStateFromInjection(injectedTurnID string) types.ReportDeliveryState {
+	if strings.TrimSpace(injectedTurnID) != "" {
+		return types.ReportDeliveryStateDelivered
+	}
+	return types.ReportDeliveryStatePending
+}
+
+func firstNonEmptyReportString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyReportChannel(values ...types.ReportChannel) types.ReportChannel {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(string(value)); trimmed != "" {
+			return types.ReportChannel(trimmed)
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyReportState(values ...types.ReportDeliveryState) types.ReportDeliveryState {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(string(value)); trimmed != "" {
+			return types.ReportDeliveryState(trimmed)
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyReportTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value.UTC()
+		}
+	}
+	return time.Time{}
 }

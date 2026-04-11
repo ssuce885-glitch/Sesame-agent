@@ -1,172 +1,114 @@
 package toolrouter
 
 import (
-	"reflect"
 	"testing"
 
 	"go-agent/internal/skills"
+	"go-agent/internal/tools"
 )
 
-func TestDecideUsesRequestShapeBaseProfiles(t *testing.T) {
-	t.Run("codebase-edit", func(t *testing.T) {
-		got := Decide(DecideInput{Profile: "codebase-edit"})
-		want := []string{
-			"apply_patch",
-			"file_edit",
-			"file_read",
-			"file_write",
-			"glob",
-			"grep",
-			"list_dir",
-			"notebook_edit",
-			"request_permissions",
-			"request_user_input",
-			"schedule_report",
-			"skill_use",
-			"task_create",
-			"task_get",
-			"task_list",
-			"task_output",
-			"task_result",
-			"task_stop",
-			"task_update",
-			"task_wait",
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("Decide(codebase-edit) = %v, want %v", got, want)
-		}
-	})
+func TestDecideHotNewsUsesWebLookupProfile(t *testing.T) {
+	decision := Decide("帮我查今天热门新闻", nil)
+	if decision.Summary.Profile != ProfileWebLookup {
+		t.Fatalf("Profile = %q, want %q", decision.Summary.Profile, ProfileWebLookup)
+	}
 
-	t.Run("web-lookup", func(t *testing.T) {
-		got := Decide(DecideInput{Profile: "web-lookup"})
-		want := []string{
-			"file_read",
-			"glob",
-			"grep",
-			"list_dir",
-			"request_permissions",
-			"request_user_input",
-			"schedule_report",
-			"skill_use",
-			"task_create",
-			"task_get",
-			"task_list",
-			"task_output",
-			"task_result",
-			"task_stop",
-			"task_update",
-			"task_wait",
-			"view_image",
-			"web_fetch",
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("Decide(web-lookup) = %v, want %v", got, want)
-		}
+	filtered := decision.FilterDefinitions([]tools.Definition{
+		{Name: "web_fetch"},
+		{Name: "skill_use"},
+		{Name: "shell_command"},
+		{Name: "task_create"},
+		{Name: "file_read"},
 	})
-
-	t.Run("system-inspect", func(t *testing.T) {
-		got := Decide(DecideInput{Profile: "system-inspect"})
-		want := []string{
-			"file_read",
-			"glob",
-			"grep",
-			"list_dir",
-			"request_permissions",
-			"request_user_input",
-			"schedule_report",
-			"shell_command",
-			"skill_use",
-			"task_create",
-			"task_get",
-			"task_list",
-			"task_output",
-			"task_result",
-			"task_stop",
-			"task_update",
-			"task_wait",
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("Decide(system-inspect) = %v, want %v", got, want)
-		}
-	})
+	assertFilteredToolNames(t, filtered, []string{"web_fetch", "skill_use", "file_read"})
 }
 
-func TestDecideDoesNotFallbackForUnknownProfile(t *testing.T) {
-	got := Decide(DecideInput{Profile: "unknown-profile"})
-	want := []string{"skill_use"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Decide(unknown-profile) = %v, want %v", got, want)
+func TestDecideBrowserInteractionUsesBrowserAutomationProfile(t *testing.T) {
+	decision := Decide("打开 https://example.com 并点击按钮", nil)
+	if decision.Summary.Profile != ProfileBrowserAutomation {
+		t.Fatalf("Profile = %q, want %q", decision.Summary.Profile, ProfileBrowserAutomation)
+	}
+	if len(decision.Summary.SkillTags) != 1 || decision.Summary.SkillTags[0] != "browser_automation" {
+		t.Fatalf("SkillTags = %v, want [browser_automation]", decision.Summary.SkillTags)
 	}
 }
 
-func TestDecideKeepsSkillUseVisibleAndAppliesSkillOverlay(t *testing.T) {
-	got := Decide(DecideInput{
-		Profile: "web-lookup",
-		ActiveSkills: []skills.ActivatedSkill{
-			{
-				Skill: skills.SkillSpec{
-					Name:             "overlay-skill",
-					ToolDependencies: []string{"shell_command", "shell_command", "task_create"},
+func TestDecideScheduledWeatherReportUsesScheduledReportProfile(t *testing.T) {
+	decision := Decide("两分钟后告诉我天气", nil)
+	if decision.Summary.Profile != ProfileScheduledReport {
+		t.Fatalf("Profile = %q, want %q", decision.Summary.Profile, ProfileScheduledReport)
+	}
+
+	filtered := decision.FilterDefinitions([]tools.Definition{
+		{Name: "schedule_report"},
+		{Name: "skill_use"},
+		{Name: "task_create"},
+		{Name: "shell_command"},
+		{Name: "file_read"},
+		{Name: "web_fetch"},
+	})
+	assertFilteredToolNames(t, filtered, []string{"schedule_report"})
+}
+
+func TestDecideIncludesPreferredToolsFromActivatedSkills(t *testing.T) {
+	decision := Decide("which go", []skills.ActivatedSkill{
+		{
+			Skill: skills.SkillSpec{
+				Name: "system-info",
+				Policy: skills.SkillPolicy{
+					PreferredTools: []string{"shell_command"},
 				},
 			},
 		},
 	})
-
-	want := []string{
-		"file_read",
-		"glob",
-		"grep",
-		"list_dir",
-		"request_permissions",
-		"request_user_input",
-		"schedule_report",
-		"shell_command",
-		"skill_use",
-		"task_create",
-		"task_get",
-		"task_list",
-		"task_output",
-		"task_result",
-		"task_stop",
-		"task_update",
-		"task_wait",
-		"view_image",
-		"web_fetch",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Decide() = %v, want %v", got, want)
+	if len(decision.Summary.PreferredTools) == 0 || decision.Summary.PreferredTools[0] != "shell_command" {
+		t.Fatalf("PreferredTools = %v, want shell_command first", decision.Summary.PreferredTools)
 	}
 }
 
-func TestDecideDoesNotNormalizeOverlayDependencyNames(t *testing.T) {
-	got := Decide(DecideInput{
-		Profile: "web-lookup",
-		ActiveSkills: []skills.ActivatedSkill{
-			{
-				Skill: skills.SkillSpec{
-					Name:             "malformed-overlay",
-					ToolDependencies: []string{" shell_command ", ""},
-				},
+func TestDecideAllowsSkillGrantedToolUnderWebLookup(t *testing.T) {
+	decision := Decide("帮我查天气然后发邮件", []skills.ActivatedSkill{
+		{
+			Skill: skills.SkillSpec{
+				Name:         "send-email",
+				AllowedTools: []string{"shell_command"},
 			},
+			Reason: skills.ActivationReasonToolUse,
 		},
 	})
-
-	if !contains(got, " shell_command ") {
-		t.Fatalf("Decide() missing exact overlay dependency with whitespace: %v", got)
-	}
-	if !contains(got, "") {
-		t.Fatalf("Decide() missing empty-string overlay dependency: %v", got)
-	}
-	if contains(got, "shell_command") {
-		t.Fatalf("Decide() unexpectedly normalized whitespace dependency to shell_command: %v", got)
-	}
+	filtered := decision.FilterDefinitions([]tools.Definition{
+		{Name: "web_fetch"},
+		{Name: "skill_use"},
+		{Name: "shell_command"},
+	})
+	assertFilteredToolNames(t, filtered, []string{"web_fetch", "skill_use", "shell_command"})
 }
 
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
+func TestDecideAddsLegacyShellGrantForExplicitSkillUse(t *testing.T) {
+	decision := Decide("帮我发邮件", []skills.ActivatedSkill{
+		{
+			Skill: skills.SkillSpec{
+				Name: "send-email",
+			},
+			Reason: skills.ActivationReasonToolUse,
+		},
+	})
+	filtered := decision.FilterDefinitions([]tools.Definition{
+		{Name: "web_fetch"},
+		{Name: "skill_use"},
+		{Name: "shell_command"},
+	})
+	assertFilteredToolNames(t, filtered, []string{"web_fetch", "skill_use", "shell_command"})
+}
+
+func assertFilteredToolNames(t *testing.T, defs []tools.Definition, want []string) {
+	t.Helper()
+	if len(defs) != len(want) {
+		t.Fatalf("len(filtered) = %d, want %d (%v)", len(defs), len(want), want)
+	}
+	for index, def := range defs {
+		if def.Name != want[index] {
+			t.Fatalf("filtered[%d] = %q, want %q", index, def.Name, want[index])
 		}
 	}
-	return false
 }

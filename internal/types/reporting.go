@@ -59,14 +59,16 @@ type ScheduleSpec struct {
 }
 
 type ChildAgentSpec struct {
-	AgentID           string         `json:"agent_id"`
-	Purpose           string         `json:"purpose,omitempty"`
-	Mode              ChildAgentMode `json:"mode,omitempty"`
-	OutputContractRef string         `json:"output_contract_ref,omitempty"`
-	ReportGroups      []string       `json:"report_groups,omitempty"`
-	Schedule          ScheduleSpec   `json:"schedule,omitempty"`
-	CreatedAt         time.Time      `json:"created_at,omitempty"`
-	UpdatedAt         time.Time      `json:"updated_at,omitempty"`
+	AgentID             string         `json:"agent_id"`
+	SessionID           string         `json:"session_id,omitempty"`
+	Purpose             string         `json:"purpose,omitempty"`
+	Mode                ChildAgentMode `json:"mode,omitempty"`
+	ActivatedSkillNames []string       `json:"activated_skill_names,omitempty"`
+	OutputContractRef   string         `json:"output_contract_ref,omitempty"`
+	ReportGroups        []string       `json:"report_groups,omitempty"`
+	Schedule            ScheduleSpec   `json:"schedule,omitempty"`
+	CreatedAt           time.Time      `json:"created_at,omitempty"`
+	UpdatedAt           time.Time      `json:"updated_at,omitempty"`
 }
 
 type AggregationContract struct {
@@ -81,6 +83,7 @@ type DeliveryProfile struct {
 
 type ReportGroup struct {
 	GroupID     string              `json:"group_id"`
+	SessionID   string              `json:"session_id,omitempty"`
 	Title       string              `json:"title,omitempty"`
 	Sources     []string            `json:"sources,omitempty"`
 	Schedule    ScheduleSpec        `json:"schedule,omitempty"`
@@ -109,6 +112,7 @@ type ReportEnvelope struct {
 
 type ChildAgentResult struct {
 	ResultID        string         `json:"result_id"`
+	SessionID       string         `json:"session_id,omitempty"`
 	AgentID         string         `json:"agent_id"`
 	ContractID      string         `json:"contract_id,omitempty"`
 	RunID           string         `json:"run_id,omitempty"`
@@ -122,6 +126,7 @@ type ChildAgentResult struct {
 
 type DigestRecord struct {
 	DigestID        string          `json:"digest_id"`
+	SessionID       string          `json:"session_id,omitempty"`
 	GroupID         string          `json:"group_id"`
 	RunID           string          `json:"run_id,omitempty"`
 	TaskID          string          `json:"task_id,omitempty"`

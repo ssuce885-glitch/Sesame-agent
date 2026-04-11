@@ -24,7 +24,7 @@ func estimateConversationTokens(userText string, recentItems []model.Conversatio
 
 func estimateConversationItemTokens(item model.ConversationItem) int {
 	switch item.Kind {
-	case model.ConversationItemUserMessage, model.ConversationItemAssistantText:
+	case model.ConversationItemUserMessage, model.ConversationItemAssistantText, model.ConversationItemAssistantThinking:
 		return estimateTextTokens(item.Text) + 4
 	case model.ConversationItemToolResult:
 		content := item.Text

@@ -4,8 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
-	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -19,40 +18,17 @@ type CLIStartupOverrides struct {
 	WorkspaceRoot  string
 }
 
-type ModelProviderConfig struct {
-	ID        string
-	APIFamily string
-	BaseURL   string
-	APIKeyEnv string
-	ProfileID string
-	OrgID     string
-	ProjectID string
-}
-
-type ProfileConfig struct {
-	ID            string
-	Model         string
-	ModelProvider string
-	Reasoning     string
-	Verbosity     string
-	CacheProfile  string
-}
-
 type Config struct {
-	Addr           string
-	DataDir        string
-	ActiveProfile  string
-	ModelProviders map[string]ModelProviderConfig
-	Profiles       map[string]ProfileConfig
-
-	ModelProvider        string
-	Model                string
-	AnthropicAPIKey      string
-	AnthropicBaseURL     string
-	OpenAIAPIKey         string
-	OpenAIBaseURL        string
-	ProviderCacheProfile string
-
+	Addr                         string
+	DataDir                      string
+	ModelProvider                string
+	CompatMode                   string
+	Model                        string
+	AnthropicAPIKey              string
+	AnthropicBaseURL             string
+	OpenAIAPIKey                 string
+	OpenAIBaseURL                string
+	ProviderCacheProfile         string
 	CacheExpirySeconds           int
 	MicrocompactBytesThreshold   int
 	LogLevel                     string
@@ -81,14 +57,6 @@ type CLIConfig struct {
 	ShowExtensionsOnStartup bool
 }
 
-var (
-	ErrLegacyConfigFieldsUnsupported = errors.New("legacy config fields are no longer supported")
-	ErrActiveProfileRequired         = errors.New("active_profile is required")
-	ErrActiveProfileNotFound         = errors.New("active_profile not found")
-	ErrUnknownModelProvider          = errors.New("unknown model_provider")
-	ErrUnsupportedAPIFamily          = errors.New("unsupported api_family")
-)
-
 func Load() (Config, error) {
 	return loadConfig(CLIStartupOverrides{})
 }
@@ -113,40 +81,29 @@ func LoadCLIConfig() (CLIConfig, error) {
 
 func MissingSetupFields(cfg Config) []string {
 	missing := make([]string, 0, 4)
-	if strings.TrimSpace(cfg.ActiveProfile) == "" {
-		missing = append(missing, "active_profile")
+	if strings.TrimSpace(cfg.ModelProvider) == "" {
+		missing = append(missing, "provider")
+	}
+	if strings.TrimSpace(cfg.Model) == "" {
+		missing = append(missing, "model")
+	}
+
+	switch strings.TrimSpace(cfg.ModelProvider) {
+	case "fake":
 		return missing
+	case "openai_compatible":
+		if strings.TrimSpace(cfg.OpenAIBaseURL) == "" {
+			missing = append(missing, "openai.base_url")
+		}
+		if strings.TrimSpace(cfg.OpenAIAPIKey) == "" {
+			missing = append(missing, "openai.api_key")
+		}
+	default:
+		if strings.TrimSpace(cfg.AnthropicAPIKey) == "" {
+			missing = append(missing, "anthropic.api_key")
+		}
 	}
-	if len(cfg.Profiles) == 0 {
-		missing = append(missing, "profiles")
-		return missing
-	}
-	profile, ok := cfg.Profiles[strings.TrimSpace(cfg.ActiveProfile)]
-	if !ok {
-		missing = append(missing, "active_profile")
-		return missing
-	}
-	if strings.TrimSpace(profile.Model) == "" {
-		missing = append(missing, "profiles.<active>.model")
-	}
-	if strings.TrimSpace(profile.ModelProvider) == "" {
-		missing = append(missing, "profiles.<active>.model_provider")
-		return missing
-	}
-	provider, ok := cfg.ModelProviders[strings.TrimSpace(profile.ModelProvider)]
-	if !ok {
-		missing = append(missing, "profiles.<active>.model_provider")
-		return missing
-	}
-	if strings.TrimSpace(provider.APIFamily) == "" {
-		missing = append(missing, "model_providers.<active>.api_family")
-	}
-	if strings.TrimSpace(provider.APIKeyEnv) == "" {
-		missing = append(missing, "model_providers.<active>.api_key_env")
-	}
-	if strings.TrimSpace(provider.BaseURL) == "" {
-		missing = append(missing, "model_providers.<active>.base_url")
-	}
+
 	return missing
 }
 
@@ -171,9 +128,6 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if usesLegacyModelConfig(uc) {
-		return Config{}, fmt.Errorf("%w; rewrite config.json using model_providers, profiles, and active_profile", ErrLegacyConfigFieldsUnsupported)
-	}
 
 	workspaceRoot := strings.TrimSpace(overrides.WorkspaceRoot)
 	if workspaceRoot == "" {
@@ -188,66 +142,45 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		return Config{}, err
 	}
 
-	activeProfile := strings.TrimSpace(uc.ActiveProfile)
-	if activeProfile == "" {
-		return Config{}, ErrActiveProfileRequired
-	}
-
-	modelProviders := buildModelProviders(uc.ModelProviders)
-	profiles := buildProfiles(uc.Profiles)
-	if runtimeModelOverride := strings.TrimSpace(overrides.Model); runtimeModelOverride != "" {
-		if active, exists := profiles[activeProfile]; exists {
-			active.Model = runtimeModelOverride
-			profiles[activeProfile] = active
-		}
-	}
-	activeRuntimeProfile, ok := profiles[activeProfile]
-	if !ok {
-		return Config{}, fmt.Errorf("%w: %q", ErrActiveProfileNotFound, activeProfile)
-	}
-	activeRuntimeProvider, ok := modelProviders[activeRuntimeProfile.ModelProvider]
-	if !ok {
-		return Config{}, fmt.Errorf("%w: active_profile %q references %q", ErrUnknownModelProvider, activeProfile, activeRuntimeProfile.ModelProvider)
-	}
-	for profileID, profile := range profiles {
-		if _, ok := modelProviders[profile.ModelProvider]; !ok {
-			return Config{}, fmt.Errorf("%w: profile %q references %q", ErrUnknownModelProvider, profileID, profile.ModelProvider)
-		}
-	}
-	for providerID, provider := range modelProviders {
-		if !isSupportedAPIFamily(provider.APIFamily) {
-			return Config{}, fmt.Errorf("%w: model_provider %q uses %q", ErrUnsupportedAPIFamily, providerID, provider.APIFamily)
-		}
-	}
-
-	compatProvider := runtimeModelProviderFromAPIFamily(activeRuntimeProvider.APIFamily)
-	providerAPIKey := envOrDefault(strings.TrimSpace(activeRuntimeProvider.APIKeyEnv), "")
-	anthropicAPIKey := ""
-	anthropicBaseURL := ""
-	openAIAPIKey := ""
-	openAIBaseURL := ""
-	switch compatProvider {
-	case "anthropic":
-		anthropicAPIKey = providerAPIKey
-		anthropicBaseURL = strings.TrimSpace(activeRuntimeProvider.BaseURL)
-	case "openai_compatible":
-		openAIAPIKey = providerAPIKey
-		openAIBaseURL = strings.TrimSpace(activeRuntimeProvider.BaseURL)
-	}
+	modelProvider := firstNonEmpty(
+		envOrDefault("SESAME_MODEL_PROVIDER", ""),
+	)
+	compatMode := firstNonEmpty(
+		envOrDefault("SESAME_COMPAT_MODE", ""),
+		uc.CompatMode,
+	)
+	genericBaseURL := firstNonEmpty(
+		envOrDefault("SESAME_BASE_URL", ""),
+		uc.BaseURL,
+	)
+	genericAPIKey := firstNonEmpty(
+		envOrDefault("SESAME_API_KEY", ""),
+		uc.APIKey,
+	)
+	modelProvider = resolveModelProvider(modelProvider, compatMode, genericBaseURL)
+	modelProvider = firstNonEmpty(
+		modelProvider,
+		uc.Provider,
+		"anthropic",
+	)
+	model := firstNonEmpty(
+		strings.TrimSpace(overrides.Model),
+		envOrDefault("SESAME_MODEL", ""),
+		uc.Model,
+		providerModelFallback(modelProvider, uc),
+	)
 
 	cfg := Config{
 		Addr:                         firstNonEmpty(strings.TrimSpace(overrides.Addr), envOrDefaultWithFallback("SESAME_ADDR", uc.Listen.Addr, "127.0.0.1:4317")),
 		DataDir:                      paths.DataDir,
-		ActiveProfile:                activeProfile,
-		ModelProviders:               modelProviders,
-		Profiles:                     profiles,
-		ModelProvider:                compatProvider,
-		Model:                        activeRuntimeProfile.Model,
-		AnthropicAPIKey:              anthropicAPIKey,
-		AnthropicBaseURL:             anthropicBaseURL,
-		OpenAIAPIKey:                 openAIAPIKey,
-		OpenAIBaseURL:                openAIBaseURL,
-		ProviderCacheProfile:         firstNonEmpty(envOrDefault("SESAME_PROVIDER_CACHE_PROFILE", ""), activeRuntimeProfile.CacheProfile, "none"),
+		ModelProvider:                modelProvider,
+		CompatMode:                   compatMode,
+		Model:                        model,
+		AnthropicAPIKey:              selectedProviderAPIKey(modelProvider == "anthropic", genericAPIKey, envOrDefaultWithFallback("ANTHROPIC_API_KEY", uc.Anthropic.APIKey, "")),
+		AnthropicBaseURL:             selectedProviderBaseURL(modelProvider == "anthropic", genericBaseURL, envOrDefaultWithFallback("ANTHROPIC_BASE_URL", uc.Anthropic.BaseURL, ""), "https://api.anthropic.com"),
+		OpenAIAPIKey:                 selectedProviderAPIKey(modelProvider == "openai_compatible", genericAPIKey, envOrDefaultWithFallback("OPENAI_API_KEY", uc.OpenAI.APIKey, "")),
+		OpenAIBaseURL:                selectedProviderBaseURL(modelProvider == "openai_compatible", genericBaseURL, envOrDefaultWithFallback("OPENAI_BASE_URL", uc.OpenAI.BaseURL, ""), ""),
+		ProviderCacheProfile:         firstNonEmpty(envOrDefault("SESAME_PROVIDER_CACHE_PROFILE", ""), defaultProviderCacheProfile(modelProvider, uc, genericBaseURL), "none"),
 		CacheExpirySeconds:           intEnvOrDefault("SESAME_CACHE_EXPIRY_SECONDS", 86400),
 		MicrocompactBytesThreshold:   intEnvOrDefaultWithFallback("SESAME_MICROCOMPACT_BYTES_THRESHOLD", uc.MicrocompactBytesThreshold, 8192),
 		LogLevel:                     envOrDefault("SESAME_LOG_LEVEL", "info"),
@@ -276,42 +209,38 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 
 func (c Config) Fingerprint() string {
 	payload := struct {
-		Addr                         string                         `json:"addr"`
-		DataDir                      string                         `json:"data_dir"`
-		ActiveProfile                string                         `json:"active_profile"`
-		ModelProviders               map[string]ModelProviderConfig `json:"model_providers"`
-		Profiles                     map[string]ProfileConfig       `json:"profiles"`
-		ModelProvider                string                         `json:"provider"`
-		Model                        string                         `json:"model"`
-		AnthropicAPIKey              string                         `json:"anthropic_api_key"`
-		AnthropicBaseURL             string                         `json:"anthropic_base_url"`
-		OpenAIAPIKey                 string                         `json:"openai_api_key"`
-		OpenAIBaseURL                string                         `json:"openai_base_url"`
-		ProviderCacheProfile         string                         `json:"provider_cache_profile"`
-		LogLevel                     string                         `json:"log_level"`
-		PermissionProfile            string                         `json:"permission_profile"`
-		MaxToolSteps                 int                            `json:"max_tool_steps"`
-		MaxShellOutputBytes          int                            `json:"max_shell_output_bytes"`
-		ShellTimeoutSeconds          int                            `json:"shell_timeout_seconds"`
-		MaxFileWriteBytes            int                            `json:"max_file_write_bytes"`
-		MaxRecentItems               int                            `json:"max_recent_items"`
-		CompactionThreshold          int                            `json:"compaction_threshold"`
-		MaxEstimatedTokens           int                            `json:"max_estimated_tokens"`
-		MaxCompactionPasses          int                            `json:"max_compaction_passes"`
-		SystemPrompt                 string                         `json:"system_prompt"`
-		SystemPromptFile             string                         `json:"system_prompt_file"`
-		MaxWorkspacePromptBytes      int                            `json:"max_workspace_prompt_bytes"`
-		MaxConcurrentTasks           int                            `json:"max_concurrent_tasks"`
-		TaskOutputMaxBytes           int                            `json:"task_output_max_bytes"`
-		RemoteExecutorShimCommand    string                         `json:"remote_executor_shim_command"`
-		RemoteExecutorTimeoutSeconds int                            `json:"remote_executor_timeout_seconds"`
+		Addr                         string `json:"addr"`
+		DataDir                      string `json:"data_dir"`
+		ModelProvider                string `json:"provider"`
+		CompatMode                   string `json:"compat_mode"`
+		Model                        string `json:"model"`
+		AnthropicAPIKey              string `json:"anthropic_api_key"`
+		AnthropicBaseURL             string `json:"anthropic_base_url"`
+		OpenAIAPIKey                 string `json:"openai_api_key"`
+		OpenAIBaseURL                string `json:"openai_base_url"`
+		ProviderCacheProfile         string `json:"provider_cache_profile"`
+		LogLevel                     string `json:"log_level"`
+		PermissionProfile            string `json:"permission_profile"`
+		MaxToolSteps                 int    `json:"max_tool_steps"`
+		MaxShellOutputBytes          int    `json:"max_shell_output_bytes"`
+		ShellTimeoutSeconds          int    `json:"shell_timeout_seconds"`
+		MaxFileWriteBytes            int    `json:"max_file_write_bytes"`
+		MaxRecentItems               int    `json:"max_recent_items"`
+		CompactionThreshold          int    `json:"compaction_threshold"`
+		MaxEstimatedTokens           int    `json:"max_estimated_tokens"`
+		MaxCompactionPasses          int    `json:"max_compaction_passes"`
+		SystemPrompt                 string `json:"system_prompt"`
+		SystemPromptFile             string `json:"system_prompt_file"`
+		MaxWorkspacePromptBytes      int    `json:"max_workspace_prompt_bytes"`
+		MaxConcurrentTasks           int    `json:"max_concurrent_tasks"`
+		TaskOutputMaxBytes           int    `json:"task_output_max_bytes"`
+		RemoteExecutorShimCommand    string `json:"remote_executor_shim_command"`
+		RemoteExecutorTimeoutSeconds int    `json:"remote_executor_timeout_seconds"`
 	}{
 		Addr:                         c.Addr,
 		DataDir:                      c.DataDir,
-		ActiveProfile:                c.ActiveProfile,
-		ModelProviders:               c.ModelProviders,
-		Profiles:                     c.Profiles,
 		ModelProvider:                c.ModelProvider,
+		CompatMode:                   c.CompatMode,
 		Model:                        c.Model,
 		AnthropicAPIKey:              c.AnthropicAPIKey,
 		AnthropicBaseURL:             c.AnthropicBaseURL,
@@ -396,66 +325,40 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func buildModelProviders(userProviders map[string]UserConfigModelProvider) map[string]ModelProviderConfig {
-	if len(userProviders) == 0 {
-		return map[string]ModelProviderConfig{}
+func providerModelFallback(modelProvider string, uc UserConfig) string {
+	switch strings.TrimSpace(modelProvider) {
+	case "openai_compatible":
+		return firstNonEmpty(uc.OpenAI.Model, "gpt-4.1-mini")
+	case "fake":
+		return "fake-smoke"
+	default:
+		return firstNonEmpty(uc.Anthropic.Model, "claude-sonnet-4-5")
 	}
-	providers := make(map[string]ModelProviderConfig, len(userProviders))
-	for id, provider := range userProviders {
-		trimmedID := strings.TrimSpace(id)
-		if trimmedID == "" {
-			continue
-		}
-		providers[trimmedID] = ModelProviderConfig{
-			ID:        trimmedID,
-			APIFamily: strings.TrimSpace(provider.APIFamily),
-			BaseURL:   strings.TrimSpace(provider.BaseURL),
-			APIKeyEnv: strings.TrimSpace(provider.APIKeyEnv),
-			ProfileID: strings.TrimSpace(provider.ProfileID),
-			OrgID:     strings.TrimSpace(provider.OrgID),
-			ProjectID: strings.TrimSpace(provider.ProjectID),
-		}
-	}
-	return providers
 }
 
-func buildProfiles(userProfiles map[string]UserConfigProfile) map[string]ProfileConfig {
-	if len(userProfiles) == 0 {
-		return map[string]ProfileConfig{}
-	}
-	profiles := make(map[string]ProfileConfig, len(userProfiles))
-	for id, profile := range userProfiles {
-		trimmedID := strings.TrimSpace(id)
-		if trimmedID == "" {
-			continue
-		}
-		profiles[trimmedID] = ProfileConfig{
-			ID:            trimmedID,
-			Model:         strings.TrimSpace(profile.Model),
-			ModelProvider: strings.TrimSpace(profile.ModelProvider),
-			Reasoning:     strings.TrimSpace(profile.Reasoning),
-			Verbosity:     strings.TrimSpace(profile.Verbosity),
-			CacheProfile:  strings.TrimSpace(profile.CacheProfile),
-		}
-	}
-	return profiles
+func defaultProviderCacheProfile(modelProvider string, uc UserConfig, genericBaseURL string) string {
+	return firstNonEmpty(
+		uc.ProviderCacheProfile,
+		inferProviderCacheProfile(modelProvider, firstNonEmpty(genericBaseURL, uc.OpenAI.BaseURL)),
+	)
 }
 
-func runtimeModelProviderFromAPIFamily(apiFamily string) string {
-	normalized := strings.ToLower(strings.TrimSpace(apiFamily))
-	switch normalized {
-	case "anthropic_messages":
-		return "anthropic"
-	case "openai_responses":
-		return "openai_compatible"
+func inferProviderCacheProfile(modelProvider, baseURL string) string {
+	if strings.TrimSpace(modelProvider) != "openai_compatible" {
+		return ""
+	}
+
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	path := strings.ToLower(parsed.Path)
+	if strings.HasPrefix(host, "ark.") && strings.Contains(host, "volces.com") {
+		return "ark_responses"
+	}
+	if strings.Contains(host, "volces.com") && strings.HasPrefix(path, "/api/") {
+		return "ark_responses"
 	}
 	return ""
-}
-
-func isSupportedAPIFamily(apiFamily string) bool {
-	return runtimeModelProviderFromAPIFamily(apiFamily) != ""
-}
-
-func usesLegacyModelConfig(uc UserConfig) bool {
-	return uc.UsesLegacyModelConfig()
 }

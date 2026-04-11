@@ -20,11 +20,12 @@ type ConversationItemKind string
 type ContentPartType string
 
 const (
-	ConversationItemUserMessage   ConversationItemKind = "user_message"
-	ConversationItemAssistantText ConversationItemKind = "assistant_text"
-	ConversationItemToolCall      ConversationItemKind = "tool_call"
-	ConversationItemToolResult    ConversationItemKind = "tool_result"
-	ConversationItemSummary       ConversationItemKind = "summary"
+	ConversationItemUserMessage       ConversationItemKind = "user_message"
+	ConversationItemAssistantText     ConversationItemKind = "assistant_text"
+	ConversationItemAssistantThinking ConversationItemKind = "assistant_thinking"
+	ConversationItemToolCall          ConversationItemKind = "tool_call"
+	ConversationItemToolResult        ConversationItemKind = "tool_result"
+	ConversationItemSummary           ConversationItemKind = "summary"
 )
 
 const (
@@ -65,6 +66,10 @@ func UserMessageItem(text string) ConversationItem {
 	return ConversationItem{Kind: ConversationItemUserMessage, Text: text}
 }
 
+func AssistantThinkingItem(text string) ConversationItem {
+	return ConversationItem{Kind: ConversationItemAssistantThinking, Text: text}
+}
+
 func UserMultipartItem(parts []ContentPart) ConversationItem {
 	return ConversationItem{Kind: ConversationItemUserMessage, Parts: cloneContentParts(parts)}
 }
@@ -99,6 +104,7 @@ type StreamEventKind string
 
 const (
 	StreamEventTextDelta        StreamEventKind = "text_delta"
+	StreamEventThinkingDelta    StreamEventKind = "thinking_delta"
 	StreamEventToolCallStart    StreamEventKind = "tool_call_start"
 	StreamEventToolCallDelta    StreamEventKind = "tool_call_delta"
 	StreamEventToolCallEnd      StreamEventKind = "tool_call_end"

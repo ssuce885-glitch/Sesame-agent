@@ -9,46 +9,30 @@ import (
 )
 
 type UserConfig struct {
-	Listen                     UserConfigListen                   `json:"listen"`
-	DataDir                    string                             `json:"data_dir"`
-	PermissionProfile          string                             `json:"permission_profile"`
-	SystemPrompt               string                             `json:"system_prompt"`
-	SystemPromptFile           string                             `json:"system_prompt_file"`
-	Skills                     UserConfigSkills                   `json:"skills"`
-	ActiveProfile              string                             `json:"active_profile"`
-	ModelProviders             map[string]UserConfigModelProvider `json:"model_providers"`
-	Profiles                   map[string]UserConfigProfile       `json:"profiles"`
-	MaxToolSteps               int                                `json:"max_tool_steps"`
-	MaxRecentItems             int                                `json:"max_recent_items"`
-	CompactionThreshold        int                                `json:"compaction_threshold"`
-	MaxEstimatedTokens         int                                `json:"max_estimated_tokens"`
-	MicrocompactBytesThreshold int                                `json:"microcompact_bytes_threshold"`
-	MaxCompactionPasses        int                                `json:"max_compaction_passes"`
-
-	Provider             string              `json:"-"`
-	Model                string              `json:"-"`
-	ProviderCacheProfile string              `json:"-"`
-	Anthropic            UserConfigAnthropic `json:"-"`
-	OpenAI               UserConfigOpenAI    `json:"-"`
-
-	hasLegacyModelConfig bool
+	Listen                     UserConfigListen    `json:"listen"`
+	Provider                   string              `json:"provider"`
+	CompatMode                 string              `json:"compat_mode"`
+	Model                      string              `json:"model"`
+	BaseURL                    string              `json:"base_url"`
+	APIKey                     string              `json:"api_key"`
+	DataDir                    string              `json:"data_dir"`
+	PermissionProfile          string              `json:"permission_profile"`
+	ProviderCacheProfile       string              `json:"provider_cache_profile"`
+	SystemPrompt               string              `json:"system_prompt"`
+	SystemPromptFile           string              `json:"system_prompt_file"`
+	Anthropic                  UserConfigAnthropic `json:"anthropic"`
+	OpenAI                     UserConfigOpenAI    `json:"openai"`
+	Skills                     UserConfigSkills    `json:"skills"`
+	MaxToolSteps               int                 `json:"max_tool_steps"`
+	MaxRecentItems             int                 `json:"max_recent_items"`
+	CompactionThreshold        int                 `json:"compaction_threshold"`
+	MaxEstimatedTokens         int                 `json:"max_estimated_tokens"`
+	MicrocompactBytesThreshold int                 `json:"microcompact_bytes_threshold"`
+	MaxCompactionPasses        int                 `json:"max_compaction_passes"`
 }
 
 type UserConfigListen struct {
 	Addr string `json:"addr"`
-}
-
-type UserConfigSkills struct {
-	Enabled []string `json:"enabled"`
-}
-
-type UserConfigModelProvider struct {
-	APIFamily string `json:"api_family"`
-	BaseURL   string `json:"base_url"`
-	APIKeyEnv string `json:"api_key_env"`
-	ProfileID string `json:"provider_profile,omitempty"`
-	OrgID     string `json:"org_id,omitempty"`
-	ProjectID string `json:"project_id,omitempty"`
 }
 
 type UserConfigAnthropic struct {
@@ -63,12 +47,13 @@ type UserConfigOpenAI struct {
 	Model   string `json:"model"`
 }
 
-type UserConfigProfile struct {
-	Model         string `json:"model"`
-	ModelProvider string `json:"model_provider"`
-	Reasoning     string `json:"reasoning,omitempty"`
-	Verbosity     string `json:"verbosity,omitempty"`
-	CacheProfile  string `json:"cache_profile,omitempty"`
+type UserConfigSkills struct {
+	Entries map[string]UserConfigSkillEntry `json:"entries"`
+}
+
+type UserConfigSkillEntry struct {
+	Enabled *bool             `json:"enabled,omitempty"`
+	Env     map[string]string `json:"env"`
 }
 
 type CLIConfigFile struct {
@@ -80,7 +65,11 @@ func loadUserConfig() (UserConfig, error) {
 	if err != nil {
 		return UserConfig{}, err
 	}
-	data, err := os.ReadFile(paths.GlobalConfigFile)
+	return loadUserConfigFromPath(paths.GlobalConfigFile)
+}
+
+func loadUserConfigFromPath(path string) (UserConfig, error) {
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return UserConfig{}, nil
 	}
@@ -89,13 +78,56 @@ func loadUserConfig() (UserConfig, error) {
 	}
 	var cfg UserConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return UserConfig{}, fmt.Errorf("%s: %w", paths.GlobalConfigFile, err)
+		return UserConfig{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return cfg, nil
 }
 
 func LoadUserConfig() (UserConfig, error) {
 	return loadUserConfig()
+}
+
+func LoadUserConfigFromGlobalRoot(globalRoot string) (UserConfig, error) {
+	globalRoot = strings.TrimSpace(globalRoot)
+	if globalRoot == "" {
+		return loadUserConfig()
+	}
+	return loadUserConfigFromPath(filepath.Join(globalRoot, "config.json"))
+}
+
+func MergedSkillEnv(globalRoot string, skillNames []string) (map[string]string, error) {
+	if len(skillNames) == 0 {
+		return nil, nil
+	}
+	cfg, err := LoadUserConfigFromGlobalRoot(globalRoot)
+	if err != nil {
+		return nil, err
+	}
+	if len(cfg.Skills.Entries) == 0 {
+		return nil, nil
+	}
+
+	out := make(map[string]string)
+	for _, skillName := range skillNames {
+		entry, ok := lookupSkillEntry(cfg.Skills.Entries, skillName)
+		if !ok {
+			continue
+		}
+		if entry.Enabled != nil && !*entry.Enabled {
+			continue
+		}
+		for key, value := range entry.Env {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 func WriteUserConfig(cfg UserConfig) error {
@@ -129,20 +161,8 @@ func EnsureUserConfigFile() (string, bool, error) {
 	}
 	template := UserConfig{
 		PermissionProfile: "trusted_local",
-		ActiveProfile:     "default",
-		ModelProviders: map[string]UserConfigModelProvider{
-			"anthropic": {
-				APIFamily: "anthropic_messages",
-				BaseURL:   "https://api.anthropic.com",
-				APIKeyEnv: "ANTHROPIC_API_KEY",
-			},
-		},
-		Profiles: map[string]UserConfigProfile{
-			"default": {
-				Model:         "claude-sonnet-4-5",
-				ModelProvider: "anthropic",
-				CacheProfile:  "anthropic_default",
-			},
+		Anthropic: UserConfigAnthropic{
+			BaseURL: "https://api.anthropic.com",
 		},
 	}
 	if err := WriteUserConfig(template); err != nil {
@@ -229,45 +249,35 @@ func pathJoin(root string, elems ...string) string {
 	return filepath.Join(parts...)
 }
 
-func (c *UserConfig) UnmarshalJSON(data []byte) error {
-	type alias UserConfig
-	var out alias
-	if err := json.Unmarshal(data, &out); err != nil {
-		return err
+func lookupSkillEntry(entries map[string]UserConfigSkillEntry, name string) (UserConfigSkillEntry, bool) {
+	want := canonicalSkillConfigName(name)
+	if want == "" {
+		return UserConfigSkillEntry{}, false
 	}
-	*c = UserConfig(out)
-
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
+	for entryName, entry := range entries {
+		if canonicalSkillConfigName(entryName) == want {
+			return entry, true
+		}
 	}
-	c.hasLegacyModelConfig = hasAnyNonNullKey(raw,
-		"provider",
-		"model",
-		"base_url",
-		"api_key",
-		"compat_mode",
-		"provider_cache_profile",
-		"anthropic",
-		"openai",
-	)
-	return nil
+	return UserConfigSkillEntry{}, false
 }
 
-func (c UserConfig) UsesLegacyModelConfig() bool {
-	return c.hasLegacyModelConfig
-}
-
-func hasAnyNonNullKey(raw map[string]json.RawMessage, keys ...string) bool {
-	for _, key := range keys {
-		value, ok := raw[key]
-		if !ok {
-			continue
-		}
-		if strings.TrimSpace(string(value)) == "null" {
-			continue
-		}
-		return true
+func canonicalSkillConfigName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
 	}
-	return false
+	var builder strings.Builder
+	builder.Grow(len(name))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '.':
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
 }

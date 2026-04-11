@@ -2,132 +2,279 @@ package instructions
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"go-agent/internal/skills"
+	"go-agent/internal/toolrouter"
 )
 
-type CompileInput struct {
-	Catalog              skills.Catalog
-	Active               []skills.ActivatedSkill
-	VisibleTools         []string
-	PreviousVisibleTools []string
+type Section struct {
+	Title string
+	Body  string
 }
 
 type Bundle struct {
-	sections []string
+	BaseText       string
+	Sections       []Section
+	Notices        []string
+	ActiveSkills   []skills.ActivatedSkill
+	ToolPolicy     toolrouter.PolicySummary
+	VisibleToolIDs []string
 }
 
-func Compile(in CompileInput) (Bundle, error) {
-	sections := make([]string, 0, 2)
-	if section := renderCatalogSection(in.Catalog); strings.TrimSpace(section) != "" {
-		sections = append(sections, section)
+type CompileInput struct {
+	BaseText     string
+	Catalog      skills.Catalog
+	Message      string
+	Policy       toolrouter.PolicySummary
+	VisibleTools []string
+	ActiveSkills []skills.ActivatedSkill
+}
+
+func Compile(input CompileInput) Bundle {
+	activated := append([]skills.ActivatedSkill(nil), input.ActiveSkills...)
+	if len(activated) == 0 {
+		activated = skills.Activate(input.Catalog, input.Message)
+	}
+	retrieval := skills.Retrieve(input.Catalog, input.Message, activated)
+	notices := skills.ActivationNotices(activated)
+	sections := make([]Section, 0, 4)
+	injection := skills.BuildPromptInjection(
+		activated,
+		retrieval.Suggested,
+		toolVisible(input.VisibleTools, "skill_use"),
+	)
+
+	if summary := strings.TrimSpace(injection.ImplicitHints); summary != "" {
+		sections = append(sections, Section{
+			Title: "Implicit skill hints",
+			Body:  summary,
+		})
+	}
+	if relevantSkills := strings.TrimSpace(injection.RelevantSkills); relevantSkills != "" {
+		sections = append(sections, Section{
+			Title: "Relevant skills",
+			Body:  relevantSkills,
+		})
+	}
+	if activatedSection := strings.TrimSpace(injection.ActivatedSkills); activatedSection != "" {
+		sections = append(sections, Section{
+			Title: "Activated skills",
+			Body:  activatedSection,
+		})
+	}
+	if catalogSnapshot := renderCatalogSnapshotIfRequested(input.Catalog, input.Message); strings.TrimSpace(catalogSnapshot) != "" {
+		sections = append(sections, Section{
+			Title: "Catalog snapshot",
+			Body:  catalogSnapshot,
+		})
+	}
+	if routingSection := renderToolPolicySection(input.Policy, input.VisibleTools); strings.TrimSpace(routingSection) != "" {
+		sections = append(sections, Section{
+			Title: "Tool routing",
+			Body:  routingSection,
+		})
 	}
 
-	if len(in.Active) == 0 {
-		if len(sections) == 0 {
-			return Bundle{}, nil
-		}
-		return Bundle{sections: sections}, nil
+	return Bundle{
+		BaseText:       strings.TrimSpace(input.BaseText),
+		Sections:       sections,
+		Notices:        notices,
+		ActiveSkills:   activated,
+		ToolPolicy:     input.Policy,
+		VisibleToolIDs: append([]string(nil), input.VisibleTools...),
 	}
-
-	activeSection := renderActiveSkillSection(in.Active, in.VisibleTools, in.PreviousVisibleTools)
-	if strings.TrimSpace(activeSection) != "" {
-		sections = append(sections, activeSection)
-	}
-	if len(sections) == 0 {
-		return Bundle{}, nil
-	}
-	return Bundle{sections: sections}, nil
 }
 
 func (b Bundle) Render() string {
-	return strings.Join(b.sections, "\n\n")
+	parts := make([]string, 0, len(b.Sections)+1)
+	if strings.TrimSpace(b.BaseText) != "" {
+		parts = append(parts, strings.TrimSpace(b.BaseText))
+	}
+	for _, section := range b.Sections {
+		body := strings.TrimSpace(section.Body)
+		if body == "" {
+			continue
+		}
+		if title := strings.TrimSpace(section.Title); title != "" {
+			parts = append(parts, "## "+title+"\n"+body)
+			continue
+		}
+		parts = append(parts, body)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
-func renderCatalogSection(catalog skills.Catalog) string {
-	lines := make([]string, 0, len(catalog.Skills)+6)
-	lines = append(lines, "Installed local skills:")
+func renderToolPolicySection(policy toolrouter.PolicySummary, visibleTools []string) string {
+	lines := make([]string, 0, 12)
+	if policy.Profile != "" {
+		lines = append(lines, "Profile: "+string(policy.Profile))
+	}
+	for _, line := range policy.Guidance {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			lines = append(lines, "- "+trimmed)
+		}
+	}
+	if len(policy.PreferredTools) > 0 {
+		lines = append(lines, "- Preferred tools: "+strings.Join(policy.PreferredTools, ", "))
+	}
+	if len(policy.HiddenTools) > 0 {
+		lines = append(lines, "- Hidden tools for this turn: "+strings.Join(policy.HiddenTools, ", "))
+	}
+	if len(visibleTools) > 0 {
+		lines = append(lines, "- Model-visible tools: "+strings.Join(visibleTools, ", "))
+	}
+	if policy.MaxSteps > 0 || policy.MaxFetches > 0 {
+		parts := make([]string, 0, 2)
+		if policy.MaxSteps > 0 {
+			parts = append(parts, "max_steps="+fmt.Sprint(policy.MaxSteps))
+		}
+		if policy.MaxFetches > 0 {
+			parts = append(parts, "max_fetches="+fmt.Sprint(policy.MaxFetches))
+		}
+		lines = append(lines, "- Soft limits: "+strings.Join(parts, ", "))
+	}
+	for _, line := range policy.ForbiddenActions {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			lines = append(lines, "- Forbidden: "+trimmed)
+		}
+	}
+	for _, line := range policy.StopConditions {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			lines = append(lines, "- Stop when: "+trimmed)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderCatalogSnapshotIfRequested(catalog skills.Catalog, message string) string {
+	message = strings.ToLower(strings.TrimSpace(message))
+	if message == "" {
+		return ""
+	}
+
+	includeSkills := isCatalogSkillQuery(message)
+	includeTools := isCatalogToolQuery(message)
+	if !includeSkills && !includeTools {
+		return ""
+	}
+
+	lines := make([]string, 0, 16)
+	lines = append(lines, "- Installed catalog is separate from turn-visible tools for this request.")
+
+	if includeSkills {
+		lines = append(lines, renderSkillCatalogSnapshot(catalog)...)
+	}
+	if includeTools {
+		lines = append(lines, renderToolCatalogSnapshot(catalog)...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func isCatalogSkillQuery(message string) bool {
+	for _, needle := range []string{
+		"/skills",
+		"skills folder",
+		"skill folder",
+		"skill list",
+		"installed skill",
+		"available skill",
+		"what skills",
+		"which skills",
+		"你的skills",
+		"skills文件夹",
+		"skill文件夹",
+		"技能",
+		"skill",
+		"skills",
+	} {
+		if strings.Contains(message, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCatalogToolQuery(message string) bool {
+	for _, needle := range []string{
+		"/tools",
+		"tool list",
+		"installed tool",
+		"available tool",
+		"what tools",
+		"which tools",
+		"你的tools",
+		"tools文件夹",
+		"tool文件夹",
+		"工具列表",
+		"工具",
+		"tools",
+	} {
+		if strings.Contains(message, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func renderSkillCatalogSnapshot(catalog skills.Catalog) []string {
+	lines := []string{
+		"- Skill directories:",
+	}
+	if dir := strings.TrimSpace(catalog.SkillDirs.System); dir != "" {
+		lines = append(lines, "  system: "+dir)
+	}
+	if dir := strings.TrimSpace(catalog.SkillDirs.Global); dir != "" {
+		lines = append(lines, "  global: "+dir)
+	}
+	if dir := strings.TrimSpace(catalog.SkillDirs.Workspace); dir != "" {
+		lines = append(lines, "  workspace: "+dir)
+	}
 	if len(catalog.Skills) == 0 {
-		lines = append(lines, "- (none installed)")
-	} else {
-		for _, skill := range catalog.Skills {
-			line := fmt.Sprintf("- %s [%s]", skill.Name, skill.Scope)
-			if desc := strings.TrimSpace(skill.Description); desc != "" {
-				line += ": " + desc
-			}
-			lines = append(lines, line)
-		}
+		lines = append(lines, "- Installed skills: none")
+		return lines
 	}
-	lines = append(lines, "Use the `skill_use` tool call with the exact installed skill name to activate a skill.")
-	return strings.Join(lines, "\n")
+	lines = append(lines, "- Installed skills:")
+	for _, skill := range catalog.Skills {
+		line := fmt.Sprintf("  - %s [%s]", skill.Name, skill.Scope)
+		if description := strings.TrimSpace(skill.Description); description != "" {
+			line += ": " + description
+		}
+		if path := strings.TrimSpace(skill.Path); path != "" {
+			line += " (" + path + ")"
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
-func renderActiveSkillSection(active []skills.ActivatedSkill, visibleTools []string, previousVisibleTools []string) string {
-	lines := make([]string, 0, len(active)*3+4)
-	lines = append(lines, "Activated local skills:")
-
-	for _, activated := range active {
-		spec := activated.Skill
-		lines = append(lines, "")
-		lines = append(lines, fmt.Sprintf("## %s (%s)", spec.Name, spec.Scope))
-		if strings.TrimSpace(activated.Body) != "" {
-			lines = append(lines, activated.Body)
-		}
+func renderToolCatalogSnapshot(catalog skills.Catalog) []string {
+	if len(catalog.Tools) == 0 {
+		return []string{"- Installed local tool assets: none"}
 	}
-
-	newTools := newlyEnabledTools(active, visibleTools, previousVisibleTools)
-	if len(newTools) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, "Newly enabled tools:")
-		for _, tool := range newTools {
-			lines = append(lines, "- "+tool)
+	lines := []string{"- Installed local tool assets:"}
+	for _, tool := range catalog.Tools {
+		line := fmt.Sprintf("  - %s [%s]", tool.Name, tool.Scope)
+		if description := strings.TrimSpace(tool.Description); description != "" {
+			line += ": " + description
 		}
+		if path := strings.TrimSpace(tool.Path); path != "" {
+			line += " (" + path + ")"
+		}
+		lines = append(lines, line)
 	}
-
-	return strings.Join(lines, "\n")
+	return lines
 }
 
-func newlyEnabledTools(active []skills.ActivatedSkill, visibleTools []string, previousVisibleTools []string) []string {
-	previouslyVisible := make(map[string]struct{}, len(previousVisibleTools))
-	for _, tool := range previousVisibleTools {
-		tool = strings.TrimSpace(tool)
-		if tool == "" {
-			continue
-		}
-		previouslyVisible[tool] = struct{}{}
+func toolVisible(visibleTools []string, name string) bool {
+	want := strings.ToLower(strings.TrimSpace(name))
+	if want == "" {
+		return false
 	}
-
-	activeDependencies := make(map[string]struct{}, 8)
-	for _, activated := range active {
-		for _, tool := range activated.Skill.ToolDependencies {
-			tool = strings.TrimSpace(tool)
-			if tool == "" {
-				continue
-			}
-			activeDependencies[tool] = struct{}{}
+	for _, toolName := range visibleTools {
+		if strings.ToLower(strings.TrimSpace(toolName)) == want {
+			return true
 		}
 	}
-
-	newlyVisible := make(map[string]struct{}, len(visibleTools))
-	for _, tool := range visibleTools {
-		tool = strings.TrimSpace(tool)
-		if tool == "" {
-			continue
-		}
-		if _, wasVisible := previouslyVisible[tool]; wasVisible {
-			continue
-		}
-		newlyVisible[tool] = struct{}{}
-	}
-
-	added := make([]string, 0, len(newlyVisible))
-	for tool := range newlyVisible {
-		if _, requiredByActiveSkill := activeDependencies[tool]; requiredByActiveSkill {
-			added = append(added, tool)
-		}
-	}
-	slices.Sort(added)
-	return added
+	return false
 }

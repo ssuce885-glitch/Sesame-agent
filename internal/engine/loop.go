@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
+	"go-agent/internal/config"
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/instructions"
 	"go-agent/internal/model"
@@ -113,7 +113,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		cacheHead = &cacheHeadValue
 	}
 
-	instructions, err := buildRuntimeInstructionsWithMaxBytes(in.Session, e.basePrompt, working.MemoryRefs, e.maxWorkspacePromptBytes)
+	runtimeInstructions, err := buildRuntimeInstructionsWithMaxBytes(in.Session, e.basePrompt, working.MemoryRefs, e.maxWorkspacePromptBytes)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
@@ -127,36 +127,64 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 		return err
 	}
-	instructions.Notices = append(instructions.Notices, completionNotices...)
-	baseRuntimeInstructions := instructions.Text
-	completionPrompt := pendingTaskCompletionPromptSection(completionNotices)
-	reportPrompt := pendingReportMailboxPromptSection(reportMailboxItems)
-	requestProfile := detectRequestShapeProfile(in.Turn.UserMessage)
-	skillState, err := buildTurnSkillState(catalog, requestProfile, toolRuntime, toolExecCtx, initialActivatedSkillNames(in), nil)
+	activeSkills := skills.Activate(catalog, in.Turn.UserMessage)
+	activeSkills = skills.MergeActivatedSkills(
+		activeSkills,
+		skills.SelectByNames(catalog, in.ActivatedSkillNames, skills.ActivationReasonInherited),
+	)
+	retrieval := skills.Retrieve(catalog, in.Turn.UserMessage, activeSkills)
+	activeSkills = skills.MergeActivatedSkills(activeSkills, retrieval.Selected)
+	toolState := resolveTurnToolState(in.Turn.UserMessage, catalog, toolRuntime, toolExecCtx, activeSkills)
+	activeSkills = toolState.ActiveSkills
+	toolExecCtx.ActiveSkillNames = activatedSkillNames(activeSkills)
+	toolExecCtx.InjectedEnv, err = loadActivatedSkillEnv(e.globalConfigRoot, activeSkills)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
 		}
 		return err
 	}
-	toolExecCtx.ActiveSkillNames = skills.ActiveSkillNames(skillState.Active)
-	toolExecCtx.KnownToolNames = skillState.KnownToolNames
-	toolExecCtx.VisibleToolNames = skillState.VisibleToolNames
-	instructions.Text = composeTurnInstructions(baseRuntimeInstructions, skillState.SkillPrompt, completionPrompt, reportPrompt)
+	toolDecision := toolState.Decision
+	visibleDefs := toolState.VisibleDefs
+	instructionBundle := instructions.Compile(instructions.CompileInput{
+		BaseText:     runtimeInstructions.Text,
+		Catalog:      catalog,
+		Message:      in.Turn.UserMessage,
+		Policy:       toolDecision.Summary,
+		VisibleTools: toolState.VisibleToolNames,
+		ActiveSkills: activeSkills,
+	})
+	runtimeInstructions.Text = instructionBundle.Render()
+	runtimeInstructions.Notices = append(runtimeInstructions.Notices, instructionBundle.Notices...)
+	runtimeInstructions.Notices = append(runtimeInstructions.Notices, completionNotices...)
+	if completionPrompt := pendingTaskCompletionPromptSection(completionNotices); strings.TrimSpace(completionPrompt) != "" {
+		if strings.TrimSpace(runtimeInstructions.Text) == "" {
+			runtimeInstructions.Text = completionPrompt
+		} else {
+			runtimeInstructions.Text += "\n\n" + completionPrompt
+		}
+	}
+	if reportPrompt := pendingReportMailboxPromptSection(reportMailboxItems); strings.TrimSpace(reportPrompt) != "" {
+		if strings.TrimSpace(runtimeInstructions.Text) == "" {
+			runtimeInstructions.Text = reportPrompt
+		} else {
+			runtimeInstructions.Text += "\n\n" + reportPrompt
+		}
+	}
 	req := e.runtime.PrepareRequest(
 		working,
 		cacheHead,
 		caps,
 		resumeAwareUserItem(in),
-		instructions.Text,
+		runtimeInstructions.Text,
 	)
-	for _, notice := range instructions.Notices {
+	for _, notice := range runtimeInstructions.Notices {
 		if err := emit(types.EventSystemNotice, types.NoticePayload{Text: notice}); err != nil {
 			return err
 		}
 	}
 	req.Stream = true
-	req.Tools = buildToolSchemas(skillState.VisibleDefs)
+	req.Tools = buildToolSchemas(visibleDefs)
 	req.ToolChoice = "auto"
 	nativeContinuation := req.Cache != nil && caps.Profile != model.CapabilityProfileNone
 	assistantStarted := false
@@ -198,6 +226,16 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 
 		for event := range stream {
 			switch event.Kind {
+			case model.StreamEventThinkingDelta:
+				if strings.TrimSpace(event.TextDelta) == "" {
+					continue
+				}
+				lastIndex := len(orderedAssistantItems) - 1
+				if lastIndex >= 0 && orderedAssistantItems[lastIndex].Kind == model.ConversationItemAssistantThinking {
+					orderedAssistantItems[lastIndex].Text += event.TextDelta
+				} else {
+					orderedAssistantItems = append(orderedAssistantItems, model.AssistantThinkingItem(event.TextDelta))
+				}
 			case model.StreamEventTextDelta:
 				if !assistantStarted {
 					if err := emit(types.EventAssistantStarted, struct{}{}); err != nil {
@@ -286,20 +324,14 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			hasUsage = true
 		}
 
-		for _, assistantItem := range orderedAssistantItems {
-			if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, assistantItem); err != nil {
+		if len(toolCalls) == 0 {
+			nextPosition, _, err = flushAssistantItems(ctx, e.store, sessionID, in.Turn.ID, nextPosition, orderedAssistantItems, 0, "", &req, nativeContinuation)
+			if err != nil {
 				if emitErr := emitFailed(err.Error()); emitErr != nil {
 					return errors.Join(err, emitErr)
 				}
 				return err
 			}
-			if assistantItem.Kind == model.ConversationItemToolCall || !nativeContinuation {
-				req.Items = append(req.Items, assistantItem)
-			}
-			nextPosition++
-		}
-
-		if len(toolCalls) == 0 {
 			if !messageEnded {
 				err := fmt.Errorf("model stream ended without message_end signal")
 				if emitErr := emitFailed(err.Error()); emitErr != nil {
@@ -341,6 +373,8 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 
 		callOffset := 0
+		assistantCursor := 0
+		persistRemainingAssistantItems := true
 		for _, batch := range toolRuntime.PlanBatches(callInputs, toolExecCtx) {
 			if callOffset+len(batch.Calls) > len(toolCalls) {
 				err := fmt.Errorf("tool batch size mismatch")
@@ -392,6 +426,13 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			stopAfterBatch := false
 			for index, execResult := range executed {
 				call := batchToolCalls[index]
+				nextPosition, assistantCursor, err = flushAssistantItems(ctx, e.store, sessionID, in.Turn.ID, nextPosition, orderedAssistantItems, assistantCursor, call.ID, &req, nativeContinuation)
+				if err != nil {
+					if emitErr := emitFailed(err.Error()); emitErr != nil {
+						return errors.Join(err, emitErr)
+					}
+					return err
+				}
 				result := execResult.Result
 				output := execResult.Output
 				execErr := execResult.Err
@@ -460,10 +501,31 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 					req.Items = append(req.Items, item)
 					nextPosition++
 				}
+				if !toolIsError {
+					if activatedNames := activatedSkillNamesFromMetadata(output.Metadata); len(activatedNames) > 0 {
+						activeSkills = skills.MergeActivatedSkills(
+							activeSkills,
+							skills.SelectByNames(catalog, activatedNames, skills.ActivationReasonToolUse),
+						)
+						toolExecCtx.ActiveSkillNames = activatedSkillNames(activeSkills)
+						toolExecCtx.InjectedEnv, err = loadActivatedSkillEnv(e.globalConfigRoot, activeSkills)
+						if err != nil {
+							if emitErr := emitFailed(err.Error()); emitErr != nil {
+								return errors.Join(err, emitErr)
+							}
+							return err
+						}
+						toolState = resolveTurnToolState(in.Turn.UserMessage, catalog, toolRuntime, toolExecCtx, activeSkills)
+						activeSkills = toolState.ActiveSkills
+						toolDecision = toolState.Decision
+						visibleDefs = toolState.VisibleDefs
+						req.Tools = buildToolSchemas(visibleDefs)
+					}
+				}
 
 				if output.Interrupt != nil {
 					if strings.TrimSpace(output.Interrupt.EventType) == types.EventPermissionRequested {
-						if err := persistPermissionPause(ctx, e, in, turnCtx, call, output, toolExecCtx.ActiveSkillNames); err != nil {
+						if err := persistPermissionPause(ctx, e, in, turnCtx, call, output); err != nil {
 							if emitErr := emitFailed(err.Error()); emitErr != nil {
 								return errors.Join(err, emitErr)
 							}
@@ -505,29 +567,6 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 					}
 					return nil
 				}
-
-				activatedNames := activatedSkillNamesFromMetadata(output.Metadata)
-				if !toolIsError && len(activatedNames) > 0 {
-					skillState, err = buildTurnSkillState(
-						catalog,
-						requestProfile,
-						toolRuntime,
-						toolExecCtx,
-						append(append([]string(nil), toolExecCtx.ActiveSkillNames...), activatedNames...),
-						skillState.VisibleToolNames,
-					)
-					if err != nil {
-						if emitErr := emitFailed(err.Error()); emitErr != nil {
-							return errors.Join(err, emitErr)
-						}
-						return err
-					}
-					toolExecCtx.ActiveSkillNames = skills.ActiveSkillNames(skillState.Active)
-					toolExecCtx.KnownToolNames = skillState.KnownToolNames
-					toolExecCtx.VisibleToolNames = skillState.VisibleToolNames
-					req.Instructions = composeTurnInstructions(baseRuntimeInstructions, skillState.SkillPrompt, completionPrompt, reportPrompt)
-					req.Tools = buildToolSchemas(skillState.VisibleDefs)
-				}
 			}
 
 			callOffset += len(batch.Calls)
@@ -539,266 +578,20 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				return err
 			}
 			if stopAfterBatch {
+				persistRemainingAssistantItems = false
 				break
 			}
 		}
-	}
-}
-
-type turnSkillState struct {
-	Active           []skills.ActivatedSkill
-	VisibleDefs      []tools.Definition
-	VisibleToolNames []string
-	KnownToolNames   []string
-	SkillPrompt      string
-}
-
-func buildTurnSkillState(
-	catalog skills.Catalog,
-	requestProfile string,
-	toolRuntime *tools.Runtime,
-	execCtx tools.ExecContext,
-	activeNames []string,
-	previousVisibleTools []string,
-) (turnSkillState, error) {
-	active, err := skills.ActivateByNames(catalog, activeNames)
-	if err != nil {
-		return turnSkillState{}, err
-	}
-
-	runtimeVisibleDefs := toolRuntime.VisibleDefinitions(execCtx)
-	knownToolNames := definitionNames(runtimeVisibleDefs)
-
-	allowedToolNames := toolrouter.Decide(toolrouter.DecideInput{
-		Profile:      requestProfile,
-		ActiveSkills: active,
-	})
-	visibleDefs := filterDefinitionsByName(runtimeVisibleDefs, allowedToolNames)
-	visibleToolNames := definitionNames(visibleDefs)
-
-	bundle, err := instructions.Compile(instructions.CompileInput{
-		Catalog:              catalog,
-		Active:               active,
-		VisibleTools:         visibleToolNames,
-		PreviousVisibleTools: previousVisibleTools,
-	})
-	if err != nil {
-		return turnSkillState{}, err
-	}
-
-	return turnSkillState{
-		Active:           active,
-		VisibleDefs:      visibleDefs,
-		VisibleToolNames: visibleToolNames,
-		KnownToolNames:   knownToolNames,
-		SkillPrompt:      bundle.Render(),
-	}, nil
-}
-
-func composeTurnInstructions(baseRuntimeInstructions string, extraSections ...string) string {
-	sections := make([]string, 0, len(extraSections)+1)
-	if trimmed := strings.TrimSpace(baseRuntimeInstructions); trimmed != "" {
-		sections = append(sections, trimmed)
-	}
-	for _, section := range extraSections {
-		if trimmed := strings.TrimSpace(section); trimmed != "" {
-			sections = append(sections, trimmed)
+		if persistRemainingAssistantItems {
+			nextPosition, _, err = flushAssistantItems(ctx, e.store, sessionID, in.Turn.ID, nextPosition, orderedAssistantItems, assistantCursor, "", &req, nativeContinuation)
+			if err != nil {
+				if emitErr := emitFailed(err.Error()); emitErr != nil {
+					return errors.Join(err, emitErr)
+				}
+				return err
+			}
 		}
 	}
-	return strings.Join(sections, "\n\n")
-}
-
-func detectRequestShapeProfile(userMessage string) string {
-	text := strings.ToLower(strings.TrimSpace(userMessage))
-	if text == "" {
-		return "codebase-edit"
-	}
-
-	if looksLikeCodebaseRequest(text) {
-		return "codebase-edit"
-	}
-
-	if looksLikeWebLookupRequest(text) {
-		return "web-lookup"
-	}
-
-	if looksLikeSystemInspectRequest(text) {
-		return "system-inspect"
-	}
-
-	return "codebase-edit"
-}
-
-func looksLikeCodebaseRequest(text string) bool {
-	editSignals := []string{
-		"edit", "update", "change", "modify", "fix", "refactor",
-		"implement", "add", "remove", "rename",
-	}
-	analysisSignals := []string{
-		"explain", "review", "debug", "analyze", "inspect",
-		"walk through",
-	}
-	targetSignals := []string{
-		"app", "code", "component", "css", "file", "footer", "function",
-		"handler", "header", "homepage", "html", "implementation", "layout",
-		"loader", "module", "page", "repo", "script", "struct",
-		"test", "ui", "web app",
-	}
-
-	return containsAnySignal(text, targetSignals) &&
-		(containsAnySignal(text, editSignals) || containsAnySignal(text, analysisSignals))
-}
-
-func looksLikeWebLookupRequest(text string) bool {
-	if containsAnySignal(text, []string{"http://", "https://", "www."}) {
-		return true
-	}
-
-	webActionSignals := []string{"browse", "search", "look up", "lookup", "fetch", "open"}
-	webTargetSignals := []string{"internet", "online", "web", "website", "url", "page", "news", "image"}
-
-	return containsAnySignal(text, webActionSignals) && containsAnySignal(text, webTargetSignals)
-}
-
-func looksLikeSystemInspectRequest(text string) bool {
-	strongSignals := []string{
-		"run a shell command",
-		"run this command",
-		"execute a shell command",
-		"execute this command",
-		"in the terminal",
-		"environment variables",
-		"env vars",
-	}
-	if containsAnySignal(text, strongSignals) {
-		return true
-	}
-
-	systemActionSignals := []string{"run", "execute", "inspect", "check", "show", "list", "tail", "print"}
-	systemTargetSignals := []string{
-		"shell command", "terminal", "logs", "log file", "process",
-		"processes", "pid", "systemd", "service status",
-	}
-
-	return containsAnySignal(text, systemActionSignals) && containsAnySignal(text, systemTargetSignals)
-}
-
-func containsAnySignal(text string, signals []string) bool {
-	for _, signal := range signals {
-		if strings.Contains(text, signal) {
-			return true
-		}
-	}
-	return false
-}
-
-func activatedSkillNamesFromMetadata(metadata map[string]any) []string {
-	if len(metadata) == 0 {
-		return nil
-	}
-
-	raw, ok := metadata["activated_skill_names"]
-	if !ok {
-		return nil
-	}
-
-	seen := make(map[string]struct{})
-	names := make([]string, 0, 4)
-	appendName := func(value string) {
-		if value == "" {
-			return
-		}
-		if _, exists := seen[value]; exists {
-			return
-		}
-		seen[value] = struct{}{}
-		names = append(names, value)
-	}
-
-	switch typed := raw.(type) {
-	case []string:
-		for _, value := range typed {
-			appendName(value)
-		}
-	case []any:
-		for _, value := range typed {
-			text, _ := value.(string)
-			appendName(text)
-		}
-	case string:
-		appendName(typed)
-	}
-
-	return names
-}
-
-func initialActivatedSkillNames(in Input) []string {
-	if names := dedupeActivatedSkillNames(in.ActivatedSkillNames); len(names) > 0 {
-		return names
-	}
-	if in.Resume != nil {
-		return dedupeActivatedSkillNames(in.Resume.ActivatedSkillNames)
-	}
-	return nil
-}
-
-func dedupeActivatedSkillNames(names []string) []string {
-	if len(names) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{}, len(names))
-	out := make([]string, 0, len(names))
-	for _, name := range names {
-		if name == "" {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		out = append(out, name)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func filterDefinitionsByName(defs []tools.Definition, allowedNames []string) []tools.Definition {
-	if len(defs) == 0 || len(allowedNames) == 0 {
-		return nil
-	}
-
-	allowed := make(map[string]struct{}, len(allowedNames))
-	for _, name := range allowedNames {
-		allowed[name] = struct{}{}
-	}
-
-	filtered := make([]tools.Definition, 0, len(defs))
-	for _, def := range defs {
-		if _, ok := allowed[def.Name]; !ok {
-			continue
-		}
-		filtered = append(filtered, def)
-	}
-	return filtered
-}
-
-func definitionNames(defs []tools.Definition) []string {
-	if len(defs) == 0 {
-		return nil
-	}
-
-	names := make([]string, 0, len(defs))
-	for _, def := range defs {
-		if def.Name == "" {
-			continue
-		}
-		names = append(names, def.Name)
-	}
-	sort.Strings(names)
-	return names
 }
 
 func effectivePermissionEngine(base *permissions.Engine, in Input) *permissions.Engine {
@@ -957,6 +750,7 @@ func applySummaryCompaction(
 	if cutoff > len(items) {
 		cutoff = len(items)
 	}
+	cutoff = model.NearestSafeConversationBoundary(items, cutoff)
 	if cutoff == 0 {
 		return working, summaries, nil
 	}
@@ -1037,7 +831,7 @@ type permissionPauseStore interface {
 	UpdateSessionState(context.Context, string, types.SessionState, string) error
 }
 
-func persistPermissionPause(ctx context.Context, e *Engine, in Input, turnCtx *runtimegraph.TurnContext, call model.ToolCallChunk, output tools.ToolExecutionResult, activatedSkillNames []string) error {
+func persistPermissionPause(ctx context.Context, e *Engine, in Input, turnCtx *runtimegraph.TurnContext, call model.ToolCallChunk, output tools.ToolExecutionResult) error {
 	store, ok := e.store.(permissionPauseStore)
 	if !ok {
 		return nil
@@ -1074,7 +868,6 @@ func persistPermissionPause(ctx context.Context, e *Engine, in Input, turnCtx *r
 		TurnID:              in.Turn.ID,
 		RunID:               turnCtx.CurrentRunID,
 		TaskID:              turnCtx.CurrentTaskID,
-		ActivatedSkillNames: dedupeActivatedSkillNames(activatedSkillNames),
 		PermissionRequestID: request.ID,
 		ToolRunID:           request.ToolRunID,
 		ToolCallID:          request.ToolCallID,
@@ -1248,6 +1041,98 @@ func buildToolSchemas(defs []tools.Definition) []model.ToolSchema {
 	return schemas
 }
 
+type turnToolState struct {
+	ActiveSkills     []skills.ActivatedSkill
+	Decision         toolrouter.Decision
+	VisibleDefs      []tools.Definition
+	VisibleToolNames []string
+}
+
+func resolveTurnToolState(
+	userMessage string,
+	catalog skills.Catalog,
+	toolRuntime *tools.Runtime,
+	toolExecCtx tools.ExecContext,
+	activated []skills.ActivatedSkill,
+) turnToolState {
+	decision := toolrouter.Decide(userMessage, activated)
+	profileSkills := skills.SelectByCapabilityTags(catalog, decision.Summary.SkillTags)
+	activeSkills := skills.MergeActivatedSkills(activated, profileSkills)
+	decision = toolrouter.Decide(userMessage, activeSkills)
+	visibleDefs := decision.FilterDefinitions(toolRuntime.VisibleDefinitions(toolExecCtx))
+	visibleToolNames := make([]string, 0, len(visibleDefs))
+	for _, def := range visibleDefs {
+		visibleToolNames = append(visibleToolNames, def.Name)
+	}
+	return turnToolState{
+		ActiveSkills:     activeSkills,
+		Decision:         decision,
+		VisibleDefs:      visibleDefs,
+		VisibleToolNames: visibleToolNames,
+	}
+}
+
+func activatedSkillNamesFromMetadata(metadata map[string]any) []string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	raw, ok := metadata["activated_skill_names"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch typed := raw.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			name, _ := item.(string)
+			name = strings.TrimSpace(name)
+			if name != "" {
+				out = append(out, name)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func activatedSkillNames(activated []skills.ActivatedSkill) []string {
+	if len(activated) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(activated))
+	names := make([]string, 0, len(activated))
+	for _, item := range activated {
+		name := strings.TrimSpace(item.Skill.Name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		names = append(names, name)
+	}
+	return names
+}
+
+func loadActivatedSkillEnv(globalConfigRoot string, activated []skills.ActivatedSkill) (map[string]string, error) {
+	if len(activated) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(activated))
+	for _, item := range activated {
+		name := strings.TrimSpace(item.Skill.Name)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return config.MergedSkillEnv(globalConfigRoot, names)
+}
+
 func marshalStructuredToolResult(value any) string {
 	if value == nil {
 		return ""
@@ -1263,10 +1148,52 @@ func persistConversationItem(ctx context.Context, store ConversationStore, sessi
 	if store == nil {
 		return nil
 	}
-	if item.Kind == model.ConversationItemAssistantText && strings.TrimSpace(item.Text) == "" {
+	if (item.Kind == model.ConversationItemAssistantText || item.Kind == model.ConversationItemAssistantThinking) && strings.TrimSpace(item.Text) == "" {
 		return nil
 	}
 	return store.InsertConversationItem(ctx, sessionID, turnID, position, item)
+}
+
+func flushAssistantItems(
+	ctx context.Context,
+	store ConversationStore,
+	sessionID string,
+	turnID string,
+	nextPosition int,
+	items []model.ConversationItem,
+	cursor int,
+	targetToolCallID string,
+	req *model.Request,
+	nativeContinuation bool,
+) (int, int, error) {
+	targetToolCallID = strings.TrimSpace(targetToolCallID)
+	foundTarget := targetToolCallID == ""
+	for cursor < len(items) {
+		item := items[cursor]
+		if err := persistConversationItem(ctx, store, sessionID, turnID, nextPosition, item); err != nil {
+			return nextPosition, cursor, err
+		}
+		appendAssistantItemToRequest(req, item, nativeContinuation)
+		nextPosition++
+		cursor++
+		if targetToolCallID != "" && item.Kind == model.ConversationItemToolCall && strings.TrimSpace(item.ToolCall.ID) == targetToolCallID {
+			foundTarget = true
+			break
+		}
+	}
+	if !foundTarget {
+		return nextPosition, cursor, fmt.Errorf("assistant tool call %q not found in ordered items", targetToolCallID)
+	}
+	return nextPosition, cursor, nil
+}
+
+func appendAssistantItemToRequest(req *model.Request, item model.ConversationItem, nativeContinuation bool) {
+	if req == nil {
+		return
+	}
+	if item.Kind == model.ConversationItemToolCall || !nativeContinuation {
+		req.Items = append(req.Items, item)
+	}
 }
 
 func persistTurnUsage(ctx context.Context, store ConversationStore, usage types.TurnUsage) error {
@@ -1389,7 +1316,7 @@ func toolRunStoreFromConversationStore(store ConversationStore) toolRunStore {
 }
 
 func providerCacheOwnerForCapabilities(caps model.ProviderCapabilities) string {
-	if caps.Profile == model.CapabilityProfileOpenAIResponses {
+	if caps.Profile == model.CapabilityProfileArkResponses {
 		return "openai_compatible"
 	}
 	return ""

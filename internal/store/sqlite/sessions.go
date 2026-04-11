@@ -215,11 +215,35 @@ func (s *Store) DeleteSession(ctx context.Context, sessionID string) (string, bo
 			args:  []any{sessionID},
 		},
 		{
+			query: `delete from report_deliveries where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from reports where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
 			query: `delete from report_mailbox_items where session_id = ?`,
 			args:  []any{sessionID},
 		},
 		{
 			query: `delete from scheduled_jobs where owner_session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from digest_records where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from child_agent_results where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from report_groups where session_id = ?`,
+			args:  []any{sessionID},
+		},
+		{
+			query: `delete from child_agent_specs where session_id = ?`,
 			args:  []any{sessionID},
 		},
 		{

@@ -108,13 +108,6 @@ func (r *Runtime) prepareCall(call Call, execCtx ExecContext) PreparedCall {
 			PrepareErr: errors.New("tool registry is required"),
 		}
 	}
-	if err := enforceVisibleToolName(call.Name, execCtx.VisibleToolNames); err != nil {
-		return PreparedCall{
-			Original:   call,
-			Call:       call,
-			PrepareErr: err,
-		}
-	}
 	prepared := r.prepareRegistryOrCustomCall(call, execCtx)
 	prepared.ResourceClaims = resourceClaimsForPrepared(prepared, execCtx)
 	prepared.Parallel = prepared.PrepareErr == nil &&
@@ -432,18 +425,6 @@ func writeToolArtifact(workspaceRoot, toolName, content string) (string, error) 
 		return "", err
 	}
 	return path, nil
-}
-
-func enforceVisibleToolName(toolName string, visibleToolNames []string) error {
-	if len(visibleToolNames) == 0 {
-		return nil
-	}
-	for _, visible := range visibleToolNames {
-		if toolName == visible {
-			return nil
-		}
-	}
-	return fmt.Errorf("tool %q is not visible in this turn", toolName)
 }
 
 func marshalCallInput(input map[string]any) string {

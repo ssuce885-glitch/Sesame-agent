@@ -10,10 +10,14 @@ import (
 
 type reportingStore interface {
 	ListChildAgentSpecs(context.Context) ([]types.ChildAgentSpec, error)
+	ListChildAgentSpecsBySession(context.Context, string) ([]types.ChildAgentSpec, error)
 	ListOutputContracts(context.Context) ([]types.OutputContract, error)
 	ListReportGroups(context.Context) ([]types.ReportGroup, error)
+	ListReportGroupsBySession(context.Context, string) ([]types.ReportGroup, error)
 	ListChildAgentResults(context.Context) ([]types.ChildAgentResult, error)
+	ListChildAgentResultsBySession(context.Context, string) ([]types.ChildAgentResult, error)
 	ListDigestRecords(context.Context) ([]types.DigestRecord, error)
+	ListDigestRecordsBySession(context.Context, string) ([]types.DigestRecord, error)
 }
 
 func registerReportingRoutes(mux *http.ServeMux, deps Dependencies) {
@@ -34,8 +38,12 @@ func handleGetReportingOverview(deps Dependencies) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		sessionID := r.URL.Query().Get("session_id")
 
 		childAgents, err := store.ListChildAgentSpecs(r.Context())
+		if sessionID != "" {
+			childAgents, err = store.ListChildAgentSpecsBySession(r.Context(), sessionID)
+		}
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
@@ -46,16 +54,25 @@ func handleGetReportingOverview(deps Dependencies) http.HandlerFunc {
 			return
 		}
 		reportGroups, err := store.ListReportGroups(r.Context())
+		if sessionID != "" {
+			reportGroups, err = store.ListReportGroupsBySession(r.Context(), sessionID)
+		}
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		childResults, err := store.ListChildAgentResults(r.Context())
+		if sessionID != "" {
+			childResults, err = store.ListChildAgentResultsBySession(r.Context(), sessionID)
+		}
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		digests, err := store.ListDigestRecords(r.Context())
+		if sessionID != "" {
+			digests, err = store.ListDigestRecordsBySession(r.Context(), sessionID)
+		}
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
