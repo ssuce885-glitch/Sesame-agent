@@ -9,10 +9,10 @@ import (
 )
 
 type CompileInput struct {
-	Catalog         skills.Catalog
-	Active          []skills.ActivatedSkill
-	NewlyActivated  []skills.ActivatedSkill
-	PreviouslyTools []string
+	Catalog              skills.Catalog
+	Active               []skills.ActivatedSkill
+	VisibleTools         []string
+	PreviousVisibleTools []string
 }
 
 type Bundle struct {
@@ -32,10 +32,7 @@ func Compile(in CompileInput) (Bundle, error) {
 		return Bundle{sections: sections}, nil
 	}
 
-	activeSection, err := renderActiveSkillSection(in.Catalog, in.Active, in.NewlyActivated, in.PreviouslyTools)
-	if err != nil {
-		return Bundle{}, err
-	}
+	activeSection := renderActiveSkillSection(in.Active, in.VisibleTools, in.PreviousVisibleTools)
 	if strings.TrimSpace(activeSection) != "" {
 		sections = append(sections, activeSection)
 	}
@@ -67,24 +64,20 @@ func renderCatalogSection(catalog skills.Catalog) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderActiveSkillSection(catalog skills.Catalog, active []skills.ActivatedSkill, newlyActivated []skills.ActivatedSkill, previouslyTools []string) (string, error) {
+func renderActiveSkillSection(active []skills.ActivatedSkill, visibleTools []string, previousVisibleTools []string) string {
 	lines := make([]string, 0, len(active)*3+4)
 	lines = append(lines, "Activated local skills:")
 
 	for _, activated := range active {
 		spec := activated.Skill
-		body, err := catalog.ReadBody(spec)
-		if err != nil {
-			return "", err
-		}
 		lines = append(lines, "")
 		lines = append(lines, fmt.Sprintf("## %s (%s)", spec.Name, spec.Scope))
-		if strings.TrimSpace(body) != "" {
-			lines = append(lines, body)
+		if strings.TrimSpace(activated.Body) != "" {
+			lines = append(lines, activated.Body)
 		}
 	}
 
-	newTools := newlyEnabledTools(newlyActivated, previouslyTools)
+	newTools := newlyEnabledTools(active, visibleTools, previousVisibleTools)
 	if len(newTools) > 0 {
 		lines = append(lines, "")
 		lines = append(lines, "Newly enabled tools:")
@@ -93,35 +86,46 @@ func renderActiveSkillSection(catalog skills.Catalog, active []skills.ActivatedS
 		}
 	}
 
-	return strings.Join(lines, "\n"), nil
+	return strings.Join(lines, "\n")
 }
 
-func newlyEnabledTools(newlyActivated []skills.ActivatedSkill, previouslyTools []string) []string {
-	seen := make(map[string]struct{}, len(previouslyTools))
-	for _, tool := range previouslyTools {
+func newlyEnabledTools(active []skills.ActivatedSkill, visibleTools []string, previousVisibleTools []string) []string {
+	previouslyVisible := make(map[string]struct{}, len(previousVisibleTools))
+	for _, tool := range previousVisibleTools {
 		tool = strings.TrimSpace(tool)
 		if tool == "" {
 			continue
 		}
-		seen[tool] = struct{}{}
+		previouslyVisible[tool] = struct{}{}
 	}
 
-	added := make([]string, 0, 8)
-	appendTool := func(tool string) {
+	activeDependencies := make(map[string]struct{}, 8)
+	for _, activated := range active {
+		for _, tool := range activated.Skill.ToolDependencies {
+			tool = strings.TrimSpace(tool)
+			if tool == "" {
+				continue
+			}
+			activeDependencies[tool] = struct{}{}
+		}
+	}
+
+	newlyVisible := make(map[string]struct{}, len(visibleTools))
+	for _, tool := range visibleTools {
 		tool = strings.TrimSpace(tool)
 		if tool == "" {
-			return
+			continue
 		}
-		if _, ok := seen[tool]; ok {
-			return
+		if _, wasVisible := previouslyVisible[tool]; wasVisible {
+			continue
 		}
-		seen[tool] = struct{}{}
-		added = append(added, tool)
+		newlyVisible[tool] = struct{}{}
 	}
 
-	for _, activated := range newlyActivated {
-		for _, tool := range activated.Skill.ToolDependencies {
-			appendTool(tool)
+	added := make([]string, 0, len(newlyVisible))
+	for tool := range newlyVisible {
+		if _, requiredByActiveSkill := activeDependencies[tool]; requiredByActiveSkill {
+			added = append(added, tool)
 		}
 	}
 	slices.Sort(added)

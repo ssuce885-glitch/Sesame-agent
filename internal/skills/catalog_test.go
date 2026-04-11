@@ -41,11 +41,11 @@ func TestLoadCatalogReadsSkillBodyOnDemand(t *testing.T) {
 
 func TestMergeActiveIsIdempotentBySkillName(t *testing.T) {
 	existing := []ActivatedSkill{
-		{Skill: SkillSpec{Name: "alpha"}},
+		{Skill: SkillSpec{Name: "alpha"}, Body: "alpha body"},
 	}
 	incoming := []ActivatedSkill{
-		{Skill: SkillSpec{Name: "alpha"}},
-		{Skill: SkillSpec{Name: "beta"}},
+		{Skill: SkillSpec{Name: "alpha"}, Body: "new alpha body"},
+		{Skill: SkillSpec{Name: "beta"}, Body: "beta body"},
 	}
 
 	merged := MergeActive(existing, incoming...)
@@ -56,6 +56,60 @@ func TestMergeActiveIsIdempotentBySkillName(t *testing.T) {
 	mergedAgain := MergeActive(merged, incoming...)
 	if got, want := ActiveSkillNames(mergedAgain), []string{"alpha", "beta"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ActiveSkillNames(second merge) = %v, want %v", got, want)
+	}
+	if mergedAgain[0].Body != "alpha body" {
+		t.Fatalf("mergedAgain[0].Body = %q, want %q", mergedAgain[0].Body, "alpha body")
+	}
+}
+
+func TestActivateByNamesLoadsBodyAndIsIdempotent(t *testing.T) {
+	globalRoot := t.TempDir()
+	workspaceRoot := t.TempDir()
+	skillDir := filepath.Join(globalRoot, "skills", "activate-test")
+	writeSkillFile(t, filepath.Join(skillDir, "SKILL.json"), `{
+		"name": "activate-test",
+		"description": "activate test skill"
+	}`)
+	writeSkillFile(t, filepath.Join(skillDir, "SKILL.md"), "activate body")
+
+	catalog, err := LoadCatalog(globalRoot, workspaceRoot)
+	if err != nil {
+		t.Fatalf("LoadCatalog() error = %v", err)
+	}
+
+	active, err := ActivateByNames(catalog, []string{"activate-test", "activate-test"})
+	if err != nil {
+		t.Fatalf("ActivateByNames() error = %v", err)
+	}
+	if got, want := ActiveSkillNames(active), []string{"activate-test"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ActiveSkillNames(active) = %v, want %v", got, want)
+	}
+	if active[0].Body != "activate body" {
+		t.Fatalf("active[0].Body = %q, want %q", active[0].Body, "activate body")
+	}
+}
+
+func TestActivateByNamesFailsWhenBodyCannotBeRead(t *testing.T) {
+	globalRoot := t.TempDir()
+	workspaceRoot := t.TempDir()
+	skillDir := filepath.Join(globalRoot, "skills", "broken-skill")
+	writeSkillFile(t, filepath.Join(skillDir, "SKILL.json"), `{
+		"name": "broken-skill",
+		"description": "broken skill"
+	}`)
+	writeSkillFile(t, filepath.Join(skillDir, "SKILL.md"), "body before deletion")
+
+	catalog, err := LoadCatalog(globalRoot, workspaceRoot)
+	if err != nil {
+		t.Fatalf("LoadCatalog() error = %v", err)
+	}
+
+	if err := os.Remove(filepath.Join(skillDir, "SKILL.md")); err != nil {
+		t.Fatalf("Remove(SKILL.md) error = %v", err)
+	}
+
+	if _, err := ActivateByNames(catalog, []string{"broken-skill"}); err == nil {
+		t.Fatalf("ActivateByNames() error = nil, want non-nil")
 	}
 }
 

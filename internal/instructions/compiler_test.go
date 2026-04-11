@@ -45,13 +45,16 @@ func TestCompileRendersCatalogOnlyUntilSkillIsActivated(t *testing.T) {
 	if !ok {
 		t.Fatalf("catalog.FindByName(%q) ok = false", "compiler-test")
 	}
-	active := []skills.ActivatedSkill{{Skill: spec}}
+	active, err := skills.ActivateByNames(catalog, []string{spec.Name})
+	if err != nil {
+		t.Fatalf("skills.ActivateByNames() error = %v", err)
+	}
 
 	activeBundle, err := Compile(CompileInput{
-		Catalog:         catalog,
-		Active:          active,
-		NewlyActivated:  active,
-		PreviouslyTools: nil,
+		Catalog:              catalog,
+		Active:               active,
+		VisibleTools:         []string{"functions.shell_command"},
+		PreviousVisibleTools: nil,
 	})
 	if err != nil {
 		t.Fatalf("Compile(active) error = %v", err)
@@ -87,20 +90,16 @@ func TestCompileNewlyEnabledToolsUsesDependenciesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("skills.LoadCatalog() error = %v", err)
 	}
-	spec, ok := catalog.FindByName("deps-only")
-	if !ok {
-		t.Fatalf("catalog.FindByName(%q) ok = false", "deps-only")
-	}
-	active := []skills.ActivatedSkill{
-		{
-			Skill: spec,
-		},
+	active, err := skills.ActivateByNames(catalog, []string{"deps-only"})
+	if err != nil {
+		t.Fatalf("skills.ActivateByNames() error = %v", err)
 	}
 
 	bundle, err := Compile(CompileInput{
-		Catalog:        catalog,
-		Active:         active,
-		NewlyActivated: active,
+		Catalog:              catalog,
+		Active:               active,
+		VisibleTools:         []string{"functions.shell_command", "functions.todo_write"},
+		PreviousVisibleTools: nil,
 	})
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
@@ -112,6 +111,45 @@ func TestCompileNewlyEnabledToolsUsesDependenciesOnly(t *testing.T) {
 	}
 	if strings.Contains(rendered, "functions.todo_write") {
 		t.Fatalf("rendered prompt unexpectedly contains preferred tool: %q", rendered)
+	}
+}
+
+func TestCompileNewlyEnabledToolsRequireVisibleDelta(t *testing.T) {
+	globalRoot := t.TempDir()
+	workspaceRoot := t.TempDir()
+	skillDir := filepath.Join(globalRoot, "skills", "visible-delta")
+	writeSkillFile(t, filepath.Join(skillDir, "SKILL.json"), `{
+		"name": "visible-delta",
+		"description": "visible delta test",
+		"tool_dependencies": ["functions.shell_command", "functions.todo_write"]
+	}`)
+	writeSkillFile(t, filepath.Join(skillDir, "SKILL.md"), "visible delta body")
+
+	catalog, err := skills.LoadCatalog(globalRoot, workspaceRoot)
+	if err != nil {
+		t.Fatalf("skills.LoadCatalog() error = %v", err)
+	}
+	active, err := skills.ActivateByNames(catalog, []string{"visible-delta"})
+	if err != nil {
+		t.Fatalf("skills.ActivateByNames() error = %v", err)
+	}
+
+	bundle, err := Compile(CompileInput{
+		Catalog:              catalog,
+		Active:               active,
+		VisibleTools:         []string{"functions.shell_command", "functions.todo_write"},
+		PreviousVisibleTools: []string{"functions.todo_write"},
+	})
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	rendered := bundle.Render()
+	if !strings.Contains(rendered, "functions.shell_command") {
+		t.Fatalf("rendered prompt missing newly visible dependency: %q", rendered)
+	}
+	if strings.Contains(rendered, "- functions.todo_write") {
+		t.Fatalf("rendered prompt unexpectedly contains previously visible dependency: %q", rendered)
 	}
 }
 
