@@ -107,27 +107,34 @@ func TestResolveCLIStartupConfigBuildsRuntimeCompatibilityFieldsFromActiveProfil
 	}
 }
 
-func TestMissingSetupFieldsAllowsFakeProviderWithoutAuthFields(t *testing.T) {
-	cfg := Config{
-		ActiveProfile: "smoke",
-		ModelProviders: map[string]ModelProviderConfig{
+func TestResolveCLIStartupConfigRejectsFakeAPIFamily(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeConfigFile(t, filepath.Join(home, ".sesame", "config.json"), `{
+		"active_profile": "smoke",
+		"model_providers": {
 			"fake-provider": {
-				ID:        "fake-provider",
-				APIFamily: "fake",
-			},
+				"api_family": "fake",
+				"base_url": "",
+				"api_key_env": ""
+			}
 		},
-		Profiles: map[string]ProfileConfig{
+		"profiles": {
 			"smoke": {
-				ID:            "smoke",
-				Model:         "fake-smoke",
-				ModelProvider: "fake-provider",
-			},
-		},
-	}
+				"model": "fake-smoke",
+				"model_provider": "fake-provider",
+				"cache_profile": "none"
+			}
+		}
+	}`)
 
-	missing := MissingSetupFields(cfg)
-	if len(missing) != 0 {
-		t.Fatalf("MissingSetupFields() = %v, want none for fake provider", missing)
+	_, err := ResolveCLIStartupConfig(CLIStartupOverrides{})
+	if err == nil {
+		t.Fatal("ResolveCLIStartupConfig() error = nil, want fake api_family rejection")
+	}
+	if !errors.Is(err, ErrUnsupportedAPIFamily) {
+		t.Fatalf("error = %v, want ErrUnsupportedAPIFamily", err)
 	}
 }
 
