@@ -24,6 +24,7 @@ type SkillSpec struct {
 
 type ActivatedSkill struct {
 	Skill SkillSpec
+	Body  string
 }
 
 type SkillDirectories struct {
@@ -122,4 +123,26 @@ func ActiveSkillNames(active []ActivatedSkill) []string {
 		names = append(names, skill.Skill.Name)
 	}
 	return names
+}
+
+func ActivateByNames(catalog Catalog, names []string) ([]ActivatedSkill, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	activated := make([]ActivatedSkill, 0, len(names))
+	for _, name := range names {
+		spec, ok := catalog.FindByName(name)
+		if !ok {
+			return nil, fmt.Errorf("skill %q not found", name)
+		}
+		body, err := catalog.ReadBody(spec)
+		if err != nil {
+			return nil, fmt.Errorf("read skill body for %q: %w", spec.Name, err)
+		}
+		activated = append(activated, ActivatedSkill{
+			Skill: spec,
+			Body:  body,
+		})
+	}
+	return MergeActive(nil, activated...), nil
 }
