@@ -25,17 +25,18 @@ type Store interface {
 }
 
 type CreateJobInput struct {
-	Name           string
-	WorkspaceRoot  string
-	OwnerSessionID string
-	Prompt         string
-	RunAt          time.Time
-	DelayMinutes   int
-	EveryMinutes   int
-	CronExpr       string
-	Timezone       string
-	TimeoutSeconds int
-	SkipIfRunning  *bool
+	Name                string
+	WorkspaceRoot       string
+	OwnerSessionID      string
+	Prompt              string
+	ActivatedSkillNames []string
+	RunAt               time.Time
+	DelayMinutes        int
+	EveryMinutes        int
+	CronExpr            string
+	Timezone            string
+	TimeoutSeconds      int
+	SkipIfRunning       *bool
 }
 
 type Service struct {
@@ -248,16 +249,17 @@ func (s *Service) handleDueJob(ctx context.Context, job types.ScheduledJob, now 
 	}
 
 	created, err := s.taskManager.Create(ctx, task.CreateTaskInput{
-		Type:            task.TaskTypeAgent,
-		Command:         job.Prompt,
-		Description:     firstNonEmpty(job.Name, job.Prompt),
-		Owner:           "scheduled_job",
-		Kind:            scheduledTaskKind(job),
-		ScheduledJobID:  job.ID,
-		ParentSessionID: job.OwnerSessionID,
-		WorkspaceRoot:   job.WorkspaceRoot,
-		TimeoutSeconds:  normalizedTimeout(job.TimeoutSeconds),
-		Start:           true,
+		Type:                task.TaskTypeAgent,
+		Command:             job.Prompt,
+		Description:         firstNonEmpty(job.Name, job.Prompt),
+		Owner:               "scheduled_job",
+		Kind:                scheduledTaskKind(job),
+		ScheduledJobID:      job.ID,
+		ParentSessionID:     job.OwnerSessionID,
+		ActivatedSkillNames: append([]string(nil), job.ActivatedSkillNames...),
+		WorkspaceRoot:       job.WorkspaceRoot,
+		TimeoutSeconds:      normalizedTimeout(job.TimeoutSeconds),
+		Start:               true,
 	})
 	if err != nil {
 		job.NextRunAt = nextRun
@@ -301,21 +303,22 @@ func (s *Service) jobHasActiveTask(job types.ScheduledJob) (bool, error) {
 
 func buildScheduledJob(now time.Time, in CreateJobInput) (types.ScheduledJob, error) {
 	job := types.ScheduledJob{
-		ID:             types.NewID("cron"),
-		Name:           strings.TrimSpace(in.Name),
-		WorkspaceRoot:  strings.TrimSpace(in.WorkspaceRoot),
-		OwnerSessionID: strings.TrimSpace(in.OwnerSessionID),
-		Prompt:         strings.TrimSpace(in.Prompt),
-		CronExpr:       strings.TrimSpace(in.CronExpr),
-		EveryMinutes:   in.EveryMinutes,
-		Timezone:       strings.TrimSpace(in.Timezone),
-		RunAt:          in.RunAt.UTC(),
-		Enabled:        true,
-		SkipIfRunning:  true,
-		TimeoutSeconds: normalizedTimeout(in.TimeoutSeconds),
-		LastStatus:     types.ScheduledJobStatusPending,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:                  types.NewID("cron"),
+		Name:                strings.TrimSpace(in.Name),
+		WorkspaceRoot:       strings.TrimSpace(in.WorkspaceRoot),
+		OwnerSessionID:      strings.TrimSpace(in.OwnerSessionID),
+		Prompt:              strings.TrimSpace(in.Prompt),
+		ActivatedSkillNames: append([]string(nil), in.ActivatedSkillNames...),
+		CronExpr:            strings.TrimSpace(in.CronExpr),
+		EveryMinutes:        in.EveryMinutes,
+		Timezone:            strings.TrimSpace(in.Timezone),
+		RunAt:               in.RunAt.UTC(),
+		Enabled:             true,
+		SkipIfRunning:       true,
+		TimeoutSeconds:      normalizedTimeout(in.TimeoutSeconds),
+		LastStatus:          types.ScheduledJobStatusPending,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 	if in.SkipIfRunning != nil {
 		job.SkipIfRunning = *in.SkipIfRunning

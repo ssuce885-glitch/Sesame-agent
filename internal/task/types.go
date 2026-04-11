@@ -48,6 +48,7 @@ type Task struct {
 	ExecutionTaskID      string          `json:"execution_task_id,omitempty"`
 	WorktreeID           string          `json:"worktree_id,omitempty"`
 	ScheduledJobID       string          `json:"scheduled_job_id,omitempty"`
+	ActivatedSkillNames  []string        `json:"activated_skill_names,omitempty"`
 	WorkspaceRoot        string          `json:"workspace_root"`
 	Output               string          `json:"output,omitempty"`
 	OutputPath           string          `json:"output_path,omitempty"`
@@ -70,20 +71,21 @@ type TodoItem struct {
 }
 
 type CreateTaskInput struct {
-	ID              string
-	Type            TaskType
-	Command         string
-	Description     string
-	ParentTaskID    string
-	ParentSessionID string
-	ParentTurnID    string
-	Owner           string
-	Kind            string
-	WorktreeID      string
-	ScheduledJobID  string
-	WorkspaceRoot   string
-	TimeoutSeconds  int
-	Start           bool
+	ID                  string
+	Type                TaskType
+	Command             string
+	Description         string
+	ParentTaskID        string
+	ParentSessionID     string
+	ParentTurnID        string
+	Owner               string
+	Kind                string
+	WorktreeID          string
+	ScheduledJobID      string
+	ActivatedSkillNames []string
+	WorkspaceRoot       string
+	TimeoutSeconds      int
+	Start               bool
 }
 
 type UpdateTaskInput struct {
@@ -137,7 +139,7 @@ type AgentTaskObserver interface {
 }
 
 type AgentExecutor interface {
-	RunTask(ctx context.Context, workspaceRoot string, prompt string, observer AgentTaskObserver) error
+	RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, observer AgentTaskObserver) error
 }
 
 type TerminalNotifier interface {

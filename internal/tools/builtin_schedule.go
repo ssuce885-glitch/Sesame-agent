@@ -188,17 +188,18 @@ func (scheduleReportTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 	}
 
 	job, err := service.CreateJob(ctx, scheduler.CreateJobInput{
-		Name:           input.Name,
-		WorkspaceRoot:  execCtx.WorkspaceRoot,
-		OwnerSessionID: sessionID,
-		Prompt:         input.Prompt,
-		RunAt:          runAt,
-		DelayMinutes:   input.DelayMinutes,
-		EveryMinutes:   input.EveryMinutes,
-		CronExpr:       input.Cron,
-		Timezone:       input.Timezone,
-		TimeoutSeconds: input.TimeoutSeconds,
-		SkipIfRunning:  input.SkipIfRunning,
+		Name:                input.Name,
+		WorkspaceRoot:       execCtx.WorkspaceRoot,
+		OwnerSessionID:      sessionID,
+		Prompt:              input.Prompt,
+		ActivatedSkillNames: explicitActiveSkillNames(execCtx),
+		RunAt:               runAt,
+		DelayMinutes:        input.DelayMinutes,
+		EveryMinutes:        input.EveryMinutes,
+		CronExpr:            input.Cron,
+		Timezone:            input.Timezone,
+		TimeoutSeconds:      input.TimeoutSeconds,
+		SkipIfRunning:       input.SkipIfRunning,
 	})
 	if err != nil {
 		return ToolExecutionResult{}, err
