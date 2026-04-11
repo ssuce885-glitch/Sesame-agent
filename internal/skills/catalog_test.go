@@ -113,6 +113,41 @@ func TestActivateByNamesFailsWhenBodyCannotBeRead(t *testing.T) {
 	}
 }
 
+func TestLoadCatalogPreservesExactDependencySpellings(t *testing.T) {
+	globalRoot := t.TempDir()
+	workspaceRoot := t.TempDir()
+	skillDir := filepath.Join(globalRoot, "skills", "exact-deps")
+
+	writeSkillFile(t, filepath.Join(skillDir, "SKILL.json"), `{
+		"name": "exact-deps",
+		"description": "preserve exact dependency spellings",
+		"tool_dependencies": ["shell_command", "Shell_Command"],
+		"preferred_tools": ["apply_patch", "Apply_Patch"],
+		"env_dependencies": ["OPENAI_API_KEY", "OpenAI_Api_Key"]
+	}`)
+	writeSkillFile(t, filepath.Join(skillDir, "SKILL.md"), "exact deps body")
+
+	catalog, err := LoadCatalog(globalRoot, workspaceRoot)
+	if err != nil {
+		t.Fatalf("LoadCatalog() error = %v", err)
+	}
+
+	skill, ok := catalog.FindByName("exact-deps")
+	if !ok {
+		t.Fatalf("catalog.FindByName(%q) ok = false", "exact-deps")
+	}
+
+	if got, want := skill.ToolDependencies, []string{"shell_command", "Shell_Command"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("skill.ToolDependencies = %v, want %v", got, want)
+	}
+	if got, want := skill.PreferredTools, []string{"apply_patch", "Apply_Patch"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("skill.PreferredTools = %v, want %v", got, want)
+	}
+	if got, want := skill.EnvDependencies, []string{"OPENAI_API_KEY", "OpenAI_Api_Key"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("skill.EnvDependencies = %v, want %v", got, want)
+	}
+}
+
 func writeSkillFile(t *testing.T, path string, contents string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -38,46 +38,60 @@ func Decide(in DecideInput) []string {
 }
 
 var profileTools = map[string][]string{
-	"codebase-edit": {
-		"apply_patch",
-		"file_edit",
-		"file_read",
-		"file_write",
-		"glob",
-		"grep",
-		"list_dir",
-		"notebook_edit",
-		"request_permissions",
-		"request_user_input",
-		"skill_use",
-	},
-	"web-lookup": {
-		"file_read",
-		"glob",
-		"grep",
-		"list_dir",
-		"request_permissions",
-		"request_user_input",
-		"skill_use",
-		"view_image",
-		"web_fetch",
-	},
-	"system-inspect": {
-		"file_read",
-		"glob",
-		"grep",
-		"list_dir",
-		"request_permissions",
-		"request_user_input",
-		"shell_command",
-		"skill_use",
-		"task_create",
-		"task_get",
-		"task_list",
-		"task_output",
-		"task_result",
-		"task_stop",
-		"task_update",
-		"task_wait",
-	},
+	"codebase-edit": composeProfileTools(
+		commonOrchestrationTools,
+		[]string{
+			"apply_patch",
+			"file_edit",
+			"file_read",
+			"file_write",
+			"glob",
+			"grep",
+			"list_dir",
+			"notebook_edit",
+		},
+	),
+	"web-lookup": composeProfileTools(
+		commonOrchestrationTools,
+		[]string{
+			"file_read",
+			"glob",
+			"grep",
+			"list_dir",
+			"view_image",
+			"web_fetch",
+		},
+	),
+	"system-inspect": composeProfileTools(
+		commonOrchestrationTools,
+		[]string{
+			"file_read",
+			"glob",
+			"grep",
+			"list_dir",
+			"shell_command",
+		},
+	),
+}
+
+var commonOrchestrationTools = []string{
+	"request_permissions",
+	"request_user_input",
+	"schedule_report",
+	"skill_use",
+	"task_create",
+	"task_get",
+	"task_list",
+	"task_output",
+	"task_result",
+	"task_stop",
+	"task_update",
+	"task_wait",
+}
+
+func composeProfileTools(shared []string, specific []string) []string {
+	combined := make([]string, 0, len(shared)+len(specific))
+	combined = append(combined, shared...)
+	combined = append(combined, specific...)
+	return combined
 }

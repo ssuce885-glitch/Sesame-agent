@@ -11,7 +11,9 @@ import (
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
+	"go-agent/internal/scheduler"
 	"go-agent/internal/skills"
+	"go-agent/internal/task"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
 )
@@ -147,17 +149,108 @@ func TestBuildTurnSkillStateRebuildsAfterActivatedSkill(t *testing.T) {
 	}
 }
 
-func TestDetectRequestShapeProfilePrefersCodebaseEditForCodingPrompts(t *testing.T) {
-	cases := []string{
-		"edit the website header",
-		"update the website homepage CSS",
-		"change the web app header component",
+func TestBuildTurnSkillStateKeepsOrchestrationToolsVisibleForWebLookup(t *testing.T) {
+	globalRoot := t.TempDir()
+	workspaceRoot := t.TempDir()
+
+	catalog, err := skills.LoadCatalog(globalRoot, workspaceRoot)
+	if err != nil {
+		t.Fatalf("skills.LoadCatalog() error = %v", err)
 	}
 
-	for _, input := range cases {
-		if got := detectRequestShapeProfile(input); got != "codebase-edit" {
-			t.Fatalf("detectRequestShapeProfile(%q) = %q, want %q", input, got, "codebase-edit")
-		}
+	state, err := buildTurnSkillState(
+		catalog,
+		"web-lookup",
+		tools.NewRuntime(tools.NewRegistry(), nil),
+		tools.ExecContext{
+			GlobalConfigRoot: globalRoot,
+			WorkspaceRoot:    workspaceRoot,
+			PermissionEngine: permissions.NewEngine("trusted_local"),
+			TaskManager:      task.NewManager(task.Config{}, nil, nil),
+			SchedulerService: scheduler.NewService(nil, nil),
+			TurnContext: &runtimegraph.TurnContext{
+				CurrentSessionID: "session-web-lookup",
+			},
+		},
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("buildTurnSkillState() error = %v", err)
+	}
+
+	want := []string{
+		"file_read",
+		"glob",
+		"grep",
+		"list_dir",
+		"request_permissions",
+		"request_user_input",
+		"schedule_report",
+		"skill_use",
+		"task_create",
+		"task_get",
+		"task_list",
+		"task_output",
+		"task_result",
+		"task_stop",
+		"task_update",
+		"task_wait",
+		"view_image",
+		"web_fetch",
+	}
+	if got := state.VisibleToolNames; !reflect.DeepEqual(got, want) {
+		t.Fatalf("state.VisibleToolNames = %v, want %v", got, want)
+	}
+	if containsString(state.VisibleToolNames, "shell_command") {
+		t.Fatalf("state.VisibleToolNames unexpectedly contains shell_command: %v", state.VisibleToolNames)
+	}
+}
+
+func TestDetectRequestShapeProfileClassifiesPromptsSafely(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "code edit request stays codebase",
+			input: "edit the website header",
+			want:  "codebase-edit",
+		},
+		{
+			name:  "code review prompt stays codebase",
+			input: "review the daemon service implementation",
+			want:  "codebase-edit",
+		},
+		{
+			name:  "code explanation prompt stays codebase",
+			input: "explain this website header component",
+			want:  "codebase-edit",
+		},
+		{
+			name:  "code edit prompt with url still stays codebase",
+			input: "fix the header component for https://example.com in this repo",
+			want:  "codebase-edit",
+		},
+		{
+			name:  "web lookup requires explicit browse signal",
+			input: "browse https://example.com and summarize the homepage",
+			want:  "web-lookup",
+		},
+		{
+			name:  "system inspect requires explicit runtime inspection signal",
+			input: "run a shell command to inspect the daemon logs",
+			want:  "system-inspect",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := detectRequestShapeProfile(tc.input); got != tc.want {
+				t.Fatalf("detectRequestShapeProfile(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
 	}
 }
 

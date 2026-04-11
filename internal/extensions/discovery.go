@@ -64,28 +64,10 @@ func Discover(globalRoot, workspaceRoot string) (Catalog, error) {
 		return Catalog{}, err
 	}
 
-	skillMap := make(map[string]Skill, len(systemSkills)+len(globalSkills)+len(workspaceSkills))
-	for _, skill := range systemSkills {
-		skillMap[strings.ToLower(skill.Name)] = skill
+	skills, err := mergeDiscoveredSkills(systemSkills, globalSkills, workspaceSkills)
+	if err != nil {
+		return Catalog{}, err
 	}
-	for _, skill := range globalSkills {
-		skillMap[strings.ToLower(skill.Name)] = skill
-	}
-	for _, skill := range workspaceSkills {
-		skillMap[strings.ToLower(skill.Name)] = skill
-	}
-	skills := make([]Skill, 0, len(skillMap))
-	for _, skill := range skillMap {
-		skills = append(skills, skill)
-	}
-	sort.Slice(skills, func(i, j int) bool {
-		left := strings.ToLower(skills[i].Name)
-		right := strings.ToLower(skills[j].Name)
-		if left == right {
-			return skills[i].Name < skills[j].Name
-		}
-		return left < right
-	})
 
 	tools := make([]ToolAsset, 0, len(toolSpecs))
 	for _, spec := range toolSpecs {
@@ -176,48 +158,52 @@ func readSkillsDir(root string, scope string) ([]Skill, error) {
 			Path:             dir,
 			Scope:            scope,
 			WhenToUse:        strings.TrimSpace(meta.WhenToUse),
-			ToolDependencies: normalizeToolIDs(meta.ToolDependencies),
-			PreferredTools:   normalizeToolIDs(meta.PreferredTools),
+			ToolDependencies: append([]string(nil), meta.ToolDependencies...),
+			PreferredTools:   append([]string(nil), meta.PreferredTools...),
 			ExecutionMode:    strings.TrimSpace(meta.ExecutionMode),
 			AgentType:        strings.TrimSpace(meta.AgentType),
-			EnvDependencies:  normalizeNames(meta.EnvDependencies),
+			EnvDependencies:  append([]string(nil), meta.EnvDependencies...),
 			Enabled:          enabled,
 		})
 	}
 	return skills, nil
 }
 
-func normalizeToolIDs(values []string) []string {
-	normalized := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		value = strings.ToLower(strings.TrimSpace(value))
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		normalized = append(normalized, value)
+func mergeDiscoveredSkills(groups ...[]Skill) ([]Skill, error) {
+	total := 0
+	for _, group := range groups {
+		total += len(group)
 	}
-	return normalized
-}
 
-func normalizeNames(values []string) []string {
-	normalized := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			continue
+	merged := make([]Skill, 0, total)
+	seenByFoldedName := make(map[string]Skill, total)
+	for _, group := range groups {
+		for _, skill := range group {
+			folded := strings.ToLower(skill.Name)
+			if existing, ok := seenByFoldedName[folded]; ok {
+				return nil, fmt.Errorf(
+					"ambiguous skill name collision: %q (%s, %s) conflicts with %q (%s, %s)",
+					existing.Name,
+					existing.Scope,
+					existing.Path,
+					skill.Name,
+					skill.Scope,
+					skill.Path,
+				)
+			}
+			seenByFoldedName[folded] = skill
+			merged = append(merged, skill)
 		}
-		key := strings.ToLower(trimmed)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		normalized = append(normalized, trimmed)
 	}
-	return normalized
+
+	sort.Slice(merged, func(i, j int) bool {
+		left := strings.ToLower(merged[i].Name)
+		right := strings.ToLower(merged[j].Name)
+		if left == right {
+			return merged[i].Name < merged[j].Name
+		}
+		return left < right
+	})
+
+	return merged, nil
 }

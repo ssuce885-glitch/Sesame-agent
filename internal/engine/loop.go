@@ -614,55 +614,77 @@ func detectRequestShapeProfile(userMessage string) string {
 		return "codebase-edit"
 	}
 
-	if looksLikeCodebaseEditRequest(text) {
+	if looksLikeCodebaseRequest(text) {
 		return "codebase-edit"
 	}
 
-	webSignals := []string{
-		"http://", "https://", "www.", "web", "website", "browse", "search",
-		"look up", "lookup", "fetch", "image", "news", "internet",
-	}
-	for _, signal := range webSignals {
-		if strings.Contains(text, signal) {
-			return "web-lookup"
-		}
+	if looksLikeWebLookupRequest(text) {
+		return "web-lookup"
 	}
 
-	systemSignals := []string{
-		"shell", "terminal", "command", "system", "process", "environment",
-		"env ", "logs", "inspect runtime", "service", "daemon",
-	}
-	for _, signal := range systemSignals {
-		if strings.Contains(text, signal) {
-			return "system-inspect"
-		}
+	if looksLikeSystemInspectRequest(text) {
+		return "system-inspect"
 	}
 
 	return "codebase-edit"
 }
 
-func looksLikeCodebaseEditRequest(text string) bool {
+func looksLikeCodebaseRequest(text string) bool {
 	editSignals := []string{
 		"edit", "update", "change", "modify", "fix", "refactor",
 		"implement", "add", "remove", "rename",
 	}
+	analysisSignals := []string{
+		"explain", "review", "debug", "analyze", "inspect",
+		"walk through",
+	}
 	targetSignals := []string{
 		"app", "code", "component", "css", "file", "footer", "function",
-		"header", "homepage", "html", "layout", "page", "repo", "test",
-		"ui", "web app", "website",
+		"handler", "header", "homepage", "html", "implementation", "layout",
+		"loader", "module", "page", "repo", "script", "struct",
+		"test", "ui", "web app",
 	}
 
-	hasEditSignal := false
-	for _, signal := range editSignals {
-		if strings.Contains(text, signal) {
-			hasEditSignal = true
-			break
-		}
+	return containsAnySignal(text, targetSignals) &&
+		(containsAnySignal(text, editSignals) || containsAnySignal(text, analysisSignals))
+}
+
+func looksLikeWebLookupRequest(text string) bool {
+	if containsAnySignal(text, []string{"http://", "https://", "www."}) {
+		return true
 	}
-	if !hasEditSignal {
-		return false
+
+	webActionSignals := []string{"browse", "search", "look up", "lookup", "fetch", "open"}
+	webTargetSignals := []string{"internet", "online", "web", "website", "url", "page", "news", "image"}
+
+	return containsAnySignal(text, webActionSignals) && containsAnySignal(text, webTargetSignals)
+}
+
+func looksLikeSystemInspectRequest(text string) bool {
+	strongSignals := []string{
+		"run a shell command",
+		"run this command",
+		"execute a shell command",
+		"execute this command",
+		"in the terminal",
+		"environment variables",
+		"env vars",
 	}
-	for _, signal := range targetSignals {
+	if containsAnySignal(text, strongSignals) {
+		return true
+	}
+
+	systemActionSignals := []string{"run", "execute", "inspect", "check", "show", "list", "tail", "print"}
+	systemTargetSignals := []string{
+		"shell command", "terminal", "logs", "log file", "process",
+		"processes", "pid", "systemd", "service status",
+	}
+
+	return containsAnySignal(text, systemActionSignals) && containsAnySignal(text, systemTargetSignals)
+}
+
+func containsAnySignal(text string, signals []string) bool {
+	for _, signal := range signals {
 		if strings.Contains(text, signal) {
 			return true
 		}

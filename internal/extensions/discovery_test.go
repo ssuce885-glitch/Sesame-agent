@@ -3,6 +3,7 @@ package extensions
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,30 @@ func TestDiscoverExcludesDisabledSkillFromCatalog(t *testing.T) {
 	}
 	if len(catalog.Skills) != 0 {
 		t.Fatalf("len(catalog.Skills) = %d, want 0", len(catalog.Skills))
+	}
+}
+
+func TestDiscoverRejectsCaseInsensitiveSkillNameCollision(t *testing.T) {
+	globalRoot := t.TempDir()
+	workspaceRoot := t.TempDir()
+
+	writeFile(t, filepath.Join(globalRoot, "skills", "Alpha", "SKILL.md"), "# Alpha")
+	writeFile(t, filepath.Join(globalRoot, "skills", "Alpha", "SKILL.json"), `{
+		"name": "Alpha",
+		"description": "global alpha"
+	}`)
+	writeFile(t, filepath.Join(workspaceRoot, ".sesame", "skills", "alpha", "SKILL.md"), "# alpha")
+	writeFile(t, filepath.Join(workspaceRoot, ".sesame", "skills", "alpha", "SKILL.json"), `{
+		"name": "alpha",
+		"description": "workspace alpha"
+	}`)
+
+	_, err := Discover(globalRoot, workspaceRoot)
+	if err == nil {
+		t.Fatalf("Discover() error = nil, want collision error")
+	}
+	if !strings.Contains(err.Error(), "Alpha") || !strings.Contains(err.Error(), "alpha") {
+		t.Fatalf("Discover() error = %q, want both colliding skill names", err)
 	}
 }
 
