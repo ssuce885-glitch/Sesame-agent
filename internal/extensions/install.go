@@ -285,7 +285,7 @@ func ListRemoteSkillNames(repo, repoPath, ref string) ([]string, error) {
 		return nil, err
 	}
 	ref = defaultRef(ref)
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s?ref=%s", owner, repoName, escapeGitHubContentPath(repoPath), url.QueryEscape(ref))
+	apiURL := githubContentsURL(owner, repoName, repoPath, ref)
 	payload, err := githubRequestFunc(apiURL, "application/vnd.github+json")
 	if err != nil {
 		return nil, err
@@ -296,9 +296,14 @@ func ListRemoteSkillNames(repo, repoPath, ref string) ([]string, error) {
 	}
 	names := make([]string, 0, len(items))
 	for _, item := range items {
-		if item.Type == "dir" && strings.TrimSpace(item.Name) != "" {
-			names = append(names, item.Name)
+		if item.Type != "dir" || strings.TrimSpace(item.Name) == "" {
+			continue
 		}
+		meta, err := loadRemoteSkillMetadata(owner, repoName, ref, path.Join(repoPath, item.Name))
+		if err != nil || !remoteSkillEnabled(meta) {
+			continue
+		}
+		names = append(names, item.Name)
 	}
 	sort.Strings(names)
 	return names, nil
@@ -319,7 +324,14 @@ func inspectGitHubSource(scope string, source resolvedInstallSource) (InstallPla
 		return InstallPlan{}, err
 	}
 	buckets := skillPathBucketsFromTree(tree.Tree)
-	plan.CandidatePaths = buckets.Candidate
+	plan.CandidatePaths = make([]string, 0, len(buckets.Candidate))
+	for _, candidate := range buckets.Candidate {
+		meta, err := loadRemoteSkillMetadata(source.owner, source.repo, source.ref, candidate)
+		if err != nil || !remoteSkillEnabled(meta) {
+			continue
+		}
+		plan.CandidatePaths = append(plan.CandidatePaths, candidate)
+	}
 	plan.IgnoredCandidatePaths = append(plan.IgnoredCandidatePaths, buckets.Foreign...)
 	plan.IgnoredCandidatePaths = append(plan.IgnoredCandidatePaths, buckets.Ignored...)
 	if len(buckets.Foreign) > 0 {
@@ -673,31 +685,29 @@ func validateSkillDir(skillDir string) error {
 }
 
 func validateRemoteSkillDir(owner, repo, ref, repoPath string) error {
+	_, err := loadRemoteSkillMetadata(owner, repo, ref, repoPath)
+	return err
+}
+
+func loadRemoteSkillMetadata(owner, repo, ref, repoPath string) (skillMetadata, error) {
 	normalizedPath := normalizeRepoPath(repoPath)
 	switch path.Base(normalizedPath) {
 	case "SKILL.md", "SKILL.json":
-		return fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md")
+		return skillMetadata{}, fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md")
 	}
 
-	apiURL := fmt.Sprintf(
-		"https://api.github.com/repos/%s/%s/contents/%s?ref=%s",
-		owner,
-		repo,
-		escapeGitHubContentPath(normalizedPath),
-		url.QueryEscape(ref),
-	)
-	payload, err := githubRequestFunc(apiURL, "application/vnd.github+json")
+	payload, err := githubRequestFunc(githubContentsURL(owner, repo, normalizedPath, ref), "application/vnd.github+json")
 	if err != nil {
-		return err
+		return skillMetadata{}, err
 	}
 
 	var items []githubContentsItem
 	if err := json.Unmarshal(payload, &items); err != nil {
 		var item githubContentsItem
 		if json.Unmarshal(payload, &item) == nil {
-			return fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md")
+			return skillMetadata{}, fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md")
 		}
-		return fmt.Errorf("decode GitHub contents response: %w", err)
+		return skillMetadata{}, fmt.Errorf("decode GitHub contents response: %w", err)
 	}
 
 	hasMarkdown := false
@@ -714,24 +724,28 @@ func validateRemoteSkillDir(owner, repo, ref, repoPath string) error {
 		}
 	}
 	if !hasMetadata {
-		return fmt.Errorf("remote skill directory is missing SKILL.json")
+		return skillMetadata{}, fmt.Errorf("remote skill directory is missing SKILL.json")
 	}
 	if !hasMarkdown {
-		return fmt.Errorf("remote skill directory is missing SKILL.md")
+		return skillMetadata{}, fmt.Errorf("remote skill directory is missing SKILL.md")
 	}
 
 	payload, err = fetchGitHubFile(owner, repo, ref, path.Join(normalizedPath, "SKILL.json"))
 	if err != nil {
-		return err
+		return skillMetadata{}, err
 	}
 	var meta skillMetadata
 	if err := json.Unmarshal(payload, &meta); err != nil {
-		return fmt.Errorf("decode SKILL.json: %w", err)
+		return skillMetadata{}, fmt.Errorf("decode SKILL.json: %w", err)
 	}
 	if strings.TrimSpace(meta.Name) == "" {
-		return fmt.Errorf("SKILL.json missing required field %q", "name")
+		return skillMetadata{}, fmt.Errorf("SKILL.json missing required field %q", "name")
 	}
-	return nil
+	return meta, nil
+}
+
+func remoteSkillEnabled(meta skillMetadata) bool {
+	return meta.Enabled == nil || *meta.Enabled
 }
 
 func copyDir(srcDir, destDir string) error {
@@ -868,7 +882,7 @@ func fetchGitHubTree(owner, repo, ref string) (githubTreeResponse, error) {
 }
 
 func fetchGitHubFile(owner, repo, ref, repoPath string) ([]byte, error) {
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s?ref=%s", owner, repo, escapeGitHubContentPath(repoPath), url.QueryEscape(ref))
+	apiURL := githubContentsURL(owner, repo, repoPath, ref)
 	return githubRequestFunc(apiURL, "application/vnd.github.raw")
 }
 
@@ -1215,6 +1229,14 @@ func escapeGitHubContentPath(repoPath string) string {
 		parts[idx] = url.PathEscape(part)
 	}
 	return strings.Join(parts, "/")
+}
+
+func githubContentsURL(owner, repo, repoPath, ref string) string {
+	base := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents", owner, repo)
+	if escapedPath := escapeGitHubContentPath(repoPath); escapedPath != "" {
+		base += "/" + escapedPath
+	}
+	return base + "?ref=" + url.QueryEscape(ref)
 }
 
 func splitGitHubRepo(repo string) (string, string, error) {
