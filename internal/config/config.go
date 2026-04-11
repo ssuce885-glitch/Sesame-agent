@@ -141,9 +141,6 @@ func MissingSetupFields(cfg Config) []string {
 	if strings.TrimSpace(provider.APIFamily) == "" {
 		missing = append(missing, "model_providers.<active>.api_family")
 	}
-	if runtimeModelProviderFromAPIFamily(provider.APIFamily) == "fake" {
-		return missing
-	}
 	if strings.TrimSpace(provider.APIKeyEnv) == "" {
 		missing = append(missing, "model_providers.<active>.api_key_env")
 	}
@@ -445,8 +442,6 @@ func runtimeModelProviderFromAPIFamily(apiFamily string) string {
 		return "anthropic"
 	case "openai", "openai_compatible", "openai_chat_completions", "openai_responses":
 		return "openai_compatible"
-	case "fake":
-		return "fake"
 	}
 	return ""
 }
