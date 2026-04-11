@@ -42,12 +42,13 @@ func ensureRuntimeConfigured(stdin io.Reader, stdout io.Writer, cfg config.Confi
 		providerTypeForProfile(fileCfg, activeProfile),
 		"anthropic",
 	)
-	provider, err := promptRequired(reader, stdout, "Provider [anthropic/openai_compatible/fake]", providerDefault)
+	providerDefault = sanitizeInteractiveProvider(providerDefault)
+	provider, err := promptRequired(reader, stdout, "Provider [anthropic/openai_compatible]", providerDefault)
 	if err != nil {
 		return err
 	}
-	for provider != "anthropic" && provider != "openai_compatible" && provider != "fake" {
-		provider, err = promptRequired(reader, stdout, "Provider [anthropic/openai_compatible/fake]", provider)
+	for provider != "anthropic" && provider != "openai_compatible" {
+		provider, err = promptRequired(reader, stdout, "Provider [anthropic/openai_compatible]", provider)
 		if err != nil {
 			return err
 		}
@@ -80,9 +81,6 @@ func ensureRuntimeConfigured(stdin io.Reader, stdout io.Writer, cfg config.Confi
 		if err != nil {
 			return err
 		}
-	case "fake":
-		baseURL = ""
-		apiKeyEnv = ""
 	}
 
 	permissionProfile, err := promptRequired(reader, stdout, "Permission profile", firstNonEmptyLocal(fileCfg.PermissionProfile, cfg.PermissionProfile, "trusted_local"))
@@ -188,8 +186,6 @@ func providerTypeFromAPIFamily(apiFamily string) string {
 		return "anthropic"
 	case "openai", "openai_compatible", "openai_chat_completions", "openai_responses":
 		return "openai_compatible"
-	case "fake":
-		return "fake"
 	default:
 		return ""
 	}
@@ -199,8 +195,6 @@ func defaultModelForProvider(provider string) string {
 	switch strings.TrimSpace(provider) {
 	case "openai_compatible":
 		return "gpt-5.4"
-	case "fake":
-		return "fake-smoke"
 	default:
 		return "claude-sonnet-4-5"
 	}
@@ -210,8 +204,6 @@ func apiFamilyForProvider(provider string) string {
 	switch strings.TrimSpace(provider) {
 	case "openai_compatible":
 		return "openai_chat_completions"
-	case "fake":
-		return "fake"
 	default:
 		return "anthropic_messages"
 	}
@@ -221,8 +213,6 @@ func cacheProfileForProvider(provider string) string {
 	switch strings.TrimSpace(provider) {
 	case "openai_compatible":
 		return "openai_responses"
-	case "fake":
-		return "none"
 	default:
 		return "anthropic_default"
 	}
@@ -235,8 +225,17 @@ func providerIDForSetup(provider, current string) string {
 	switch strings.TrimSpace(provider) {
 	case "openai_compatible":
 		return "openai"
-	case "fake":
-		return "fake"
+	default:
+		return "anthropic"
+	}
+}
+
+func sanitizeInteractiveProvider(provider string) string {
+	switch strings.TrimSpace(provider) {
+	case "openai_compatible":
+		return "openai_compatible"
+	case "anthropic":
+		return "anthropic"
 	default:
 		return "anthropic"
 	}

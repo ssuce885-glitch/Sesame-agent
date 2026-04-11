@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -75,7 +77,7 @@ func TestLoadRuntimeConfigWithSetupRecoversFromMissingActiveProfile(t *testing.T
 		LoadConfig: func(opts Options) (config.Config, error) {
 			calls++
 			if calls == 1 {
-				return config.Config{}, fmt.Errorf("active_profile is required")
+				return config.Config{}, fmt.Errorf("wrapped: %w", config.ErrActiveProfileRequired)
 			}
 			return config.Config{Addr: "127.0.0.1:4317"}, nil
 		},
@@ -90,5 +92,43 @@ func TestLoadRuntimeConfigWithSetupRecoversFromMissingActiveProfile(t *testing.T
 	}
 	if cfg.Addr != "127.0.0.1:4317" {
 		t.Fatalf("cfg.Addr = %q, want 127.0.0.1:4317", cfg.Addr)
+	}
+}
+
+func TestEnsureRuntimeConfiguredProviderPromptDoesNotOfferFake(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	var out bytes.Buffer
+	stdin := strings.NewReader(strings.Join([]string{
+		"fake",
+		"anthropic",
+		"claude-sonnet-4-5",
+		"https://api.anthropic.com",
+		"ANTHROPIC_API_KEY",
+		"trusted_local",
+	}, "\n") + "\n")
+
+	if err := ensureRuntimeConfigured(stdin, &out, config.Config{}); err != nil {
+		t.Fatalf("ensureRuntimeConfigured() error = %v", err)
+	}
+	if strings.Contains(out.String(), "Provider [anthropic/openai_compatible/fake]") {
+		t.Fatalf("provider prompt still exposes fake option:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "Provider [anthropic/openai_compatible]") {
+		t.Fatalf("provider prompt missing explicit provider choices:\n%s", out.String())
+	}
+}
+
+func TestIsRecoverableSetupConfigErrorUsesTypedErrors(t *testing.T) {
+	if !isRecoverableSetupConfigError(fmt.Errorf("wrapped typed error: %w", config.ErrActiveProfileRequired)) {
+		t.Fatal("typed active profile error should be recoverable")
+	}
+	if isRecoverableSetupConfigError(errors.New("active_profile is required")) {
+		t.Fatal("plain string error should not be recoverable")
+	}
+	if isRecoverableSetupConfigError(fmt.Errorf("wrapped typed error: %w", config.ErrLegacyConfigFieldsUnsupported)) {
+		t.Fatal("legacy-config typed error should not be recoverable")
 	}
 }

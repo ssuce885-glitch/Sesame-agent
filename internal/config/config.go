@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -79,6 +80,14 @@ type Config struct {
 type CLIConfig struct {
 	ShowExtensionsOnStartup bool
 }
+
+var (
+	ErrLegacyConfigFieldsUnsupported = errors.New("legacy config fields are no longer supported")
+	ErrActiveProfileRequired         = errors.New("active_profile is required")
+	ErrActiveProfileNotFound         = errors.New("active_profile not found")
+	ErrUnknownModelProvider          = errors.New("unknown model_provider")
+	ErrUnsupportedAPIFamily          = errors.New("unsupported api_family")
+)
 
 func Load() (Config, error) {
 	return loadConfig(CLIStartupOverrides{})
@@ -166,7 +175,7 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		return Config{}, err
 	}
 	if usesLegacyModelConfig(uc) {
-		return Config{}, fmt.Errorf("legacy config fields are no longer supported; rewrite config.json using model_providers, profiles, and active_profile")
+		return Config{}, fmt.Errorf("%w; rewrite config.json using model_providers, profiles, and active_profile", ErrLegacyConfigFieldsUnsupported)
 	}
 
 	workspaceRoot := strings.TrimSpace(overrides.WorkspaceRoot)
@@ -184,22 +193,27 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 
 	activeProfile := strings.TrimSpace(uc.ActiveProfile)
 	if activeProfile == "" {
-		return Config{}, fmt.Errorf("active_profile is required")
+		return Config{}, ErrActiveProfileRequired
 	}
 
 	modelProviders := buildModelProviders(uc.ModelProviders)
-	profiles := buildProfiles(uc.Profiles, strings.TrimSpace(overrides.Model))
+	profiles := buildProfiles(uc.Profiles)
 	activeRuntimeProfile, ok := profiles[activeProfile]
 	if !ok {
-		return Config{}, fmt.Errorf("active_profile %q not found", activeProfile)
+		return Config{}, fmt.Errorf("%w: %q", ErrActiveProfileNotFound, activeProfile)
 	}
 	activeRuntimeProvider, ok := modelProviders[activeRuntimeProfile.ModelProvider]
 	if !ok {
-		return Config{}, fmt.Errorf("active_profile %q references unknown model_provider %q", activeProfile, activeRuntimeProfile.ModelProvider)
+		return Config{}, fmt.Errorf("%w: active_profile %q references %q", ErrUnknownModelProvider, activeProfile, activeRuntimeProfile.ModelProvider)
 	}
 	for profileID, profile := range profiles {
 		if _, ok := modelProviders[profile.ModelProvider]; !ok {
-			return Config{}, fmt.Errorf("profile %q references unknown model_provider %q", profileID, profile.ModelProvider)
+			return Config{}, fmt.Errorf("%w: profile %q references %q", ErrUnknownModelProvider, profileID, profile.ModelProvider)
+		}
+	}
+	for providerID, provider := range modelProviders {
+		if !isSupportedAPIFamily(provider.APIFamily) {
+			return Config{}, fmt.Errorf("%w: model_provider %q uses %q", ErrUnsupportedAPIFamily, providerID, provider.APIFamily)
 		}
 	}
 
@@ -225,7 +239,7 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		ModelProviders:               modelProviders,
 		Profiles:                     profiles,
 		ModelProvider:                compatProvider,
-		Model:                        activeRuntimeProfile.Model,
+		Model:                        firstNonEmpty(strings.TrimSpace(overrides.Model), activeRuntimeProfile.Model),
 		AnthropicAPIKey:              anthropicAPIKey,
 		AnthropicBaseURL:             anthropicBaseURL,
 		OpenAIAPIKey:                 openAIAPIKey,
@@ -402,24 +416,19 @@ func buildModelProviders(userProviders map[string]UserConfigModelProvider) map[s
 	return providers
 }
 
-func buildProfiles(userProfiles map[string]UserConfigProfile, modelOverride string) map[string]ProfileConfig {
+func buildProfiles(userProfiles map[string]UserConfigProfile) map[string]ProfileConfig {
 	if len(userProfiles) == 0 {
 		return map[string]ProfileConfig{}
 	}
 	profiles := make(map[string]ProfileConfig, len(userProfiles))
-	override := strings.TrimSpace(modelOverride)
 	for id, profile := range userProfiles {
 		trimmedID := strings.TrimSpace(id)
 		if trimmedID == "" {
 			continue
 		}
-		model := strings.TrimSpace(profile.Model)
-		if override != "" {
-			model = override
-		}
 		profiles[trimmedID] = ProfileConfig{
 			ID:            trimmedID,
-			Model:         model,
+			Model:         strings.TrimSpace(profile.Model),
 			ModelProvider: strings.TrimSpace(profile.ModelProvider),
 			Reasoning:     strings.TrimSpace(profile.Reasoning),
 			Verbosity:     strings.TrimSpace(profile.Verbosity),
@@ -439,13 +448,11 @@ func runtimeModelProviderFromAPIFamily(apiFamily string) string {
 	case "fake":
 		return "fake"
 	}
-	if strings.Contains(normalized, "anthropic") {
-		return "anthropic"
-	}
-	if strings.Contains(normalized, "openai") {
-		return "openai_compatible"
-	}
-	return strings.TrimSpace(apiFamily)
+	return ""
+}
+
+func isSupportedAPIFamily(apiFamily string) bool {
+	return runtimeModelProviderFromAPIFamily(apiFamily) != ""
 }
 
 func usesLegacyModelConfig(uc UserConfig) bool {

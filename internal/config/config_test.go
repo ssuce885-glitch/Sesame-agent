@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,6 +128,81 @@ func TestMissingSetupFieldsAllowsFakeProviderWithoutAuthFields(t *testing.T) {
 	missing := MissingSetupFields(cfg)
 	if len(missing) != 0 {
 		t.Fatalf("MissingSetupFields() = %v, want none for fake provider", missing)
+	}
+}
+
+func TestResolveCLIStartupConfigModelOverrideAffectsOnlyRuntimeSelection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeConfigFile(t, filepath.Join(home, ".sesame", "config.json"), `{
+		"active_profile": "coding",
+		"model_providers": {
+			"anthropic-prod": {
+				"api_family": "anthropic_messages",
+				"base_url": "https://api.anthropic.com",
+				"api_key_env": "ANTHROPIC_API_KEY"
+			}
+		},
+		"profiles": {
+			"coding": {
+				"model": "claude-sonnet-4-5",
+				"model_provider": "anthropic-prod",
+				"cache_profile": "anthropic_default"
+			},
+			"review": {
+				"model": "claude-3-5-haiku",
+				"model_provider": "anthropic-prod",
+				"cache_profile": "anthropic_default"
+			}
+		}
+	}`)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	cfg, err := ResolveCLIStartupConfig(CLIStartupOverrides{Model: "override-model"})
+	if err != nil {
+		t.Fatalf("ResolveCLIStartupConfig() error = %v", err)
+	}
+	if cfg.Model != "override-model" {
+		t.Fatalf("Model = %q, want override-model", cfg.Model)
+	}
+	if cfg.Profiles["coding"].Model != "claude-sonnet-4-5" {
+		t.Fatalf("active profile model in cfg.Profiles = %q, want unchanged claude-sonnet-4-5", cfg.Profiles["coding"].Model)
+	}
+	if cfg.Profiles["review"].Model != "claude-3-5-haiku" {
+		t.Fatalf("non-active profile model in cfg.Profiles = %q, want unchanged claude-3-5-haiku", cfg.Profiles["review"].Model)
+	}
+}
+
+func TestResolveCLIStartupConfigRejectsUnsupportedAPIFamily(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeConfigFile(t, filepath.Join(home, ".sesame", "config.json"), `{
+		"active_profile": "coding",
+		"model_providers": {
+			"custom": {
+				"api_family": "totally_custom_family",
+				"base_url": "https://example.com",
+				"api_key_env": "CUSTOM_API_KEY"
+			}
+		},
+		"profiles": {
+			"coding": {
+				"model": "custom-model",
+				"model_provider": "custom",
+				"cache_profile": "none"
+			}
+		}
+	}`)
+	t.Setenv("CUSTOM_API_KEY", "test-key")
+
+	_, err := ResolveCLIStartupConfig(CLIStartupOverrides{})
+	if err == nil {
+		t.Fatal("ResolveCLIStartupConfig() error = nil, want unsupported api_family rejection")
+	}
+	if !errors.Is(err, ErrUnsupportedAPIFamily) {
+		t.Fatalf("error = %v, want ErrUnsupportedAPIFamily", err)
 	}
 }
 
