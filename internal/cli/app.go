@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -237,17 +238,16 @@ func isRecoverableSetupConfigError(err error) bool {
 	if err == nil {
 		return false
 	}
-	message := err.Error()
-	if strings.Contains(message, "legacy config fields are no longer supported") {
+	if errors.Is(err, config.ErrLegacyConfigFieldsUnsupported) {
 		return false
 	}
-	if strings.Contains(message, "active_profile is required") {
+	if errors.Is(err, config.ErrActiveProfileRequired) {
 		return true
 	}
-	if strings.Contains(message, "active_profile") && strings.Contains(message, "not found") {
+	if errors.Is(err, config.ErrActiveProfileNotFound) {
 		return true
 	}
-	if strings.Contains(message, "references unknown model_provider") {
+	if errors.Is(err, config.ErrUnknownModelProvider) {
 		return true
 	}
 	return false
