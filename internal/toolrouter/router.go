@@ -15,9 +15,6 @@ type DecideInput struct {
 // Decide returns the visible runtime tools for the request profile plus active skill overlays.
 func Decide(in DecideInput) []string {
 	base := profileTools[in.Profile]
-	if len(base) == 0 {
-		base = profileTools["codebase-edit"]
-	}
 	visible := make(map[string]struct{}, len(base)+4)
 	for _, toolName := range base {
 		visible[toolName] = struct{}{}

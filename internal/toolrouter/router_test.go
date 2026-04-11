@@ -72,6 +72,14 @@ func TestDecideUsesRequestShapeBaseProfiles(t *testing.T) {
 	})
 }
 
+func TestDecideDoesNotFallbackForUnknownProfile(t *testing.T) {
+	got := Decide(DecideInput{Profile: "unknown-profile"})
+	want := []string{"skill_use"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Decide(unknown-profile) = %v, want %v", got, want)
+	}
+}
+
 func TestDecideKeepsSkillUseVisibleAndAppliesSkillOverlay(t *testing.T) {
 	got := Decide(DecideInput{
 		Profile: "web-lookup",
