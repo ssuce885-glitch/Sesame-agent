@@ -100,7 +100,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 		return runSkillCommand(a.Stdout, *opts.Skill)
 	}
 
-	cfg, err := a.loadConfig(opts)
+	cfg, err := a.loadRuntimeConfigWithSetup(opts)
 	if err != nil {
 		return err
 	}
@@ -217,6 +217,40 @@ func (a App) loadConfig(opts Options) (config.Config, error) {
 		})
 	}
 	return a.LoadConfig(opts)
+}
+
+func (a App) loadRuntimeConfigWithSetup(opts Options) (config.Config, error) {
+	cfg, err := a.loadConfig(opts)
+	if err == nil {
+		return cfg, nil
+	}
+	if !isRecoverableSetupConfigError(err) {
+		return config.Config{}, err
+	}
+	if err := ensureRuntimeConfigured(a.Stdin, a.Stdout, config.Config{}); err != nil {
+		return config.Config{}, err
+	}
+	return a.loadConfig(opts)
+}
+
+func isRecoverableSetupConfigError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	if strings.Contains(message, "legacy config fields are no longer supported") {
+		return false
+	}
+	if strings.Contains(message, "active_profile is required") {
+		return true
+	}
+	if strings.Contains(message, "active_profile") && strings.Contains(message, "not found") {
+		return true
+	}
+	if strings.Contains(message, "references unknown model_provider") {
+		return true
+	}
+	return false
 }
 
 func (a App) ensureDaemon(ctx context.Context, cfg config.Config) error {
