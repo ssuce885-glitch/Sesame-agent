@@ -62,6 +62,50 @@ func TestResolveCLIStartupConfigRejectsLegacyProviderFields(t *testing.T) {
 	}
 }
 
+func TestResolveCLIStartupConfigBuildsRuntimeCompatibilityFieldsFromActiveProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeConfigFile(t, filepath.Join(home, ".sesame", "config.json"), `{
+		"active_profile": "coding",
+		"model_providers": {
+			"anthropic-prod": {
+				"api_family": "anthropic_messages",
+				"base_url": "https://api.anthropic.com",
+				"api_key_env": "ANTHROPIC_API_KEY"
+			}
+		},
+		"profiles": {
+			"coding": {
+				"model": "claude-sonnet-4-5",
+				"model_provider": "anthropic-prod",
+				"cache_profile": "anthropic_default"
+			}
+		}
+	}`)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	cfg, err := ResolveCLIStartupConfig(CLIStartupOverrides{})
+	if err != nil {
+		t.Fatalf("ResolveCLIStartupConfig() error = %v", err)
+	}
+	if cfg.ModelProvider != "anthropic" {
+		t.Fatalf("ModelProvider = %q, want anthropic", cfg.ModelProvider)
+	}
+	if cfg.Model != "claude-sonnet-4-5" {
+		t.Fatalf("Model = %q, want claude-sonnet-4-5", cfg.Model)
+	}
+	if cfg.AnthropicAPIKey != "test-key" {
+		t.Fatalf("AnthropicAPIKey = %q, want test-key", cfg.AnthropicAPIKey)
+	}
+	if cfg.AnthropicBaseURL != "https://api.anthropic.com" {
+		t.Fatalf("AnthropicBaseURL = %q, want https://api.anthropic.com", cfg.AnthropicBaseURL)
+	}
+	if cfg.ProviderCacheProfile != "anthropic_default" {
+		t.Fatalf("ProviderCacheProfile = %q, want anthropic_default", cfg.ProviderCacheProfile)
+	}
+}
+
 func writeConfigFile(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
