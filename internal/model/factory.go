@@ -26,7 +26,7 @@ func newTransportFromResolved(resolved ResolvedProviderConfig) (StreamingClient,
 			Model:   resolved.Model,
 			BaseURL: resolved.BaseURL,
 		})
-	case APIFamilyOpenAIChatCompletions, APIFamilyOpenAIResponses:
+	case APIFamilyOpenAIResponses:
 		return NewOpenAICompatibleProvider(Config{
 			APIKey:       resolved.APIKey,
 			Model:        resolved.Model,

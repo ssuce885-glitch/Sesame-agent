@@ -182,9 +182,9 @@ func apiKeyEnvForProviderType(cfg config.UserConfig, providerType string) string
 
 func providerTypeFromAPIFamily(apiFamily string) string {
 	switch strings.ToLower(strings.TrimSpace(apiFamily)) {
-	case "anthropic", "anthropic_messages":
+	case "anthropic_messages":
 		return "anthropic"
-	case "openai", "openai_compatible", "openai_chat_completions", "openai_responses":
+	case "openai_responses":
 		return "openai_compatible"
 	default:
 		return ""
@@ -203,7 +203,7 @@ func defaultModelForProvider(provider string) string {
 func apiFamilyForProvider(provider string) string {
 	switch strings.TrimSpace(provider) {
 	case "openai_compatible":
-		return "openai_chat_completions"
+		return "openai_responses"
 	default:
 		return "anthropic_messages"
 	}
