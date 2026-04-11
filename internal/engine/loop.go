@@ -648,7 +648,6 @@ func activatedSkillNamesFromMetadata(metadata map[string]any) []string {
 	seen := make(map[string]struct{})
 	names := make([]string, 0, 4)
 	appendName := func(value string) {
-		value = strings.TrimSpace(value)
 		if value == "" {
 			return
 		}
@@ -683,10 +682,6 @@ func filterDefinitionsByName(defs []tools.Definition, allowedNames []string) []t
 
 	allowed := make(map[string]struct{}, len(allowedNames))
 	for _, name := range allowedNames {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
 		allowed[name] = struct{}{}
 	}
 
@@ -707,7 +702,7 @@ func definitionNames(defs []tools.Definition) []string {
 
 	names := make([]string, 0, len(defs))
 	for _, def := range defs {
-		if strings.TrimSpace(def.Name) == "" {
+		if def.Name == "" {
 			continue
 		}
 		names = append(names, def.Name)
