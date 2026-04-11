@@ -195,6 +195,12 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 
 	modelProviders := buildModelProviders(uc.ModelProviders)
 	profiles := buildProfiles(uc.Profiles)
+	if runtimeModelOverride := strings.TrimSpace(overrides.Model); runtimeModelOverride != "" {
+		if active, exists := profiles[activeProfile]; exists {
+			active.Model = runtimeModelOverride
+			profiles[activeProfile] = active
+		}
+	}
 	activeRuntimeProfile, ok := profiles[activeProfile]
 	if !ok {
 		return Config{}, fmt.Errorf("%w: %q", ErrActiveProfileNotFound, activeProfile)
@@ -236,7 +242,7 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		ModelProviders:               modelProviders,
 		Profiles:                     profiles,
 		ModelProvider:                compatProvider,
-		Model:                        firstNonEmpty(strings.TrimSpace(overrides.Model), activeRuntimeProfile.Model),
+		Model:                        activeRuntimeProfile.Model,
 		AnthropicAPIKey:              anthropicAPIKey,
 		AnthropicBaseURL:             anthropicBaseURL,
 		OpenAIAPIKey:                 openAIAPIKey,

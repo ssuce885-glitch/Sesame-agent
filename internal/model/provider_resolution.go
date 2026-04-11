@@ -71,7 +71,7 @@ func ResolveProviderConfig(cfg config.Config) (ResolvedProviderConfig, error) {
 	return ResolvedProviderConfig{
 		ProfileID:    profileID,
 		ProviderID:   providerID,
-		Model:        selectedModel(cfg, profile),
+		Model:        strings.TrimSpace(profile.Model),
 		APIKey:       apiKey,
 		BaseURL:      strings.TrimSpace(provider.BaseURL),
 		APIFamily:    apiFamily,
@@ -80,13 +80,6 @@ func ResolveProviderConfig(cfg config.Config) (ResolvedProviderConfig, error) {
 		Reasoning:    strings.TrimSpace(profile.Reasoning),
 		Verbosity:    strings.TrimSpace(profile.Verbosity),
 	}, nil
-}
-
-func selectedModel(cfg config.Config, profile config.ProfileConfig) string {
-	if model := strings.TrimSpace(cfg.Model); model != "" {
-		return model
-	}
-	return strings.TrimSpace(profile.Model)
 }
 
 func providerProfileFor(provider config.ModelProviderConfig) ProviderProfile {

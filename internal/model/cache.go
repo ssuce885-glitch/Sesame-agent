@@ -3,8 +3,8 @@ package model
 type CapabilityProfile string
 
 const (
-	CapabilityProfileNone         CapabilityProfile = "none"
-	CapabilityProfileArkResponses CapabilityProfile = "ark_responses"
+	CapabilityProfileNone            CapabilityProfile = "none"
+	CapabilityProfileOpenAIResponses CapabilityProfile = "openai_responses"
 )
 
 type ProviderCapabilities struct {
