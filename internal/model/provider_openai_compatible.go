@@ -63,9 +63,9 @@ func NewOpenAICompatibleProvider(cfg Config) (*OpenAICompatibleProvider, error) 
 }
 
 func (p *OpenAICompatibleProvider) Capabilities() ProviderCapabilities {
-	if p.cacheProfile == CapabilityProfileArkResponses {
+	if p.cacheProfile == CapabilityProfileOpenAIResponses {
 		return ProviderCapabilities{
-			Profile:              CapabilityProfileArkResponses,
+			Profile:              CapabilityProfileOpenAIResponses,
 			SupportsSessionCache: true,
 			SupportsPrefixCache:  false,
 			CachesToolResults:    true,
@@ -238,7 +238,7 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			}
 		case "response.completed":
 			sawMessageEnd = true
-			if p.cacheProfile == CapabilityProfileArkResponses && emitResponseMetadata {
+			if p.cacheProfile == CapabilityProfileOpenAIResponses && emitResponseMetadata {
 				var payload struct {
 					ID    string `json:"id"`
 					Usage struct {
@@ -295,9 +295,9 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 }
 
 func (p *OpenAICompatibleProvider) buildRequestBody(req Request) openAICompatibleRequestBody {
-	useArkCache := req.Cache != nil && p.cacheProfile == CapabilityProfileArkResponses
+	useResponsesCache := req.Cache != nil && p.cacheProfile == CapabilityProfileOpenAIResponses
 	input := toResponsesInput(req.Items)
-	if useArkCache && req.Instructions != "" {
+	if useResponsesCache && req.Instructions != "" {
 		input = prependSystemInstruction(input, req.Instructions)
 	}
 
@@ -309,12 +309,12 @@ func (p *OpenAICompatibleProvider) buildRequestBody(req Request) openAICompatibl
 		Stream:     req.Stream,
 	}
 
-	if !useArkCache && req.Instructions != "" {
+	if !useResponsesCache && req.Instructions != "" {
 		instructions := req.Instructions
 		body.Instructions = &instructions
 	}
 
-	if useArkCache {
+	if useResponsesCache {
 		store := req.Cache.Store
 		body.Store = &store
 		if req.Cache.PreviousResponseID != "" {

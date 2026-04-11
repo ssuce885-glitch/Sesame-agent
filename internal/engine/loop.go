@@ -1114,7 +1114,7 @@ func toolRunStoreFromConversationStore(store ConversationStore) toolRunStore {
 }
 
 func providerCacheOwnerForCapabilities(caps model.ProviderCapabilities) string {
-	if caps.Profile == model.CapabilityProfileArkResponses {
+	if caps.Profile == model.CapabilityProfileOpenAIResponses {
 		return "openai_compatible"
 	}
 	return ""

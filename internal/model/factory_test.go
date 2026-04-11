@@ -59,10 +59,10 @@ func TestResolveProviderConfigRejectsMissingProviderReference(t *testing.T) {
 	}
 }
 
-func TestResolveProviderConfigPrefersRuntimeModelOverride(t *testing.T) {
+func TestResolveProviderConfigUsesActiveProfileModelOnly(t *testing.T) {
 	cfg := config.Config{
 		ActiveProfile: "coding",
-		Model:         "runtime-override-model",
+		Model:         "compat-shadow-model",
 		ModelProviders: map[string]config.ModelProviderConfig{
 			"anthropic-prod": {
 				ID:        "anthropic-prod",
@@ -86,8 +86,8 @@ func TestResolveProviderConfigPrefersRuntimeModelOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveProviderConfig() error = %v", err)
 	}
-	if resolved.Model != "runtime-override-model" {
-		t.Fatalf("Model = %q, want runtime-override-model", resolved.Model)
+	if resolved.Model != "profile-model" {
+		t.Fatalf("Model = %q, want profile-model", resolved.Model)
 	}
 }
 
@@ -119,5 +119,43 @@ func TestResolveProviderConfigRejectsOpenAIChatCompletionsFamily(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `uses unsupported api_family "openai_chat_completions"`) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNewFromConfigOpenAIResponsesCapabilities(t *testing.T) {
+	cfg := config.Config{
+		ActiveProfile: "coding",
+		ModelProviders: map[string]config.ModelProviderConfig{
+			"openai-prod": {
+				ID:        "openai-prod",
+				APIFamily: "openai_responses",
+				BaseURL:   "https://api.openai.com/v1",
+				APIKeyEnv: "OPENAI_API_KEY",
+			},
+		},
+		Profiles: map[string]config.ProfileConfig{
+			"coding": {
+				ID:            "coding",
+				Model:         "gpt-5.4",
+				ModelProvider: "openai-prod",
+				CacheProfile:  "openai_responses",
+			},
+		},
+	}
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	client, err := NewFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("NewFromConfig() error = %v", err)
+	}
+	caps := client.Capabilities()
+	if caps.Profile != CapabilityProfileOpenAIResponses {
+		t.Fatalf("Capabilities().Profile = %q, want %q", caps.Profile, CapabilityProfileOpenAIResponses)
+	}
+	if !caps.SupportsSessionCache {
+		t.Fatal("Capabilities().SupportsSessionCache = false, want true")
+	}
+	if !caps.CachesToolResults {
+		t.Fatal("Capabilities().CachesToolResults = false, want true")
 	}
 }

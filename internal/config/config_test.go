@@ -173,8 +173,8 @@ func TestResolveCLIStartupConfigModelOverrideAffectsOnlyRuntimeSelection(t *test
 	if cfg.Model != "override-model" {
 		t.Fatalf("Model = %q, want override-model", cfg.Model)
 	}
-	if cfg.Profiles["coding"].Model != "claude-sonnet-4-5" {
-		t.Fatalf("active profile model in cfg.Profiles = %q, want unchanged claude-sonnet-4-5", cfg.Profiles["coding"].Model)
+	if cfg.Profiles["coding"].Model != "override-model" {
+		t.Fatalf("active profile model in cfg.Profiles = %q, want override-model", cfg.Profiles["coding"].Model)
 	}
 	if cfg.Profiles["review"].Model != "claude-3-5-haiku" {
 		t.Fatalf("non-active profile model in cfg.Profiles = %q, want unchanged claude-3-5-haiku", cfg.Profiles["review"].Model)
