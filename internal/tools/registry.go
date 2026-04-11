@@ -33,6 +33,7 @@ func NewRegistry() *Registry {
 	r.Register(notebookEditTool{})
 	r.Register(requestPermissionsTool{})
 	r.Register(requestUserInputTool{})
+	r.Register(skillUseTool{})
 	r.Register(shellTool{})
 	r.Register(scheduleReportTool{})
 	r.Register(taskCreateTool{})
