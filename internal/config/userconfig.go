@@ -9,17 +9,27 @@ import (
 )
 
 type UserConfig struct {
-	Listen            UserConfigListen                   `json:"listen"`
-	DataDir           string                             `json:"data_dir"`
-	PermissionProfile string                             `json:"permission_profile"`
-	SystemPrompt      string                             `json:"system_prompt"`
-	SystemPromptFile  string                             `json:"system_prompt_file"`
-	Skills            UserConfigSkills                   `json:"skills"`
-	ActiveProfile     string                             `json:"active_profile"`
-	ModelProviders    map[string]UserConfigModelProvider `json:"model_providers"`
-	Profiles          map[string]UserConfigProfile       `json:"profiles"`
-	MaxToolSteps      int                                `json:"max_tool_steps"`
-	MaxRecentItems    int                                `json:"max_recent_items"`
+	Listen                     UserConfigListen                   `json:"listen"`
+	DataDir                    string                             `json:"data_dir"`
+	PermissionProfile          string                             `json:"permission_profile"`
+	SystemPrompt               string                             `json:"system_prompt"`
+	SystemPromptFile           string                             `json:"system_prompt_file"`
+	Skills                     UserConfigSkills                   `json:"skills"`
+	ActiveProfile              string                             `json:"active_profile"`
+	ModelProviders             map[string]UserConfigModelProvider `json:"model_providers"`
+	Profiles                   map[string]UserConfigProfile       `json:"profiles"`
+	MaxToolSteps               int                                `json:"max_tool_steps"`
+	MaxRecentItems             int                                `json:"max_recent_items"`
+	CompactionThreshold        int                                `json:"compaction_threshold"`
+	MaxEstimatedTokens         int                                `json:"max_estimated_tokens"`
+	MicrocompactBytesThreshold int                                `json:"microcompact_bytes_threshold"`
+	MaxCompactionPasses        int                                `json:"max_compaction_passes"`
+
+	Provider             string              `json:"-"`
+	Model                string              `json:"-"`
+	ProviderCacheProfile string              `json:"-"`
+	Anthropic            UserConfigAnthropic `json:"-"`
+	OpenAI               UserConfigOpenAI    `json:"-"`
 
 	hasLegacyModelConfig bool
 }
@@ -39,6 +49,18 @@ type UserConfigModelProvider struct {
 	ProfileID string `json:"provider_profile,omitempty"`
 	OrgID     string `json:"org_id,omitempty"`
 	ProjectID string `json:"project_id,omitempty"`
+}
+
+type UserConfigAnthropic struct {
+	APIKey  string `json:"api_key"`
+	BaseURL string `json:"base_url"`
+	Model   string `json:"model"`
+}
+
+type UserConfigOpenAI struct {
+	APIKey  string `json:"api_key"`
+	BaseURL string `json:"base_url"`
+	Model   string `json:"model"`
 }
 
 type UserConfigProfile struct {
