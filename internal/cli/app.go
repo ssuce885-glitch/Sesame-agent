@@ -36,6 +36,7 @@ type App struct {
 	LoadOptions  func([]string) (Options, error)
 	LoadConfig   func(Options) (config.Config, error)
 	EnsureDaemon func(context.Context, config.Config) error
+	StopDaemon   func(context.Context, config.Config) error
 	NewClient    func(config.Config) RuntimeClient
 	NewREPL      func(repl.Options) REPLRunner
 }
@@ -69,6 +70,21 @@ func New() App {
 			})
 			return manager.EnsureRunning(ctx)
 		},
+		StopDaemon: func(ctx context.Context, cfg config.Config) error {
+			manager := daemoncli.NewManager(daemoncli.Options{
+				BaseURL: baseURLFromAddr(cfg.Addr),
+				Config: daemoncli.LaunchConfig{
+					DaemonID:          cfg.DaemonID,
+					Addr:              cfg.Addr,
+					DataDir:           cfg.DataDir,
+					Model:             cfg.Model,
+					PermissionMode:    cfg.PermissionProfile,
+					ConfigFingerprint: cfg.ConfigFingerprint,
+				},
+				HTTPClient: &http.Client{},
+			})
+			return manager.Stop(ctx)
+		},
 		NewClient: func(cfg config.Config) RuntimeClient {
 			return client.New(baseURLFromAddr(cfg.Addr), &http.Client{})
 		},
@@ -101,7 +117,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 		return runSkillCommand(a.Stdout, *opts.Skill)
 	}
 
-	cfg, err := a.loadRuntimeConfigWithSetup(opts)
+	cfg, err := a.loadConfig(opts)
 	if err != nil {
 		return err
 	}
@@ -131,7 +147,10 @@ func (a App) Run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	catalog, err := extensions.LoadCatalog(cfg.Paths.GlobalRoot, workspaceRoot)
+	catalogLoader := func() (extensions.Catalog, error) {
+		return extensions.LoadCatalog(cfg.Paths.GlobalRoot, workspaceRoot)
+	}
+	catalog, err := catalogLoader()
 	if err != nil {
 		return err
 	}
@@ -157,8 +176,19 @@ func (a App) Run(ctx context.Context, args []string) error {
 		ShowExtensionsSummary: cliConfig.ShowExtensionsOnStartup,
 		Client:                runtimeClient,
 		Catalog:               catalog,
+		CatalogLoader:         catalogLoader,
 	})
-	return runner.Run(ctx, opts.InitialPrompt)
+	runErr := runner.Run(ctx, opts.InitialPrompt)
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stopErr := a.stopDaemon(stopCtx, cfg)
+	if runErr != nil && stopErr != nil {
+		return errors.Join(runErr, stopErr)
+	}
+	if runErr != nil {
+		return runErr
+	}
+	return stopErr
 }
 
 func (a App) runStatus(ctx context.Context, opts Options, base config.Config) error {
@@ -220,44 +250,18 @@ func (a App) loadConfig(opts Options) (config.Config, error) {
 	return a.LoadConfig(opts)
 }
 
-func (a App) loadRuntimeConfigWithSetup(opts Options) (config.Config, error) {
-	cfg, err := a.loadConfig(opts)
-	if err == nil {
-		return cfg, nil
-	}
-	if !isRecoverableSetupConfigError(err) {
-		return config.Config{}, err
-	}
-	if err := ensureRuntimeConfigured(a.Stdin, a.Stdout, config.Config{}); err != nil {
-		return config.Config{}, err
-	}
-	return a.loadConfig(opts)
-}
-
-func isRecoverableSetupConfigError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, config.ErrLegacyConfigFieldsUnsupported) {
-		return false
-	}
-	if errors.Is(err, config.ErrActiveProfileRequired) {
-		return true
-	}
-	if errors.Is(err, config.ErrActiveProfileNotFound) {
-		return true
-	}
-	if errors.Is(err, config.ErrUnknownModelProvider) {
-		return true
-	}
-	return false
-}
-
 func (a App) ensureDaemon(ctx context.Context, cfg config.Config) error {
 	if a.EnsureDaemon == nil {
 		return New().EnsureDaemon(ctx, cfg)
 	}
 	return a.EnsureDaemon(ctx, cfg)
+}
+
+func (a App) stopDaemon(ctx context.Context, cfg config.Config) error {
+	if a.StopDaemon == nil {
+		return New().StopDaemon(ctx, cfg)
+	}
+	return a.StopDaemon(ctx, cfg)
 }
 
 func (a App) newClient(cfg config.Config) RuntimeClient {

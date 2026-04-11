@@ -143,6 +143,8 @@ func messagesToConversationItems(messages []Message) []model.ConversationItem {
 				Kind: model.ConversationItemAssistantText,
 				Text: message.Content,
 			})
+		case "assistant_thinking":
+			out = append(out, model.AssistantThinkingItem(message.Content))
 		case "tool_result":
 			out = append(out, model.ConversationItem{
 				Kind: model.ConversationItemToolResult,
@@ -183,6 +185,8 @@ func conversationItemsToMessages(items []model.ConversationItem) []Message {
 		switch item.Kind {
 		case model.ConversationItemUserMessage:
 			out = append(out, Message{Role: "user", Content: item.Text})
+		case model.ConversationItemAssistantThinking:
+			out = append(out, Message{Role: "assistant_thinking", Content: item.Text})
 		case model.ConversationItemAssistantText:
 			out = append(out, Message{Role: "assistant", Content: item.Text})
 		case model.ConversationItemToolResult:

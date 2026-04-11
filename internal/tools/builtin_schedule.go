@@ -13,15 +13,21 @@ import (
 type scheduleReportTool struct{}
 
 type ScheduleReportInput struct {
-	Name           string `json:"name,omitempty"`
-	Prompt         string `json:"prompt"`
-	DelayMinutes   int    `json:"delay_minutes,omitempty"`
-	RunAt          string `json:"run_at,omitempty"`
-	EveryMinutes   int    `json:"every_minutes,omitempty"`
-	Cron           string `json:"cron,omitempty"`
-	Timezone       string `json:"timezone,omitempty"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
-	SkipIfRunning  *bool  `json:"skip_if_running,omitempty"`
+	Name                    string `json:"name,omitempty"`
+	Prompt                  string `json:"prompt"`
+	ReportGroupID           string `json:"report_group_id,omitempty"`
+	ReportGroupTitle        string `json:"report_group_title,omitempty"`
+	ReportGroupRunAt        string `json:"report_group_run_at,omitempty"`
+	ReportGroupEveryMinutes int    `json:"report_group_every_minutes,omitempty"`
+	ReportGroupCron         string `json:"report_group_cron,omitempty"`
+	ReportGroupTimezone     string `json:"report_group_timezone,omitempty"`
+	DelayMinutes            int    `json:"delay_minutes,omitempty"`
+	RunAt                   string `json:"run_at,omitempty"`
+	EveryMinutes            int    `json:"every_minutes,omitempty"`
+	Cron                    string `json:"cron,omitempty"`
+	Timezone                string `json:"timezone,omitempty"`
+	TimeoutSeconds          int    `json:"timeout_seconds,omitempty"`
+	SkipIfRunning           *bool  `json:"skip_if_running,omitempty"`
 }
 
 type ScheduleReportOutput struct {
@@ -44,6 +50,30 @@ func (scheduleReportTool) Definition() Definition {
 			"prompt": map[string]any{
 				"type":        "string",
 				"description": "The prompt that the scheduled report should run.",
+			},
+			"report_group_id": map[string]any{
+				"type":        "string",
+				"description": "Optional group id used to aggregate multiple worker reports into one digest stream.",
+			},
+			"report_group_title": map[string]any{
+				"type":        "string",
+				"description": "Optional title to use when auto-creating the report group.",
+			},
+			"report_group_run_at": map[string]any{
+				"type":        "string",
+				"description": "Optional RFC3339 time for a one-shot group digest run.",
+			},
+			"report_group_every_minutes": map[string]any{
+				"type":        "integer",
+				"description": "Optional recurring interval for grouped digest generation.",
+			},
+			"report_group_cron": map[string]any{
+				"type":        "string",
+				"description": "Optional 5-field cron expression for grouped digest generation.",
+			},
+			"report_group_timezone": map[string]any{
+				"type":        "string",
+				"description": "IANA timezone for report_group_cron.",
 			},
 			"delay_minutes": map[string]any{
 				"type":        "integer",
@@ -87,11 +117,16 @@ func (scheduleReportTool) IsConcurrencySafe() bool { return false }
 
 func (scheduleReportTool) Decode(call Call) (DecodedCall, error) {
 	input := ScheduleReportInput{
-		Name:     strings.TrimSpace(call.StringInput("name")),
-		Prompt:   strings.TrimSpace(call.StringInput("prompt")),
-		RunAt:    strings.TrimSpace(call.StringInput("run_at")),
-		Cron:     strings.TrimSpace(call.StringInput("cron")),
-		Timezone: strings.TrimSpace(call.StringInput("timezone")),
+		Name:                strings.TrimSpace(call.StringInput("name")),
+		Prompt:              strings.TrimSpace(call.StringInput("prompt")),
+		ReportGroupID:       strings.TrimSpace(call.StringInput("report_group_id")),
+		ReportGroupTitle:    strings.TrimSpace(call.StringInput("report_group_title")),
+		ReportGroupRunAt:    strings.TrimSpace(call.StringInput("report_group_run_at")),
+		ReportGroupCron:     strings.TrimSpace(call.StringInput("report_group_cron")),
+		ReportGroupTimezone: strings.TrimSpace(call.StringInput("report_group_timezone")),
+		RunAt:               strings.TrimSpace(call.StringInput("run_at")),
+		Cron:                strings.TrimSpace(call.StringInput("cron")),
+		Timezone:            strings.TrimSpace(call.StringInput("timezone")),
 	}
 	if input.Prompt == "" {
 		return DecodedCall{}, fmt.Errorf("prompt is required")
@@ -112,6 +147,11 @@ func (scheduleReportTool) Decode(call Call) (DecodedCall, error) {
 	input.DelayMinutes = delayMinutes
 	input.EveryMinutes = everyMinutes
 	input.TimeoutSeconds = timeoutSeconds
+	reportGroupEveryMinutes, err := decodeShellPositiveInt(call.Input["report_group_every_minutes"], 0)
+	if err != nil {
+		return DecodedCall{}, fmt.Errorf("report_group_every_minutes %w", err)
+	}
+	input.ReportGroupEveryMinutes = reportGroupEveryMinutes
 	if rawSkip, ok := call.Input["skip_if_running"].(bool); ok {
 		input.SkipIfRunning = &rawSkip
 	}
@@ -140,19 +180,46 @@ func (scheduleReportTool) Decode(call Call) (DecodedCall, error) {
 			return DecodedCall{}, fmt.Errorf("run_at must be RFC3339: %w", err)
 		}
 	}
+	reportGroupScheduleCount := 0
+	if input.ReportGroupRunAt != "" {
+		reportGroupScheduleCount++
+	}
+	if input.ReportGroupEveryMinutes > 0 {
+		reportGroupScheduleCount++
+	}
+	if input.ReportGroupCron != "" {
+		reportGroupScheduleCount++
+	}
+	if reportGroupScheduleCount > 0 && input.ReportGroupID == "" {
+		return DecodedCall{}, fmt.Errorf("report_group_id is required when report group scheduling is configured")
+	}
+	if reportGroupScheduleCount > 1 {
+		return DecodedCall{}, fmt.Errorf("exactly one report group schedule selector is allowed")
+	}
+	if input.ReportGroupRunAt != "" {
+		if _, err := time.Parse(time.RFC3339, input.ReportGroupRunAt); err != nil {
+			return DecodedCall{}, fmt.Errorf("report_group_run_at must be RFC3339: %w", err)
+		}
+	}
 
 	normalized := Call{
 		Name: call.Name,
 		Input: map[string]any{
-			"name":            input.Name,
-			"prompt":          input.Prompt,
-			"delay_minutes":   input.DelayMinutes,
-			"run_at":          input.RunAt,
-			"every_minutes":   input.EveryMinutes,
-			"cron":            input.Cron,
-			"timezone":        input.Timezone,
-			"timeout_seconds": input.TimeoutSeconds,
-			"skip_if_running": input.SkipIfRunning,
+			"name":                       input.Name,
+			"prompt":                     input.Prompt,
+			"report_group_id":            input.ReportGroupID,
+			"report_group_title":         input.ReportGroupTitle,
+			"report_group_run_at":        input.ReportGroupRunAt,
+			"report_group_every_minutes": input.ReportGroupEveryMinutes,
+			"report_group_cron":          input.ReportGroupCron,
+			"report_group_timezone":      input.ReportGroupTimezone,
+			"delay_minutes":              input.DelayMinutes,
+			"run_at":                     input.RunAt,
+			"every_minutes":              input.EveryMinutes,
+			"cron":                       input.Cron,
+			"timezone":                   input.Timezone,
+			"timeout_seconds":            input.TimeoutSeconds,
+			"skip_if_running":            input.SkipIfRunning,
 		},
 	}
 	return DecodedCall{Call: normalized, Input: input}, nil
@@ -186,21 +253,30 @@ func (scheduleReportTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 		}
 		runAt = parsed
 	}
+	activatedSkillNames, err := resolveChildTaskSkillNames(execCtx, input.Prompt)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
 
 	job, err := service.CreateJob(ctx, scheduler.CreateJobInput{
-		Name:                input.Name,
-		WorkspaceRoot:       execCtx.WorkspaceRoot,
-		OwnerSessionID:      sessionID,
-		Prompt:              input.Prompt,
-		ActivatedSkillNames: explicitActiveSkillNames(execCtx),
-		PermissionProfile:   currentPermissionProfile(execCtx),
-		RunAt:               runAt,
-		DelayMinutes:        input.DelayMinutes,
-		EveryMinutes:        input.EveryMinutes,
-		CronExpr:            input.Cron,
-		Timezone:            input.Timezone,
-		TimeoutSeconds:      input.TimeoutSeconds,
-		SkipIfRunning:       input.SkipIfRunning,
+		Name:                    input.Name,
+		WorkspaceRoot:           execCtx.WorkspaceRoot,
+		OwnerSessionID:          sessionID,
+		Prompt:                  input.Prompt,
+		ActivatedSkillNames:     activatedSkillNames,
+		ReportGroupID:           input.ReportGroupID,
+		ReportGroupTitle:        input.ReportGroupTitle,
+		ReportGroupRunAt:        input.ReportGroupRunAt,
+		ReportGroupEveryMinutes: input.ReportGroupEveryMinutes,
+		ReportGroupCron:         input.ReportGroupCron,
+		ReportGroupTimezone:     input.ReportGroupTimezone,
+		RunAt:                   runAt,
+		DelayMinutes:            input.DelayMinutes,
+		EveryMinutes:            input.EveryMinutes,
+		CronExpr:                input.Cron,
+		Timezone:                input.Timezone,
+		TimeoutSeconds:          input.TimeoutSeconds,
+		SkipIfRunning:           input.SkipIfRunning,
 	})
 	if err != nil {
 		return ToolExecutionResult{}, err

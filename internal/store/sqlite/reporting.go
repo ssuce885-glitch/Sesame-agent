@@ -11,11 +11,11 @@ import (
 )
 
 func (s *Store) UpsertChildAgentSpec(ctx context.Context, spec types.ChildAgentSpec) error {
-	return upsertReportingObject(ctx, s.db, "child_agent_specs", spec.AgentID, &spec)
+	return upsertSessionReportingObject(ctx, s.db, "child_agent_specs", spec.AgentID, spec.SessionID, &spec)
 }
 
 func (t runtimeTx) UpsertChildAgentSpec(ctx context.Context, spec types.ChildAgentSpec) error {
-	return upsertReportingObject(ctx, t.tx, "child_agent_specs", spec.AgentID, &spec)
+	return upsertSessionReportingObject(ctx, t.tx, "child_agent_specs", spec.AgentID, spec.SessionID, &spec)
 }
 
 func (s *Store) GetChildAgentSpec(ctx context.Context, agentID string) (types.ChildAgentSpec, bool, error) {
@@ -24,12 +24,29 @@ func (s *Store) GetChildAgentSpec(ctx context.Context, agentID string) (types.Ch
 	return spec, ok, err
 }
 
+func (s *Store) DeleteChildAgentSpec(ctx context.Context, agentID string) (bool, error) {
+	return deleteReportingObject(ctx, s.db, "child_agent_specs", agentID)
+}
+
+func (t runtimeTx) DeleteChildAgentSpec(ctx context.Context, agentID string) (bool, error) {
+	return deleteReportingObject(ctx, t.tx, "child_agent_specs", agentID)
+}
+
 func (s *Store) ListChildAgentSpecs(ctx context.Context) ([]types.ChildAgentSpec, error) {
 	return listReportingObjectsAs[types.ChildAgentSpec](ctx, s.db, `
 		select payload, created_at, updated_at
 		from child_agent_specs
 		order by updated_at desc, created_at desc, id asc
 	`)
+}
+
+func (s *Store) ListChildAgentSpecsBySession(ctx context.Context, sessionID string) ([]types.ChildAgentSpec, error) {
+	return listReportingObjectsAs[types.ChildAgentSpec](ctx, s.db, `
+		select payload, created_at, updated_at
+		from child_agent_specs
+		where session_id = ?
+		order by updated_at desc, created_at desc, id asc
+	`, sessionID)
 }
 
 func (s *Store) UpsertOutputContract(ctx context.Context, contract types.OutputContract) error {
@@ -55,16 +72,22 @@ func (s *Store) ListOutputContracts(ctx context.Context) ([]types.OutputContract
 }
 
 func (s *Store) UpsertReportGroup(ctx context.Context, group types.ReportGroup) error {
-	return upsertReportingObject(ctx, s.db, "report_groups", group.GroupID, &group)
+	return upsertSessionReportingObject(ctx, s.db, "report_groups", group.GroupID, group.SessionID, &group)
 }
 
 func (t runtimeTx) UpsertReportGroup(ctx context.Context, group types.ReportGroup) error {
-	return upsertReportingObject(ctx, t.tx, "report_groups", group.GroupID, &group)
+	return upsertSessionReportingObject(ctx, t.tx, "report_groups", group.GroupID, group.SessionID, &group)
 }
 
 func (s *Store) GetReportGroup(ctx context.Context, groupID string) (types.ReportGroup, bool, error) {
 	var group types.ReportGroup
 	ok, err := getReportingObject(ctx, s.db, "report_groups", groupID, &group)
+	return group, ok, err
+}
+
+func (t runtimeTx) GetReportGroup(ctx context.Context, groupID string) (types.ReportGroup, bool, error) {
+	var group types.ReportGroup
+	ok, err := getReportingObject(ctx, t.tx, "report_groups", groupID, &group)
 	return group, ok, err
 }
 
@@ -74,6 +97,15 @@ func (s *Store) ListReportGroups(ctx context.Context) ([]types.ReportGroup, erro
 		from report_groups
 		order by updated_at desc, created_at desc, id asc
 	`)
+}
+
+func (s *Store) ListReportGroupsBySession(ctx context.Context, sessionID string) ([]types.ReportGroup, error) {
+	return listReportingObjectsAs[types.ReportGroup](ctx, s.db, `
+		select payload, created_at, updated_at
+		from report_groups
+		where session_id = ?
+		order by updated_at desc, created_at desc, id asc
+	`, sessionID)
 }
 
 func (s *Store) UpsertChildAgentResult(ctx context.Context, result types.ChildAgentResult) error {
@@ -98,6 +130,15 @@ func (s *Store) ListChildAgentResults(ctx context.Context) ([]types.ChildAgentRe
 	`)
 }
 
+func (s *Store) ListChildAgentResultsBySession(ctx context.Context, sessionID string) ([]types.ChildAgentResult, error) {
+	return listReportingObjectsAs[types.ChildAgentResult](ctx, s.db, `
+		select payload, created_at, updated_at
+		from child_agent_results
+		where session_id = ?
+		order by observed_at desc, created_at desc, id asc
+	`, sessionID)
+}
+
 func (s *Store) ListChildAgentResultsByAgent(ctx context.Context, agentID string) ([]types.ChildAgentResult, error) {
 	return listReportingObjectsAs[types.ChildAgentResult](ctx, s.db, `
 		select payload, created_at, updated_at
@@ -109,6 +150,20 @@ func (s *Store) ListChildAgentResultsByAgent(ctx context.Context, agentID string
 
 func (s *Store) ListChildAgentResultsByReportGroup(ctx context.Context, groupID string) ([]types.ChildAgentResult, error) {
 	all, err := s.ListChildAgentResults(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]types.ChildAgentResult, 0, len(all))
+	for _, result := range all {
+		if containsReportingString(result.ReportGroupRefs, groupID) {
+			out = append(out, result)
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) ListChildAgentResultsBySessionAndReportGroup(ctx context.Context, sessionID, groupID string) ([]types.ChildAgentResult, error) {
+	all, err := s.ListChildAgentResultsBySession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +198,15 @@ func (s *Store) ListDigestRecords(ctx context.Context) ([]types.DigestRecord, er
 	`)
 }
 
+func (s *Store) ListDigestRecordsBySession(ctx context.Context, sessionID string) ([]types.DigestRecord, error) {
+	return listReportingObjectsAs[types.DigestRecord](ctx, s.db, `
+		select payload, created_at, updated_at
+		from digest_records
+		where session_id = ?
+		order by window_end desc, created_at desc, id asc
+	`, sessionID)
+}
+
 func (s *Store) ListDigestRecordsByGroup(ctx context.Context, groupID string) ([]types.DigestRecord, error) {
 	return listReportingObjectsAs[types.DigestRecord](ctx, s.db, `
 		select payload, created_at, updated_at
@@ -150,6 +214,15 @@ func (s *Store) ListDigestRecordsByGroup(ctx context.Context, groupID string) ([
 		where group_id = ?
 		order by window_end desc, created_at desc, id asc
 	`, groupID)
+}
+
+func (s *Store) ListDigestRecordsBySessionAndGroup(ctx context.Context, sessionID, groupID string) ([]types.DigestRecord, error) {
+	return listReportingObjectsAs[types.DigestRecord](ctx, s.db, `
+		select payload, created_at, updated_at
+		from digest_records
+		where session_id = ? and group_id = ?
+		order by window_end desc, created_at desc, id asc
+	`, sessionID, groupID)
 }
 
 func upsertReportingObject(ctx context.Context, execer execContexter, table, id string, value any) error {
@@ -171,6 +244,26 @@ func upsertReportingObject(ctx context.Context, execer execContexter, table, id 
 	return err
 }
 
+func upsertSessionReportingObject(ctx context.Context, execer execContexter, table, id, sessionID string, value any) error {
+	createdAt, updatedAt := normalizeReportingTimestamps(value)
+	applyReportingTimestamps(value, createdAt, updatedAt)
+
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		insert into `+table+` (id, session_id, payload, created_at, updated_at)
+		values (?, ?, ?, ?, ?)
+		on conflict(id) do update set
+			session_id = excluded.session_id,
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+	`, id, sessionID, string(payload), createdAt.Format(timeLayout), updatedAt.Format(timeLayout))
+	return err
+}
+
 func upsertChildAgentResultWithExec(ctx context.Context, execer execContexter, result types.ChildAgentResult) error {
 	createdAt, updatedAt := normalizeReportingTimestamps(&result)
 	result.ObservedAt = normalizeObservedAt(result.ObservedAt, updatedAt)
@@ -182,9 +275,10 @@ func upsertChildAgentResultWithExec(ctx context.Context, execer execContexter, r
 	}
 
 	_, err = execer.ExecContext(ctx, `
-		insert into child_agent_results (id, agent_id, status, severity, observed_at, payload, created_at, updated_at)
-		values (?, ?, ?, ?, ?, ?, ?, ?)
+		insert into child_agent_results (id, session_id, agent_id, status, severity, observed_at, payload, created_at, updated_at)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set
+			session_id = excluded.session_id,
 			agent_id = excluded.agent_id,
 			status = excluded.status,
 			severity = excluded.severity,
@@ -193,6 +287,7 @@ func upsertChildAgentResultWithExec(ctx context.Context, execer execContexter, r
 			updated_at = excluded.updated_at
 	`,
 		result.ResultID,
+		result.SessionID,
 		result.AgentID,
 		result.Envelope.Status,
 		result.Envelope.Severity,
@@ -215,9 +310,10 @@ func upsertDigestRecordWithExec(ctx context.Context, execer execContexter, diges
 	}
 
 	_, err = execer.ExecContext(ctx, `
-		insert into digest_records (id, group_id, status, severity, window_start, window_end, payload, created_at, updated_at)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		insert into digest_records (id, session_id, group_id, status, severity, window_start, window_end, payload, created_at, updated_at)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set
+			session_id = excluded.session_id,
 			group_id = excluded.group_id,
 			status = excluded.status,
 			severity = excluded.severity,
@@ -227,6 +323,7 @@ func upsertDigestRecordWithExec(ctx context.Context, execer execContexter, diges
 			updated_at = excluded.updated_at
 	`,
 		digest.DigestID,
+		digest.SessionID,
 		digest.GroupID,
 		digest.Envelope.Status,
 		digest.Envelope.Severity,
@@ -270,6 +367,18 @@ func getReportingObject(ctx context.Context, queryer queryRowContexter, table, i
 	}
 	applyReportingTimestamps(target, createdParsed, updatedParsed)
 	return true, nil
+}
+
+func deleteReportingObject(ctx context.Context, execer execContexter, table, id string) (bool, error) {
+	result, err := execer.ExecContext(ctx, `delete from `+table+` where id = ?`, id)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
 }
 
 func listReportingObjectsAs[T any](ctx context.Context, queryer queryContexter, query string, args ...any) ([]T, error) {

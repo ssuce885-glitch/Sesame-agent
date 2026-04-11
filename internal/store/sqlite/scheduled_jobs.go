@@ -11,13 +11,21 @@ import (
 )
 
 func (s *Store) UpsertScheduledJob(ctx context.Context, job types.ScheduledJob) error {
+	return upsertScheduledJobWithExec(ctx, s.db, job)
+}
+
+func (t runtimeTx) UpsertScheduledJob(ctx context.Context, job types.ScheduledJob) error {
+	return upsertScheduledJobWithExec(ctx, t.tx, job)
+}
+
+func upsertScheduledJobWithExec(ctx context.Context, execer execContexter, job types.ScheduledJob) error {
 	job = normalizeScheduledJob(job)
 	payload, err := json.Marshal(job)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err = execer.ExecContext(ctx, `
 		insert into scheduled_jobs (
 			id, workspace_root, owner_session_id, kind, enabled, next_run_at, last_status, payload, created_at, updated_at
 		)
@@ -47,7 +55,15 @@ func (s *Store) UpsertScheduledJob(ctx context.Context, job types.ScheduledJob) 
 }
 
 func (s *Store) GetScheduledJob(ctx context.Context, id string) (types.ScheduledJob, bool, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return getScheduledJobWithQueryer(ctx, s.db, id)
+}
+
+func (t runtimeTx) GetScheduledJob(ctx context.Context, id string) (types.ScheduledJob, bool, error) {
+	return getScheduledJobWithQueryer(ctx, t.tx, id)
+}
+
+func getScheduledJobWithQueryer(ctx context.Context, queryer queryContexter, id string) (types.ScheduledJob, bool, error) {
+	rows, err := queryer.QueryContext(ctx, `
 		select payload, created_at, updated_at
 		from scheduled_jobs
 		where id = ?
@@ -109,7 +125,15 @@ func (s *Store) ListDueScheduledJobs(ctx context.Context, now time.Time) ([]type
 }
 
 func (s *Store) DeleteScheduledJob(ctx context.Context, id string) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `
+	return deleteScheduledJobWithExec(ctx, s.db, id)
+}
+
+func (t runtimeTx) DeleteScheduledJob(ctx context.Context, id string) (bool, error) {
+	return deleteScheduledJobWithExec(ctx, t.tx, id)
+}
+
+func deleteScheduledJobWithExec(ctx context.Context, execer execContexter, id string) (bool, error) {
+	result, err := execer.ExecContext(ctx, `
 		delete from scheduled_jobs
 		where id = ?
 	`, strings.TrimSpace(id))
@@ -161,6 +185,8 @@ func normalizeScheduledJob(job types.ScheduledJob) types.ScheduledJob {
 	job.Name = strings.TrimSpace(job.Name)
 	job.WorkspaceRoot = strings.TrimSpace(job.WorkspaceRoot)
 	job.OwnerSessionID = strings.TrimSpace(job.OwnerSessionID)
+	job.ReportGroupID = strings.TrimSpace(job.ReportGroupID)
+	job.ReportGroupTitle = strings.TrimSpace(job.ReportGroupTitle)
 	job.Kind = types.ScheduleKind(strings.TrimSpace(string(job.Kind)))
 	job.Prompt = strings.TrimSpace(job.Prompt)
 	job.CronExpr = strings.TrimSpace(job.CronExpr)

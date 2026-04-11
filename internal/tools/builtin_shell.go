@@ -178,7 +178,7 @@ func (shellTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCt
 		}
 	}
 
-	output, err := runtime.RunCommand(shellCtx, commandWorkdir, input.Command, input.MaxOutputBytes)
+	output, err := runtime.RunCommandWithEnv(shellCtx, commandWorkdir, input.Command, input.MaxOutputBytes, execCtx.InjectedEnv)
 	if err != nil {
 		return ToolExecutionResult{}, err
 	}

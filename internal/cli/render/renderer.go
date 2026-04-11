@@ -214,6 +214,32 @@ func (r *Renderer) RenderEvent(event types.Event) {
 			display := SummarizeToolDisplay(payload.ToolName, payload.Arguments, payload.ResultPreview)
 			r.renderDetail(display.Action, display.Target, display.Detail)
 		}
+	case types.EventPermissionRequested:
+		r.closeAssistantStream()
+		var payload types.PermissionRequestedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil {
+			body := strings.TrimSpace(payload.Reason)
+			if strings.TrimSpace(payload.RequestID) != "" {
+				if body != "" {
+					body += "\n"
+				}
+				body += "use /approve " + payload.RequestID + " [once|run|session] or /deny " + payload.RequestID
+			}
+			r.renderDetail("Permission", firstNonEmpty(payload.ToolName, payload.RequestedProfile), body)
+		}
+	case types.EventPermissionResolved:
+		r.closeAssistantStream()
+		var payload types.PermissionResolvedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil {
+			body := strings.TrimSpace(payload.RequestedProfile)
+			if decision := strings.TrimSpace(payload.Decision); decision != "" {
+				if body != "" {
+					body += "\n"
+				}
+				body += "decision: " + decision
+			}
+			r.renderDetail("Permission", firstNonEmpty(payload.ToolName, payload.RequestID), body)
+		}
 	case types.EventSystemNotice:
 		r.closeAssistantStream()
 		var payload types.NoticePayload

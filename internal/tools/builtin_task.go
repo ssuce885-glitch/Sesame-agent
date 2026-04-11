@@ -220,6 +220,13 @@ func (taskCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 	if taskKind == "" {
 		taskKind = string(taskType)
 	}
+	activatedSkillNames := []string(nil)
+	if taskType == task.TaskTypeAgent {
+		activatedSkillNames, err = resolveChildTaskSkillNames(execCtx, input.Command)
+		if err != nil {
+			return ToolExecutionResult{}, err
+		}
+	}
 	created, err := manager.Create(ctx, task.CreateTaskInput{
 		Type:                taskType,
 		Command:             input.Command,
@@ -230,8 +237,7 @@ func (taskCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		Owner:               input.Owner,
 		Kind:                taskKind,
 		WorktreeID:          input.WorktreeID,
-		ActivatedSkillNames: explicitActiveSkillNames(execCtx),
-		PermissionProfile:   currentPermissionProfile(execCtx),
+		ActivatedSkillNames: activatedSkillNames,
 		WorkspaceRoot:       execCtx.WorkspaceRoot,
 		Start:               start,
 	})

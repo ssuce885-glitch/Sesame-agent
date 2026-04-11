@@ -157,21 +157,28 @@ func (p *AnthropicProvider) stream(ctx context.Context, req Request, events chan
 
 		switch eventType {
 		case "content_block_start":
-			if payload.ContentBlock.Type != "tool_use" {
-				continue
-			}
-			state := &anthropicToolCallState{
-				ID:   payload.ContentBlock.ID,
-				Name: payload.ContentBlock.Name,
-			}
-			if len(payload.ContentBlock.Input) > 0 {
-				raw, err := json.Marshal(payload.ContentBlock.Input)
-				if err != nil {
+			switch payload.ContentBlock.Type {
+			case "tool_use":
+				state := &anthropicToolCallState{
+					ID:   payload.ContentBlock.ID,
+					Name: payload.ContentBlock.Name,
+				}
+				if payload.ContentBlock.Input != nil {
+					state.InitialInput = cloneToolCallInput(*payload.ContentBlock.Input)
+					state.HasInitialInput = true
+				}
+				toolCalls[payload.Index] = state
+			case "thinking":
+				if payload.ContentBlock.Thinking == "" {
+					continue
+				}
+				if err := sendStreamEvent(ctx, events, StreamEvent{
+					Kind:      StreamEventThinkingDelta,
+					TextDelta: payload.ContentBlock.Thinking,
+				}); err != nil {
 					return err
 				}
-				state.Input.Write(raw)
 			}
-			toolCalls[payload.Index] = state
 		case "content_block_delta":
 			switch payload.Delta.Type {
 			case "text_delta":
@@ -181,11 +188,19 @@ func (p *AnthropicProvider) stream(ctx context.Context, req Request, events chan
 				}); err != nil {
 					return err
 				}
+			case "thinking_delta":
+				if err := sendStreamEvent(ctx, events, StreamEvent{
+					Kind:      StreamEventThinkingDelta,
+					TextDelta: payload.Delta.Thinking,
+				}); err != nil {
+					return err
+				}
 			case "input_json_delta":
 				state, ok := toolCalls[payload.Index]
 				if !ok {
 					continue
 				}
+				state.HasDelta = true
 				state.Input.WriteString(payload.Delta.PartialJSON)
 				if err := sendStreamEvent(ctx, events, StreamEvent{
 					Kind: StreamEventToolCallDelta,
@@ -204,10 +219,13 @@ func (p *AnthropicProvider) stream(ctx context.Context, req Request, events chan
 				continue
 			}
 			input := map[string]any{}
-			if strings.TrimSpace(state.Input.String()) != "" {
+			switch {
+			case strings.TrimSpace(state.Input.String()) != "":
 				if err := json.Unmarshal([]byte(state.Input.String()), &input); err != nil {
 					return fmt.Errorf("decode anthropic tool input: %w", err)
 				}
+			case state.HasInitialInput:
+				input = cloneToolCallInput(state.InitialInput)
 			}
 			if err := sendStreamEvent(ctx, events, StreamEvent{
 				Kind: StreamEventToolCallEnd,
@@ -245,13 +263,14 @@ type anthropicMessage struct {
 type anthropicContentBlock struct {
 	Type      string                `json:"type"`
 	Text      string                `json:"text,omitempty"`
+	Thinking  string                `json:"thinking,omitempty"`
 	Source    *anthropicImageSource `json:"source,omitempty"`
 	ToolUseID string                `json:"tool_use_id,omitempty"`
 	Content   string                `json:"content,omitempty"`
 	IsError   bool                  `json:"is_error,omitempty"`
 	ID        string                `json:"id,omitempty"`
 	Name      string                `json:"name,omitempty"`
-	Input     map[string]any        `json:"input,omitempty"`
+	Input     *map[string]any       `json:"input,omitempty"`
 }
 
 type anthropicImageSource struct {
@@ -263,13 +282,17 @@ type anthropicImageSource struct {
 type anthropicDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text"`
+	Thinking    string `json:"thinking"`
 	PartialJSON string `json:"partial_json"`
 }
 
 type anthropicToolCallState struct {
-	ID    string
-	Name  string
-	Input strings.Builder
+	ID              string
+	Name            string
+	Input           strings.Builder
+	InitialInput    map[string]any
+	HasInitialInput bool
+	HasDelta        bool
 }
 
 func toAnthropicTools(tools []ToolSchema, choice string) []anthropicTool {
@@ -336,6 +359,14 @@ func toAnthropicMessages(items []ConversationItem) []anthropicMessage {
 			for _, block := range toAnthropicUserBlocks(item) {
 				appendMessageBlock("user", block)
 			}
+		case ConversationItemAssistantThinking:
+			if strings.TrimSpace(item.Text) == "" {
+				continue
+			}
+			appendMessageBlock("assistant", anthropicContentBlock{
+				Type:     "thinking",
+				Thinking: item.Text,
+			})
 		case ConversationItemAssistantText:
 			if strings.TrimSpace(item.Text) == "" {
 				continue
@@ -349,7 +380,7 @@ func toAnthropicMessages(items []ConversationItem) []anthropicMessage {
 				Type:  "tool_use",
 				ID:    item.ToolCall.ID,
 				Name:  item.ToolCall.Name,
-				Input: normalizedToolCallInput(item.ToolCall),
+				Input: toolCallInputPointer(item.ToolCall),
 			})
 		case ConversationItemToolResult:
 			if item.Result == nil {
@@ -413,6 +444,11 @@ func toAnthropicUserBlocks(item ConversationItem) []anthropicContentBlock {
 		}
 	}
 	return out
+}
+
+func toolCallInputPointer(call ToolCallChunk) *map[string]any {
+	input := normalizedToolCallInput(call)
+	return &input
 }
 
 func sendStreamEvent(ctx context.Context, events chan<- StreamEvent, event StreamEvent) error {

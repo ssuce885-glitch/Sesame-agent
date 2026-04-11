@@ -37,6 +37,7 @@ type Options struct {
 	HTTPClient   *http.Client
 	Status       func(context.Context, string) (StatusInfo, error)
 	Launcher     func(context.Context, LaunchConfig) error
+	Stopper      func(int) error
 	Config       LaunchConfig
 	PollInterval time.Duration
 	ReadyTimeout time.Duration
@@ -46,6 +47,7 @@ type Manager struct {
 	baseURL      string
 	status       func(context.Context, string) (StatusInfo, error)
 	launcher     func(context.Context, LaunchConfig) error
+	stopper      func(int) error
 	config       LaunchConfig
 	pollInterval time.Duration
 	readyTimeout time.Duration
@@ -89,6 +91,11 @@ func NewManager(opts Options) *Manager {
 	if manager.launcher == nil {
 		manager.launcher = LaunchSesameDaemon
 	}
+	if opts.Stopper != nil {
+		manager.stopper = opts.Stopper
+	} else {
+		manager.stopper = stopPID
+	}
 	return manager
 }
 
@@ -98,7 +105,7 @@ func (m *Manager) EnsureRunning(ctx context.Context) error {
 		return nil
 	}
 	if err == nil && !m.matchesConfig(status) {
-		if err := restartPID(status.PID); err != nil {
+		if err := m.stopper(status.PID); err != nil {
 			return err
 		}
 		if err := m.waitForUnavailable(ctx); err != nil {
@@ -175,6 +182,24 @@ func (m *Manager) waitForReady(ctx context.Context) error {
 	return fmt.Errorf("ensure daemon running: %w", lastErr)
 }
 
+func (m *Manager) Stop(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+
+	status, err := m.status(ctx, m.baseURL)
+	if err != nil {
+		return nil
+	}
+	if !m.matchesConfig(status) {
+		return nil
+	}
+	if err := m.stopper(status.PID); err != nil {
+		return err
+	}
+	return m.waitForUnavailable(ctx)
+}
+
 func (m *Manager) fetchStatus(ctx context.Context, baseURL string) (StatusInfo, error) {
 	return FetchStatus(ctx, baseURL, m.httpClient)
 }
@@ -204,9 +229,9 @@ func FetchStatus(ctx context.Context, baseURL string, httpClient *http.Client) (
 	return payload, nil
 }
 
-func restartPID(pid int) error {
+func stopPID(pid int) error {
 	if pid <= 0 {
-		return fmt.Errorf("cannot restart sesame daemon: missing pid")
+		return fmt.Errorf("cannot stop sesame daemon: missing pid")
 	}
 	process, err := os.FindProcess(pid)
 	if err != nil {

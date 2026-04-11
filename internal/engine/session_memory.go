@@ -195,7 +195,7 @@ func countSessionMemorySignals(items []model.ConversationItem) int {
 		switch item.Kind {
 		case model.ConversationItemToolCall, model.ConversationItemToolResult, model.ConversationItemSummary:
 			signals++
-		case model.ConversationItemAssistantText:
+		case model.ConversationItemAssistantText, model.ConversationItemAssistantThinking:
 			if len(strings.TrimSpace(item.Text)) >= sessionMemoryLongAssistantChars {
 				signals++
 			}

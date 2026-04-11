@@ -2,10 +2,8 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"strings"
 
 	"go-agent/internal/skills"
 )
@@ -16,63 +14,67 @@ type SkillUseInput struct {
 	Name string `json:"name"`
 }
 
-type SkillUseActivation struct {
-	Skill skills.SkillSpec `json:"skill"`
-	Body  string           `json:"body"`
-}
-
 type SkillUseOutput struct {
-	Status        string             `json:"status"`
-	AlreadyActive bool               `json:"already_active"`
-	Activation    SkillUseActivation `json:"activation"`
+	Name         string   `json:"name"`
+	Scope        string   `json:"scope"`
+	Path         string   `json:"path"`
+	Description  string   `json:"description,omitempty"`
+	GrantedTools []string `json:"granted_tools,omitempty"`
+	BodyInjected bool     `json:"body_injected"`
 }
 
 func (skillUseTool) Definition() Definition {
-	activationSchema := objectSchema(map[string]any{
-		"skill": map[string]any{
-			"type": "object",
-		},
-		"body": map[string]any{
-			"type": "string",
-		},
-	}, "skill", "body")
-
 	return Definition{
 		Name:        "skill_use",
-		Description: "Activate an installed skill by exact name for the current turn.",
+		Description: "Load a local skill by name, inject its instructions for the rest of the turn, and unlock any tools the skill grants.",
 		InputSchema: objectSchema(map[string]any{
 			"name": map[string]any{
 				"type":        "string",
-				"description": "Exact installed skill name.",
+				"description": "Installed skill name to activate.",
 			},
 		}, "name"),
 		OutputSchema: objectSchema(map[string]any{
-			"status": map[string]any{
+			"name": map[string]any{"type": "string"},
+			"scope": map[string]any{
 				"type": "string",
 			},
-			"already_active": map[string]any{
+			"path": map[string]any{
+				"type": "string",
+			},
+			"description": map[string]any{
+				"type": "string",
+			},
+			"granted_tools": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "string",
+				},
+			},
+			"body_injected": map[string]any{
 				"type": "boolean",
 			},
-			"activation": activationSchema,
-		}, "status", "already_active", "activation"),
+		}, "name", "scope", "path", "body_injected"),
 	}
 }
 
 func (skillUseTool) IsConcurrencySafe() bool { return false }
 
 func (skillUseTool) Decode(call Call) (DecodedCall, error) {
-	name := call.StringInput("name")
-	if name == "" {
+	input := SkillUseInput{
+		Name: strings.TrimSpace(call.StringInput("name")),
+	}
+	if input.Name == "" {
 		return DecodedCall{}, fmt.Errorf("name is required")
 	}
 	return DecodedCall{
 		Call: Call{
+			ID:   call.ID,
 			Name: call.Name,
 			Input: map[string]any{
-				"name": name,
+				"name": input.Name,
 			},
 		},
-		Input: SkillUseInput{Name: name},
+		Input: input,
 	}, nil
 }
 
@@ -89,63 +91,65 @@ func (skillUseTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execC
 	input, _ := decoded.Input.(SkillUseInput)
 	catalog, err := skills.LoadCatalog(execCtx.GlobalConfigRoot, execCtx.WorkspaceRoot)
 	if err != nil {
-		return ToolExecutionResult{}, fmt.Errorf("load skills catalog: %w", err)
+		return ToolExecutionResult{}, err
 	}
 
-	spec, ok := catalog.FindByName(input.Name)
+	skill, ok := findSkillByName(catalog, input.Name)
 	if !ok {
-		return ToolExecutionResult{}, fmt.Errorf("skill %q not found", input.Name)
-	}
-	rawToolDeps, rawEnvDeps, err := readRawSkillDependencies(spec.Path)
-	if err != nil {
-		return ToolExecutionResult{}, fmt.Errorf("read raw skill dependencies for %q: %w", spec.Name, err)
+		return ToolExecutionResult{}, fmt.Errorf("installed skill %q not found", input.Name)
 	}
 
-	alreadyActive := containsExact(execCtx.ActiveSkillNames, spec.Name)
-	if !alreadyActive {
-		if unknown, found := firstUnknownDependency(rawToolDeps, execCtx.KnownToolNames); found {
-			return ToolExecutionResult{}, fmt.Errorf("unknown tool dependency %q declared by skill %q", unknown, spec.Name)
-		}
-		if missing, found := missingEnvDependencies(rawEnvDeps); found {
-			return ToolExecutionResult{}, fmt.Errorf("missing env dependency %q for skill %q", missing, spec.Name)
-		}
+	activated := skills.ActivatedSkill{
+		Skill:       skill,
+		Reason:      skills.ActivationReasonToolUse,
+		MatchedText: input.Name,
+	}
+	grantedTools := skills.GrantedTools([]skills.ActivatedSkill{activated})
+	injectedBody := strings.TrimSpace(skills.RenderActivatedSkillsInjection([]skills.ActivatedSkill{activated}))
+
+	modelLines := []string{
+		fmt.Sprintf("Activated skill: %s", skill.Name),
+	}
+	if description := strings.TrimSpace(skill.Description); description != "" {
+		modelLines = append(modelLines, "Description: "+description)
+	}
+	if len(grantedTools) > 0 {
+		modelLines = append(modelLines, "Granted tools for the rest of this turn: "+strings.Join(grantedTools, ", "))
+	} else {
+		modelLines = append(modelLines, "Granted tools for the rest of this turn: none")
+	}
+	if injectedBody != "" {
+		modelLines = append(modelLines, injectedBody)
+	} else if summary := strings.TrimSpace(skill.Body); summary != "" {
+		modelLines = append(modelLines, "Skill summary:\n"+summary)
 	}
 
-	body, err := catalog.ReadBody(spec)
-	if err != nil {
-		return ToolExecutionResult{}, fmt.Errorf("read skill body for %q: %w", spec.Name, err)
-	}
-
-	status := "activated"
-	text := fmt.Sprintf("Activated skill %q.", spec.Name)
-	if alreadyActive {
-		status = "already_active"
-		text = fmt.Sprintf("Skill %q is already active.", spec.Name)
-	}
 	output := SkillUseOutput{
-		Status:        status,
-		AlreadyActive: alreadyActive,
-		Activation: SkillUseActivation{
-			Skill: spec,
-			Body:  body,
-		},
+		Name:         skill.Name,
+		Scope:        skill.Scope,
+		Path:         skill.Path,
+		Description:  skill.Description,
+		GrantedTools: grantedTools,
+		BodyInjected: injectedBody != "",
 	}
-
+	preview := fmt.Sprintf("Activated skill %s", skill.Name)
+	if len(grantedTools) > 0 {
+		preview += " (grants: " + strings.Join(grantedTools, ", ") + ")"
+	}
 	return ToolExecutionResult{
 		Result: Result{
-			Text:      text,
-			ModelText: text,
+			Text:      preview,
+			ModelText: strings.Join(modelLines, "\n\n"),
 		},
-		Data: output,
+		Data:        output,
+		PreviewText: preview,
 		Metadata: map[string]any{
-			"skill_name":            spec.Name,
-			"status":                status,
-			"already_active":        alreadyActive,
-			"activated_skill_names": []string{spec.Name},
-			"tool_dependencies":     append([]string(nil), rawToolDeps...),
-			"env_dependencies":      append([]string(nil), rawEnvDeps...),
+			"activated_skill_names": []string{skill.Name},
+			"granted_tools":         grantedTools,
+			"skill_name":            skill.Name,
+			"skill_scope":           skill.Scope,
+			"skill_path":            skill.Path,
 		},
-		PreviewText: text,
 	}, nil
 }
 
@@ -153,50 +157,39 @@ func (skillUseTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
 	return defaultStructuredModelResult(output)
 }
 
-func containsExact(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
+func findSkillByName(catalog skills.Catalog, name string) (skills.SkillSpec, bool) {
+	wantExact := strings.ToLower(strings.TrimSpace(name))
+	for _, skill := range catalog.Skills {
+		if strings.ToLower(strings.TrimSpace(skill.Name)) == wantExact {
+			return skill, true
 		}
 	}
-	return false
-}
 
-func firstUnknownDependency(deps []string, known []string) (string, bool) {
-	knownSet := make(map[string]struct{}, len(known))
-	for _, name := range known {
-		knownSet[name] = struct{}{}
-	}
-
-	for _, dep := range deps {
-		if _, ok := knownSet[dep]; !ok {
-			return dep, true
+	wantCanonical := canonicalSkillLookupName(name)
+	for _, skill := range catalog.Skills {
+		if canonicalSkillLookupName(skill.Name) == wantCanonical {
+			return skill, true
 		}
 	}
-	return "", false
+	return skills.SkillSpec{}, false
 }
 
-func missingEnvDependencies(names []string) (string, bool) {
-	for _, name := range names {
-		if value, ok := os.LookupEnv(name); !ok || value == "" {
-			return name, true
+func canonicalSkillLookupName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	var builder strings.Builder
+	builder.Grow(len(name))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '.':
+			builder.WriteRune(r)
 		}
 	}
-	return "", false
-}
-
-func readRawSkillDependencies(skillPath string) ([]string, []string, error) {
-	rawPath := filepath.Join(skillPath, "SKILL.json")
-	data, err := os.ReadFile(rawPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	var raw struct {
-		ToolDependencies []string `json:"tool_dependencies"`
-		EnvDependencies  []string `json:"env_dependencies"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, nil, err
-	}
-	return append([]string(nil), raw.ToolDependencies...), append([]string(nil), raw.EnvDependencies...), nil
+	return builder.String()
 }

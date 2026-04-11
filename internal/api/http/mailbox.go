@@ -13,6 +13,11 @@ type reportMailboxStore interface {
 	CountPendingReportMailboxItems(context.Context, string) (int, error)
 }
 
+type reportDeliveryStore interface {
+	ListReports(context.Context, string) ([]types.ReportRecord, error)
+	ListReportDeliveries(context.Context, string, types.ReportChannel) ([]types.ReportDelivery, error)
+}
+
 func handleGetReportMailbox(deps Dependencies, sessionID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -36,11 +41,27 @@ func handleGetReportMailbox(deps Dependencies, sessionID string) http.HandlerFun
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		reports := []types.ReportRecord(nil)
+		deliveries := []types.ReportDelivery(nil)
+		if deliveryStore, ok := deps.Store.(reportDeliveryStore); ok {
+			reports, err = deliveryStore.ListReports(r.Context(), sessionID)
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+			deliveries, err = deliveryStore.ListReportDeliveries(r.Context(), sessionID, types.ReportChannelMailbox)
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(types.SessionReportMailboxResponse{
 			Items:        items,
 			PendingCount: pendingCount,
+			Reports:      reports,
+			Deliveries:   deliveries,
 		})
 	}
 }

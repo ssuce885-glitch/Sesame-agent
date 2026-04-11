@@ -1,29 +1,8 @@
 # Sesame
 
-Sesame 是一个面向终端、本地 daemon 驱动的代码代理运行时。
+Sesame 是一个面向终端的本地代码代理。
 
-它围绕持续会话、任务编排、定时报告、可扩展 skills 和工作区感知的上下文管理设计，适合把一次性问答升级成可持续运行的本地自动化工作流。
-
-## 适合的工作场景
-
-- 服务器状态监控与定时汇报
-  让 agent 定期检查服务健康状态、日志、资源占用和异常信号，并把结果作为异步 report 回到当前会话。
-- 故障排查与持续跟踪
-  适合“先看一下现场，几分钟后再回来告诉我有没有恢复”这类需要延时 follow-up 的任务。
-- 多任务拆分与异步协作
-  把复杂工作拆成后台任务，由主会话负责调度、等待和汇总结果，而不是把所有步骤塞进一轮同步对话。
-- 面向工作流的 skills 扩展
-  安装 skills 后，可以把 Sesame 扩展成适配具体团队流程的 agent，例如发布巡检、生产值守、代码审查流程、交付检查或内部 SOP 执行器。
-- 长时间运行的本地代理工作流
-  适合持续运行、结果稍后返回、需要会话连续性的自动化任务，而不仅是一次命令执行。
-
-## 为什么是 Sesame
-
-- 终端优先的本地 agent 体验，带持久化 session 和本地 daemon
-- 原生支持后台任务、定时报告、mailbox 和异步结果回流
-- skills 可按全局或工作区安装，并在对话中按需激活
-- 面向工作区的工具体系，覆盖文件、补丁、搜索、任务和权限控制
-- 对长会话做了明确的上下文预算控制，适合持续运行的自动化场景
+它提供全屏 TUI、本地 daemon、持久化 session、工具调用、skill 加载和工作区感知的上下文管理，主工作流不依赖浏览器。
 
 ## 当前状态
 
@@ -34,13 +13,28 @@ Sesame 是一个面向终端、本地 daemon 驱动的代码代理运行时。
 - 自动为当前工作区选择或创建 session
 - 支持 shell、读写文件、搜索、补丁、任务、权限等工具
 - 支持全局和工作区 skill 发现与安装
+- skill 注入已改成两段式：默认只给极短 implicit hints，显式激活或 runtime 选中的 skill 才注入完整正文
+- 已按能力拆分 tool routing profile：`codebase_edit`、`system_inspect`、`web_lookup`、`browser_automation`、`scheduled_report`
+- 支持 system skills，当前内置 `skill-installer` 和 `skill-normalizer`
 - 支持真实定时/周期自动汇报任务
 - 支持 mailbox 收件箱和 cron 任务管理
+- 支持在 TUI / REPL 中处理权限中断，并通过 `/approve` / `/deny` 继续恢复当前 turn
 - 支持 `Esc` 中断当前对话
 - 支持鼠标滚轮和 `PgUp` / `PgDn` 滚动
 - 支持通过 `~/.sesame/config.json` 配置模型与运行参数
 
-Sesame 目前已经适合日常本地开发、服务器巡检和定时汇报类工作流，但整体仍在快速演进。
+当前公开方向以终端版本为主，`web/` 前端不作为这一版的主交付内容。
+
+## 最近完成
+
+最近这一轮已经完成的重构和补强：
+
+- 重构了 skills 注入层，去掉每轮默认注入的全量本地 skill 摘要，减少 prompt 污染
+- 新增 capability-profile 路由骨架，让普通网页问答和浏览器自动化任务不再混在一起
+- 新增 `skill-normalizer` system skill，用于把第三方或下载来的 skill 规范化成 Sesame 格式
+- 增加按需 `Catalog snapshot`，当用户明确询问 skills / tools 时，模型能回答当前已加载目录内容，而不是只复述 turn-visible tools
+- 修复权限请求后的交互链路，权限中断不再表现成“卡住不继续”
+- 修正文案和渲染，`web_fetch` 不再被误显示成 `search`
 
 ## 环境要求
 
@@ -76,22 +70,13 @@ OpenAI 兼容接口示例：
 
 ```json
 {
-  "active_profile": "coding",
+  "provider": "openai_compatible",
+  "model": "glm-4-7-251222",
   "permission_profile": "trusted_local",
-  "model_providers": {
-    "openai_compatible": {
-      "api_family": "openai_responses",
-      "base_url": "https://your-provider.example.com/v1",
-      "api_key_env": "OPENAI_API_KEY"
-    }
-  },
-  "profiles": {
-    "coding": {
-      "model": "glm-4-7-251222",
-      "model_provider": "openai_compatible",
-      "reasoning": "high",
-      "verbosity": "medium"
-    }
+  "openai": {
+    "api_key": "your-key",
+    "base_url": "https://your-provider.example.com/v1",
+    "model": "glm-4-7-251222"
   },
   "max_tool_steps": 8,
   "max_recent_items": 12,
@@ -105,26 +90,16 @@ Anthropic 示例：
 
 ```json
 {
-  "active_profile": "default",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-5",
   "permission_profile": "trusted_local",
-  "model_providers": {
-    "anthropic": {
-      "api_family": "anthropic_messages",
-      "base_url": "https://api.anthropic.com",
-      "api_key_env": "ANTHROPIC_API_KEY"
-    }
-  },
-  "profiles": {
-    "default": {
-      "model": "claude-sonnet-4-5",
-      "model_provider": "anthropic",
-      "cache_profile": "anthropic_default"
-    }
+  "anthropic": {
+    "api_key": "your-key",
+    "base_url": "https://api.anthropic.com",
+    "model": "claude-sonnet-4-5"
   }
 }
 ```
-
-配置文件中的模型通过 profile 选择；运行时也可以用 `--model` 仅覆盖当前激活 profile 的模型名。
 
 本地假模型 smoke test：
 
@@ -148,16 +123,19 @@ TUI 快捷键：
 
 - `Enter` 发送
 - `Alt+Enter` 换行
+- `Tab` / `Shift+Tab` 切换 `Chat` / `Agents` / `Mailbox` / `Cron` 视图
 - `Esc` 中断当前 turn
 - `Mouse wheel` / `PgUp` / `PgDn` 滚动
 - `Ctrl+C` 退出
 
-内置 slash 命令：
+通用 slash 命令：
 
 - `/help`
 - `/status`
 - `/skills`
 - `/tools`
+- `/approve [<request_id>] [once|run|session]`
+- `/deny [<request_id>]`
 - `/mailbox`
 - `/cron list`
 - `/cron inspect <id>`
@@ -169,14 +147,23 @@ TUI 快捷键：
 - `/clear`
 - `/exit`
 
+TUI 视图命令：
+
+- `/chat`
+- `/agents`
+
 ## Skills
 
 Sesame 支持系统内置 skill、全局 skill 和工作区 skill。
 
-运行时会在每轮开始时发现已安装 skill，并把已安装清单展示给模型。需要使用某个 skill 时，模型会通过 `skill_use` 工具按精确名称显式激活，而不是靠提示词里的 `$skill-name` 隐式触发。
+已安装 skill 默认按需激活：
+
+- 普通 turn 只会收到允许隐式触发的短摘要
+- 只有用户显式点名或 runtime 选中的 skill 才会注入完整正文
 
 目录位置：
 
+- 系统：`~/.sesame/skills/.system`
 - 全局：`~/.sesame/skills`
 - 工作区：`<workspace>/.sesame/skills`
 
@@ -190,35 +177,23 @@ go run ./cmd/sesame skill install openai/skills --path skills/.curated/parallel 
 go run ./cmd/sesame skill remove parallel
 ```
 
-安装完成后，新 skill 会在后续 turn 中出现在已安装 skills 列表里，可被 `skill_use` 激活。
-
-## 任务、子代理与定时报告
-
-Sesame 的原生能力不只是一轮问答。它支持后台任务、结果等待、异步回流和真实定时报告，适合把 agent 放进持续运行的本地工作流中。
-
-- 使用 `task_*` 工具把复杂工作拆成后台执行单元
-- 使用 `schedule_report` 创建真实的 delayed / recurring report
-- 通过 mailbox 和会话恢复机制把异步结果带回当前会话
-- 结合 skills，把任务编排能力扩展到更垂直的场景
-
-## 上下文管理
-
-Sesame 针对长会话做了明确的上下文预算控制，包括最近上下文窗口、prompt token 估算、滚动压缩、超大工具结果微压缩、workspace prompt 大小限制和 provider cache 接入。
-
-这让它更适合监控、定时汇报和多步骤异步协作这类容易让上下文不断膨胀的工作流。
-
 ## 仓库结构
 
 - `cmd/sesame`：CLI 入口
 - `internal/`：daemon、runtime、tools、session、storage、config 等核心实现
 - `README.md`：项目说明
 
-## 近期方向
+## 下一步计划
 
-- 继续强化 skill/runtime 机制和工作区扩展能力
-- 强化多任务协作、异步结果汇总和定时报告工作流
-- 持续优化模型 provider/profile 配置体验
-- 继续改进终端交互和对外文档
+下一阶段重点会放在几类能力上：
+
+- 正在思考如何做自动化任务报告的推送
+- 继续强化多 agent 协作，包括 skill 调用约束、子代理工具边界和报告汇总策略
+- 补上 task understanding / retrieval，让 runtime 先理解任务意图，再做 skill 的检索、排序和选择，而不是主要依赖名字或 trigger 的字符串匹配
+- 增加更硬的 runtime budget / arbitration，避免只有 prompt 软约束、缺少真正的执行收束
+- 继续补齐 skill 规范化流程，把外部下载来的 skill 稳定收敛到 Sesame canonical format
+- 评估是否增加一等 `web_search` / `news_lookup` 能力，而不是长期只依赖 `web_fetch`
+- 继续增强可观测性，让 TUI / 调试视图能直接看到 selected profile、skill activations 和 budget usage
 
 定位：自用 agent。
 

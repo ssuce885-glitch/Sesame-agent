@@ -18,6 +18,7 @@ import (
 	"go-agent/internal/engine"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
+	"go-agent/internal/reporting"
 	"go-agent/internal/runtimegraph"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
@@ -58,6 +59,7 @@ type taskTerminalNotifier struct {
 	store     *sqlite.Store
 	bus       *stream.Bus
 	scheduler *scheduler.Service
+	reporting *reporting.Service
 }
 
 func (s storeAndBusSink) Emit(ctx context.Context, event types.Event) error {
@@ -165,10 +167,23 @@ func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus) *taskTermin
 	if store == nil || bus == nil {
 		return nil
 	}
-	return &taskTerminalNotifier{store: store, bus: bus}
+	reportingService := reporting.NewService(store)
+	reportingService.SetReportReadySink(func(ctx context.Context, sessionID, turnID string, item types.ReportMailboxItem) error {
+		eventSink := storeAndBusSink{store: store, bus: bus}
+		event, err := types.NewEvent(sessionID, turnID, types.EventReportReady, item)
+		if err != nil {
+			return err
+		}
+		return eventSink.Emit(ctx, event)
+	})
+	return &taskTerminalNotifier{
+		store:     store,
+		bus:       bus,
+		reporting: reportingService,
+	}
 }
 
-func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, permissionProfile string, observer task.AgentTaskObserver) error {
+func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, observer task.AgentTaskObserver) error {
 	if a.runner == nil {
 		return errors.New("engine runner is not configured")
 	}
@@ -178,9 +193,8 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, pr
 	sink := &taskEventSink{observer: observer}
 	if err := a.runner.RunTurn(ctx, engine.Input{
 		Session: types.Session{
-			ID:                sessionID,
-			WorkspaceRoot:     workspaceRoot,
-			PermissionProfile: permissionProfile,
+			ID:            sessionID,
+			WorkspaceRoot: workspaceRoot,
 		},
 		Turn: types.Turn{
 			ID:          turnID,
@@ -248,19 +262,37 @@ func (n taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed 
 	if !shouldNotifyTaskResultReady(completed) {
 		return nil
 	}
-	if shouldQueueReportMailboxItem(completed) {
-		reportItem, ok := reportMailboxItemFromTask(completed, now)
-		if !ok {
-			return nil
+	if reporting.ShouldQueueTaskReport(completed) {
+		var (
+			reportItems []types.ReportMailboxItem
+			ok          bool
+			err         error
+		)
+		if strings.TrimSpace(completed.ScheduledJobID) != "" {
+			_, reportItems, ok, err = n.reporting.EnqueueScheduledJobReport(ctx, completed, now)
+		} else {
+			var reportItem types.ReportMailboxItem
+			_, _, reportItem, ok, err = n.reporting.EnqueueTaskReport(ctx, completed, now)
+			if ok {
+				reportItems = append(reportItems, reportItem)
+			}
 		}
-		if err := n.store.UpsertReportMailboxItem(ctx, reportItem); err != nil {
-			return err
-		}
-		reportEvent, err := types.NewEvent(completed.ParentSessionID, completed.ParentTurnID, types.EventReportReady, reportItem)
 		if err != nil {
 			return err
 		}
-		return eventSink.Emit(ctx, reportEvent)
+		if !ok {
+			return nil
+		}
+		for _, reportItem := range reportItems {
+			reportEvent, err := types.NewEvent(completed.ParentSessionID, completed.ParentTurnID, types.EventReportReady, reportItem)
+			if err != nil {
+				return err
+			}
+			if err := eventSink.Emit(ctx, reportEvent); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	completion, readyBlock, ok := pendingCompletionFromTask(completed, updatedBlock, now)
 	if !ok {
@@ -348,66 +380,6 @@ func shouldNotifyTaskResultReady(completed task.Task) bool {
 		completed.ResultReady() &&
 		strings.TrimSpace(completed.ParentSessionID) != "" &&
 		completed.CompletionNotifiedAt == nil
-}
-
-func shouldQueueReportMailboxItem(completed task.Task) bool {
-	if completed.Status != task.TaskStatusCompleted || !completed.ResultReady() || strings.TrimSpace(completed.ParentSessionID) == "" {
-		return false
-	}
-	switch normalizeTaskKind(completed.Kind) {
-	case "report", "scheduled_report", "digest", "scheduled_digest":
-		return true
-	default:
-		return false
-	}
-}
-
-func reportMailboxItemFromTask(completed task.Task, now time.Time) (types.ReportMailboxItem, bool) {
-	result, ready := completed.FinalResult()
-	if !ready {
-		return types.ReportMailboxItem{}, false
-	}
-
-	title := firstNonEmptyTrimmed(completed.Description, completed.Command, completed.ExecutionTaskID, completed.ID)
-	summary := clampTaskResultPreview(result.Text)
-	envelope := types.ReportEnvelope{
-		Source:   "task_result",
-		Status:   "completed",
-		Severity: mailboxSeverityFromTaskKind(completed.Kind),
-		Title:    title,
-		Summary:  summary,
-	}
-	if strings.TrimSpace(result.Text) != "" {
-		envelope.Sections = []types.ReportSectionContent{{
-			ID:    "report_body",
-			Title: firstNonEmptyTrimmed(title, "Report"),
-			Text:  strings.TrimSpace(result.Text),
-		}}
-	}
-
-	return types.ReportMailboxItem{
-		ID:         fmt.Sprintf("task_result:%s", completed.ID),
-		SessionID:  completed.ParentSessionID,
-		SourceKind: types.ReportMailboxSourceTaskResult,
-		SourceID:   completed.ID,
-		Envelope:   envelope,
-		ObservedAt: result.ObservedAt,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}, true
-}
-
-func normalizeTaskKind(kind string) string {
-	return strings.ToLower(strings.TrimSpace(kind))
-}
-
-func mailboxSeverityFromTaskKind(kind string) string {
-	switch normalizeTaskKind(kind) {
-	case "digest", "scheduled_digest":
-		return "info"
-	default:
-		return ""
-	}
 }
 
 func clampTaskResultPreview(text string) string {
@@ -537,6 +509,13 @@ func Run(ctx context.Context) error {
 			slog.Error("scheduler loop exited", "error", err)
 		}
 	}()
+	if taskNotifier != nil && taskNotifier.reporting != nil {
+		go func() {
+			if err := taskNotifier.reporting.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("reporting loop exited", "error", err)
+			}
+		}()
+	}
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
 		Bus:         bus,
@@ -707,7 +686,6 @@ func resumeResolvedContinuations(ctx context.Context, store *sqlite.Store, manag
 			EffectivePermissionProfile: effectiveProfile,
 			RunID:                      continuation.RunID,
 			TaskID:                     continuation.TaskID,
-			ActivatedSkillNames:        append([]string(nil), continuation.ActivatedSkillNames...),
 		}
 		if _, err := manager.ResumeTurn(ctx, sessionRow.ID, session.ResumeTurnInput{
 			TurnID:  turn.ID,

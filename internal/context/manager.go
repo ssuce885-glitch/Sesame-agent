@@ -56,6 +56,7 @@ func (m *Manager) Build(userText string, items []model.ConversationItem, summari
 	} else if max <= 0 {
 		start = len(items)
 	}
+	start = model.NearestSafeConversationBoundary(items, start)
 	recentItems := cloneConversationItems(items[start:])
 	estimated := estimateConversationTokens(userText, recentItems, summaries, memoryRefs)
 	action := chooseCompactionAction(items, start, estimated, m.cfg)

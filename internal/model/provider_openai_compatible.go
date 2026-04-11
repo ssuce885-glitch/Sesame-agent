@@ -63,9 +63,9 @@ func NewOpenAICompatibleProvider(cfg Config) (*OpenAICompatibleProvider, error) 
 }
 
 func (p *OpenAICompatibleProvider) Capabilities() ProviderCapabilities {
-	if p.cacheProfile == CapabilityProfileOpenAIResponses {
+	if p.cacheProfile == CapabilityProfileArkResponses {
 		return ProviderCapabilities{
-			Profile:              CapabilityProfileOpenAIResponses,
+			Profile:              CapabilityProfileArkResponses,
 			SupportsSessionCache: true,
 			SupportsPrefixCache:  false,
 			CachesToolResults:    true,
@@ -238,7 +238,7 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			}
 		case "response.completed":
 			sawMessageEnd = true
-			if p.cacheProfile == CapabilityProfileOpenAIResponses && emitResponseMetadata {
+			if p.cacheProfile == CapabilityProfileArkResponses && emitResponseMetadata {
 				var payload struct {
 					ID    string `json:"id"`
 					Usage struct {
@@ -295,9 +295,9 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 }
 
 func (p *OpenAICompatibleProvider) buildRequestBody(req Request) openAICompatibleRequestBody {
-	useResponsesCache := req.Cache != nil && p.cacheProfile == CapabilityProfileOpenAIResponses
+	useArkCache := req.Cache != nil && p.cacheProfile == CapabilityProfileArkResponses
 	input := toResponsesInput(req.Items)
-	if useResponsesCache && req.Instructions != "" {
+	if useArkCache && req.Instructions != "" {
 		input = prependSystemInstruction(input, req.Instructions)
 	}
 
@@ -309,12 +309,12 @@ func (p *OpenAICompatibleProvider) buildRequestBody(req Request) openAICompatibl
 		Stream:     req.Stream,
 	}
 
-	if !useResponsesCache && req.Instructions != "" {
+	if !useArkCache && req.Instructions != "" {
 		instructions := req.Instructions
 		body.Instructions = &instructions
 	}
 
-	if useResponsesCache {
+	if useArkCache {
 		store := req.Cache.Store
 		body.Store = &store
 		if req.Cache.PreviousResponseID != "" {
@@ -486,6 +486,21 @@ func toResponsesInput(items []ConversationItem) []map[string]any {
 			out = append(out, map[string]any{
 				"role":    "user",
 				"content": content,
+			})
+		case ConversationItemAssistantThinking:
+			if strings.TrimSpace(item.Text) == "" {
+				continue
+			}
+			out = append(out, map[string]any{
+				"type":   "message",
+				"role":   "assistant",
+				"status": "completed",
+				"content": []map[string]any{
+					{
+						"type": "output_text",
+						"text": item.Text,
+					},
+				},
 			})
 		case ConversationItemAssistantText:
 			out = append(out, map[string]any{

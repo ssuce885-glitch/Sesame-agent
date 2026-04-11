@@ -82,6 +82,14 @@ func (c *Client) InterruptTurn(ctx context.Context, sessionID string) error {
 	return c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/sessions/%s/interrupt", sessionID), nil, nil)
 }
 
+func (c *Client) DecidePermission(ctx context.Context, req types.PermissionDecisionRequest) (types.PermissionDecisionResponse, error) {
+	var out types.PermissionDecisionResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/permissions/decide", req, &out); err != nil {
+		return types.PermissionDecisionResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) GetTimeline(ctx context.Context, sessionID string) (types.SessionTimelineResponse, error) {
 	var out types.SessionTimelineResponse
 	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/sessions/%s/timeline", sessionID), nil, &out); err != nil {
@@ -94,6 +102,26 @@ func (c *Client) GetReportMailbox(ctx context.Context, sessionID string) (types.
 	var out types.SessionReportMailboxResponse
 	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/sessions/%s/mailbox", sessionID), nil, &out); err != nil {
 		return types.SessionReportMailboxResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) GetRuntimeGraph(ctx context.Context, sessionID string) (types.SessionRuntimeGraphResponse, error) {
+	var out types.SessionRuntimeGraphResponse
+	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/sessions/%s/runtime_graph", sessionID), nil, &out); err != nil {
+		return types.SessionRuntimeGraphResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) GetReportingOverview(ctx context.Context, sessionID string) (types.ReportingOverview, error) {
+	var out types.ReportingOverview
+	path := "/v1/reporting/overview"
+	if trimmed := strings.TrimSpace(sessionID); trimmed != "" {
+		path += "?session_id=" + url.QueryEscape(trimmed)
+	}
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return types.ReportingOverview{}, err
 	}
 	return out, nil
 }
