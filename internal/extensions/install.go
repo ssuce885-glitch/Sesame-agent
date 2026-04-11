@@ -33,6 +33,7 @@ var skillDirNameSanitizer = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 var readmePathPattern = regexp.MustCompile(`(?i)^readme(?:\.[a-z0-9._-]+)?$`)
 
 var githubRequestFunc = githubRequest
+var errRemoteSkillContract = errors.New("remote skill does not satisfy SKILL.json + SKILL.md contract")
 
 type InstallRequest struct {
 	Scope  string
@@ -299,8 +300,15 @@ func ListRemoteSkillNames(repo, repoPath, ref string) ([]string, error) {
 		if item.Type != "dir" || strings.TrimSpace(item.Name) == "" {
 			continue
 		}
-		meta, err := loadRemoteSkillMetadata(owner, repoName, ref, path.Join(repoPath, item.Name))
-		if err != nil || !remoteSkillEnabled(meta) {
+		childPath := path.Join(repoPath, item.Name)
+		meta, err := loadRemoteSkillMetadata(owner, repoName, ref, childPath)
+		if err != nil {
+			if errors.Is(err, errRemoteSkillContract) {
+				continue
+			}
+			return nil, fmt.Errorf("validate remote skill child %s: %w", childPath, err)
+		}
+		if !remoteSkillEnabled(meta) {
 			continue
 		}
 		names = append(names, item.Name)
@@ -327,7 +335,10 @@ func inspectGitHubSource(scope string, source resolvedInstallSource) (InstallPla
 	plan.CandidatePaths = make([]string, 0, len(buckets.Candidate))
 	for _, candidate := range buckets.Candidate {
 		meta, err := loadRemoteSkillMetadata(source.owner, source.repo, source.ref, candidate)
-		if err != nil || !remoteSkillEnabled(meta) {
+		if err != nil {
+			return InstallPlan{}, fmt.Errorf("validate remote skill candidate %s: %w", candidate, err)
+		}
+		if !remoteSkillEnabled(meta) {
 			continue
 		}
 		plan.CandidatePaths = append(plan.CandidatePaths, candidate)
@@ -693,7 +704,7 @@ func loadRemoteSkillMetadata(owner, repo, ref, repoPath string) (skillMetadata, 
 	normalizedPath := normalizeRepoPath(repoPath)
 	switch path.Base(normalizedPath) {
 	case "SKILL.md", "SKILL.json":
-		return skillMetadata{}, fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md")
+		return skillMetadata{}, fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md: %w", errRemoteSkillContract)
 	}
 
 	payload, err := githubRequestFunc(githubContentsURL(owner, repo, normalizedPath, ref), "application/vnd.github+json")
@@ -705,7 +716,7 @@ func loadRemoteSkillMetadata(owner, repo, ref, repoPath string) (skillMetadata, 
 	if err := json.Unmarshal(payload, &items); err != nil {
 		var item githubContentsItem
 		if json.Unmarshal(payload, &item) == nil {
-			return skillMetadata{}, fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md")
+			return skillMetadata{}, fmt.Errorf("remote skill path must point to a directory containing SKILL.json and SKILL.md: %w", errRemoteSkillContract)
 		}
 		return skillMetadata{}, fmt.Errorf("decode GitHub contents response: %w", err)
 	}
@@ -724,10 +735,10 @@ func loadRemoteSkillMetadata(owner, repo, ref, repoPath string) (skillMetadata, 
 		}
 	}
 	if !hasMetadata {
-		return skillMetadata{}, fmt.Errorf("remote skill directory is missing SKILL.json")
+		return skillMetadata{}, fmt.Errorf("remote skill directory is missing SKILL.json: %w", errRemoteSkillContract)
 	}
 	if !hasMarkdown {
-		return skillMetadata{}, fmt.Errorf("remote skill directory is missing SKILL.md")
+		return skillMetadata{}, fmt.Errorf("remote skill directory is missing SKILL.md: %w", errRemoteSkillContract)
 	}
 
 	payload, err = fetchGitHubFile(owner, repo, ref, path.Join(normalizedPath, "SKILL.json"))

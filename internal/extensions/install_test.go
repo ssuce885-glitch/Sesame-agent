@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,6 +103,53 @@ func TestInspectSkillSourceSkipsDisabledRemoteCandidateFromRepoRoot(t *testing.T
 	}
 }
 
+func TestInspectSkillSourceErrorsWhenRemoteCandidateMetadataCannotBeValidated(t *testing.T) {
+	t.Cleanup(func() {
+		githubRequestFunc = githubRequest
+	})
+	githubRequestFunc = func(rawURL, accept string) ([]byte, error) {
+		switch rawURL {
+		case "https://api.github.com/repos/example/skills/git/trees/main?recursive=1":
+			return []byte(`{
+				"tree": [
+					{"path":"skills/active/SKILL.md","type":"blob"},
+					{"path":"skills/active/SKILL.json","type":"blob"},
+					{"path":"skills/broken/SKILL.md","type":"blob"},
+					{"path":"skills/broken/SKILL.json","type":"blob"}
+				],
+				"truncated": false
+			}`), nil
+		case "https://api.github.com/repos/example/skills/contents/skills/active?ref=main":
+			return []byte(`[
+				{"name":"SKILL.md","type":"file"},
+				{"name":"SKILL.json","type":"file"}
+			]`), nil
+		case "https://api.github.com/repos/example/skills/contents/skills/active/SKILL.json?ref=main":
+			return []byte(`{
+				"name": "active"
+			}`), nil
+		case "https://api.github.com/repos/example/skills/contents/skills/broken?ref=main":
+			return []byte(`[
+				{"name":"SKILL.md","type":"file"},
+				{"name":"SKILL.json","type":"file"}
+			]`), nil
+		case "https://api.github.com/repos/example/skills/contents/skills/broken/SKILL.json?ref=main":
+			return nil, errors.New("temporary GitHub failure")
+		default:
+			t.Fatalf("githubRequestFunc() unexpected URL %q", rawURL)
+			return nil, nil
+		}
+	}
+
+	_, err := InspectSkillSource(t.TempDir(), t.TempDir(), InstallRequest{Source: "example/skills"})
+	if err == nil {
+		t.Fatal("InspectSkillSource() error = nil, want remote candidate validation failure")
+	}
+	if !strings.Contains(err.Error(), "skills/broken") {
+		t.Fatalf("error = %v, want failing remote candidate path", err)
+	}
+}
+
 func TestListRemoteSkillNamesFiltersLegacyAndDisabledChildren(t *testing.T) {
 	t.Cleanup(func() {
 		githubRequestFunc = githubRequest
@@ -170,5 +218,45 @@ func TestListRemoteSkillNamesFiltersLegacyAndDisabledChildren(t *testing.T) {
 	}
 	if len(names) != 1 || names[0] != "active" {
 		t.Fatalf("ListRemoteSkillNames() = %v, want [active]", names)
+	}
+}
+
+func TestListRemoteSkillNamesErrorsWhenChildMetadataCannotBeValidated(t *testing.T) {
+	t.Cleanup(func() {
+		githubRequestFunc = githubRequest
+	})
+	githubRequestFunc = func(rawURL, accept string) ([]byte, error) {
+		switch rawURL {
+		case "https://api.github.com/repos/example/skills/contents/skills?ref=main":
+			return []byte(`[
+				{"name":"active","type":"dir"},
+				{"name":"broken","type":"dir"}
+			]`), nil
+		case "https://api.github.com/repos/example/skills/contents/skills/active?ref=main":
+			return []byte(`[
+				{"name":"SKILL.md","type":"file"},
+				{"name":"SKILL.json","type":"file"}
+			]`), nil
+		case "https://api.github.com/repos/example/skills/contents/skills/active/SKILL.json?ref=main":
+			return []byte(`{"name":"active"}`), nil
+		case "https://api.github.com/repos/example/skills/contents/skills/broken?ref=main":
+			return []byte(`[
+				{"name":"SKILL.md","type":"file"},
+				{"name":"SKILL.json","type":"file"}
+			]`), nil
+		case "https://api.github.com/repos/example/skills/contents/skills/broken/SKILL.json?ref=main":
+			return []byte(`{`), nil
+		default:
+			t.Fatalf("githubRequestFunc() unexpected URL %q", rawURL)
+			return nil, nil
+		}
+	}
+
+	_, err := ListRemoteSkillNames("example/skills", "skills", "main")
+	if err == nil {
+		t.Fatal("ListRemoteSkillNames() error = nil, want child metadata validation failure")
+	}
+	if !strings.Contains(err.Error(), "skills/broken") {
+		t.Fatalf("error = %v, want failing child path", err)
 	}
 }
