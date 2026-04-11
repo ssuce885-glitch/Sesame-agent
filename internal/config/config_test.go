@@ -213,6 +213,76 @@ func TestResolveCLIStartupConfigRejectsUnsupportedAPIFamily(t *testing.T) {
 	}
 }
 
+func TestResolveCLIStartupConfigRejectsOpenAIChatCompletionsAPIFamily(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeConfigFile(t, filepath.Join(home, ".sesame", "config.json"), `{
+		"active_profile": "coding",
+		"model_providers": {
+			"openai": {
+				"api_family": "openai_chat_completions",
+				"base_url": "https://api.openai.com/v1",
+				"api_key_env": "OPENAI_API_KEY"
+			}
+		},
+		"profiles": {
+			"coding": {
+				"model": "gpt-5.4",
+				"model_provider": "openai",
+				"cache_profile": "openai_responses"
+			}
+		}
+	}`)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	_, err := ResolveCLIStartupConfig(CLIStartupOverrides{})
+	if err == nil {
+		t.Fatal("ResolveCLIStartupConfig() error = nil, want openai_chat_completions rejection")
+	}
+	if !errors.Is(err, ErrUnsupportedAPIFamily) {
+		t.Fatalf("error = %v, want ErrUnsupportedAPIFamily", err)
+	}
+}
+
+func TestResolveCLIStartupConfigAcceptsOpenAIResponsesAPIFamily(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeConfigFile(t, filepath.Join(home, ".sesame", "config.json"), `{
+		"active_profile": "coding",
+		"model_providers": {
+			"openai": {
+				"api_family": "openai_responses",
+				"base_url": "https://api.openai.com/v1",
+				"api_key_env": "OPENAI_API_KEY"
+			}
+		},
+		"profiles": {
+			"coding": {
+				"model": "gpt-5.4",
+				"model_provider": "openai",
+				"cache_profile": "openai_responses"
+			}
+		}
+	}`)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	cfg, err := ResolveCLIStartupConfig(CLIStartupOverrides{})
+	if err != nil {
+		t.Fatalf("ResolveCLIStartupConfig() error = %v", err)
+	}
+	if cfg.ModelProvider != "openai_compatible" {
+		t.Fatalf("ModelProvider = %q, want openai_compatible", cfg.ModelProvider)
+	}
+	if cfg.OpenAIAPIKey != "test-key" {
+		t.Fatalf("OpenAIAPIKey = %q, want test-key", cfg.OpenAIAPIKey)
+	}
+	if cfg.OpenAIBaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("OpenAIBaseURL = %q, want https://api.openai.com/v1", cfg.OpenAIBaseURL)
+	}
+}
+
 func writeConfigFile(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

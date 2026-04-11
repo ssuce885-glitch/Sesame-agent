@@ -11,12 +11,8 @@ import (
 type APIFamily string
 
 const (
-	APIFamilyAnthropicMessages     APIFamily = "anthropic_messages"
-	APIFamilyOpenAIChatCompletions APIFamily = "openai_chat_completions"
-	APIFamilyOpenAIResponses       APIFamily = "openai_responses"
-	APIFamilyAnthropic             APIFamily = "anthropic"
-	APIFamilyOpenAICompatible      APIFamily = "openai_compatible"
-	APIFamilyOpenAI                APIFamily = "openai"
+	APIFamilyAnthropicMessages APIFamily = "anthropic_messages"
+	APIFamilyOpenAIResponses   APIFamily = "openai_responses"
 )
 
 type ProviderProfile string
@@ -75,7 +71,7 @@ func ResolveProviderConfig(cfg config.Config) (ResolvedProviderConfig, error) {
 	return ResolvedProviderConfig{
 		ProfileID:    profileID,
 		ProviderID:   providerID,
-		Model:        strings.TrimSpace(profile.Model),
+		Model:        selectedModel(cfg, profile),
 		APIKey:       apiKey,
 		BaseURL:      strings.TrimSpace(provider.BaseURL),
 		APIFamily:    apiFamily,
@@ -84,6 +80,13 @@ func ResolveProviderConfig(cfg config.Config) (ResolvedProviderConfig, error) {
 		Reasoning:    strings.TrimSpace(profile.Reasoning),
 		Verbosity:    strings.TrimSpace(profile.Verbosity),
 	}, nil
+}
+
+func selectedModel(cfg config.Config, profile config.ProfileConfig) string {
+	if model := strings.TrimSpace(cfg.Model); model != "" {
+		return model
+	}
+	return strings.TrimSpace(profile.Model)
 }
 
 func providerProfileFor(provider config.ModelProviderConfig) ProviderProfile {
@@ -99,7 +102,7 @@ func providerProfileFor(provider config.ModelProviderConfig) ProviderProfile {
 	switch apiFamily {
 	case APIFamilyAnthropicMessages:
 		return ProviderProfileAnthropicDefault
-	case APIFamilyOpenAIChatCompletions, APIFamilyOpenAIResponses:
+	case APIFamilyOpenAIResponses:
 		return ProviderProfileOpenAIResponses
 	default:
 		return ""
@@ -108,10 +111,8 @@ func providerProfileFor(provider config.ModelProviderConfig) ProviderProfile {
 
 func normalizeAPIFamily(raw string) (APIFamily, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case string(APIFamilyAnthropic), string(APIFamilyAnthropicMessages):
+	case string(APIFamilyAnthropicMessages):
 		return APIFamilyAnthropicMessages, nil
-	case string(APIFamilyOpenAI), string(APIFamilyOpenAICompatible), string(APIFamilyOpenAIChatCompletions):
-		return APIFamilyOpenAIChatCompletions, nil
 	case string(APIFamilyOpenAIResponses):
 		return APIFamilyOpenAIResponses, nil
 	default:

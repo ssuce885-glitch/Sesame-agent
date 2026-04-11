@@ -438,9 +438,9 @@ func buildProfiles(userProfiles map[string]UserConfigProfile) map[string]Profile
 func runtimeModelProviderFromAPIFamily(apiFamily string) string {
 	normalized := strings.ToLower(strings.TrimSpace(apiFamily))
 	switch normalized {
-	case "anthropic", "anthropic_messages":
+	case "anthropic_messages":
 		return "anthropic"
-	case "openai", "openai_compatible", "openai_chat_completions", "openai_responses":
+	case "openai_responses":
 		return "openai_compatible"
 	}
 	return ""

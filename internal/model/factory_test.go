@@ -58,3 +58,66 @@ func TestResolveProviderConfigRejectsMissingProviderReference(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestResolveProviderConfigPrefersRuntimeModelOverride(t *testing.T) {
+	cfg := config.Config{
+		ActiveProfile: "coding",
+		Model:         "runtime-override-model",
+		ModelProviders: map[string]config.ModelProviderConfig{
+			"anthropic-prod": {
+				ID:        "anthropic-prod",
+				APIFamily: "anthropic_messages",
+				BaseURL:   "https://api.anthropic.com",
+				APIKeyEnv: "ANTHROPIC_API_KEY",
+			},
+		},
+		Profiles: map[string]config.ProfileConfig{
+			"coding": {
+				ID:            "coding",
+				Model:         "profile-model",
+				ModelProvider: "anthropic-prod",
+				CacheProfile:  "anthropic_default",
+			},
+		},
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	resolved, err := ResolveProviderConfig(cfg)
+	if err != nil {
+		t.Fatalf("ResolveProviderConfig() error = %v", err)
+	}
+	if resolved.Model != "runtime-override-model" {
+		t.Fatalf("Model = %q, want runtime-override-model", resolved.Model)
+	}
+}
+
+func TestResolveProviderConfigRejectsOpenAIChatCompletionsFamily(t *testing.T) {
+	cfg := config.Config{
+		ActiveProfile: "coding",
+		ModelProviders: map[string]config.ModelProviderConfig{
+			"openai-prod": {
+				ID:        "openai-prod",
+				APIFamily: "openai_chat_completions",
+				BaseURL:   "https://api.openai.com/v1",
+				APIKeyEnv: "OPENAI_API_KEY",
+			},
+		},
+		Profiles: map[string]config.ProfileConfig{
+			"coding": {
+				ID:            "coding",
+				Model:         "gpt-5.4",
+				ModelProvider: "openai-prod",
+				CacheProfile:  "openai_responses",
+			},
+		},
+	}
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	_, err := ResolveProviderConfig(cfg)
+	if err == nil {
+		t.Fatal("ResolveProviderConfig() error = nil, want unsupported openai_chat_completions")
+	}
+	if !strings.Contains(err.Error(), `uses unsupported api_family "openai_chat_completions"`) {
+		t.Fatalf("error = %v", err)
+	}
+}

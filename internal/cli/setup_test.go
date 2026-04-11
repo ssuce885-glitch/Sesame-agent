@@ -46,8 +46,8 @@ func TestEnsureRuntimeConfiguredWritesExplicitModelConfig(t *testing.T) {
 	if !ok {
 		t.Fatalf("profile provider %q missing from model_providers", profile.ModelProvider)
 	}
-	if provider.APIFamily == "" {
-		t.Fatal("provider api_family is empty")
+	if provider.APIFamily != "openai_responses" {
+		t.Fatalf("provider api_family = %q, want openai_responses", provider.APIFamily)
 	}
 	if provider.BaseURL != "https://example.com/v1" {
 		t.Fatalf("provider base_url = %q, want https://example.com/v1", provider.BaseURL)
