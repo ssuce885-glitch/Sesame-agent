@@ -57,14 +57,61 @@ func TestCompileRendersCatalogOnlyUntilSkillIsActivated(t *testing.T) {
 		t.Fatalf("Compile(active) error = %v", err)
 	}
 	activePrompt := activeBundle.Render()
-	if strings.Contains(activePrompt, "Installed local skills:") {
-		t.Fatalf("active prompt unexpectedly contains catalog section: %q", activePrompt)
+	if !strings.Contains(activePrompt, "Installed local skills:") {
+		t.Fatalf("active prompt missing catalog section: %q", activePrompt)
+	}
+	if !strings.Contains(activePrompt, "skill_use") {
+		t.Fatalf("active prompt missing skill_use hint: %q", activePrompt)
 	}
 	if !strings.Contains(activePrompt, "compiler body") {
 		t.Fatalf("active prompt missing skill body: %q", activePrompt)
 	}
 	if !strings.Contains(activePrompt, "functions.shell_command") {
 		t.Fatalf("active prompt missing newly enabled tool: %q", activePrompt)
+	}
+}
+
+func TestCompileNewlyEnabledToolsUsesDependenciesOnly(t *testing.T) {
+	globalRoot := t.TempDir()
+	workspaceRoot := t.TempDir()
+	skillDir := filepath.Join(globalRoot, "skills", "deps-only")
+	writeSkillFile(t, filepath.Join(skillDir, "SKILL.json"), `{
+		"name": "deps-only",
+		"description": "deps-only test",
+		"tool_dependencies": ["functions.shell_command"],
+		"preferred_tools": ["functions.todo_write"]
+	}`)
+	writeSkillFile(t, filepath.Join(skillDir, "SKILL.md"), "deps-only body")
+
+	catalog, err := skills.LoadCatalog(globalRoot, workspaceRoot)
+	if err != nil {
+		t.Fatalf("skills.LoadCatalog() error = %v", err)
+	}
+	spec, ok := catalog.FindByName("deps-only")
+	if !ok {
+		t.Fatalf("catalog.FindByName(%q) ok = false", "deps-only")
+	}
+	active := []skills.ActivatedSkill{
+		{
+			Skill: spec,
+		},
+	}
+
+	bundle, err := Compile(CompileInput{
+		Catalog:        catalog,
+		Active:         active,
+		NewlyActivated: active,
+	})
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	rendered := bundle.Render()
+	if !strings.Contains(rendered, "functions.shell_command") {
+		t.Fatalf("rendered prompt missing dependency tool: %q", rendered)
+	}
+	if strings.Contains(rendered, "functions.todo_write") {
+		t.Fatalf("rendered prompt unexpectedly contains preferred tool: %q", rendered)
 	}
 }
 
