@@ -373,6 +373,177 @@ func TestOpenAICompatibleProviderFallsBackToDeltaArgumentsWhenDonePayloadIsMalfo
 	}
 }
 
+func TestOpenAICompatibleProviderDefersMalformedDoneUntilLaterDeltaCompletesArguments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeEvent := func(event string, data any) {
+			t.Helper()
+			payload, err := json.Marshal(data)
+			if err != nil {
+				t.Fatalf("marshal %s payload: %v", event, err)
+			}
+			_, _ = w.Write([]byte("event: " + event + "\n"))
+			_, _ = w.Write([]byte("data: "))
+			_, _ = w.Write(payload)
+			_, _ = w.Write([]byte("\n\n"))
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeEvent("response.output_item.added", map[string]any{
+			"item": map[string]any{
+				"id":      "fc_1",
+				"call_id": "call_1",
+				"type":    "function_call",
+				"name":    "shell_command",
+			},
+		})
+		writeEvent("response.function_call_arguments.delta", map[string]any{
+			"item_id": "fc_1",
+			"delta":   `{`,
+		})
+		writeEvent("response.function_call_arguments.done", map[string]any{
+			"item_id":   "fc_1",
+			"arguments": `{`,
+		})
+		writeEvent("response.function_call_arguments.delta", map[string]any{
+			"item_id": "fc_1",
+			"delta":   `"command":"echo hi"}`,
+		})
+		writeEvent("response.completed", map[string]any{"status": "completed"})
+	}))
+	defer server.Close()
+
+	provider, err := NewOpenAICompatibleProvider(Config{
+		APIKey:  "test-key",
+		Model:   "fallback-model",
+		BaseURL: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAICompatibleProvider() error = %v", err)
+	}
+
+	events, errs := provider.Stream(context.Background(), Request{
+		Stream: true,
+		Items:  []ConversationItem{UserMessageItem("hello")},
+	})
+
+	var got []StreamEvent
+	for event := range events {
+		got = append(got, event)
+	}
+
+	if len(got) != 4 {
+		t.Fatalf("len(events) = %d, want 4", len(got))
+	}
+	if got[0].Kind != StreamEventToolCallDelta || got[0].ToolCall.InputChunk != "{" {
+		t.Fatalf("first event = %+v, want opening tool call delta", got[0])
+	}
+	if got[1].Kind != StreamEventToolCallDelta || got[1].ToolCall.InputChunk != `"command":"echo hi"}` {
+		t.Fatalf("second event = %+v, want completing tool call delta", got[1])
+	}
+	if got[2].Kind != StreamEventToolCallEnd {
+		t.Fatalf("third event = %+v, want tool call end", got[2])
+	}
+	if got[2].ToolCall.Input["command"] != "echo hi" {
+		t.Fatalf("tool call input = %#v, want parsed command", got[2].ToolCall.Input)
+	}
+	if got[3].Kind != StreamEventMessageEnd {
+		t.Fatalf("fourth event = %+v, want message end", got[3])
+	}
+
+	select {
+	case err := <-errs:
+		if err != nil {
+			t.Fatalf("stream error = %v, want nil", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for stream error result")
+	}
+}
+
+func TestOpenAICompatibleProviderFinalizesToolCallFromDeltaOnlyAtResponseCompleted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeEvent := func(event string, data any) {
+			t.Helper()
+			payload, err := json.Marshal(data)
+			if err != nil {
+				t.Fatalf("marshal %s payload: %v", event, err)
+			}
+			_, _ = w.Write([]byte("event: " + event + "\n"))
+			_, _ = w.Write([]byte("data: "))
+			_, _ = w.Write(payload)
+			_, _ = w.Write([]byte("\n\n"))
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeEvent("response.output_item.added", map[string]any{
+			"item": map[string]any{
+				"id":      "fc_1",
+				"call_id": "call_1",
+				"type":    "function_call",
+				"name":    "shell_command",
+			},
+		})
+		writeEvent("response.function_call_arguments.delta", map[string]any{
+			"item_id": "fc_1",
+			"delta":   `{"command":"echo hi"}`,
+		})
+		writeEvent("response.completed", map[string]any{"status": "completed"})
+	}))
+	defer server.Close()
+
+	provider, err := NewOpenAICompatibleProvider(Config{
+		APIKey:  "test-key",
+		Model:   "fallback-model",
+		BaseURL: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAICompatibleProvider() error = %v", err)
+	}
+
+	events, errs := provider.Stream(context.Background(), Request{
+		Stream: true,
+		Items:  []ConversationItem{UserMessageItem("hello")},
+	})
+
+	var got []StreamEvent
+	for event := range events {
+		got = append(got, event)
+	}
+
+	if len(got) != 3 {
+		t.Fatalf("len(events) = %d, want 3", len(got))
+	}
+	if got[0].Kind != StreamEventToolCallDelta {
+		t.Fatalf("first event = %+v, want tool call delta", got[0])
+	}
+	if got[1].Kind != StreamEventToolCallEnd {
+		t.Fatalf("second event = %+v, want tool call end", got[1])
+	}
+	if got[1].ToolCall.Input["command"] != "echo hi" {
+		t.Fatalf("tool call input = %#v, want parsed command", got[1].ToolCall.Input)
+	}
+	if got[2].Kind != StreamEventMessageEnd {
+		t.Fatalf("third event = %+v, want message end", got[2])
+	}
+
+	select {
+	case err := <-errs:
+		if err != nil {
+			t.Fatalf("stream error = %v, want nil", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for stream error result")
+	}
+}
+
 func TestOpenAICompatibleProviderUsesArkCacheFieldsAndMetadata(t *testing.T) {
 	type requestBody map[string]any
 

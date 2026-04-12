@@ -89,6 +89,11 @@ func refreshSessionMemory(ctx context.Context, e *Engine, in Input) (sessionMemo
 	if len(items) == 0 {
 		return report, nil
 	}
+	safeEnd := model.NearestSafeConversationBoundary(items, len(items))
+	if safeEnd <= 0 {
+		return report, nil
+	}
+	items = items[:safeEnd]
 
 	existing, hasExisting, err := e.store.GetSessionMemory(ctx, sessionID)
 	if err != nil {
@@ -136,8 +141,8 @@ func refreshSessionMemory(ctx context.Context, e *Engine, in Input) (sessionMemo
 		SessionID:      sessionID,
 		WorkspaceRoot:  in.Session.WorkspaceRoot,
 		SourceTurnID:   in.Turn.ID,
-		UpToPosition:   len(items),
-		ItemCount:      len(items),
+		UpToPosition:   safeEnd,
+		ItemCount:      safeEnd,
 		SummaryPayload: encodeSessionMemorySummary(summary),
 		CreatedAt:      now,
 		UpdatedAt:      now,

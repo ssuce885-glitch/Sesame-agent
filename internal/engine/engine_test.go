@@ -2184,6 +2184,68 @@ func TestMaybeRefreshSessionMemoryPromotesGlobalPreferenceMemory(t *testing.T) {
 	}
 }
 
+func TestMaybeRefreshSessionMemoryStopsAtSafeConversationBoundary(t *testing.T) {
+	store := &fakeConversationStore{
+		items: []model.ConversationItem{
+			model.UserMessageItem("turn 1"),
+			{Kind: model.ConversationItemAssistantText, Text: "assistant 1"},
+			model.UserMessageItem("turn 2"),
+			{Kind: model.ConversationItemAssistantText, Text: "assistant 2"},
+			model.UserMessageItem("turn 3"),
+			{Kind: model.ConversationItemAssistantText, Text: "assistant 3"},
+			model.UserMessageItem("turn 4"),
+			{Kind: model.ConversationItemAssistantText, Text: "assistant 4"},
+			{
+				Kind: model.ConversationItemToolCall,
+				ToolCall: model.ToolCallChunk{
+					ID:    "call_open",
+					Name:  "shell_command",
+					Input: map[string]any{"command": "pwd"},
+				},
+			},
+		},
+	}
+	compactor := &recordingCompactor{
+		summary: model.Summary{
+			RangeLabel:  "session memory",
+			OpenThreads: []string{"safe boundary only"},
+		},
+	}
+	runner := &Engine{
+		store:     store,
+		compactor: compactor,
+	}
+
+	err := maybeRefreshSessionMemory(context.Background(), runner, Input{
+		Session: types.Session{ID: "sess_safe_boundary", WorkspaceRoot: t.TempDir()},
+		Turn:    types.Turn{ID: "turn_safe_boundary", SessionID: "sess_safe_boundary"},
+	})
+	if err != nil {
+		t.Fatalf("maybeRefreshSessionMemory() error = %v", err)
+	}
+
+	if compactor.calls != 1 {
+		t.Fatalf("compactor calls = %d, want 1", compactor.calls)
+	}
+	if len(compactor.inputs) != 1 {
+		t.Fatalf("len(compactor inputs) = %d, want 1", len(compactor.inputs))
+	}
+	if len(compactor.inputs[0]) != 8 {
+		t.Fatalf("len(compactor input items) = %d, want 8 safe items without unresolved tool call", len(compactor.inputs[0]))
+	}
+	for _, item := range compactor.inputs[0] {
+		if item.Kind == model.ConversationItemToolCall {
+			t.Fatalf("compactor input unexpectedly includes unresolved tool call: %#v", item)
+		}
+	}
+	if store.upsertedSessionMemory == nil {
+		t.Fatal("upserted session memory = nil, want refreshed memory at safe boundary")
+	}
+	if store.upsertedSessionMemory.UpToPosition != 8 {
+		t.Fatalf("session memory up_to_position = %d, want 8 safe items", store.upsertedSessionMemory.UpToPosition)
+	}
+}
+
 func TestRunTurnIgnoresSessionMemoryRefreshFailure(t *testing.T) {
 	store := &fakeConversationStore{
 		items: []model.ConversationItem{

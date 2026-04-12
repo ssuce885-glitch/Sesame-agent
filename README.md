@@ -1,6 +1,6 @@
 # Sesame
 
-Sesame 是一个面向终端的本地代码代理。
+Sesame 是一个以终端版本为公开主线的本地代码代理。
 
 它提供全屏 TUI、本地 daemon、持久化 session、工具调用、skill 加载和工作区感知的上下文管理，主工作流不依赖浏览器。
 
@@ -23,8 +23,6 @@ Sesame 是一个面向终端的本地代码代理。
 - 支持鼠标滚轮和 `PgUp` / `PgDn` 滚动
 - 支持通过 `~/.sesame/config.json` 配置模型与运行参数
 
-当前公开方向以终端版本为主，`web/` 前端不作为这一版的主交付内容。
-
 ## 最近完成
 
 最近这一轮已经完成的重构和补强：
@@ -35,6 +33,8 @@ Sesame 是一个面向终端的本地代码代理。
 - 增加按需 `Catalog snapshot`，当用户明确询问 skills / tools 时，模型能回答当前已加载目录内容，而不是只复述 turn-visible tools
 - 修复权限请求后的交互链路，权限中断不再表现成“卡住不继续”
 - 修正文案和渲染，`web_fetch` 不再被误显示成 `search`
+- 修复严格 provider 下 session memory refresh 会错误压缩未闭合 tool exchange 的问题，避免中断或打满工具步数后触发 compactor transcript 校验报错
+- 修复 OpenAI-compatible 流式 function call 参数容错，遇到过早 `done`、仅 delta 补全或异常 arguments 序列时不再直接打断整轮对话
 
 ## 环境要求
 
