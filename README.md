@@ -1,5 +1,7 @@
 # Sesame
 
+[中文](./README.md) | [English](./README.en.md)
+
 Sesame 是一个以终端版本为公开主线的本地通用代理。
 
 它提供全屏 TUI、本地 daemon、持久化 session、工具调用、skill 加载和工作区感知的上下文管理，适合做终端自动化、系统巡检、定时报告和多代理协作。
