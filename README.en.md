@@ -128,6 +128,17 @@ Local fake-model smoke test:
 SESAME_MODEL_PROVIDER=fake SESAME_MODEL=fake-smoke SESAME_PERMISSION_PROFILE=trusted_local go run ./cmd/sesame
 ```
 
+## Model Validation Scope
+
+Real runtime validation has mainly been done with the following model/platform combinations:
+
+- `GLM-4.7` on Volcengine
+- `MiniMax`
+
+`MiniMax` has only received limited validation so far. MiniMax's starter plan is a pain in the ass and only provides `1` concurrent request, so I did not use it for full validation; once child-agent flows, parallel tasks, or higher-concurrency scenarios are involved, they can fail directly because of the concurrency limit.
+
+Beyond the combinations above, other models have not yet been fully tested. If you plan to switch to a different model in production, validate tool calling, concurrent tasks, scheduled jobs, and long-session behavior against your target workflow first.
+
 ## Terminal Usage
 
 Common commands:

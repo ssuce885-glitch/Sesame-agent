@@ -128,6 +128,17 @@ Anthropic 示例：
 SESAME_MODEL_PROVIDER=fake SESAME_MODEL=fake-smoke SESAME_PERMISSION_PROFILE=trusted_local go run ./cmd/sesame
 ```
 
+## 模型验证范围
+
+当前主要在以下模型/平台组合上做过实际调用验证：
+
+- 火山引擎上的 `GLM-4.7`
+- `MiniMax`
+
+其中，`MiniMax` 目前只做了有限验证。`MiniMax` 初始套餐太TM坑了，只提供 `1` 路并发，因此没有用 `MiniMax` 做完整测试；一旦涉及子代理、并行任务或更高并发场景，就很容易因为并发额度限制而直接报错。
+
+除上述组合外，其他模型目前尚未做完整测试；如果你准备在生产环境中切换到其他模型，建议先按你的目标工作流自行验证工具调用、并发任务、定时任务和长会话场景。
+
 ## 终端使用
 
 常用命令：
