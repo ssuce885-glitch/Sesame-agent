@@ -97,9 +97,14 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 
 	functionCalls := make(map[string]functionCallMeta)
 	functionCallArgumentDeltas := make(map[string]string)
+	functionCallArgumentDone := make(map[string]string)
+	functionCallOrder := make([]string, 0, 4)
 	rememberFunctionCall := func(itemID, callID, name string) {
 		if itemID == "" {
 			return
+		}
+		if _, ok := functionCalls[itemID]; !ok {
+			functionCallOrder = append(functionCallOrder, itemID)
 		}
 		meta := functionCalls[itemID]
 		if callID != "" {
@@ -120,6 +125,38 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			name = meta.Name
 		}
 		return callID, name
+	}
+	finalizeFunctionCall := func(itemID, name string) error {
+		if strings.TrimSpace(itemID) == "" {
+			return nil
+		}
+		callID, resolvedName := resolveFunctionCall(itemID, name)
+		input, err := parseFunctionCallArguments(functionCallArgumentDone[itemID], functionCallArgumentDeltas[itemID])
+		if err != nil {
+			return err
+		}
+		delete(functionCalls, itemID)
+		delete(functionCallArgumentDeltas, itemID)
+		delete(functionCallArgumentDone, itemID)
+		return sendStreamEvent(ctx, events, StreamEvent{
+			Kind: StreamEventToolCallEnd,
+			ToolCall: ToolCallChunk{
+				ID:    callID,
+				Name:  resolvedName,
+				Input: input,
+			},
+		})
+	}
+	finalizeOutstandingFunctionCalls := func() error {
+		for _, itemID := range functionCallOrder {
+			if _, ok := functionCalls[itemID]; !ok {
+				continue
+			}
+			if err := finalizeFunctionCall(itemID, ""); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	body := p.buildRequestBody(req)
@@ -196,6 +233,7 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			if err := json.Unmarshal([]byte(frame.Data), &payload); err != nil {
 				return err
 			}
+			rememberFunctionCall(payload.ItemID, "", payload.Name)
 			callID, name := resolveFunctionCall(payload.ItemID, payload.Name)
 			if payload.ItemID != "" && payload.Delta != "" {
 				functionCallArgumentDeltas[payload.ItemID] += payload.Delta
@@ -210,6 +248,13 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			}); err != nil {
 				return err
 			}
+			if payload.ItemID != "" {
+				if _, hasDone := functionCallArgumentDone[payload.ItemID]; hasDone {
+					if err := finalizeFunctionCall(payload.ItemID, payload.Name); err == nil {
+						continue
+					}
+				}
+			}
 		case "response.function_call_arguments.done":
 			var payload struct {
 				ItemID    string `json:"item_id"`
@@ -219,24 +264,15 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			if err := json.Unmarshal([]byte(frame.Data), &payload); err != nil {
 				return err
 			}
-			callID, name := resolveFunctionCall(payload.ItemID, payload.Name)
-			input, err := parseFunctionCallArguments(payload.Arguments, functionCallArgumentDeltas[payload.ItemID])
-			delete(functionCalls, payload.ItemID)
-			delete(functionCallArgumentDeltas, payload.ItemID)
-			if err != nil {
-				return err
-			}
-			if err := sendStreamEvent(ctx, events, StreamEvent{
-				Kind: StreamEventToolCallEnd,
-				ToolCall: ToolCallChunk{
-					ID:    callID,
-					Name:  name,
-					Input: input,
-				},
-			}); err != nil {
-				return err
+			rememberFunctionCall(payload.ItemID, "", payload.Name)
+			functionCallArgumentDone[payload.ItemID] = payload.Arguments
+			if err := finalizeFunctionCall(payload.ItemID, payload.Name); err != nil {
+				continue
 			}
 		case "response.completed":
+			if err := finalizeOutstandingFunctionCalls(); err != nil {
+				return err
+			}
 			sawMessageEnd = true
 			if p.cacheProfile == CapabilityProfileArkResponses && emitResponseMetadata {
 				var payload struct {
