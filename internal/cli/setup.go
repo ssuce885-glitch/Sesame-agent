@@ -62,7 +62,7 @@ func ensureRuntimeConfigured(stdin io.Reader, stdout io.Writer, cfg config.Confi
 		if err != nil {
 			return err
 		}
-		apiKey, err := promptRequired(reader, stdout, "OpenAI-compatible API key", firstNonEmptyLocal(fileCfg.OpenAI.APIKey, cfg.OpenAIAPIKey))
+		apiKey, err := promptSecretRequired(reader, stdout, "OpenAI-compatible API key", firstNonEmptyLocal(fileCfg.OpenAI.APIKey, cfg.OpenAIAPIKey))
 		if err != nil {
 			return err
 		}
@@ -74,7 +74,7 @@ func ensureRuntimeConfigured(stdin io.Reader, stdout io.Writer, cfg config.Confi
 		if err != nil {
 			return err
 		}
-		apiKey, err := promptRequired(reader, stdout, "Anthropic API key", firstNonEmptyLocal(fileCfg.Anthropic.APIKey, cfg.AnthropicAPIKey))
+		apiKey, err := promptSecretRequired(reader, stdout, "Anthropic API key", firstNonEmptyLocal(fileCfg.Anthropic.APIKey, cfg.AnthropicAPIKey))
 		if err != nil {
 			return err
 		}
@@ -100,9 +100,21 @@ func ensureRuntimeConfigured(stdin io.Reader, stdout io.Writer, cfg config.Confi
 }
 
 func promptRequired(reader *bufio.Reader, stdout io.Writer, label, defaultValue string) (string, error) {
+	return promptValue(reader, stdout, label, defaultValue, defaultValue)
+}
+
+func promptSecretRequired(reader *bufio.Reader, stdout io.Writer, label, defaultValue string) (string, error) {
+	display := ""
+	if strings.TrimSpace(defaultValue) != "" {
+		display = "your-key"
+	}
+	return promptValue(reader, stdout, label, display, defaultValue)
+}
+
+func promptValue(reader *bufio.Reader, stdout io.Writer, label, displayValue, actualDefault string) (string, error) {
 	for {
-		if strings.TrimSpace(defaultValue) != "" {
-			fmt.Fprintf(stdout, "%s [%s]: ", label, defaultValue)
+		if strings.TrimSpace(displayValue) != "" {
+			fmt.Fprintf(stdout, "%s [%s]: ", label, displayValue)
 		} else {
 			fmt.Fprintf(stdout, "%s: ", label)
 		}
@@ -112,7 +124,7 @@ func promptRequired(reader *bufio.Reader, stdout io.Writer, label, defaultValue 
 		}
 		value := strings.TrimSpace(line)
 		if value == "" {
-			value = strings.TrimSpace(defaultValue)
+			value = strings.TrimSpace(actualDefault)
 		}
 		if value != "" {
 			return value, nil
