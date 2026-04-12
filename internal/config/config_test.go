@@ -131,6 +131,9 @@ func TestResolveCLIStartupConfigUsesSesameEnvAndDefaults(t *testing.T) {
 	if cfg.PermissionProfile != "read_only" {
 		t.Fatalf("PermissionProfile = %q, want read_only", cfg.PermissionProfile)
 	}
+	if cfg.MaxToolSteps != 100 {
+		t.Fatalf("MaxToolSteps = %d, want 100", cfg.MaxToolSteps)
+	}
 	if cfg.MaxRecentItems != 12 {
 		t.Fatalf("MaxRecentItems = %d, want 12", cfg.MaxRecentItems)
 	}

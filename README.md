@@ -1,12 +1,12 @@
 # Sesame
 
-Sesame 是一个以终端版本为公开主线的本地代码代理。
+Sesame 是一个以终端版本为公开主线的本地通用代理。
 
-它提供全屏 TUI、本地 daemon、持久化 session、工具调用、skill 加载和工作区感知的上下文管理，主工作流不依赖浏览器。
+它提供全屏 TUI、本地 daemon、持久化 session、工具调用、skill 加载和工作区感知的上下文管理，适合做终端自动化、系统巡检、定时报告和多代理协作。
 
 ## 当前状态
 
-当前仓库已经可以用于日常本地开发工作流：
+当前仓库已经可以用于日常终端自动化工作流：
 
 - 终端 TUI 可直接对话
 - 自动拉起或连接本地 daemon
@@ -78,7 +78,7 @@ OpenAI 兼容接口示例：
     "base_url": "https://your-provider.example.com/v1",
     "model": "glm-4-7-251222"
   },
-  "max_tool_steps": 8,
+  "max_tool_steps": 100,
   "max_recent_items": 12,
   "compaction_threshold": 32,
   "max_estimated_tokens": 16000,
