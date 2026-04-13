@@ -27,3 +27,8 @@ Treat this turn as automation compilation or automation management, not as a one
 - Do not substitute `schedule_report`, `task_create`, or direct background shells for automation creation.
 - If the automation should start immediately, the draft must already contain a runnable watcher signal and any referenced script assets.
 - Child agents are one-shot responders after a trigger or incident, not long-lived workers.
+- Persist `response_plan` in the versioned `schema_version = "sesame.response_plan/v2"` shape.
+- Structure `assumptions` as `{field,value,reason}` objects rather than free-form strings.
+- Manual testing must emit a synthetic trigger through the normal ingest path; never propose or rely on `automation run`.
+- Approval-capable child-agent templates require `runtime_policy.approval_binding.workspace_binding` and `owner_key`.
+- Final results return through notice plus mailbox/reporting; next-turn injection is opt-in and should stay summary-only.

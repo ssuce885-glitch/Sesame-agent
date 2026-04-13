@@ -124,6 +124,7 @@ func (d *Dispatcher) dispatchIncident(ctx context.Context, incident types.Automa
 	}
 
 	now := d.currentTime()
+	approvalQueueKey, preferredSessionID := approvalBindingRouting(spec.RuntimePolicy)
 	attempt := types.DispatchAttempt{
 		DispatchID:          types.NewID("dispatch"),
 		IncidentID:          incident.ID,
@@ -135,6 +136,8 @@ func (d *Dispatcher) dispatchIncident(ctx context.Context, incident types.Automa
 		ChildAgentID:        template.AgentID,
 		ActivatedSkillNames: append([]string(nil), template.ActivatedSkillNames...),
 		OutputContractRef:   template.OutputContractRef,
+		ApprovalQueueKey:    approvalQueueKey,
+		PreferredSessionID:  preferredSessionID,
 		StartedAt:           now,
 		CreatedAt:           now,
 		UpdatedAt:           now,
@@ -265,14 +268,27 @@ func hasActiveDispatchAttempt(attempts []types.DispatchAttempt, phase types.Auto
 }
 
 func approvalBindingResolvable(raw json.RawMessage) bool {
+	cfg := approvalBindingConfig(raw)
+	return strings.TrimSpace(cfg.WorkspaceBinding) != "" && strings.TrimSpace(cfg.OwnerKey) != ""
+}
+
+func approvalBindingRouting(raw json.RawMessage) (string, string) {
+	cfg := approvalBindingConfig(raw)
+	return strings.TrimSpace(cfg.WorkspaceBinding), strings.TrimSpace(cfg.PreferredSessionID)
+}
+
+type approvalBinding struct {
+	WorkspaceBinding   string `json:"workspace_binding"`
+	OwnerKey           string `json:"owner_key"`
+	PreferredSessionID string `json:"preferred_session_id"`
+}
+
+func approvalBindingConfig(raw json.RawMessage) approvalBinding {
 	cfg := struct {
-		ApprovalBinding struct {
-			WorkspaceBinding string `json:"workspace_binding"`
-			OwnerKey         string `json:"owner_key"`
-		} `json:"approval_binding"`
+		ApprovalBinding approvalBinding `json:"approval_binding"`
 	}{}
 	_ = json.Unmarshal(raw, &cfg)
-	return strings.TrimSpace(cfg.ApprovalBinding.WorkspaceBinding) != "" && strings.TrimSpace(cfg.ApprovalBinding.OwnerKey) != ""
+	return cfg.ApprovalBinding
 }
 
 func nextIncidentStatusForDispatch(_ types.AutomationPhasePlan, current types.AutomationIncidentStatus) types.AutomationIncidentStatus {

@@ -27,6 +27,10 @@ type PermissionDecisionResponse struct {
 	Resumed bool              `json:"resumed"`
 }
 
+type ListPendingAutomationPermissionsResponse struct {
+	Pending []PendingAutomationPermission `json:"pending"`
+}
+
 type SessionListItem struct {
 	ID            string       `json:"id"`
 	Title         string       `json:"title,omitempty"`

@@ -687,6 +687,34 @@ func getDispatchAttemptWithQueryer(ctx context.Context, queryer queryContexter, 
 	return items[0], true, nil
 }
 
+func (s *Store) FindDispatchAttemptByBackgroundRun(ctx context.Context, sessionID, turnID string) (types.DispatchAttempt, bool, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	turnID = strings.TrimSpace(turnID)
+	if sessionID == "" || turnID == "" {
+		return types.DispatchAttempt{}, false, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		select payload, created_at, updated_at
+		from automation_dispatch_attempts
+		where background_session_id = ? and background_turn_id = ?
+		order by updated_at desc, created_at desc, dispatch_id asc
+		limit 1
+	`, sessionID, turnID)
+	if err != nil {
+		return types.DispatchAttempt{}, false, err
+	}
+	defer rows.Close()
+
+	items, err := scanDispatchAttempts(rows)
+	if err != nil {
+		return types.DispatchAttempt{}, false, err
+	}
+	if len(items) == 0 {
+		return types.DispatchAttempt{}, false, nil
+	}
+	return items[0], true, nil
+}
+
 func (s *Store) ListDispatchAttempts(ctx context.Context, filter types.DispatchAttemptFilter) ([]types.DispatchAttempt, error) {
 	return listDispatchAttemptsWithQueryer(ctx, s.db, filter)
 }
@@ -856,6 +884,48 @@ func listDeliveryRecordsWithQueryer(ctx context.Context, queryer queryContexter,
 	}
 	defer rows.Close()
 	return scanDeliveryRecords(rows)
+}
+
+func (s *Store) ListPendingAutomationPermissions(ctx context.Context, workspaceRoot string) ([]types.PendingAutomationPermission, error) {
+	attempts, err := s.ListDispatchAttempts(ctx, types.DispatchAttemptFilter{
+		WorkspaceRoot: strings.TrimSpace(workspaceRoot),
+		Status:        types.DispatchAttemptStatusAwaitingApproval,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]types.PendingAutomationPermission, 0)
+	for _, attempt := range attempts {
+		requestID := strings.TrimSpace(attempt.PermissionRequestID)
+		if requestID == "" {
+			continue
+		}
+		request, ok, err := s.GetPermissionRequest(ctx, requestID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || request.Status != types.PermissionRequestStatusRequested {
+			continue
+		}
+		continuation, ok, err := s.GetTurnContinuationByPermissionRequest(ctx, requestID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || continuation.State != types.TurnContinuationStatePending {
+			continue
+		}
+		out = append(out, types.PendingAutomationPermission{
+			RequestID:           requestID,
+			WorkspaceRoot:       attempt.WorkspaceRoot,
+			AutomationID:        attempt.AutomationID,
+			IncidentID:          attempt.IncidentID,
+			DispatchID:          attempt.DispatchID,
+			BackgroundSessionID: attempt.BackgroundSessionID,
+			BackgroundTurnID:    attempt.BackgroundTurnID,
+			PreferredSessionID:  attempt.PreferredSessionID,
+		})
+	}
+	return out, nil
 }
 
 func scanAutomationSpecs(rows *sql.Rows) ([]types.AutomationSpec, error) {

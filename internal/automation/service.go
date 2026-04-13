@@ -10,13 +10,14 @@ import (
 )
 
 var (
-	errServiceNotConfigured = errors.New("automation service is not configured")
-	errMissingDispatchPlan  = &types.AutomationValidationError{Code: "missing_dispatch_plan", Message: "response_plan and delivery_policy are required"}
-	errMissingRuntimePolicy = &types.AutomationValidationError{Code: "missing_runtime_policy", Message: "runtime_policy is required"}
-	errMissingAutomationID  = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "automation_id is required"}
-	errMissingConfirmation  = &types.AutomationValidationError{Code: "missing_confirmation", Message: "automation_apply requires confirmed=true after user review"}
-	errAutomationNotFound   = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "automation not found"}
-	errInvalidControlAction = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "action must be pause or resume"}
+	errServiceNotConfigured         = errors.New("automation service is not configured")
+	errMissingDispatchPlan          = &types.AutomationValidationError{Code: "missing_dispatch_plan", Message: "response_plan and delivery_policy are required"}
+	errMissingRuntimePolicy         = &types.AutomationValidationError{Code: "missing_runtime_policy", Message: "runtime_policy is required"}
+	errMissingAutomationID          = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "automation_id is required"}
+	errMissingConfirmation          = &types.AutomationValidationError{Code: "missing_confirmation", Message: "automation_apply requires confirmed=true after user review"}
+	errAutomationNotFound           = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "automation not found"}
+	errInvalidControlAction         = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "action must be pause or resume"}
+	errInvalidIncidentControlAction = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "action must be ack, close, reopen, or escalate"}
 )
 
 type Store interface {
@@ -193,6 +194,43 @@ func (s *Service) Delete(ctx context.Context, id string) (bool, error) {
 		}
 	}
 	return s.store.DeleteAutomation(ctx, id)
+}
+
+func (s *Service) ControlIncident(ctx context.Context, id string, action types.IncidentControlAction) (types.AutomationIncident, bool, error) {
+	if s == nil || s.store == nil {
+		return types.AutomationIncident{}, false, errServiceNotConfigured
+	}
+
+	action = normalizeIncidentControlAction(action)
+	switch action {
+	case types.IncidentControlActionAck, types.IncidentControlActionClose, types.IncidentControlActionReopen, types.IncidentControlActionEscalate:
+	default:
+		return types.AutomationIncident{}, false, errInvalidIncidentControlAction
+	}
+
+	incident, ok, err := s.store.GetAutomationIncident(ctx, strings.TrimSpace(id))
+	if err != nil || !ok {
+		return types.AutomationIncident{}, ok, err
+	}
+
+	switch action {
+	case types.IncidentControlActionAck:
+		switch incident.Status {
+		case types.AutomationIncidentStatusOpen, types.AutomationIncidentStatusSuppressed:
+			incident.Status = types.AutomationIncidentStatusQueued
+		}
+	case types.IncidentControlActionClose:
+		incident.Status = types.AutomationIncidentStatusClosed
+	case types.IncidentControlActionReopen:
+		incident.Status = types.AutomationIncidentStatusOpen
+	case types.IncidentControlActionEscalate:
+		incident.Status = types.AutomationIncidentStatusEscalated
+	}
+	incident.UpdatedAt = s.currentTime()
+	if err := s.store.UpsertAutomationIncident(ctx, incident); err != nil {
+		return types.AutomationIncident{}, false, err
+	}
+	return incident, true, nil
 }
 
 func (s *Service) EmitTrigger(ctx context.Context, req types.AutomationTriggerRequest) (types.AutomationIncident, error) {

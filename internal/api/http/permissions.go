@@ -17,6 +17,8 @@ type permissionStore interface {
 	GetTurn(context.Context, string) (types.Turn, bool, error)
 	GetSession(context.Context, string) (types.Session, bool, error)
 	GetToolRun(context.Context, string) (types.ToolRun, bool, error)
+	ListDispatchAttempts(context.Context, types.DispatchAttemptFilter) ([]types.DispatchAttempt, error)
+	ListPendingAutomationPermissions(context.Context, string) ([]types.PendingAutomationPermission, error)
 	UpsertPermissionRequest(context.Context, types.PermissionRequest) error
 	UpsertTurnContinuation(context.Context, types.TurnContinuation) error
 	UpsertToolRun(context.Context, types.ToolRun) error
@@ -30,6 +32,24 @@ type eventPublisher interface {
 }
 
 func registerPermissionRoutes(mux *http.ServeMux, deps Dependencies) {
+	mux.HandleFunc("/v1/permissions/pending", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/permissions/pending" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handleListPendingPermissions(deps)(w, r)
+	})
+	mux.HandleFunc("/v1/permissions/pending/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handleGetPendingPermission(deps)(w, r)
+	})
 	mux.HandleFunc("/v1/permissions/decide", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -37,6 +57,106 @@ func registerPermissionRoutes(mux *http.ServeMux, deps Dependencies) {
 		}
 		handlePermissionDecision(deps)(w, r)
 	})
+}
+
+func handleListPendingPermissions(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		store, ok := deps.Store.(permissionStore)
+		if !ok {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		workspaceRoot := strings.TrimSpace(deps.WorkspaceRoot)
+		if workspaceRoot == "" {
+			workspaceRoot = strings.TrimSpace(r.URL.Query().Get("workspace_root"))
+		}
+		if workspaceRoot == "" {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		items, err := store.ListPendingAutomationPermissions(r.Context(), workspaceRoot)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(types.ListPendingAutomationPermissionsResponse{
+			Pending: items,
+		})
+	}
+}
+
+func handleGetPendingPermission(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		store, ok := deps.Store.(permissionStore)
+		if !ok {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		requestID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/permissions/pending/"))
+		if requestID == "" || strings.Contains(requestID, "/") {
+			http.NotFound(w, r)
+			return
+		}
+
+		item, ok, err := findPendingAutomationPermission(r.Context(), store, requestID)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(item)
+	}
+}
+
+func findPendingAutomationPermission(ctx context.Context, store permissionStore, requestID string) (types.PendingAutomationPermission, bool, error) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return types.PendingAutomationPermission{}, false, nil
+	}
+	request, found, err := store.GetPermissionRequest(ctx, requestID)
+	if err != nil {
+		return types.PendingAutomationPermission{}, false, err
+	}
+	if !found || request.Status != types.PermissionRequestStatusRequested {
+		return types.PendingAutomationPermission{}, false, nil
+	}
+	continuation, found, err := store.GetTurnContinuationByPermissionRequest(ctx, requestID)
+	if err != nil {
+		return types.PendingAutomationPermission{}, false, err
+	}
+	if !found || continuation.State != types.TurnContinuationStatePending {
+		return types.PendingAutomationPermission{}, false, nil
+	}
+	attempts, err := store.ListDispatchAttempts(ctx, types.DispatchAttemptFilter{
+		Status: types.DispatchAttemptStatusAwaitingApproval,
+	})
+	if err != nil {
+		return types.PendingAutomationPermission{}, false, err
+	}
+	for _, attempt := range attempts {
+		if strings.TrimSpace(attempt.PermissionRequestID) != requestID {
+			continue
+		}
+		return types.PendingAutomationPermission{
+			RequestID:           requestID,
+			WorkspaceRoot:       attempt.WorkspaceRoot,
+			AutomationID:        attempt.AutomationID,
+			IncidentID:          attempt.IncidentID,
+			DispatchID:          attempt.DispatchID,
+			BackgroundSessionID: attempt.BackgroundSessionID,
+			BackgroundTurnID:    attempt.BackgroundTurnID,
+			PreferredSessionID:  attempt.PreferredSessionID,
+		}, true, nil
+	}
+	return types.PendingAutomationPermission{}, false, nil
 }
 
 func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
@@ -257,12 +377,12 @@ func appendRuntimeTimelineEvent(ctx context.Context, deps Dependencies, sessionI
 
 func marshalPermissionToolRunOutput(request types.PermissionRequest, effectiveProfile string) string {
 	payload, _ := json.Marshal(map[string]any{
-		"status":                    request.Status,
-		"decision":                  request.Decision,
-		"decision_scope":            request.DecisionScope,
-		"requested_profile":         request.RequestedProfile,
+		"status":                       request.Status,
+		"decision":                     request.Decision,
+		"decision_scope":               request.DecisionScope,
+		"requested_profile":            request.RequestedProfile,
 		"effective_permission_profile": effectiveProfile,
-		"reason":                    request.Reason,
+		"reason":                       request.Reason,
 	})
 	return string(payload)
 }

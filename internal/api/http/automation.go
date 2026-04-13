@@ -91,16 +91,36 @@ func registerAutomationRoutes(mux *http.ServeMux, deps Dependencies) {
 	})
 
 	mux.HandleFunc("/v1/incidents/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		rest := strings.TrimPrefix(r.URL.Path, "/v1/incidents/")
+		parts := strings.Split(rest, "/")
+		if len(parts) == 1 && parts[0] != "" {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			handleGetIncident(deps, parts[0])(w, r)
 			return
 		}
-		id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/incidents/"))
-		if id == "" || strings.Contains(id, "/") {
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			http.NotFound(w, r)
 			return
 		}
-		handleGetIncident(deps, id)(w, r)
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		switch parts[1] {
+		case "ack":
+			handleIncidentControl(deps, parts[0], types.IncidentControlActionAck)(w, r)
+		case "close":
+			handleIncidentControl(deps, parts[0], types.IncidentControlActionClose)(w, r)
+		case "reopen":
+			handleIncidentControl(deps, parts[0], types.IncidentControlActionReopen)(w, r)
+		case "escalate":
+			handleIncidentControl(deps, parts[0], types.IncidentControlActionEscalate)(w, r)
+		default:
+			http.NotFound(w, r)
+		}
 	})
 }
 
@@ -363,6 +383,25 @@ func handleGetIncident(deps Dependencies, id string) http.HandlerFunc {
 			return
 		}
 		incident, ok, err := deps.Automation.GetIncident(r.Context(), strings.TrimSpace(id))
+		if err != nil {
+			writeAutomationError(w, err)
+			return
+		}
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, incident)
+	}
+}
+
+func handleIncidentControl(deps Dependencies, id string, action types.IncidentControlAction) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if deps.Automation == nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		incident, ok, err := deps.Automation.ControlIncident(r.Context(), strings.TrimSpace(id), action)
 		if err != nil {
 			writeAutomationError(w, err)
 			return

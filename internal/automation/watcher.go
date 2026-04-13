@@ -409,10 +409,10 @@ func renderWatcherScript(automationID, watcherID, statePath, dataDir, addr, exec
 	}
 	lines = append(lines,
 		"exec "+shellQuote(executablePath)+
-			" automation run"+
+			" trigger watch"+
+			" --automation "+shellQuote(automationID)+
 			" --watcher-id "+shellQuote(watcherID)+
-			" --state-file "+shellQuote(statePath)+
-			" "+shellQuote(automationID),
+			" --state-file "+shellQuote(statePath),
 	)
 	return strings.Join(lines, "\n") + "\n"
 }

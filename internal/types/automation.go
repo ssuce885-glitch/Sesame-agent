@@ -8,6 +8,7 @@ import (
 
 type AutomationState string
 type AutomationControlAction string
+type IncidentControlAction string
 type AutomationIncidentStatus string
 type AutomationWatcherState string
 type AutomationPhaseName string
@@ -31,6 +32,13 @@ const (
 const (
 	AutomationControlPause  AutomationControlAction = AutomationControlActionPause
 	AutomationControlResume AutomationControlAction = AutomationControlActionResume
+)
+
+const (
+	IncidentControlActionAck      IncidentControlAction = "ack"
+	IncidentControlActionClose    IncidentControlAction = "close"
+	IncidentControlActionReopen   IncidentControlAction = "reopen"
+	IncidentControlActionEscalate IncidentControlAction = "escalate"
 )
 
 const (
@@ -347,6 +355,17 @@ type DeliveryRecordFilter struct {
 	IncidentID    string `json:"incident_id,omitempty"`
 	DispatchID    string `json:"dispatch_id,omitempty"`
 	Limit         int    `json:"limit,omitempty"`
+}
+
+type PendingAutomationPermission struct {
+	RequestID           string `json:"request_id"`
+	WorkspaceRoot       string `json:"workspace_root"`
+	AutomationID        string `json:"automation_id"`
+	IncidentID          string `json:"incident_id"`
+	DispatchID          string `json:"dispatch_id"`
+	BackgroundSessionID string `json:"background_session_id"`
+	BackgroundTurnID    string `json:"background_turn_id"`
+	PreferredSessionID  string `json:"preferred_session_id,omitempty"`
 }
 
 type IncidentListFilter = AutomationIncidentFilter

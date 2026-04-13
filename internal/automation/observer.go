@@ -13,15 +13,25 @@ type dispatchAttemptObserverStore interface {
 	UpsertDispatchAttempt(context.Context, types.DispatchAttempt) error
 }
 
+type dispatchResultDelivery interface {
+	DeliverDispatchResult(context.Context, types.DispatchAttempt, types.ChildAgentResult) (types.DeliveryRecord, error)
+}
+
 type DispatchTaskObserver struct {
 	store      dispatchAttemptObserverStore
+	delivery   dispatchResultDelivery
 	dispatchID string
 	now        func() time.Time
 }
 
 func NewDispatchTaskObserver(store dispatchAttemptObserverStore, dispatchID string, now func() time.Time) *DispatchTaskObserver {
+	return NewDispatchTaskObserverWithDelivery(store, nil, dispatchID, now)
+}
+
+func NewDispatchTaskObserverWithDelivery(store dispatchAttemptObserverStore, delivery dispatchResultDelivery, dispatchID string, now func() time.Time) *DispatchTaskObserver {
 	return &DispatchTaskObserver{
 		store:      store,
+		delivery:   delivery,
 		dispatchID: strings.TrimSpace(dispatchID),
 		now:        firstNonNilClock(now),
 	}
@@ -31,7 +41,7 @@ func (o *DispatchTaskObserver) AppendLog(_ []byte) error {
 	return nil
 }
 
-func (o *DispatchTaskObserver) SetFinalText(_ string) error {
+func (o *DispatchTaskObserver) SetFinalText(text string) error {
 	if o == nil || o.store == nil || strings.TrimSpace(o.dispatchID) == "" {
 		return nil
 	}
@@ -43,7 +53,31 @@ func (o *DispatchTaskObserver) SetFinalText(_ string) error {
 	attempt.Status = types.DispatchAttemptStatusCompleted
 	attempt.FinishedAt = now
 	attempt.UpdatedAt = now
-	return o.store.UpsertDispatchAttempt(context.Background(), attempt)
+	if err := o.store.UpsertDispatchAttempt(context.Background(), attempt); err != nil {
+		return err
+	}
+	if o.delivery == nil || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	_, err = o.delivery.DeliverDispatchResult(context.Background(), attempt, types.ChildAgentResult{
+		AgentID:    strings.TrimSpace(attempt.ChildAgentID),
+		ContractID: strings.TrimSpace(attempt.OutputContractRef),
+		Envelope: types.ReportEnvelope{
+			Source:  string(types.ReportMailboxSourceChildAgentResult),
+			Status:  "completed",
+			Title:   firstNonEmptyObserverString(attempt.ChildAgentID, "Automation dispatch result"),
+			Summary: summarizeObserverText(text),
+			Sections: []types.ReportSectionContent{{
+				ID:    "report_body",
+				Title: "Result",
+				Text:  strings.TrimSpace(text),
+			}},
+		},
+		ObservedAt: now,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	})
+	return err
 }
 
 func (o *DispatchTaskObserver) SetRunContext(sessionID, turnID string) error {
@@ -70,4 +104,21 @@ func (o *DispatchTaskObserver) currentTime() time.Time {
 		return o.now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func firstNonEmptyObserverString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func summarizeObserverText(text string) string {
+	text = strings.TrimSpace(text)
+	if len(text) <= 160 {
+		return text
+	}
+	return strings.TrimSpace(text[:157]) + "..."
 }

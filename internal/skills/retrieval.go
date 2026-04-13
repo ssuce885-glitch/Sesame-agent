@@ -296,8 +296,8 @@ func inferSkillTraits(skill SkillSpec) skillTraits {
 	return skillTraits{
 		BrowserAutomation: hasCapabilityTag(skill, "browser_automation") || hasBrowserAutomationSignal(text),
 		EmailDelivery: containsAny(text, []string{
-			"send-email", "email", "mail", "smtp", "邮件", "邮箱",
-		}),
+			"send-email", "email", "smtp", "邮件", "邮箱",
+		}) || containsEnglishToken(text, "mail"),
 		SystemInspect: containsAny(text, []string{
 			"system", "environment", "version", "binary", "process", "wsl", "which ", "系统", "环境", "版本", "路径",
 		}),
@@ -359,6 +359,21 @@ func skillSearchText(skill SkillSpec) string {
 func containsAny(text string, needles []string) bool {
 	for _, needle := range needles {
 		if needle != "" && strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEnglishToken(text, token string) bool {
+	token = strings.ToLower(strings.TrimSpace(token))
+	if token == "" {
+		return false
+	}
+	for _, field := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	}) {
+		if field == token {
 			return true
 		}
 	}

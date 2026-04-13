@@ -13,6 +13,8 @@ type automationApplyTool struct{}
 type automationGetTool struct{}
 type automationListTool struct{}
 type automationControlTool struct{}
+type incidentAckTool struct{}
+type incidentControlTool struct{}
 type incidentGetTool struct{}
 type incidentListTool struct{}
 
@@ -35,6 +37,15 @@ type AutomationListInput struct {
 type AutomationControlInput struct {
 	AutomationID string                        `json:"automation_id"`
 	Action       types.AutomationControlAction `json:"action"`
+}
+
+type IncidentAckInput struct {
+	IncidentID string `json:"incident_id"`
+}
+
+type IncidentControlInput struct {
+	IncidentID string                      `json:"incident_id"`
+	Action     types.IncidentControlAction `json:"action"`
 }
 
 type IncidentGetInput struct {
@@ -61,6 +72,14 @@ func (automationListTool) IsEnabled(execCtx ExecContext) bool {
 }
 
 func (automationControlTool) IsEnabled(execCtx ExecContext) bool {
+	return execCtx.AutomationService != nil
+}
+
+func (incidentAckTool) IsEnabled(execCtx ExecContext) bool {
+	return execCtx.AutomationService != nil
+}
+
+func (incidentControlTool) IsEnabled(execCtx ExecContext) bool {
 	return execCtx.AutomationService != nil
 }
 
@@ -152,6 +171,39 @@ func (automationControlTool) Definition() Definition {
 	}
 }
 
+func (incidentAckTool) Definition() Definition {
+	return Definition{
+		Name:        "incident_ack",
+		Description: "Acknowledge an automation incident by id.",
+		InputSchema: objectSchema(map[string]any{
+			"incident_id": map[string]any{
+				"type":        "string",
+				"description": "Incident identifier.",
+			},
+		}, "incident_id"),
+		OutputSchema: automationIncidentOutputSchema(),
+	}
+}
+
+func (incidentControlTool) Definition() Definition {
+	return Definition{
+		Name:        "incident_control",
+		Description: "Acknowledge, close, reopen, or escalate an automation incident by id.",
+		InputSchema: objectSchema(map[string]any{
+			"incident_id": map[string]any{
+				"type":        "string",
+				"description": "Incident identifier.",
+			},
+			"action": map[string]any{
+				"type":        "string",
+				"enum":        incidentControlActionEnum(),
+				"description": "Control action to apply.",
+			},
+		}, "incident_id", "action"),
+		OutputSchema: automationIncidentOutputSchema(),
+	}
+}
+
 func (incidentGetTool) Definition() Definition {
 	return Definition{
 		Name:        "incident_get",
@@ -202,6 +254,8 @@ func (automationApplyTool) IsConcurrencySafe() bool   { return false }
 func (automationGetTool) IsConcurrencySafe() bool     { return true }
 func (automationListTool) IsConcurrencySafe() bool    { return true }
 func (automationControlTool) IsConcurrencySafe() bool { return false }
+func (incidentAckTool) IsConcurrencySafe() bool       { return false }
+func (incidentControlTool) IsConcurrencySafe() bool   { return false }
 func (incidentGetTool) IsConcurrencySafe() bool       { return true }
 func (incidentListTool) IsConcurrencySafe() bool      { return true }
 
@@ -270,6 +324,28 @@ func (automationControlTool) Decode(call Call) (DecodedCall, error) {
 	return DecodedCall{Call: call, Input: input}, nil
 }
 
+func (incidentAckTool) Decode(call Call) (DecodedCall, error) {
+	input := IncidentAckInput{IncidentID: strings.TrimSpace(call.StringInput("incident_id"))}
+	if input.IncidentID == "" {
+		return DecodedCall{}, fmt.Errorf("incident_id is required")
+	}
+	return DecodedCall{Call: call, Input: input}, nil
+}
+
+func (incidentControlTool) Decode(call Call) (DecodedCall, error) {
+	input := IncidentControlInput{
+		IncidentID: strings.TrimSpace(call.StringInput("incident_id")),
+		Action:     types.IncidentControlAction(strings.TrimSpace(call.StringInput("action"))),
+	}
+	if input.IncidentID == "" {
+		return DecodedCall{}, fmt.Errorf("incident_id is required")
+	}
+	if input.Action == "" {
+		return DecodedCall{}, fmt.Errorf("action is required")
+	}
+	return DecodedCall{Call: call, Input: input}, nil
+}
+
 func (incidentGetTool) Decode(call Call) (DecodedCall, error) {
 	input := IncidentGetInput{IncidentID: strings.TrimSpace(call.StringInput("incident_id"))}
 	if input.IncidentID == "" {
@@ -320,6 +396,24 @@ func (t automationListTool) Execute(ctx context.Context, call Call, execCtx Exec
 }
 
 func (t automationControlTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
+	decoded, err := t.Decode(call)
+	if err != nil {
+		return Result{}, err
+	}
+	output, err := t.ExecuteDecoded(ctx, decoded, execCtx)
+	return output.Result, err
+}
+
+func (t incidentAckTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
+	decoded, err := t.Decode(call)
+	if err != nil {
+		return Result{}, err
+	}
+	output, err := t.ExecuteDecoded(ctx, decoded, execCtx)
+	return output.Result, err
+}
+
+func (t incidentControlTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
 	decoded, err := t.Decode(call)
 	if err != nil {
 		return Result{}, err
@@ -437,6 +531,50 @@ func (automationControlTool) ExecuteDecoded(ctx context.Context, decoded Decoded
 	}, nil
 }
 
+func (incidentAckTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
+	service, err := requireAutomationService(execCtx)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+	input, _ := decoded.Input.(IncidentAckInput)
+	incident, ok, err := service.ControlIncident(ctx, input.IncidentID, types.IncidentControlActionAck)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+	if !ok {
+		return ToolExecutionResult{}, fmt.Errorf("incident %q not found", input.IncidentID)
+	}
+	return ToolExecutionResult{
+		Result: Result{
+			Text:      mustJSON(incident),
+			ModelText: mustJSON(incident),
+		},
+		Data: incident,
+	}, nil
+}
+
+func (incidentControlTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
+	service, err := requireAutomationService(execCtx)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+	input, _ := decoded.Input.(IncidentControlInput)
+	incident, ok, err := service.ControlIncident(ctx, input.IncidentID, input.Action)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+	if !ok {
+		return ToolExecutionResult{}, fmt.Errorf("incident %q not found", input.IncidentID)
+	}
+	return ToolExecutionResult{
+		Result: Result{
+			Text:      mustJSON(incident),
+			ModelText: mustJSON(incident),
+		},
+		Data: incident,
+	}, nil
+}
+
 func (incidentGetTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
 	service, err := requireAutomationService(execCtx)
 	if err != nil {
@@ -497,6 +635,14 @@ func (automationListTool) MapModelResult(output ToolExecutionResult) ModelToolRe
 }
 
 func (automationControlTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
+	return defaultStructuredModelResult(output)
+}
+
+func (incidentAckTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
+	return defaultStructuredModelResult(output)
+}
+
+func (incidentControlTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
 	return defaultStructuredModelResult(output)
 }
 
@@ -736,8 +882,26 @@ func automationControlActionEnum() []string {
 	}
 }
 
+func incidentControlActionEnum() []string {
+	return []string{
+		string(types.IncidentControlActionAck),
+		string(types.IncidentControlActionClose),
+		string(types.IncidentControlActionReopen),
+		string(types.IncidentControlActionEscalate),
+	}
+}
+
 func automationIncidentStatusEnum() []string {
 	return []string{
 		string(types.AutomationIncidentStatusOpen),
+		string(types.AutomationIncidentStatusSuppressed),
+		string(types.AutomationIncidentStatusQueued),
+		string(types.AutomationIncidentStatusActive),
+		string(types.AutomationIncidentStatusMonitoring),
+		string(types.AutomationIncidentStatusResolved),
+		string(types.AutomationIncidentStatusEscalated),
+		string(types.AutomationIncidentStatusFailed),
+		string(types.AutomationIncidentStatusCanceled),
+		string(types.AutomationIncidentStatusClosed),
 	}
 }

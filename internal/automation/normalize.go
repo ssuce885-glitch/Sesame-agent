@@ -108,6 +108,10 @@ func normalizeControlAction(action types.AutomationControlAction) types.Automati
 	return types.AutomationControlAction(strings.ToLower(strings.TrimSpace(string(action))))
 }
 
+func normalizeIncidentControlAction(action types.IncidentControlAction) types.IncidentControlAction {
+	return types.IncidentControlAction(strings.ToLower(strings.TrimSpace(string(action))))
+}
+
 func normalizeSignals(signals []types.AutomationSignal) []types.AutomationSignal {
 	if len(signals) == 0 {
 		return []types.AutomationSignal{}

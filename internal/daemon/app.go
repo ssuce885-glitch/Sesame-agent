@@ -32,8 +32,11 @@ import (
 )
 
 type sessionRunnerAdapter struct {
-	engine *engine.Engine
-	sink   engine.EventSink
+	engine   *engine.Engine
+	sink     storeAndBusSink
+	store    *sqlite.Store
+	delivery *automation.DeliveryService
+	now      func() time.Time
 }
 
 type storeAndBusSink struct {
@@ -61,6 +64,18 @@ type taskTerminalNotifier struct {
 	bus       *stream.Bus
 	scheduler *scheduler.Service
 	reporting *reporting.Service
+}
+
+type combinedEventSink struct {
+	primary   engine.EventSink
+	finalizer engine.TurnFinalizingSink
+	observer  engine.EventSink
+}
+
+type automationDispatchManager struct {
+	store   *sqlite.Store
+	manager *session.Manager
+	now     func() time.Time
 }
 
 func (s storeAndBusSink) Emit(ctx context.Context, event types.Event) error {
@@ -105,6 +120,21 @@ func (s storeAndBusSink) FinalizeTurn(ctx context.Context, usage *types.TurnUsag
 }
 
 func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) error {
+	sink := engine.EventSink(a.sink)
+	var observerSink *taskEventSink
+	var observer task.AgentTaskObserver
+	if dispatchObserver, ok, err := a.dispatchObserverForRun(ctx, in.Session.ID, in.TurnID); err != nil {
+		return err
+	} else if ok {
+		observer = dispatchObserver
+		observerSink = &taskEventSink{observer: observer}
+		sink = combinedEventSink{
+			primary:   a.sink,
+			finalizer: a.sink,
+			observer:  observerSink,
+		}
+	}
+
 	err := a.engine.RunTurn(ctx, engine.Input{
 		Session: in.Session,
 		Turn: types.Turn{
@@ -113,9 +143,26 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 			ClientTurnID: "",
 			UserMessage:  in.Message,
 		},
-		Sink:   a.sink,
+		Sink:   sink,
 		Resume: in.Resume,
 	})
+	if observerSink != nil && observer != nil && err == nil {
+		if turn, ok, turnErr := a.store.GetTurn(ctx, in.TurnID); turnErr != nil {
+			return turnErr
+		} else if ok && turn.State != types.TurnStateAwaitingPermission {
+			if finalText := strings.TrimSpace(observerSink.FinalText()); finalText != "" {
+				if err := observer.SetFinalText(finalText); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if reconcileErr := a.reconcileDispatchRun(ctx, in.Session.ID, in.TurnID, err); reconcileErr != nil {
+		if err != nil {
+			return errors.Join(err, reconcileErr)
+		}
+		return reconcileErr
+	}
 	return err
 }
 
@@ -190,6 +237,203 @@ func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus, workspaceRo
 		bus:       bus,
 		reporting: reportingService,
 	}
+}
+
+func (s combinedEventSink) Emit(ctx context.Context, event types.Event) error {
+	if s.primary != nil {
+		if err := s.primary.Emit(ctx, event); err != nil {
+			return err
+		}
+	}
+	if s.observer != nil {
+		if err := s.observer.Emit(ctx, event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s combinedEventSink) FinalizeTurn(ctx context.Context, usage *types.TurnUsage, events []types.Event) error {
+	if s.finalizer == nil {
+		return nil
+	}
+	return s.finalizer.FinalizeTurn(ctx, usage, events)
+}
+
+func (a sessionRunnerAdapter) dispatchObserverForRun(ctx context.Context, sessionID, turnID string) (task.AgentTaskObserver, bool, error) {
+	if a.store == nil {
+		return nil, false, nil
+	}
+	attempt, ok, err := a.store.FindDispatchAttemptByBackgroundRun(ctx, sessionID, turnID)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return automation.NewDispatchTaskObserverWithDelivery(a.store, a.delivery, attempt.DispatchID, a.currentTime), true, nil
+}
+
+func (a sessionRunnerAdapter) reconcileDispatchRun(ctx context.Context, sessionID, turnID string, runErr error) error {
+	if a.store == nil {
+		return nil
+	}
+	attempt, ok, err := a.store.FindDispatchAttemptByBackgroundRun(ctx, sessionID, turnID)
+	if err != nil || !ok {
+		return err
+	}
+	now := a.currentTime()
+	if runErr != nil {
+		attempt.Status = types.DispatchAttemptStatusFailed
+		attempt.Error = strings.TrimSpace(runErr.Error())
+		attempt.FinishedAt = now
+		attempt.UpdatedAt = now
+		return a.store.UpsertDispatchAttempt(ctx, attempt)
+	}
+
+	turn, ok, err := a.store.GetTurn(ctx, turnID)
+	if err != nil || !ok {
+		return err
+	}
+	if turn.State != types.TurnStateAwaitingPermission {
+		return nil
+	}
+
+	requests, err := a.store.ListPermissionRequestsBySession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	var request types.PermissionRequest
+	foundRequest := false
+	for _, candidate := range requests {
+		if candidate.TurnID != turnID || candidate.Status != types.PermissionRequestStatusRequested {
+			continue
+		}
+		if !foundRequest || candidate.CreatedAt.After(request.CreatedAt) {
+			request = candidate
+			foundRequest = true
+		}
+	}
+	if !foundRequest {
+		return nil
+	}
+
+	continuation, ok, err := a.store.GetTurnContinuationByPermissionRequest(ctx, request.ID)
+	if err != nil || !ok {
+		return err
+	}
+	attempt.Status = types.DispatchAttemptStatusAwaitingApproval
+	attempt.PermissionRequestID = request.ID
+	attempt.ContinuationID = continuation.ID
+	attempt.BackgroundSessionID = sessionID
+	attempt.BackgroundTurnID = turnID
+	attempt.UpdatedAt = now
+	if err := a.store.UpsertDispatchAttempt(ctx, attempt); err != nil {
+		return err
+	}
+	if phases, err := a.store.ListIncidentPhaseStates(ctx, attempt.IncidentID); err == nil {
+		for _, phase := range phases {
+			if phase.Phase != attempt.Phase {
+				continue
+			}
+			phase.Status = types.IncidentPhaseStatusAwaitingApproval
+			phase.UpdatedAt = now
+			if err := a.store.UpsertIncidentPhaseState(ctx, phase); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	if incident, ok, err := a.store.GetAutomationIncident(ctx, attempt.IncidentID); err == nil && ok {
+		incident.Status = types.AutomationIncidentStatusActive
+		incident.UpdatedAt = now
+		return a.store.UpsertAutomationIncident(ctx, incident)
+	} else if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a sessionRunnerAdapter) currentTime() time.Time {
+	if a.now != nil {
+		return a.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (m automationDispatchManager) StartAutomationDispatch(ctx context.Context, attempt types.DispatchAttempt, template types.ChildAgentTemplate) error {
+	if m.store == nil || m.manager == nil {
+		return errors.New("automation dispatch manager is not configured")
+	}
+	now := m.currentTime()
+	sessionRow := types.Session{
+		ID:                firstNonEmptyTrimmed(attempt.BackgroundSessionID, types.NewID("auto_session")),
+		WorkspaceRoot:     strings.TrimSpace(attempt.WorkspaceRoot),
+		PermissionProfile: "read_only",
+		State:             types.SessionStateIdle,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if existing, ok, err := m.store.GetSession(ctx, sessionRow.ID); err != nil {
+		return err
+	} else if ok {
+		sessionRow = existing
+	} else if err := m.store.InsertSession(ctx, sessionRow); err != nil {
+		return err
+	}
+
+	turnRow := types.Turn{
+		ID:          firstNonEmptyTrimmed(attempt.BackgroundTurnID, types.NewID("auto_turn")),
+		SessionID:   sessionRow.ID,
+		State:       types.TurnStateCreated,
+		UserMessage: buildAutomationDispatchPrompt(attempt, template),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if _, ok, err := m.store.GetTurn(ctx, turnRow.ID); err != nil {
+		return err
+	} else if !ok {
+		if err := m.store.InsertTurn(ctx, turnRow); err != nil {
+			return err
+		}
+	}
+
+	attempt.BackgroundSessionID = sessionRow.ID
+	attempt.BackgroundTurnID = turnRow.ID
+	attempt.UpdatedAt = now
+	if err := m.store.UpsertDispatchAttempt(ctx, attempt); err != nil {
+		return err
+	}
+
+	m.manager.RegisterSession(sessionRow)
+	_, err := m.manager.SubmitTurn(ctx, sessionRow.ID, session.SubmitTurnInput{
+		TurnID:  turnRow.ID,
+		Message: turnRow.UserMessage,
+	})
+	return err
+}
+
+func (m automationDispatchManager) currentTime() time.Time {
+	if m.now != nil {
+		return m.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func buildAutomationDispatchPrompt(attempt types.DispatchAttempt, template types.ChildAgentTemplate) string {
+	lines := []string{
+		"Run this automation child-agent task in the background.",
+	}
+	if purpose := strings.TrimSpace(template.Purpose); purpose != "" {
+		lines = append(lines, "Goal: "+purpose)
+	}
+	if agentID := strings.TrimSpace(template.AgentID); agentID != "" {
+		lines = append(lines, "Template: "+agentID)
+	}
+	if incidentID := strings.TrimSpace(attempt.IncidentID); incidentID != "" {
+		lines = append(lines, "Incident: "+incidentID)
+	}
+	if dispatchID := strings.TrimSpace(attempt.DispatchID); dispatchID != "" {
+		lines = append(lines, "Dispatch: "+dispatchID)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, observer task.AgentTaskObserver) error {
@@ -503,6 +747,12 @@ func Run(ctx context.Context) error {
 	runner.SetRuntimeService(runtimeService)
 	runner.SetAutomationService(automationService)
 	taskNotifier := buildTaskTerminalNotifier(store, bus, cfg.Paths.WorkspaceRoot)
+	var deliveryService *automation.DeliveryService
+	if taskNotifier != nil {
+		deliveryService = automation.NewDeliveryService(store, taskNotifier.reporting, nil)
+	} else {
+		deliveryService = automation.NewDeliveryService(store, nil, nil)
+	}
 	taskManager := task.NewManager(task.Config{
 		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
 		TaskOutputMaxBytes: cfg.TaskOutputMaxBytes,
@@ -527,12 +777,18 @@ func Run(ctx context.Context) error {
 	runner.SetTaskManager(taskManager)
 	runner.SetSchedulerService(schedulerService)
 	manager := session.NewManager(sessionRunnerAdapter{
-		engine: runner,
+		engine:   runner,
+		store:    store,
+		delivery: deliveryService,
 		sink: storeAndBusSink{
 			store: store,
 			bus:   bus,
 		},
 	})
+	dispatcher := automation.NewDispatcher(store, automationDispatchManager{
+		store:   store,
+		manager: manager,
+	}, automation.DispatcherConfig{})
 	if err := recoverRuntimeState(ctx, store, manager); err != nil {
 		return err
 	}
@@ -544,6 +800,11 @@ func Run(ctx context.Context) error {
 	go func() {
 		if err := watcherService.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("watcher loop exited", "error", err)
+		}
+	}()
+	go func() {
+		if err := runAutomationDispatcherLoop(ctx, dispatcher); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("automation dispatcher loop exited", "error", err)
 		}
 	}()
 	if taskNotifier != nil && taskNotifier.reporting != nil {
@@ -618,6 +879,28 @@ func buildRuntimeWiring(cfg config.Config, modelClient model.StreamingClient) ru
 	}
 }
 
+func runAutomationDispatcherLoop(ctx context.Context, dispatcher *automation.Dispatcher) error {
+	if dispatcher == nil {
+		return nil
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	if err := dispatcher.Tick(ctx); err != nil {
+		return err
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := dispatcher.Tick(ctx); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *session.Manager) error {
 	sessions, err := store.ListSessions(ctx)
 	if err != nil {
@@ -659,6 +942,21 @@ func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *sess
 			return err
 		}
 		if _, err := store.AppendEvent(ctx, event); err != nil {
+			return err
+		}
+	}
+
+	attempts, err := store.ListDispatchAttempts(ctx, types.DispatchAttemptFilter{
+		Status: types.DispatchAttemptStatusRunning,
+	})
+	if err != nil {
+		return err
+	}
+	for _, attempt := range attempts {
+		attempt.Status = types.DispatchAttemptStatusInterrupted
+		attempt.Error = firstNonEmptyTrimmed(attempt.Error, "daemon_restart")
+		attempt.UpdatedAt = time.Now().UTC()
+		if err := store.UpsertDispatchAttempt(ctx, attempt); err != nil {
 			return err
 		}
 	}

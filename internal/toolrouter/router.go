@@ -88,6 +88,8 @@ var (
 		"automation_control",
 		"automation_get",
 		"automation_list",
+		"incident_ack",
+		"incident_control",
 		"incident_get",
 		"incident_list",
 	}
@@ -186,11 +188,12 @@ func profileFor(profile CapabilityProfile) profileSpec {
 				"This request is automation setup or automation management. Keep the turn in the automation compile-and-manage path.",
 				"Draft the script-backed automation first, then summarize assumptions, then wait for explicit user confirmation before automation_apply.",
 				"Use only the automation tools for apply, lookup, control, and incident inspection.",
+				"Manual automation testing must emit a synthetic trigger; never launch child agents, shell loops, or watcher runners directly from this profile.",
 				"Do not fall back to schedule_report, task_create, shell_command, or ad hoc long-running loops for automation creation.",
 			},
 			VisibleTools:     append([]string(nil), automationTools...),
 			HiddenTools:      normalizeToolList(append(append(append([]string(nil), readOnlyTools...), editTools...), append(append([]string(nil), taskTools...), "schedule_report", "shell_command")...)),
-			PreferredTools:   []string{"automation_apply", "automation_get", "automation_list", "automation_control", "incident_get", "incident_list"},
+			PreferredTools:   []string{"automation_apply", "automation_get", "automation_list", "automation_control", "incident_ack", "incident_control", "incident_get", "incident_list"},
 			MaxSteps:         8,
 			SkillTags:        []string{"automation_standard_behavior"},
 			ExposeSkillUse:   false,
@@ -198,6 +201,7 @@ func profileFor(profile CapabilityProfile) profileSpec {
 			ForbiddenActions: []string{
 				"Do not fake automation with background shell loops, direct task launches, or delayed reports.",
 				"Do not use non-automation tools during an automation compile turn unless the runtime changes profiles later.",
+				"Do not launch child agents, watcher runners, shell loops, or tasks directly during automation compile and manage turns.",
 			},
 			StopConditions: []string{
 				"Stop after the automation definition is drafted, normalized, applied, or the missing automation fields are clarified.",
