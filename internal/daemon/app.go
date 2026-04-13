@@ -20,7 +20,6 @@ import (
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/reporting"
-	"go-agent/internal/runtimegraph"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
 	"go-agent/internal/store/artifacts"
@@ -460,96 +459,52 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	defer store.Close()
-	runtimeService := runtimegraph.NewService(store)
-	automationService := automation.NewService(store)
 
 	_, err = artifacts.New(filepath.Join(cfg.DataDir, "artifacts"))
 	if err != nil {
 		return err
 	}
 
-	bus := stream.NewBus()
-	registry := tools.NewRegistry()
 	configureRuntimeGuardrails(cfg)
-	permissionEngine := buildPermissionEngine(cfg)
 	modelClient, err := model.NewFromConfig(cfg)
 	if err != nil {
 		return err
 	}
-	wiring := buildRuntimeWiring(cfg, modelClient)
-	runner := engine.NewWithRuntime(
-		modelClient,
-		registry,
-		permissionEngine,
-		store,
-		contextstate.NewManager(wiring.contextManagerConfig),
-		wiring.runtime,
-		wiring.compactor,
-		engine.RuntimeMetadata{
-			Provider: cfg.ModelProvider,
-			Model:    cfg.Model,
-		},
-		buildMaxToolSteps(cfg),
-	)
-	runner.SetBaseSystemPrompt(basePrompt)
-	runner.SetGlobalConfigRoot(cfg.Paths.GlobalRoot)
-	runner.SetSessionMemoryAsync(true)
-	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
-	runner.SetRuntimeService(runtimeService)
-	runner.SetAutomationService(automationService)
-	taskNotifier := buildTaskTerminalNotifier(store, bus, cfg.Paths.WorkspaceRoot)
-	taskManager := task.NewManager(task.Config{
-		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
-		TaskOutputMaxBytes: cfg.TaskOutputMaxBytes,
-		TerminalNotifier:   taskNotifier,
-	}, nil, buildAgentTaskExecutor(runner))
-	executablePath, _ := os.Executable()
-	watcherService := automation.NewWatcherService(store, taskManager, automation.WatcherConfig{
-		DataRoot:       filepath.Join(cfg.DataDir, "automation"),
-		ExecutablePath: executablePath,
-		DataDir:        cfg.DataDir,
-		Addr:           cfg.Addr,
-	})
-	automationService.SetWatcherService(watcherService)
-	schedulerService := scheduler.NewService(store, taskManager)
-	if taskNotifier != nil {
-		taskNotifier.scheduler = schedulerService
+	runtime, err := buildRuntime(ctx, cfg, store, modelClient)
+	if err != nil {
+		return err
 	}
-	taskManager.SetRemoteConfig(task.RemoteExecutorConfig{
-		ShimCommand:    cfg.RemoteExecutorShimCommand,
-		TimeoutSeconds: cfg.RemoteExecutorTimeoutSeconds,
-	})
-	runner.SetTaskManager(taskManager)
-	runner.SetSchedulerService(schedulerService)
-	manager := session.NewManager(sessionRunnerAdapter{
-		engine: runner,
-		sink: storeAndBusSink{
-			store: store,
-			bus:   bus,
-		},
-	})
-	if err := recoverRuntimeState(ctx, store, manager); err != nil {
+	if err := validateRuntime(runtime); err != nil {
+		return err
+	}
+	if runtime.Engine != nil {
+		runtime.Engine.SetBaseSystemPrompt(basePrompt)
+	}
+
+	if err := recoverRuntimeState(ctx, runtime.Store, runtime.SessionManager); err != nil {
 		return err
 	}
 	go func() {
-		if err := schedulerService.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := runtime.SchedulerService.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("scheduler loop exited", "error", err)
 		}
 	}()
-	go func() {
-		if err := watcherService.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("watcher loop exited", "error", err)
-		}
-	}()
-	if taskNotifier != nil && taskNotifier.reporting != nil {
+	if runtime.WatcherService != nil {
 		go func() {
-			if err := taskNotifier.reporting.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				slog.Error("reporting loop exited", "error", err)
-			}
+			runSupervisedLoop(ctx, "watcher", runtime.WatcherService.ReconcileInterval(), runtime.WatcherService.Reconcile, func(_ context.Context, err error) {
+				slog.Error("watcher tick failed", "error", err)
+			})
+		}()
+	}
+	if runtime.ReportingService != nil {
+		go func() {
+			runSupervisedLoop(ctx, "reporting", runtime.ReportingService.PollInterval(), runtime.ReportingService.Tick, func(_ context.Context, err error) {
+				slog.Error("reporting tick failed", "error", err)
+			})
 		}()
 	}
 
-	handler := httpapi.NewRouter(buildHTTPDependencies(cfg, store, bus, manager, schedulerService, automationService))
+	handler := httpapi.NewRouter(buildHTTPDependencies(cfg, runtime.Store, runtime.Bus, runtime.SessionManager, runtime.SchedulerService, runtime.AutomationService))
 
 	slog.Info("sesame daemon listening", "addr", cfg.Addr)
 	return http.ListenAndServe(cfg.Addr, handler)

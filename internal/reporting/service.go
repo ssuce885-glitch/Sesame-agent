@@ -89,6 +89,13 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 }
 
+func (s *Service) PollInterval() time.Duration {
+	if s == nil || s.pollInterval <= 0 {
+		return time.Second
+	}
+	return s.pollInterval
+}
+
 func (s *Service) Tick(ctx context.Context) error {
 	if s == nil || s.store == nil {
 		return nil
