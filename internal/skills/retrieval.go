@@ -16,10 +16,9 @@ type TaskUnderstanding struct {
 }
 
 type RetrievalCandidate struct {
-	Skill        SkillSpec
-	Score        int
-	Reasons      []string
-	AutoActivate bool
+	Skill   SkillSpec
+	Score   int
+	Reasons []string
 }
 
 type RetrievalResult struct {
@@ -58,17 +57,8 @@ func retrieveForTask(catalog Catalog, task TaskUnderstanding, already []Activate
 		return RetrievalResult{Task: task}
 	}
 
-	selected := make([]ActivatedSkill, 0, 3)
 	suggested := make([]RetrievalCandidate, 0, 3)
 	for _, candidate := range candidates {
-		if candidate.AutoActivate && len(selected) < 3 {
-			selected = append(selected, ActivatedSkill{
-				Skill:       candidate.Skill,
-				Reason:      ActivationReasonRetrieved,
-				MatchedText: strings.Join(candidate.Reasons, ", "),
-			})
-			continue
-		}
 		if len(suggested) < 3 {
 			suggested = append(suggested, candidate)
 		}
@@ -76,7 +66,6 @@ func retrieveForTask(catalog Catalog, task TaskUnderstanding, already []Activate
 
 	return RetrievalResult{
 		Task:      task,
-		Selected:  selected,
 		Suggested: suggested,
 	}
 }
@@ -168,7 +157,6 @@ func rankRetrievalCandidates(catalog Catalog, task TaskUnderstanding, already []
 			Score:   score,
 			Reasons: reasons,
 		}
-		candidate.AutoActivate = shouldAutoActivateCandidate(task, candidate)
 		out = append(out, candidate)
 	}
 
@@ -254,25 +242,6 @@ func scoreRetrievalCandidate(task TaskUnderstanding, skill SkillSpec) (int, []st
 	}
 
 	return score, reasons
-}
-
-func shouldAutoActivateCandidate(task TaskUnderstanding, candidate RetrievalCandidate) bool {
-	if task.WantsScheduling || candidate.Score < 80 {
-		return false
-	}
-	traits := inferSkillTraits(candidate.Skill)
-	switch {
-	case traits.EmailDelivery && task.WantsEmailDelivery:
-		return true
-	case traits.SystemInspect && task.WantsSystemInspect:
-		return true
-	case traits.BrowserAutomation && task.WantsBrowserAutomation:
-		return true
-	case traits.CodeEdit && task.WantsCodeEdit && candidate.Score >= 100:
-		return true
-	default:
-		return candidate.Score >= 140
-	}
 }
 
 func inferSkillTraits(skill SkillSpec) skillTraits {

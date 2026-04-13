@@ -56,6 +56,19 @@ type Catalog struct {
 	SkillDirs SkillDirectories
 }
 
+func (c Catalog) SkillNames() []string {
+	if len(c.Skills) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(c.Skills))
+	for _, skill := range c.Skills {
+		if trimmed := strings.TrimSpace(skill.Name); trimmed != "" {
+			names = append(names, trimmed)
+		}
+	}
+	return names
+}
+
 type ActivationReason string
 
 const (

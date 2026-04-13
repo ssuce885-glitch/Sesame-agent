@@ -177,6 +177,13 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists session_pending_confirmations (
+			session_id text primary key,
+			source_turn_id text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
 		`create table if not exists provider_cache_entries (
 			id text primary key,
 			session_id text not null,

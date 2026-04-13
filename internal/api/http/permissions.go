@@ -32,31 +32,9 @@ type eventPublisher interface {
 }
 
 func registerPermissionRoutes(mux *http.ServeMux, deps Dependencies) {
-	mux.HandleFunc("/v1/permissions/pending", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/permissions/pending" {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		handleListPendingPermissions(deps)(w, r)
-	})
-	mux.HandleFunc("/v1/permissions/pending/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		handleGetPendingPermission(deps)(w, r)
-	})
-	mux.HandleFunc("/v1/permissions/decide", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		handlePermissionDecision(deps)(w, r)
-	})
+	mux.HandleFunc("GET /v1/permissions/pending", handleListPendingPermissions(deps))
+	mux.HandleFunc("GET /v1/permissions/pending/{request_id}", handleGetPendingPermission(deps))
+	mux.HandleFunc("POST /v1/permissions/decide", handlePermissionDecision(deps))
 }
 
 func handleListPendingPermissions(deps Dependencies) http.HandlerFunc {
@@ -96,7 +74,7 @@ func handleGetPendingPermission(deps Dependencies) http.HandlerFunc {
 			return
 		}
 
-		requestID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/permissions/pending/"))
+		requestID := strings.TrimSpace(r.PathValue("request_id"))
 		if requestID == "" || strings.Contains(requestID, "/") {
 			http.NotFound(w, r)
 			return

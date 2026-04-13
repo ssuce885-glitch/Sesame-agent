@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"go-agent/internal/intent"
 	"go-agent/internal/skills"
 	"go-agent/internal/tools"
 )
@@ -42,6 +43,7 @@ type profileSpec struct {
 	Guidance         []string
 	VisibleTools     []string
 	HiddenTools      []string
+	BlockedTools     []string
 	PreferredTools   []string
 	MaxSteps         int
 	MaxFetches       int
@@ -95,8 +97,30 @@ var (
 	}
 )
 
-func Decide(userMessage string, activated []skills.ActivatedSkill) Decision {
-	profile := detectProfile(userMessage)
+func Decide(input any, extra any) Decision {
+	switch value := input.(type) {
+	case intent.Plan:
+		if resolution, ok := extra.(skills.Resolution); ok {
+			return decideFromPlan(value, resolution)
+		}
+		return decideFromPlan(value, skills.Resolution{})
+	case string:
+		activated, _ := extra.([]skills.ActivatedSkill)
+		return decideFromPlan(intent.Plan{
+			Signal:  intent.Signal{Raw: strings.TrimSpace(value)},
+			Profile: intent.CapabilityProfile(detectProfile(value)),
+		}, skills.Resolution{Activated: activated})
+	default:
+		return decideFromPlan(intent.Plan{Profile: intent.ProfileCodebaseEdit}, skills.Resolution{})
+	}
+}
+
+func decideFromPlan(plan intent.Plan, resolution skills.Resolution) Decision {
+	profile := CapabilityProfile(plan.Profile)
+	if profile == "" {
+		profile = ProfileCodebaseEdit
+	}
+	activated := append([]skills.ActivatedSkill(nil), resolution.Activated...)
 	spec := profileFor(profile)
 	visibleTools := normalizeToolList(spec.VisibleTools)
 	if spec.ExposeSkillUse {
@@ -104,10 +128,23 @@ func Decide(userMessage string, activated []skills.ActivatedSkill) Decision {
 	}
 	preferredTools := normalizeToolList(append(append([]string(nil), spec.PreferredTools...), skills.PreferredTools(activated)...))
 	hiddenTools := normalizeToolList(spec.HiddenTools)
+	blockedTools := normalizeToolList(spec.BlockedTools)
+	blockedSet := make(map[string]struct{}, len(blockedTools))
+	for _, name := range blockedTools {
+		blockedSet[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
 	if spec.AllowSkillGrants {
 		grantedTools := skills.GrantedTools(activated)
-		visibleTools = normalizeToolList(append(append([]string(nil), visibleTools...), grantedTools...))
-		hiddenTools = removeTools(hiddenTools, grantedTools)
+		allowedGrants := make([]string, 0, len(grantedTools))
+		for _, name := range grantedTools {
+			normalized := strings.ToLower(strings.TrimSpace(name))
+			if _, blocked := blockedSet[normalized]; blocked {
+				continue
+			}
+			allowedGrants = append(allowedGrants, name)
+		}
+		visibleTools = normalizeToolList(append(append([]string(nil), visibleTools...), allowedGrants...))
+		hiddenTools = removeTools(hiddenTools, allowedGrants)
 	}
 
 	visibleSet := make(map[string]struct{}, len(visibleTools))
@@ -191,8 +228,9 @@ func profileFor(profile CapabilityProfile) profileSpec {
 				"Manual automation testing must emit a synthetic trigger; never launch child agents, shell loops, or watcher runners directly from this profile.",
 				"Do not fall back to schedule_report, task_create, shell_command, or ad hoc long-running loops for automation creation.",
 			},
-			VisibleTools:     append([]string(nil), automationTools...),
-			HiddenTools:      normalizeToolList(append(append(append([]string(nil), readOnlyTools...), editTools...), append(append([]string(nil), taskTools...), "schedule_report", "shell_command")...)),
+			VisibleTools:     normalizeToolList(append(append([]string(nil), automationTools...), readOnlyTools...)),
+			HiddenTools:      normalizeToolList(append(append([]string(nil), editTools...), append(append([]string(nil), taskTools...), "schedule_report", "shell_command")...)),
+			BlockedTools:     normalizeToolList(append(append([]string(nil), editTools...), append(append([]string(nil), taskTools...), "schedule_report", "shell_command")...)),
 			PreferredTools:   []string{"automation_apply", "automation_get", "automation_list", "automation_control", "incident_ack", "incident_control", "incident_get", "incident_list"},
 			MaxSteps:         8,
 			SkillTags:        []string{"automation_standard_behavior"},
@@ -214,6 +252,7 @@ func profileFor(profile CapabilityProfile) profileSpec {
 			},
 			VisibleTools: append(append([]string(nil), readOnlyTools...), "shell_command"),
 			HiddenTools:  append(append([]string(nil), editTools...), append(append([]string(nil), taskTools...), "schedule_report")...),
+			BlockedTools: append(append([]string(nil), taskTools...), "schedule_report"),
 			PreferredTools: []string{
 				"shell_command",
 			},
@@ -235,6 +274,7 @@ func profileFor(profile CapabilityProfile) profileSpec {
 			},
 			VisibleTools: append([]string(nil), readOnlyTools...),
 			HiddenTools:  normalizeToolList(append(append([]string(nil), editTools...), append(append([]string(nil), taskTools...), "schedule_report", "shell_command")...)),
+			BlockedTools: normalizeToolList(append(append([]string(nil), taskTools...), "schedule_report")),
 			PreferredTools: []string{
 				"web_fetch",
 			},
@@ -257,6 +297,7 @@ func profileFor(profile CapabilityProfile) profileSpec {
 			},
 			VisibleTools: append([]string(nil), readOnlyTools...),
 			HiddenTools:  normalizeToolList(append(append([]string(nil), editTools...), append(append([]string(nil), taskTools...), "schedule_report", "shell_command")...)),
+			BlockedTools: normalizeToolList(append(append([]string(nil), taskTools...), "schedule_report")),
 			PreferredTools: []string{
 				"web_fetch",
 			},
@@ -284,6 +325,7 @@ func profileFor(profile CapabilityProfile) profileSpec {
 			},
 			VisibleTools: []string{"schedule_report"},
 			HiddenTools:  normalizeToolList(append(append(append([]string(nil), readOnlyTools...), editTools...), append(append([]string(nil), taskTools...), "shell_command")...)),
+			BlockedTools: normalizeToolList(append(append(append([]string(nil), readOnlyTools...), editTools...), append(append([]string(nil), taskTools...), "shell_command")...)),
 			PreferredTools: []string{
 				"schedule_report",
 			},

@@ -23,44 +23,30 @@ type Bundle struct {
 }
 
 type CompileInput struct {
-	BaseText     string
-	Catalog      skills.Catalog
-	Message      string
-	Policy       toolrouter.PolicySummary
-	VisibleTools []string
-	ActiveSkills []skills.ActivatedSkill
+	BaseText               string
+	Catalog                skills.Catalog
+	Message                string
+	Policy                 toolrouter.PolicySummary
+	VisibleTools           []string
+	ActiveSkills           []skills.ActivatedSkill
+	SuggestedSkills        []skills.SuggestedSkill
+	ActiveSkillTokenBudget int
 }
 
 func Compile(input CompileInput) Bundle {
 	activated := append([]skills.ActivatedSkill(nil), input.ActiveSkills...)
-	if len(activated) == 0 {
-		activated = skills.Activate(input.Catalog, input.Message)
-	}
-	retrieval := skills.Retrieve(input.Catalog, input.Message, activated)
 	notices := skills.ActivationNotices(activated)
-	sections := make([]Section, 0, 4)
+	sections := make([]Section, 0, 3)
 	injection := skills.BuildPromptInjection(
 		activated,
-		retrieval.Suggested,
-		toolVisible(input.VisibleTools, "skill_use"),
+		append([]skills.SuggestedSkill(nil), input.SuggestedSkills...),
+		input.ActiveSkillTokenBudget,
 	)
 
-	if summary := strings.TrimSpace(injection.ImplicitHints); summary != "" {
+	if activeContext := strings.TrimSpace(injection.ActiveContext); activeContext != "" {
 		sections = append(sections, Section{
-			Title: "Implicit skill hints",
-			Body:  summary,
-		})
-	}
-	if relevantSkills := strings.TrimSpace(injection.RelevantSkills); relevantSkills != "" {
-		sections = append(sections, Section{
-			Title: "Relevant skills",
-			Body:  relevantSkills,
-		})
-	}
-	if activatedSection := strings.TrimSpace(injection.ActivatedSkills); activatedSection != "" {
-		sections = append(sections, Section{
-			Title: "Activated skills",
-			Body:  activatedSection,
+			Title: "Active context",
+			Body:  activeContext,
 		})
 	}
 	if catalogSnapshot := renderCatalogSnapshotIfRequested(input.Catalog, input.Message); strings.TrimSpace(catalogSnapshot) != "" {
@@ -71,7 +57,7 @@ func Compile(input CompileInput) Bundle {
 	}
 	if routingSection := renderToolPolicySection(input.Policy, input.VisibleTools); strings.TrimSpace(routingSection) != "" {
 		sections = append(sections, Section{
-			Title: "Tool routing",
+			Title: "Tool guidance",
 			Body:  routingSection,
 		})
 	}

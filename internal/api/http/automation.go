@@ -11,117 +11,26 @@ import (
 )
 
 func registerAutomationRoutes(mux *http.ServeMux, deps Dependencies) {
-	mux.HandleFunc("/v1/automations", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/automations" {
-			http.NotFound(w, r)
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			handleListAutomations(deps)(w, r)
-		case http.MethodPost:
-			handleApplyAutomation(deps)(w, r)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
+	mux.HandleFunc("GET /v1/automations", handleListAutomations(deps))
+	mux.HandleFunc("POST /v1/automations", handleApplyAutomation(deps))
+	mux.HandleFunc("GET /v1/automations/{automation_id}", handleGetAutomation(deps))
+	mux.HandleFunc("PATCH /v1/automations/{automation_id}", handlePatchAutomation(deps))
+	mux.HandleFunc("DELETE /v1/automations/{automation_id}", handleDeleteAutomation(deps))
+	mux.HandleFunc("POST /v1/automations/{automation_id}/pause", handleControlAutomation(deps, types.AutomationControlActionPause))
+	mux.HandleFunc("POST /v1/automations/{automation_id}/resume", handleControlAutomation(deps, types.AutomationControlActionResume))
+	mux.HandleFunc("POST /v1/automations/{automation_id}/install", handleInstallAutomationWatcher(deps, false))
+	mux.HandleFunc("POST /v1/automations/{automation_id}/reinstall", handleInstallAutomationWatcher(deps, true))
+	mux.HandleFunc("GET /v1/automations/{automation_id}/watcher", handleGetAutomationWatcher(deps))
 
-	mux.HandleFunc("/v1/automations/", func(w http.ResponseWriter, r *http.Request) {
-		rest := strings.TrimPrefix(r.URL.Path, "/v1/automations/")
-		parts := strings.Split(rest, "/")
-		if len(parts) == 1 && parts[0] != "" {
-			switch r.Method {
-			case http.MethodGet:
-				handleGetAutomation(deps, parts[0])(w, r)
-			case http.MethodPatch:
-				handlePatchAutomation(deps, parts[0])(w, r)
-			case http.MethodDelete:
-				handleDeleteAutomation(deps, parts[0])(w, r)
-			default:
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			}
-			return
-		}
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			http.NotFound(w, r)
-			return
-		}
-		switch parts[1] {
-		case "pause":
-			handleControlAutomation(deps, parts[0], types.AutomationControlActionPause)(w, r)
-		case "resume":
-			handleControlAutomation(deps, parts[0], types.AutomationControlActionResume)(w, r)
-		case "install":
-			handleInstallAutomationWatcher(deps, parts[0], false)(w, r)
-		case "reinstall":
-			handleInstallAutomationWatcher(deps, parts[0], true)(w, r)
-		case "watcher":
-			handleGetAutomationWatcher(deps, parts[0])(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
+	mux.HandleFunc("POST /v1/triggers/emit", handleEmitTrigger(deps))
+	mux.HandleFunc("POST /v1/triggers/heartbeat", handleRecordHeartbeat(deps))
 
-	mux.HandleFunc("/v1/triggers/emit", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		handleEmitTrigger(deps)(w, r)
-	})
-
-	mux.HandleFunc("/v1/triggers/heartbeat", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		handleRecordHeartbeat(deps)(w, r)
-	})
-
-	mux.HandleFunc("/v1/incidents", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/incidents" {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		handleListIncidents(deps)(w, r)
-	})
-
-	mux.HandleFunc("/v1/incidents/", func(w http.ResponseWriter, r *http.Request) {
-		rest := strings.TrimPrefix(r.URL.Path, "/v1/incidents/")
-		parts := strings.Split(rest, "/")
-		if len(parts) == 1 && parts[0] != "" {
-			if r.Method != http.MethodGet {
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			handleGetIncident(deps, parts[0])(w, r)
-			return
-		}
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		switch parts[1] {
-		case "ack":
-			handleIncidentControl(deps, parts[0], types.IncidentControlActionAck)(w, r)
-		case "close":
-			handleIncidentControl(deps, parts[0], types.IncidentControlActionClose)(w, r)
-		case "reopen":
-			handleIncidentControl(deps, parts[0], types.IncidentControlActionReopen)(w, r)
-		case "escalate":
-			handleIncidentControl(deps, parts[0], types.IncidentControlActionEscalate)(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
+	mux.HandleFunc("GET /v1/incidents", handleListIncidents(deps))
+	mux.HandleFunc("GET /v1/incidents/{incident_id}", handleGetIncident(deps))
+	mux.HandleFunc("POST /v1/incidents/{incident_id}/ack", handleIncidentControl(deps, types.IncidentControlActionAck))
+	mux.HandleFunc("POST /v1/incidents/{incident_id}/close", handleIncidentControl(deps, types.IncidentControlActionClose))
+	mux.HandleFunc("POST /v1/incidents/{incident_id}/reopen", handleIncidentControl(deps, types.IncidentControlActionReopen))
+	mux.HandleFunc("POST /v1/incidents/{incident_id}/escalate", handleIncidentControl(deps, types.IncidentControlActionEscalate))
 }
 
 func handleListAutomations(deps Dependencies) http.HandlerFunc {
@@ -170,10 +79,15 @@ func handleApplyAutomation(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-func handlePatchAutomation(deps Dependencies, id string) http.HandlerFunc {
+func handlePatchAutomation(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if deps.Automation == nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		id := strings.TrimSpace(r.PathValue("automation_id"))
+		if id == "" {
+			http.NotFound(w, r)
 			return
 		}
 		var req types.ControlAutomationRequest
@@ -181,7 +95,7 @@ func handlePatchAutomation(deps Dependencies, id string) http.HandlerFunc {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		spec, ok, err := deps.Automation.Control(r.Context(), strings.TrimSpace(id), req.Action)
+		spec, ok, err := deps.Automation.Control(r.Context(), id, req.Action)
 		if err != nil {
 			writeAutomationError(w, err)
 			return
@@ -194,13 +108,18 @@ func handlePatchAutomation(deps Dependencies, id string) http.HandlerFunc {
 	}
 }
 
-func handleGetAutomation(deps Dependencies, id string) http.HandlerFunc {
+func handleGetAutomation(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if deps.Automation == nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		spec, ok, err := deps.Automation.Get(r.Context(), strings.TrimSpace(id))
+		id := strings.TrimSpace(r.PathValue("automation_id"))
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
+		spec, ok, err := deps.Automation.Get(r.Context(), id)
 		if err != nil {
 			writeAutomationError(w, err)
 			return
@@ -213,13 +132,18 @@ func handleGetAutomation(deps Dependencies, id string) http.HandlerFunc {
 	}
 }
 
-func handleDeleteAutomation(deps Dependencies, id string) http.HandlerFunc {
+func handleDeleteAutomation(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if deps.Automation == nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		deleted, err := deps.Automation.Delete(r.Context(), strings.TrimSpace(id))
+		id := strings.TrimSpace(r.PathValue("automation_id"))
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
+		deleted, err := deps.Automation.Delete(r.Context(), id)
 		if err != nil {
 			writeAutomationError(w, err)
 			return
@@ -232,18 +156,19 @@ func handleDeleteAutomation(deps Dependencies, id string) http.HandlerFunc {
 	}
 }
 
-func handleControlAutomation(deps Dependencies, id string, action types.AutomationControlAction) http.HandlerFunc {
+func handleControlAutomation(deps Dependencies, action types.AutomationControlAction) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		if deps.Automation == nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		id := strings.TrimSpace(r.PathValue("automation_id"))
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
 
-		spec, ok, err := deps.Automation.Control(r.Context(), strings.TrimSpace(id), action)
+		spec, ok, err := deps.Automation.Control(r.Context(), id, action)
 		if err != nil {
 			writeAutomationError(w, err)
 			return
@@ -256,14 +181,15 @@ func handleControlAutomation(deps Dependencies, id string, action types.Automati
 	}
 }
 
-func handleInstallAutomationWatcher(deps Dependencies, id string, force bool) http.HandlerFunc {
+func handleInstallAutomationWatcher(deps Dependencies, force bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		if deps.Automation == nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		id := strings.TrimSpace(r.PathValue("automation_id"))
+		if id == "" {
+			http.NotFound(w, r)
 			return
 		}
 		var (
@@ -272,9 +198,9 @@ func handleInstallAutomationWatcher(deps Dependencies, id string, force bool) ht
 			err     error
 		)
 		if force {
-			watcher, ok, err = deps.Automation.ReinstallWatcher(r.Context(), strings.TrimSpace(id))
+			watcher, ok, err = deps.Automation.ReinstallWatcher(r.Context(), id)
 		} else {
-			watcher, ok, err = deps.Automation.InstallWatcher(r.Context(), strings.TrimSpace(id))
+			watcher, ok, err = deps.Automation.InstallWatcher(r.Context(), id)
 		}
 		if err != nil {
 			writeAutomationError(w, err)
@@ -288,17 +214,18 @@ func handleInstallAutomationWatcher(deps Dependencies, id string, force bool) ht
 	}
 }
 
-func handleGetAutomationWatcher(deps Dependencies, id string) http.HandlerFunc {
+func handleGetAutomationWatcher(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		if deps.Automation == nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		watcher, ok, err := deps.Automation.GetWatcher(r.Context(), strings.TrimSpace(id))
+		id := strings.TrimSpace(r.PathValue("automation_id"))
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
+		watcher, ok, err := deps.Automation.GetWatcher(r.Context(), id)
 		if err != nil {
 			writeAutomationError(w, err)
 			return
@@ -376,13 +303,18 @@ func handleListIncidents(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-func handleGetIncident(deps Dependencies, id string) http.HandlerFunc {
+func handleGetIncident(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if deps.Automation == nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		incident, ok, err := deps.Automation.GetIncident(r.Context(), strings.TrimSpace(id))
+		id := strings.TrimSpace(r.PathValue("incident_id"))
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
+		incident, ok, err := deps.Automation.GetIncident(r.Context(), id)
 		if err != nil {
 			writeAutomationError(w, err)
 			return
@@ -395,13 +327,18 @@ func handleGetIncident(deps Dependencies, id string) http.HandlerFunc {
 	}
 }
 
-func handleIncidentControl(deps Dependencies, id string, action types.IncidentControlAction) http.HandlerFunc {
+func handleIncidentControl(deps Dependencies, action types.IncidentControlAction) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if deps.Automation == nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		incident, ok, err := deps.Automation.ControlIncident(r.Context(), strings.TrimSpace(id), action)
+		id := strings.TrimSpace(r.PathValue("incident_id"))
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
+		incident, ok, err := deps.Automation.ControlIncident(r.Context(), id, action)
 		if err != nil {
 			writeAutomationError(w, err)
 			return
