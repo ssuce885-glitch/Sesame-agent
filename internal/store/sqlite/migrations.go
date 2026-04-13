@@ -281,6 +281,36 @@ func (s *Store) migrate(ctx context.Context) error {
 		);`,
 		`create index if not exists automation_watchers_workspace_state_idx
 			on automation_watchers(workspace_root, state, updated_at desc, automation_id asc);`,
+		`create table if not exists automation_dispatch_attempts (
+			dispatch_id text primary key,
+			workspace_root text not null,
+			automation_id text not null,
+			incident_id text not null,
+			phase text not null,
+			status text not null,
+			task_id text not null default '',
+			background_session_id text not null default '',
+			background_turn_id text not null default '',
+			permission_request_id text not null default '',
+			continuation_id text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists automation_dispatch_attempts_incident_status_idx
+			on automation_dispatch_attempts(incident_id, status, updated_at desc, dispatch_id asc);`,
+		`create table if not exists automation_delivery_records (
+			delivery_id text primary key,
+			workspace_root text not null,
+			automation_id text not null,
+			incident_id text not null,
+			dispatch_id text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists automation_delivery_records_dispatch_idx
+			on automation_delivery_records(dispatch_id, updated_at desc, delivery_id asc);`,
 		`create table if not exists report_groups (
 			id text primary key,
 			session_id text not null default '',

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
-	"time"
 
 	"go-agent/internal/types"
 )
@@ -439,6 +438,264 @@ func deleteAutomationWatcherWithExec(ctx context.Context, execer execContexter, 
 	return affected > 0, nil
 }
 
+func (s *Store) UpsertDispatchAttempt(ctx context.Context, attempt types.DispatchAttempt) error {
+	return upsertDispatchAttemptWithExec(ctx, s.db, attempt)
+}
+
+func (t runtimeTx) UpsertDispatchAttempt(ctx context.Context, attempt types.DispatchAttempt) error {
+	return upsertDispatchAttemptWithExec(ctx, t.tx, attempt)
+}
+
+func upsertDispatchAttemptWithExec(ctx context.Context, execer execContexter, attempt types.DispatchAttempt) error {
+	attempt = normalizeDispatchAttemptForStore(attempt)
+	payload, err := json.Marshal(attempt)
+	if err != nil {
+		return err
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		insert into automation_dispatch_attempts (
+			dispatch_id, workspace_root, automation_id, incident_id, phase, status,
+			task_id, background_session_id, background_turn_id, permission_request_id,
+			continuation_id, payload, created_at, updated_at
+		)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		on conflict(dispatch_id) do update set
+			workspace_root = excluded.workspace_root,
+			automation_id = excluded.automation_id,
+			incident_id = excluded.incident_id,
+			phase = excluded.phase,
+			status = excluded.status,
+			task_id = excluded.task_id,
+			background_session_id = excluded.background_session_id,
+			background_turn_id = excluded.background_turn_id,
+			permission_request_id = excluded.permission_request_id,
+			continuation_id = excluded.continuation_id,
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+	`,
+		attempt.DispatchID,
+		attempt.WorkspaceRoot,
+		attempt.AutomationID,
+		attempt.IncidentID,
+		attempt.Phase,
+		attempt.Status,
+		attempt.TaskID,
+		attempt.BackgroundSessionID,
+		attempt.BackgroundTurnID,
+		attempt.PermissionRequestID,
+		attempt.ContinuationID,
+		string(payload),
+		attempt.CreatedAt.UTC().Format(timeLayout),
+		attempt.UpdatedAt.UTC().Format(timeLayout),
+	)
+	return err
+}
+
+func (s *Store) GetDispatchAttempt(ctx context.Context, dispatchID string) (types.DispatchAttempt, bool, error) {
+	return getDispatchAttemptWithQueryer(ctx, s.db, dispatchID)
+}
+
+func (t runtimeTx) GetDispatchAttempt(ctx context.Context, dispatchID string) (types.DispatchAttempt, bool, error) {
+	return getDispatchAttemptWithQueryer(ctx, t.tx, dispatchID)
+}
+
+func getDispatchAttemptWithQueryer(ctx context.Context, queryer queryContexter, dispatchID string) (types.DispatchAttempt, bool, error) {
+	dispatchID = strings.TrimSpace(dispatchID)
+	if dispatchID == "" {
+		return types.DispatchAttempt{}, false, nil
+	}
+	rows, err := queryer.QueryContext(ctx, `
+		select payload, created_at, updated_at
+		from automation_dispatch_attempts
+		where dispatch_id = ?
+	`, dispatchID)
+	if err != nil {
+		return types.DispatchAttempt{}, false, err
+	}
+	defer rows.Close()
+
+	items, err := scanDispatchAttempts(rows)
+	if err != nil {
+		return types.DispatchAttempt{}, false, err
+	}
+	if len(items) == 0 {
+		return types.DispatchAttempt{}, false, nil
+	}
+	return items[0], true, nil
+}
+
+func (s *Store) ListDispatchAttempts(ctx context.Context, filter types.DispatchAttemptFilter) ([]types.DispatchAttempt, error) {
+	return listDispatchAttemptsWithQueryer(ctx, s.db, filter)
+}
+
+func (t runtimeTx) ListDispatchAttempts(ctx context.Context, filter types.DispatchAttemptFilter) ([]types.DispatchAttempt, error) {
+	return listDispatchAttemptsWithQueryer(ctx, t.tx, filter)
+}
+
+func listDispatchAttemptsWithQueryer(ctx context.Context, queryer queryContexter, filter types.DispatchAttemptFilter) ([]types.DispatchAttempt, error) {
+	filter = normalizeDispatchAttemptFilterForStore(filter)
+	query := `
+		select payload, created_at, updated_at
+		from automation_dispatch_attempts
+	`
+	args := make([]any, 0, 5)
+	conditions := make([]string, 0, 4)
+	if filter.WorkspaceRoot != "" {
+		conditions = append(conditions, "workspace_root = ?")
+		args = append(args, filter.WorkspaceRoot)
+	}
+	if filter.AutomationID != "" {
+		conditions = append(conditions, "automation_id = ?")
+		args = append(args, filter.AutomationID)
+	}
+	if filter.IncidentID != "" {
+		conditions = append(conditions, "incident_id = ?")
+		args = append(args, filter.IncidentID)
+	}
+	if filter.Status != "" {
+		conditions = append(conditions, "status = ?")
+		args = append(args, filter.Status)
+	}
+	if len(conditions) > 0 {
+		query += " where " + strings.Join(conditions, " and ")
+	}
+	query += " order by updated_at desc, created_at desc, dispatch_id asc"
+	if filter.Limit > 0 {
+		query += " limit ?"
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := queryer.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanDispatchAttempts(rows)
+}
+
+func (s *Store) UpsertDeliveryRecord(ctx context.Context, delivery types.DeliveryRecord) error {
+	return upsertDeliveryRecordWithExec(ctx, s.db, delivery)
+}
+
+func (t runtimeTx) UpsertDeliveryRecord(ctx context.Context, delivery types.DeliveryRecord) error {
+	return upsertDeliveryRecordWithExec(ctx, t.tx, delivery)
+}
+
+func upsertDeliveryRecordWithExec(ctx context.Context, execer execContexter, delivery types.DeliveryRecord) error {
+	delivery = normalizeDeliveryRecordForStore(delivery)
+	payload, err := json.Marshal(delivery)
+	if err != nil {
+		return err
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		insert into automation_delivery_records (
+			delivery_id, workspace_root, automation_id, incident_id, dispatch_id, payload, created_at, updated_at
+		)
+		values (?, ?, ?, ?, ?, ?, ?, ?)
+		on conflict(delivery_id) do update set
+			workspace_root = excluded.workspace_root,
+			automation_id = excluded.automation_id,
+			incident_id = excluded.incident_id,
+			dispatch_id = excluded.dispatch_id,
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+	`,
+		delivery.DeliveryID,
+		delivery.WorkspaceRoot,
+		delivery.AutomationID,
+		delivery.IncidentID,
+		delivery.DispatchID,
+		string(payload),
+		delivery.CreatedAt.UTC().Format(timeLayout),
+		delivery.UpdatedAt.UTC().Format(timeLayout),
+	)
+	return err
+}
+
+func (s *Store) GetDeliveryRecord(ctx context.Context, deliveryID string) (types.DeliveryRecord, bool, error) {
+	return getDeliveryRecordWithQueryer(ctx, s.db, deliveryID)
+}
+
+func (t runtimeTx) GetDeliveryRecord(ctx context.Context, deliveryID string) (types.DeliveryRecord, bool, error) {
+	return getDeliveryRecordWithQueryer(ctx, t.tx, deliveryID)
+}
+
+func getDeliveryRecordWithQueryer(ctx context.Context, queryer queryContexter, deliveryID string) (types.DeliveryRecord, bool, error) {
+	deliveryID = strings.TrimSpace(deliveryID)
+	if deliveryID == "" {
+		return types.DeliveryRecord{}, false, nil
+	}
+	rows, err := queryer.QueryContext(ctx, `
+		select payload, created_at, updated_at
+		from automation_delivery_records
+		where delivery_id = ?
+	`, deliveryID)
+	if err != nil {
+		return types.DeliveryRecord{}, false, err
+	}
+	defer rows.Close()
+
+	items, err := scanDeliveryRecords(rows)
+	if err != nil {
+		return types.DeliveryRecord{}, false, err
+	}
+	if len(items) == 0 {
+		return types.DeliveryRecord{}, false, nil
+	}
+	return items[0], true, nil
+}
+
+func (s *Store) ListDeliveryRecords(ctx context.Context, filter types.DeliveryRecordFilter) ([]types.DeliveryRecord, error) {
+	return listDeliveryRecordsWithQueryer(ctx, s.db, filter)
+}
+
+func (t runtimeTx) ListDeliveryRecords(ctx context.Context, filter types.DeliveryRecordFilter) ([]types.DeliveryRecord, error) {
+	return listDeliveryRecordsWithQueryer(ctx, t.tx, filter)
+}
+
+func listDeliveryRecordsWithQueryer(ctx context.Context, queryer queryContexter, filter types.DeliveryRecordFilter) ([]types.DeliveryRecord, error) {
+	filter = normalizeDeliveryRecordFilterForStore(filter)
+	query := `
+		select payload, created_at, updated_at
+		from automation_delivery_records
+	`
+	args := make([]any, 0, 5)
+	conditions := make([]string, 0, 4)
+	if filter.WorkspaceRoot != "" {
+		conditions = append(conditions, "workspace_root = ?")
+		args = append(args, filter.WorkspaceRoot)
+	}
+	if filter.AutomationID != "" {
+		conditions = append(conditions, "automation_id = ?")
+		args = append(args, filter.AutomationID)
+	}
+	if filter.IncidentID != "" {
+		conditions = append(conditions, "incident_id = ?")
+		args = append(args, filter.IncidentID)
+	}
+	if filter.DispatchID != "" {
+		conditions = append(conditions, "dispatch_id = ?")
+		args = append(args, filter.DispatchID)
+	}
+	if len(conditions) > 0 {
+		query += " where " + strings.Join(conditions, " and ")
+	}
+	query += " order by updated_at desc, created_at desc, delivery_id asc"
+	if filter.Limit > 0 {
+		query += " limit ?"
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := queryer.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanDeliveryRecords(rows)
+}
+
 func scanAutomationSpecs(rows *sql.Rows) ([]types.AutomationSpec, error) {
 	out := make([]types.AutomationSpec, 0)
 	for rows.Next() {
@@ -530,250 +787,60 @@ func scanAutomationIncidents(rows *sql.Rows) ([]types.AutomationIncident, error)
 	return out, nil
 }
 
-func normalizeAutomationSpecForStore(spec types.AutomationSpec) types.AutomationSpec {
-	now := time.Now().UTC()
-	spec.ID = strings.TrimSpace(spec.ID)
-	if spec.ID == "" {
-		spec.ID = types.NewID("automation")
-	}
-	spec.Title = strings.TrimSpace(spec.Title)
-	spec.WorkspaceRoot = strings.TrimSpace(spec.WorkspaceRoot)
-	spec.Goal = strings.TrimSpace(spec.Goal)
-	spec.State = normalizeAutomationStateForStore(spec.State)
-	spec.Assumptions = normalizeAutomationStringList(spec.Assumptions)
-
-	spec.Context.Owner = strings.TrimSpace(spec.Context.Owner)
-	spec.Context.Environment = strings.TrimSpace(spec.Context.Environment)
-	spec.Context.Targets = normalizeAutomationStringList(spec.Context.Targets)
-	labels := make(map[string]string, len(spec.Context.Labels))
-	for key, value := range spec.Context.Labels {
-		key = strings.TrimSpace(key)
-		if key == "" {
-			continue
+func scanDispatchAttempts(rows *sql.Rows) ([]types.DispatchAttempt, error) {
+	out := make([]types.DispatchAttempt, 0)
+	for rows.Next() {
+		var (
+			payload   string
+			createdAt string
+			updatedAt string
+		)
+		if err := rows.Scan(&payload, &createdAt, &updatedAt); err != nil {
+			return nil, err
 		}
-		labels[key] = strings.TrimSpace(value)
-	}
-	spec.Context.Labels = labels
-
-	signals := make([]types.AutomationSignal, 0, len(spec.Signals))
-	for _, signal := range spec.Signals {
-		signal.Kind = strings.TrimSpace(signal.Kind)
-		signal.Source = strings.TrimSpace(signal.Source)
-		signal.Selector = strings.TrimSpace(signal.Selector)
-		signal.Payload = normalizeAutomationRawJSON(signal.Payload)
-		if signal.Kind == "" && signal.Source == "" && signal.Selector == "" && len(signal.Payload) == 0 {
-			continue
+		var attempt types.DispatchAttempt
+		if err := json.Unmarshal([]byte(payload), &attempt); err != nil {
+			return nil, err
 		}
-		signals = append(signals, signal)
-	}
-	spec.Signals = signals
-	spec.IncidentPolicy = normalizeAutomationObjectJSON(spec.IncidentPolicy)
-	spec.ResponsePlan = normalizeAutomationRawJSON(spec.ResponsePlan)
-	spec.VerificationPlan = normalizeAutomationObjectJSON(spec.VerificationPlan)
-	spec.EscalationPolicy = normalizeAutomationObjectJSON(spec.EscalationPolicy)
-	spec.DeliveryPolicy = normalizeAutomationRawJSON(spec.DeliveryPolicy)
-	spec.RuntimePolicy = normalizeAutomationRawJSON(spec.RuntimePolicy)
-	spec.WatcherLifecycle = normalizeAutomationObjectJSON(spec.WatcherLifecycle)
-	spec.RetriggerPolicy = normalizeAutomationObjectJSON(spec.RetriggerPolicy)
-	spec.RunPolicy = normalizeAutomationObjectJSON(spec.RunPolicy)
-
-	if spec.CreatedAt.IsZero() {
-		spec.CreatedAt = now
-	} else {
-		spec.CreatedAt = spec.CreatedAt.UTC()
-	}
-	if spec.UpdatedAt.IsZero() {
-		spec.UpdatedAt = spec.CreatedAt
-	} else {
-		spec.UpdatedAt = spec.UpdatedAt.UTC()
-	}
-	if spec.UpdatedAt.Before(spec.CreatedAt) {
-		spec.UpdatedAt = spec.CreatedAt
-	}
-	return spec
-}
-
-func normalizeAutomationIncidentForStore(incident types.AutomationIncident) types.AutomationIncident {
-	now := time.Now().UTC()
-	incident.ID = strings.TrimSpace(incident.ID)
-	if incident.ID == "" {
-		incident.ID = types.NewID("incident")
-	}
-	incident.AutomationID = strings.TrimSpace(incident.AutomationID)
-	incident.WorkspaceRoot = strings.TrimSpace(incident.WorkspaceRoot)
-	incident.Status = types.AutomationIncidentStatus(strings.ToLower(strings.TrimSpace(string(incident.Status))))
-	if incident.Status == "" {
-		incident.Status = types.AutomationIncidentStatusOpen
-	}
-	incident.SignalKind = strings.TrimSpace(incident.SignalKind)
-	incident.Source = strings.TrimSpace(incident.Source)
-	incident.Summary = strings.TrimSpace(incident.Summary)
-	incident.Payload = normalizeAutomationRawJSON(incident.Payload)
-	if incident.ObservedAt.IsZero() {
-		incident.ObservedAt = now
-	} else {
-		incident.ObservedAt = incident.ObservedAt.UTC()
-	}
-	if incident.CreatedAt.IsZero() {
-		incident.CreatedAt = now
-	} else {
-		incident.CreatedAt = incident.CreatedAt.UTC()
-	}
-	if incident.UpdatedAt.IsZero() {
-		incident.UpdatedAt = incident.CreatedAt
-	} else {
-		incident.UpdatedAt = incident.UpdatedAt.UTC()
-	}
-	if incident.UpdatedAt.Before(incident.CreatedAt) {
-		incident.UpdatedAt = incident.CreatedAt
-	}
-	return incident
-}
-
-func normalizeAutomationHeartbeatForStore(heartbeat types.AutomationHeartbeat) types.AutomationHeartbeat {
-	now := time.Now().UTC()
-	heartbeat.AutomationID = strings.TrimSpace(heartbeat.AutomationID)
-	heartbeat.WatcherID = strings.TrimSpace(heartbeat.WatcherID)
-	heartbeat.WorkspaceRoot = strings.TrimSpace(heartbeat.WorkspaceRoot)
-	heartbeat.Status = strings.TrimSpace(heartbeat.Status)
-	heartbeat.Payload = normalizeAutomationRawJSON(heartbeat.Payload)
-	if heartbeat.ObservedAt.IsZero() {
-		heartbeat.ObservedAt = now
-	} else {
-		heartbeat.ObservedAt = heartbeat.ObservedAt.UTC()
-	}
-	if heartbeat.CreatedAt.IsZero() {
-		heartbeat.CreatedAt = now
-	} else {
-		heartbeat.CreatedAt = heartbeat.CreatedAt.UTC()
-	}
-	if heartbeat.UpdatedAt.IsZero() {
-		heartbeat.UpdatedAt = heartbeat.CreatedAt
-	} else {
-		heartbeat.UpdatedAt = heartbeat.UpdatedAt.UTC()
-	}
-	if heartbeat.UpdatedAt.Before(heartbeat.CreatedAt) {
-		heartbeat.UpdatedAt = heartbeat.CreatedAt
-	}
-	return heartbeat
-}
-
-func normalizeAutomationWatcherForStore(watcher types.AutomationWatcherRuntime) types.AutomationWatcherRuntime {
-	now := time.Now().UTC()
-	watcher.ID = strings.TrimSpace(watcher.ID)
-	if watcher.ID == "" {
-		watcher.ID = types.NewID("watcher")
-	}
-	watcher.AutomationID = strings.TrimSpace(watcher.AutomationID)
-	watcher.WorkspaceRoot = strings.TrimSpace(watcher.WorkspaceRoot)
-	watcher.WatcherID = strings.TrimSpace(watcher.WatcherID)
-	if watcher.WatcherID == "" {
-		watcher.WatcherID = watcher.ID
-	}
-	watcher.State = normalizeAutomationWatcherStateForStore(watcher.State)
-	watcher.ScriptPath = strings.TrimSpace(watcher.ScriptPath)
-	watcher.StatePath = strings.TrimSpace(watcher.StatePath)
-	watcher.TaskID = strings.TrimSpace(watcher.TaskID)
-	watcher.Command = strings.TrimSpace(watcher.Command)
-	watcher.LastError = strings.TrimSpace(watcher.LastError)
-	if watcher.CreatedAt.IsZero() {
-		watcher.CreatedAt = now
-	} else {
-		watcher.CreatedAt = watcher.CreatedAt.UTC()
-	}
-	if watcher.UpdatedAt.IsZero() {
-		watcher.UpdatedAt = watcher.CreatedAt
-	} else {
-		watcher.UpdatedAt = watcher.UpdatedAt.UTC()
-	}
-	if watcher.UpdatedAt.Before(watcher.CreatedAt) {
-		watcher.UpdatedAt = watcher.CreatedAt
-	}
-	return watcher
-}
-
-func normalizeAutomationStateForStore(state types.AutomationState) types.AutomationState {
-	state = types.AutomationState(strings.ToLower(strings.TrimSpace(string(state))))
-	if state == "" {
-		return types.AutomationStateActive
-	}
-	return state
-}
-
-func normalizeAutomationListFilterForStore(filter types.AutomationListFilter) types.AutomationListFilter {
-	filter.WorkspaceRoot = strings.TrimSpace(filter.WorkspaceRoot)
-	filter.State = types.AutomationState(strings.ToLower(strings.TrimSpace(string(filter.State))))
-	if filter.Limit < 0 {
-		filter.Limit = 0
-	}
-	return filter
-}
-
-func normalizeAutomationIncidentFilterForStore(filter types.AutomationIncidentFilter) types.AutomationIncidentFilter {
-	filter.WorkspaceRoot = strings.TrimSpace(filter.WorkspaceRoot)
-	filter.AutomationID = strings.TrimSpace(filter.AutomationID)
-	filter.Status = types.AutomationIncidentStatus(strings.ToLower(strings.TrimSpace(string(filter.Status))))
-	if filter.Limit < 0 {
-		filter.Limit = 0
-	}
-	return filter
-}
-
-func normalizeAutomationWatcherFilterForStore(filter types.AutomationWatcherFilter) types.AutomationWatcherFilter {
-	filter.WorkspaceRoot = strings.TrimSpace(filter.WorkspaceRoot)
-	filter.AutomationID = strings.TrimSpace(filter.AutomationID)
-	if strings.TrimSpace(string(filter.State)) != "" {
-		filter.State = normalizeAutomationWatcherStateForStore(filter.State)
-	}
-	if filter.Limit < 0 {
-		filter.Limit = 0
-	}
-	return filter
-}
-
-func normalizeAutomationWatcherStateForStore(state types.AutomationWatcherState) types.AutomationWatcherState {
-	state = types.AutomationWatcherState(strings.ToLower(strings.TrimSpace(string(state))))
-	if state == "" {
-		return types.AutomationWatcherStatePending
-	}
-	return state
-}
-
-func normalizeAutomationStringList(values []string) []string {
-	if len(values) == 0 {
-		return []string{}
-	}
-	out := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			continue
+		if parsed, err := parsePendingOptionalTime(createdAt); err == nil && !parsed.IsZero() {
+			attempt.CreatedAt = parsed
 		}
-		if _, ok := seen[trimmed]; ok {
-			continue
+		if parsed, err := parsePendingOptionalTime(updatedAt); err == nil && !parsed.IsZero() {
+			attempt.UpdatedAt = parsed
 		}
-		seen[trimmed] = struct{}{}
-		out = append(out, trimmed)
+		out = append(out, normalizeDispatchAttemptForStore(attempt))
 	}
-	if len(out) == 0 {
-		return []string{}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
-func normalizeAutomationRawJSON(raw json.RawMessage) json.RawMessage {
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" {
-		return nil
+func scanDeliveryRecords(rows *sql.Rows) ([]types.DeliveryRecord, error) {
+	out := make([]types.DeliveryRecord, 0)
+	for rows.Next() {
+		var (
+			payload   string
+			createdAt string
+			updatedAt string
+		)
+		if err := rows.Scan(&payload, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		var delivery types.DeliveryRecord
+		if err := json.Unmarshal([]byte(payload), &delivery); err != nil {
+			return nil, err
+		}
+		if parsed, err := parsePendingOptionalTime(createdAt); err == nil && !parsed.IsZero() {
+			delivery.CreatedAt = parsed
+		}
+		if parsed, err := parsePendingOptionalTime(updatedAt); err == nil && !parsed.IsZero() {
+			delivery.UpdatedAt = parsed
+		}
+		out = append(out, normalizeDeliveryRecordForStore(delivery))
 	}
-	return json.RawMessage(trimmed)
-}
-
-func normalizeAutomationObjectJSON(raw json.RawMessage) json.RawMessage {
-	raw = normalizeAutomationRawJSON(raw)
-	if len(raw) == 0 || string(raw) == "null" {
-		return json.RawMessage("{}")
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	return raw
+	return out, nil
 }
