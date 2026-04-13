@@ -36,6 +36,19 @@ func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		sess, found, err := deps.Store.GetSession(r.Context(), sessionID)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.NotFound(w, r)
+			return
+		}
+		if sess.State == types.SessionStateAwaitingPermission {
+			http.Error(w, "session is awaiting permission; use /approve or /deny before sending another prompt", http.StatusConflict)
+			return
+		}
 
 		now := time.Now().UTC()
 		turn := types.Turn{

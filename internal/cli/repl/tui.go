@@ -890,6 +890,11 @@ func (m *tuiModel) submitPromptCmd(prompt string) tea.Cmd {
 	if strings.TrimSpace(prompt) == "" || strings.TrimSpace(m.sessionID) == "" {
 		return nil
 	}
+	if pending := strings.TrimSpace(m.lastPermissionRequestID); pending != "" {
+		m.appendNotice(pendingPermissionNotice(pending))
+		m.layout()
+		return nil
+	}
 	m.busy = true
 	m.closeAssistantStream()
 	m.appendEntry(tuiEntry{

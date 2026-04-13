@@ -420,6 +420,10 @@ func decodeAPIError(resp *http.Response, method string, path string) error {
 		return &validation
 	}
 
+	if detail := strings.TrimSpace(string(raw)); detail != "" {
+		return fmt.Errorf("%s %s: status %d: %s", method, path, resp.StatusCode, detail)
+	}
+
 	return fmt.Errorf("%s %s: status %d", method, path, resp.StatusCode)
 }
 

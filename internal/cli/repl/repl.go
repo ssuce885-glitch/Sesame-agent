@@ -132,6 +132,10 @@ func (r *REPL) HandleLine(ctx context.Context, line string) (bool, error) {
 	if strings.TrimSpace(r.sessionID) == "" {
 		return false, errors.New("session is not selected")
 	}
+	if pending := strings.TrimSpace(r.lastPermissionRequestID); pending != "" {
+		fmt.Fprintln(r.stdout, pendingPermissionNotice(pending))
+		return true, nil
+	}
 	if _, err := r.client.SubmitTurn(ctx, r.sessionID, types.SubmitTurnRequest{Message: line}); err != nil {
 		return false, err
 	}
@@ -161,6 +165,7 @@ func (r *REPL) loadSession(ctx context.Context) error {
 		return err
 	}
 	r.lastSeq = timeline.LatestSeq
+	r.lastPermissionRequestID = pendingPermissionRequestIDFromTimeline(timeline)
 	r.renderer.RenderTimeline(timeline)
 	return nil
 }
@@ -359,6 +364,35 @@ func permissionCommandUsage(command string) string {
 		return "[<request_id>]"
 	}
 	return "[<request_id>] [once|run|session]"
+}
+
+func pendingPermissionNotice(requestID string) string {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return "permission request is pending; resolve it before sending another prompt"
+	}
+	return fmt.Sprintf("permission request is pending; use /approve %s [once|run|session] or /deny %s before sending another prompt", requestID, requestID)
+}
+
+func pendingPermissionRequestIDFromTimeline(timeline types.SessionTimelineResponse) string {
+	pending := ""
+	for _, block := range timeline.Blocks {
+		if block.Kind != "permission_block" {
+			continue
+		}
+		requestID := strings.TrimSpace(block.PermissionRequestID)
+		if requestID == "" {
+			continue
+		}
+		if strings.EqualFold(block.Status, string(types.PermissionRequestStatusRequested)) {
+			pending = requestID
+			continue
+		}
+		if requestID == pending {
+			pending = ""
+		}
+	}
+	return pending
 }
 
 func (r *REPL) handleCronCommand(ctx context.Context, args []string) error {

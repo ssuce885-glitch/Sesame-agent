@@ -68,6 +68,7 @@ type skillMetadata struct {
 type skillPolicySection struct {
 	AllowImplicitActivation *bool      `yaml:"allow_implicit_activation"`
 	AllowFullInjection      *bool      `yaml:"allow_full_injection"`
+	AllowedTools            stringList `yaml:"allowed-tools"`
 	CapabilityTags          stringList `yaml:"capability_tags"`
 	PreferredTools          stringList `yaml:"preferred_tools"`
 }
@@ -295,7 +296,8 @@ func decodeSkillMetadata(raw string) (skillMetadata, error) {
 	meta.Agent.Description = strings.TrimSpace(meta.Agent.Description)
 	meta.Agent.Instructions = strings.TrimSpace(meta.Agent.Instructions)
 	meta.Triggers = normalizeSkillStringList(meta.Triggers)
-	meta.AllowedTools = normalizeSkillStringList(meta.AllowedTools)
+	meta.Policy.AllowedTools = normalizeSkillStringList(meta.Policy.AllowedTools)
+	meta.AllowedTools = normalizeSkillStringList(append(meta.AllowedTools, meta.Policy.AllowedTools...))
 	meta.Policy.CapabilityTags = normalizeSkillStringList(meta.Policy.CapabilityTags)
 	meta.Policy.PreferredTools = normalizeSkillStringList(meta.Policy.PreferredTools)
 	meta.Agent.Tools = normalizeSkillStringList(meta.Agent.Tools)

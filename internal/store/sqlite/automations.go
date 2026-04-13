@@ -300,6 +300,129 @@ func upsertAutomationHeartbeatWithExec(ctx context.Context, execer execContexter
 	return err
 }
 
+func (s *Store) UpsertDispatchAttempt(ctx context.Context, attempt types.DispatchAttempt) error {
+	return upsertDispatchAttemptWithExec(ctx, s.db, attempt)
+}
+
+func (t runtimeTx) UpsertDispatchAttempt(ctx context.Context, attempt types.DispatchAttempt) error {
+	return upsertDispatchAttemptWithExec(ctx, t.tx, attempt)
+}
+
+func upsertDispatchAttemptWithExec(ctx context.Context, execer execContexter, attempt types.DispatchAttempt) error {
+	attempt = normalizeDispatchAttemptForStore(attempt)
+	payload, err := json.Marshal(attempt)
+	if err != nil {
+		return err
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		insert into dispatch_attempts (
+			dispatch_id,
+			attempt,
+			incident_id,
+			automation_id,
+			workspace_root,
+			phase,
+			status,
+			task_id,
+			background_session_id,
+			background_turn_id,
+			continuation_id,
+			permission_request_id,
+			approval_queue_key,
+			preferred_session_id,
+			payload,
+			created_at,
+			updated_at
+		)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		on conflict(dispatch_id, attempt) do update set
+			incident_id = excluded.incident_id,
+			automation_id = excluded.automation_id,
+			workspace_root = excluded.workspace_root,
+			phase = excluded.phase,
+			status = excluded.status,
+			task_id = excluded.task_id,
+			background_session_id = excluded.background_session_id,
+			background_turn_id = excluded.background_turn_id,
+			continuation_id = excluded.continuation_id,
+			permission_request_id = excluded.permission_request_id,
+			approval_queue_key = excluded.approval_queue_key,
+			preferred_session_id = excluded.preferred_session_id,
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+	`,
+		attempt.DispatchID,
+		attempt.Attempt,
+		attempt.IncidentID,
+		attempt.AutomationID,
+		attempt.WorkspaceRoot,
+		attempt.Phase,
+		attempt.Status,
+		attempt.TaskID,
+		attempt.BackgroundSessionID,
+		attempt.BackgroundTurnID,
+		attempt.ContinuationID,
+		attempt.PermissionRequestID,
+		attempt.ApprovalQueueKey,
+		attempt.PreferredSessionID,
+		string(payload),
+		attempt.CreatedAt.UTC().Format(timeLayout),
+		attempt.UpdatedAt.UTC().Format(timeLayout),
+	)
+	return err
+}
+
+func (s *Store) UpsertDeliveryRecord(ctx context.Context, record types.DeliveryRecord) error {
+	return upsertDeliveryRecordWithExec(ctx, s.db, record)
+}
+
+func (t runtimeTx) UpsertDeliveryRecord(ctx context.Context, record types.DeliveryRecord) error {
+	return upsertDeliveryRecordWithExec(ctx, t.tx, record)
+}
+
+func upsertDeliveryRecordWithExec(ctx context.Context, execer execContexter, record types.DeliveryRecord) error {
+	record = normalizeDeliveryRecordForStore(record)
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		insert into delivery_records (
+			delivery_id,
+			workspace_root,
+			automation_id,
+			incident_id,
+			dispatch_id,
+			summary_ref,
+			payload,
+			created_at,
+			updated_at
+		)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		on conflict(delivery_id) do update set
+			workspace_root = excluded.workspace_root,
+			automation_id = excluded.automation_id,
+			incident_id = excluded.incident_id,
+			dispatch_id = excluded.dispatch_id,
+			summary_ref = excluded.summary_ref,
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+	`,
+		record.DeliveryID,
+		record.WorkspaceRoot,
+		record.AutomationID,
+		record.IncidentID,
+		record.DispatchID,
+		record.SummaryRef,
+		string(payload),
+		record.CreatedAt.UTC().Format(timeLayout),
+		record.UpdatedAt.UTC().Format(timeLayout),
+	)
+	return err
+}
+
 func (s *Store) UpsertAutomationWatcher(ctx context.Context, watcher types.AutomationWatcherRuntime) error {
 	return upsertAutomationWatcherWithExec(ctx, s.db, watcher)
 }
@@ -540,7 +663,7 @@ func normalizeAutomationSpecForStore(spec types.AutomationSpec) types.Automation
 	spec.WorkspaceRoot = strings.TrimSpace(spec.WorkspaceRoot)
 	spec.Goal = strings.TrimSpace(spec.Goal)
 	spec.State = normalizeAutomationStateForStore(spec.State)
-	spec.Assumptions = normalizeAutomationStringList(spec.Assumptions)
+	spec.Assumptions = normalizeAutomationAssumptions(spec.Assumptions)
 
 	spec.Context.Owner = strings.TrimSpace(spec.Context.Owner)
 	spec.Context.Environment = strings.TrimSpace(spec.Context.Environment)
@@ -690,6 +813,157 @@ func normalizeAutomationWatcherForStore(watcher types.AutomationWatcherRuntime) 
 		watcher.UpdatedAt = watcher.CreatedAt
 	}
 	return watcher
+}
+
+func normalizeAutomationAssumptions(values []types.AutomationAssumption) []types.AutomationAssumption {
+	if len(values) == 0 {
+		return []types.AutomationAssumption{}
+	}
+	out := make([]types.AutomationAssumption, 0, len(values))
+	for _, value := range values {
+		value.Field = strings.TrimSpace(value.Field)
+		value.Value = strings.TrimSpace(value.Value)
+		value.Reason = strings.TrimSpace(value.Reason)
+		if value.Field == "" && value.Value == "" && value.Reason == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return []types.AutomationAssumption{}
+	}
+	return out
+}
+
+func normalizeDispatchAttemptForStore(attempt types.DispatchAttempt) types.DispatchAttempt {
+	now := time.Now().UTC()
+	attempt.DispatchID = strings.TrimSpace(attempt.DispatchID)
+	if attempt.DispatchID == "" {
+		attempt.DispatchID = types.NewID("dispatch")
+	}
+	attempt.IncidentID = strings.TrimSpace(attempt.IncidentID)
+	attempt.AutomationID = strings.TrimSpace(attempt.AutomationID)
+	attempt.WorkspaceRoot = strings.TrimSpace(attempt.WorkspaceRoot)
+	attempt.Phase = normalizeAutomationPhaseForStore(attempt.Phase)
+	attempt.Status = normalizeDispatchAttemptStatusForStore(attempt.Status)
+	if attempt.Attempt <= 0 {
+		attempt.Attempt = 1
+	}
+	attempt.TaskID = strings.TrimSpace(attempt.TaskID)
+	attempt.BackgroundSessionID = strings.TrimSpace(attempt.BackgroundSessionID)
+	attempt.BackgroundTurnID = strings.TrimSpace(attempt.BackgroundTurnID)
+	attempt.ContinuationID = strings.TrimSpace(attempt.ContinuationID)
+	attempt.PermissionRequestID = strings.TrimSpace(attempt.PermissionRequestID)
+	attempt.ApprovalQueueKey = strings.TrimSpace(attempt.ApprovalQueueKey)
+	attempt.PreferredSessionID = strings.TrimSpace(attempt.PreferredSessionID)
+	if attempt.CreatedAt.IsZero() {
+		attempt.CreatedAt = now
+	} else {
+		attempt.CreatedAt = attempt.CreatedAt.UTC()
+	}
+	if attempt.UpdatedAt.IsZero() {
+		attempt.UpdatedAt = attempt.CreatedAt
+	} else {
+		attempt.UpdatedAt = attempt.UpdatedAt.UTC()
+	}
+	if attempt.UpdatedAt.Before(attempt.CreatedAt) {
+		attempt.UpdatedAt = attempt.CreatedAt
+	}
+	return attempt
+}
+
+func normalizeDeliveryRecordForStore(record types.DeliveryRecord) types.DeliveryRecord {
+	now := time.Now().UTC()
+	record.DeliveryID = strings.TrimSpace(record.DeliveryID)
+	if record.DeliveryID == "" {
+		record.DeliveryID = types.NewID("delivery")
+	}
+	record.WorkspaceRoot = strings.TrimSpace(record.WorkspaceRoot)
+	record.AutomationID = strings.TrimSpace(record.AutomationID)
+	record.IncidentID = strings.TrimSpace(record.IncidentID)
+	record.DispatchID = strings.TrimSpace(record.DispatchID)
+	record.SummaryRef = strings.TrimSpace(record.SummaryRef)
+	record.Channels = normalizeDeliveryChannelsForStore(record.Channels)
+	if record.CreatedAt.IsZero() {
+		record.CreatedAt = now
+	} else {
+		record.CreatedAt = record.CreatedAt.UTC()
+	}
+	if record.UpdatedAt.IsZero() {
+		record.UpdatedAt = record.CreatedAt
+	} else {
+		record.UpdatedAt = record.UpdatedAt.UTC()
+	}
+	if record.UpdatedAt.Before(record.CreatedAt) {
+		record.UpdatedAt = record.CreatedAt
+	}
+	return record
+}
+
+func normalizeAutomationPhaseForStore(phase types.AutomationPhase) types.AutomationPhase {
+	switch strings.ToLower(strings.TrimSpace(string(phase))) {
+	case string(types.AutomationPhaseDiagnose):
+		return types.AutomationPhaseDiagnose
+	case string(types.AutomationPhaseRemediate):
+		return types.AutomationPhaseRemediate
+	case string(types.AutomationPhaseVerify):
+		return types.AutomationPhaseVerify
+	default:
+		return ""
+	}
+}
+
+func normalizeDispatchAttemptStatusForStore(status types.DispatchAttemptStatus) types.DispatchAttemptStatus {
+	switch strings.ToLower(strings.TrimSpace(string(status))) {
+	case string(types.DispatchAttemptStatusAwaitingApproval):
+		return types.DispatchAttemptStatusAwaitingApproval
+	default:
+		return types.DispatchAttemptStatusAwaitingApproval
+	}
+}
+
+func normalizeDeliveryChannelsForStore(channels types.DeliveryChannelSet) types.DeliveryChannelSet {
+	channels.Notice.Status = normalizeNoticeDeliveryChannelStatusForStore(channels.Notice.Status)
+	channels.Mailbox.Status = normalizeMailboxDeliveryChannelStatusForStore(channels.Mailbox.Status)
+	channels.Injection.Status = normalizeInjectionDeliveryChannelStatusForStore(channels.Injection.Status)
+	return channels
+}
+
+func normalizeNoticeDeliveryChannelStatusForStore(status types.DeliveryChannelStatus) types.DeliveryChannelStatus {
+	switch strings.ToLower(strings.TrimSpace(string(status))) {
+	case string(types.DeliveryChannelStatusPending):
+		return types.DeliveryChannelStatusPending
+	case string(types.DeliveryChannelStatusDisabled):
+		return types.DeliveryChannelStatusDisabled
+	default:
+		return types.DeliveryChannelStatusPending
+	}
+}
+
+func normalizeMailboxDeliveryChannelStatusForStore(status types.DeliveryChannelStatus) types.DeliveryChannelStatus {
+	switch strings.ToLower(strings.TrimSpace(string(status))) {
+	case string(types.DeliveryChannelStatusPending):
+		return types.DeliveryChannelStatusPending
+	case string(types.DeliveryChannelStatusReady):
+		return types.DeliveryChannelStatusReady
+	case string(types.DeliveryChannelStatusDisabled):
+		return types.DeliveryChannelStatusDisabled
+	default:
+		return types.DeliveryChannelStatusPending
+	}
+}
+
+func normalizeInjectionDeliveryChannelStatusForStore(status types.DeliveryChannelStatus) types.DeliveryChannelStatus {
+	switch strings.ToLower(strings.TrimSpace(string(status))) {
+	case string(types.DeliveryChannelStatusPending):
+		return types.DeliveryChannelStatusPending
+	case string(types.DeliveryChannelStatusReady):
+		return types.DeliveryChannelStatusReady
+	case string(types.DeliveryChannelStatusDisabled):
+		return types.DeliveryChannelStatusDisabled
+	default:
+		return types.DeliveryChannelStatusDisabled
+	}
 }
 
 func normalizeAutomationStateForStore(state types.AutomationState) types.AutomationState {

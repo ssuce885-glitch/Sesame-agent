@@ -10,6 +10,9 @@ type AutomationState string
 type AutomationControlAction string
 type AutomationIncidentStatus string
 type AutomationWatcherState string
+type AutomationPhase string
+type DispatchAttemptStatus string
+type DeliveryChannelStatus string
 
 const (
 	AutomationStateActive AutomationState = "active"
@@ -38,6 +41,26 @@ const (
 	AutomationWatcherStateStopped AutomationWatcherState = "stopped"
 )
 
+const (
+	AutomationPhaseDiagnose  AutomationPhase = "diagnose"
+	AutomationPhaseRemediate AutomationPhase = "remediate"
+	AutomationPhaseVerify    AutomationPhase = "verify"
+)
+
+const (
+	ResponsePlanV2Schema = "sesame.response_plan/v2"
+)
+
+const (
+	DispatchAttemptStatusAwaitingApproval DispatchAttemptStatus = "awaiting_approval"
+)
+
+const (
+	DeliveryChannelStatusPending  DeliveryChannelStatus = "pending"
+	DeliveryChannelStatusReady    DeliveryChannelStatus = "ready"
+	DeliveryChannelStatusDisabled DeliveryChannelStatus = "disabled"
+)
+
 type AutomationContext struct {
 	Targets     []string          `json:"targets"`
 	Labels      map[string]string `json:"labels"`
@@ -50,6 +73,24 @@ type AutomationSignal struct {
 	Source   string          `json:"source,omitempty"`
 	Selector string          `json:"selector,omitempty"`
 	Payload  json.RawMessage `json:"payload,omitempty"`
+}
+
+type AutomationAssumption struct {
+	Field  string `json:"field,omitempty"`
+	Value  string `json:"value,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type ResponsePlanPhase struct {
+	Phase                  AutomationPhase `json:"phase,omitempty"`
+	ChildAgentTemplateRefs []string        `json:"child_agent_template_refs,omitempty"`
+}
+
+type ResponsePlanV2 struct {
+	SchemaVersion          string              `json:"schema_version,omitempty"`
+	Mode                   string              `json:"mode,omitempty"`
+	ChildAgentTemplateRefs []string            `json:"child_agent_template_refs,omitempty"`
+	Phases                 []ResponsePlanPhase `json:"phases,omitempty"`
 }
 
 type AutomationSpec struct {
@@ -69,7 +110,7 @@ type AutomationSpec struct {
 	WatcherLifecycle json.RawMessage    `json:"watcher_lifecycle"`
 	RetriggerPolicy  json.RawMessage    `json:"retrigger_policy"`
 	RunPolicy        json.RawMessage    `json:"run_policy"`
-	Assumptions      []string           `json:"assumptions"`
+	Assumptions      []AutomationAssumption `json:"assumptions"`
 	CreatedAt        time.Time          `json:"created_at,omitempty"`
 	UpdatedAt        time.Time          `json:"updated_at,omitempty"`
 }
@@ -112,6 +153,47 @@ type AutomationWatcherRuntime struct {
 	LastError     string                 `json:"last_error,omitempty"`
 	CreatedAt     time.Time              `json:"created_at,omitempty"`
 	UpdatedAt     time.Time              `json:"updated_at,omitempty"`
+}
+
+type DispatchAttempt struct {
+	DispatchID          string               `json:"dispatch_id"`
+	IncidentID          string               `json:"incident_id,omitempty"`
+	AutomationID        string               `json:"automation_id,omitempty"`
+	WorkspaceRoot       string               `json:"workspace_root,omitempty"`
+	Phase               AutomationPhase      `json:"phase,omitempty"`
+	Attempt             int                  `json:"attempt,omitempty"`
+	Status              DispatchAttemptStatus `json:"status,omitempty"`
+	TaskID              string               `json:"task_id,omitempty"`
+	BackgroundSessionID string               `json:"background_session_id,omitempty"`
+	BackgroundTurnID    string               `json:"background_turn_id,omitempty"`
+	ContinuationID      string               `json:"continuation_id,omitempty"`
+	PermissionRequestID string               `json:"permission_request_id,omitempty"`
+	ApprovalQueueKey    string               `json:"approval_queue_key,omitempty"`
+	PreferredSessionID  string               `json:"preferred_session_id,omitempty"`
+	CreatedAt           time.Time            `json:"created_at,omitempty"`
+	UpdatedAt           time.Time            `json:"updated_at,omitempty"`
+}
+
+type DeliveryChannelStatusRecord struct {
+	Status DeliveryChannelStatus `json:"status,omitempty"`
+}
+
+type DeliveryChannelSet struct {
+	Notice    DeliveryChannelStatusRecord `json:"notice,omitempty"`
+	Mailbox   DeliveryChannelStatusRecord `json:"mailbox,omitempty"`
+	Injection DeliveryChannelStatusRecord `json:"injection,omitempty"`
+}
+
+type DeliveryRecord struct {
+	DeliveryID    string             `json:"delivery_id"`
+	WorkspaceRoot string             `json:"workspace_root,omitempty"`
+	AutomationID  string             `json:"automation_id,omitempty"`
+	IncidentID    string             `json:"incident_id,omitempty"`
+	DispatchID    string             `json:"dispatch_id,omitempty"`
+	SummaryRef    string             `json:"summary_ref,omitempty"`
+	Channels      DeliveryChannelSet `json:"channels,omitempty"`
+	CreatedAt     time.Time          `json:"created_at,omitempty"`
+	UpdatedAt     time.Time          `json:"updated_at,omitempty"`
 }
 
 type AutomationAsset struct {

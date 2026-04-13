@@ -408,7 +408,7 @@ func normalizeAutomationSpec(spec types.AutomationSpec, now time.Time) types.Aut
 	spec.Context.Labels = normalizeLabels(spec.Context.Labels)
 	spec.Signals = normalizeSignals(spec.Signals)
 	spec.IncidentPolicy = normalizeObjectJSON(spec.IncidentPolicy)
-	spec.ResponsePlan = normalizeRawJSON(spec.ResponsePlan)
+	spec.ResponsePlan = normalizeResponsePlanJSON(spec.ResponsePlan)
 	spec.VerificationPlan = normalizeObjectJSON(spec.VerificationPlan)
 	spec.EscalationPolicy = normalizeObjectJSON(spec.EscalationPolicy)
 	spec.DeliveryPolicy = normalizeRawJSON(spec.DeliveryPolicy)
@@ -416,7 +416,7 @@ func normalizeAutomationSpec(spec types.AutomationSpec, now time.Time) types.Aut
 	spec.WatcherLifecycle = normalizeObjectJSON(spec.WatcherLifecycle)
 	spec.RetriggerPolicy = normalizeObjectJSON(spec.RetriggerPolicy)
 	spec.RunPolicy = normalizeObjectJSON(spec.RunPolicy)
-	spec.Assumptions = normalizeStringList(spec.Assumptions)
+	spec.Assumptions = normalizeAssumptions(spec.Assumptions)
 
 	if spec.CreatedAt.IsZero() {
 		spec.CreatedAt = now
@@ -560,12 +560,104 @@ func normalizeStringList(values []string) []string {
 	return out
 }
 
+func normalizeAssumptions(values []types.AutomationAssumption) []types.AutomationAssumption {
+	if len(values) == 0 {
+		return []types.AutomationAssumption{}
+	}
+	out := make([]types.AutomationAssumption, 0, len(values))
+	for _, value := range values {
+		value.Field = strings.TrimSpace(value.Field)
+		value.Value = strings.TrimSpace(value.Value)
+		value.Reason = strings.TrimSpace(value.Reason)
+		if value.Field == "" && value.Value == "" && value.Reason == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return []types.AutomationAssumption{}
+	}
+	return out
+}
+
 func normalizeRawJSON(raw json.RawMessage) json.RawMessage {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" {
 		return nil
 	}
 	return json.RawMessage(trimmed)
+}
+
+func normalizeResponsePlanJSON(raw json.RawMessage) json.RawMessage {
+	raw = normalizeRawJSON(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return raw
+	}
+	var plan types.ResponsePlanV2
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return raw
+	}
+	plan.SchemaVersion = strings.TrimSpace(plan.SchemaVersion)
+	plan.Mode = strings.TrimSpace(plan.Mode)
+	plan.ChildAgentTemplateRefs = normalizeStringList(plan.ChildAgentTemplateRefs)
+	plan.Phases = normalizeResponsePlanPhases(plan.Phases)
+	if plan.SchemaVersion == "" && (plan.Mode != "" || len(plan.Phases) > 0 || len(plan.ChildAgentTemplateRefs) > 0) {
+		plan.SchemaVersion = types.ResponsePlanV2Schema
+	}
+	if len(plan.Phases) == 0 && plan.Mode != "" {
+		plan.Phases = defaultResponsePlanPhases(plan.Mode, plan.ChildAgentTemplateRefs)
+	}
+	normalized, err := json.Marshal(plan)
+	if err != nil {
+		return raw
+	}
+	return normalized
+}
+
+func normalizeResponsePlanPhases(phases []types.ResponsePlanPhase) []types.ResponsePlanPhase {
+	if len(phases) == 0 {
+		return []types.ResponsePlanPhase{}
+	}
+	out := make([]types.ResponsePlanPhase, 0, len(phases))
+	for _, phase := range phases {
+		phase.Phase = types.AutomationPhase(strings.ToLower(strings.TrimSpace(string(phase.Phase))))
+		phase.ChildAgentTemplateRefs = normalizeStringList(phase.ChildAgentTemplateRefs)
+		if phase.Phase == "" && len(phase.ChildAgentTemplateRefs) == 0 {
+			continue
+		}
+		out = append(out, phase)
+	}
+	if len(out) == 0 {
+		return []types.ResponsePlanPhase{}
+	}
+	return out
+}
+
+func defaultResponsePlanPhases(mode string, templateRefs []string) []types.ResponsePlanPhase {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "investigate_then_remediate":
+		diagnoseRefs := []string{}
+		remediateRefs := []string{}
+		if len(templateRefs) > 0 {
+			diagnoseRefs = append(diagnoseRefs, templateRefs[0])
+		}
+		if len(templateRefs) > 1 {
+			remediateRefs = append(remediateRefs, templateRefs[1:]...)
+		}
+		phases := []types.ResponsePlanPhase{{
+			Phase:                  types.AutomationPhaseDiagnose,
+			ChildAgentTemplateRefs: diagnoseRefs,
+		}}
+		if len(remediateRefs) > 0 {
+			phases = append(phases, types.ResponsePlanPhase{
+				Phase:                  types.AutomationPhaseRemediate,
+				ChildAgentTemplateRefs: remediateRefs,
+			})
+		}
+		return phases
+	default:
+		return []types.ResponsePlanPhase{}
+	}
 }
 
 func isPresentJSON(raw json.RawMessage) bool {
