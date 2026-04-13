@@ -14,6 +14,10 @@ type Runner interface {
 	RunTurn(ctx context.Context, in RunInput) error
 }
 
+type TurnResultSink interface {
+	HandleTurnResult(ctx context.Context, session types.Session, turnID string, err error)
+}
+
 type SubmitTurnInput struct {
 	TurnID       string
 	ClientTurnID string
@@ -34,17 +38,23 @@ type RunInput struct {
 }
 
 type Manager struct {
-	mu       sync.Mutex
-	runner   Runner
-	sessions map[string]types.Session
-	runtime  map[string]*RuntimeState
+	mu             sync.Mutex
+	runner         Runner
+	turnResultSink TurnResultSink
+	sessions       map[string]types.Session
+	runtime        map[string]*RuntimeState
 }
 
-func NewManager(runner Runner) *Manager {
+func NewManager(runner Runner, sink ...TurnResultSink) *Manager {
+	var turnResultSink TurnResultSink
+	if len(sink) > 0 {
+		turnResultSink = sink[0]
+	}
 	return &Manager{
-		runner:   runner,
-		sessions: make(map[string]types.Session),
-		runtime:  make(map[string]*RuntimeState),
+		runner:         runner,
+		turnResultSink: turnResultSink,
+		sessions:       make(map[string]types.Session),
+		runtime:        make(map[string]*RuntimeState),
 	}
 }
 
@@ -154,13 +164,16 @@ func (m *Manager) startTurn(ctx context.Context, sessionID string, in RunInput) 
 	m.mu.Unlock()
 
 	go func() {
-		defer m.finishTurn(sessionID, in.TurnID)
-		_ = m.runner.RunTurn(runCtx, RunInput{
+		runErr := m.runner.RunTurn(runCtx, RunInput{
 			Session: session,
 			TurnID:  in.TurnID,
 			Message: in.Message,
 			Resume:  in.Resume,
 		})
+		if m.turnResultSink != nil {
+			m.turnResultSink.HandleTurnResult(runCtx, session, in.TurnID, runErr)
+		}
+		m.finishTurn(sessionID, in.TurnID)
 	}()
 
 	return in.TurnID, nil

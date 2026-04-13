@@ -206,6 +206,13 @@ func (s *WatcherService) Run(ctx context.Context) error {
 	}
 }
 
+func (s *WatcherService) ReconcileInterval() time.Duration {
+	if s == nil || s.reconcileEvery <= 0 {
+		return 5 * time.Second
+	}
+	return s.reconcileEvery
+}
+
 func (s *WatcherService) reconcileWatcher(ctx context.Context, runtime types.AutomationWatcherRuntime) error {
 	spec, ok, err := s.store.GetAutomation(ctx, runtime.AutomationID)
 	if err != nil {

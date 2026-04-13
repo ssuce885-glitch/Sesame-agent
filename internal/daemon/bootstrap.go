@@ -1,0 +1,105 @@
+package daemon
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+
+	"go-agent/internal/automation"
+	"go-agent/internal/config"
+	contextstate "go-agent/internal/context"
+	"go-agent/internal/engine"
+	"go-agent/internal/model"
+	"go-agent/internal/reporting"
+	"go-agent/internal/runtimegraph"
+	"go-agent/internal/scheduler"
+	"go-agent/internal/session"
+	"go-agent/internal/store/sqlite"
+	"go-agent/internal/stream"
+	"go-agent/internal/task"
+	"go-agent/internal/tools"
+)
+
+func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, modelClient model.StreamingClient) (*Runtime, error) {
+	bus := stream.NewBus()
+	runtimeService := runtimegraph.NewService(store)
+	automationService := automation.NewService(store)
+
+	wiring := buildRuntimeWiring(cfg, modelClient)
+	runner := engine.NewWithRuntime(
+		modelClient,
+		toolsRegistry(),
+		buildPermissionEngine(cfg),
+		store,
+		contextstate.NewManager(wiring.contextManagerConfig),
+		wiring.runtime,
+		wiring.compactor,
+		engine.RuntimeMetadata{
+			Provider: cfg.ModelProvider,
+			Model:    cfg.Model,
+		},
+		buildMaxToolSteps(cfg),
+	)
+	runner.SetGlobalConfigRoot(cfg.Paths.GlobalRoot)
+	runner.SetSessionMemoryAsync(true)
+	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
+	runner.SetRuntimeService(runtimeService)
+	runner.SetAutomationService(automationService)
+
+	taskNotifier := buildTaskTerminalNotifier(store, bus, cfg.Paths.WorkspaceRoot)
+	taskManager := task.NewManager(task.Config{
+		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
+		TaskOutputMaxBytes: cfg.TaskOutputMaxBytes,
+		TerminalNotifier:   taskNotifier,
+	}, nil, buildAgentTaskExecutor(runner))
+	executablePath, _ := os.Executable()
+	watcherService := automation.NewWatcherService(store, taskManager, automation.WatcherConfig{
+		DataRoot:       filepath.Join(cfg.DataDir, "automation"),
+		ExecutablePath: executablePath,
+		DataDir:        cfg.DataDir,
+		Addr:           cfg.Addr,
+	})
+	automationService.SetWatcherService(watcherService)
+
+	schedulerService := scheduler.NewService(store, taskManager)
+	taskManager.SetRemoteConfig(task.RemoteExecutorConfig{
+		ShimCommand:    cfg.RemoteExecutorShimCommand,
+		TimeoutSeconds: cfg.RemoteExecutorTimeoutSeconds,
+	})
+	if taskNotifier != nil {
+		taskNotifier.scheduler = schedulerService
+	}
+	runner.SetTaskManager(taskManager)
+	runner.SetSchedulerService(schedulerService)
+
+	sessionManager := session.NewManager(sessionRunnerAdapter{
+		engine: runner,
+		sink: storeAndBusSink{
+			store: store,
+			bus:   bus,
+		},
+	}, newTurnResultFallbackSink(store, bus))
+
+	reportingService := reporting.NewService(store)
+	if taskNotifier != nil && taskNotifier.reporting != nil {
+		reportingService = taskNotifier.reporting
+	}
+
+	return &Runtime{
+		Store:             store,
+		Bus:               bus,
+		Engine:            runner,
+		SessionManager:    sessionManager,
+		TaskManager:       taskManager,
+		RuntimeService:    runtimeService,
+		AutomationService: automationService,
+		WatcherService:    watcherService,
+		SchedulerService:  schedulerService,
+		ReportingService:  reportingService,
+		TaskNotifier:      taskNotifier,
+	}, nil
+}
+
+func toolsRegistry() *tools.Registry {
+	return tools.NewRegistry()
+}
