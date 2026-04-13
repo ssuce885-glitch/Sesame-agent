@@ -200,6 +200,11 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, pr
 	sessionID := types.NewID("task_session")
 	turnID := types.NewID("task_turn")
 	sink := &taskEventSink{observer: observer}
+	if observer != nil {
+		if err := observer.SetRunContext(sessionID, turnID); err != nil {
+			return err
+		}
+	}
 	if err := a.runner.RunTurn(ctx, engine.Input{
 		Session: types.Session{
 			ID:            sessionID,

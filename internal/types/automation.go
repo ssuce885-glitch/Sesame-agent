@@ -34,7 +34,16 @@ const (
 )
 
 const (
-	AutomationIncidentStatusOpen AutomationIncidentStatus = "open"
+	AutomationIncidentStatusOpen       AutomationIncidentStatus = "open"
+	AutomationIncidentStatusSuppressed AutomationIncidentStatus = "suppressed"
+	AutomationIncidentStatusQueued     AutomationIncidentStatus = "queued"
+	AutomationIncidentStatusActive     AutomationIncidentStatus = "active"
+	AutomationIncidentStatusMonitoring AutomationIncidentStatus = "monitoring"
+	AutomationIncidentStatusResolved   AutomationIncidentStatus = "resolved"
+	AutomationIncidentStatusEscalated  AutomationIncidentStatus = "escalated"
+	AutomationIncidentStatusFailed     AutomationIncidentStatus = "failed"
+	AutomationIncidentStatusCanceled   AutomationIncidentStatus = "canceled"
+	AutomationIncidentStatusClosed     AutomationIncidentStatus = "closed"
 )
 
 const (

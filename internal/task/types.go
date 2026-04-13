@@ -136,6 +136,7 @@ type Runner interface {
 type AgentTaskObserver interface {
 	AppendLog(chunk []byte) error
 	SetFinalText(text string) error
+	SetRunContext(sessionID, turnID string) error
 }
 
 type AgentExecutor interface {
