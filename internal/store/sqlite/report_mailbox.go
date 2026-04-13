@@ -11,12 +11,62 @@ import (
 	"go-agent/internal/types"
 )
 
+func (s *Store) workspaceRootForSession(ctx context.Context, sessionID string) string {
+	if s == nil {
+		return ""
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ""
+	}
+	var root string
+	if err := s.db.QueryRowContext(ctx, `
+		select workspace_root
+		from sessions
+		where id = ?
+	`, sessionID).Scan(&root); err != nil {
+		// Backwards-compatible fallback: some code paths/tests write mailbox data without
+		// persisting a session row. Treat session_id as a stable scope key in that case.
+		if err == sql.ErrNoRows {
+			return sessionID
+		}
+		return ""
+	}
+	return strings.TrimSpace(root)
+}
+
 func (s *Store) UpsertReport(ctx context.Context, report types.ReportRecord) error {
 	return upsertReportWithExec(ctx, s.db, report)
 }
 
 func (s *Store) UpsertReportDelivery(ctx context.Context, delivery types.ReportDelivery) error {
 	return upsertReportDeliveryWithExec(ctx, s.db, delivery)
+}
+
+func (s *Store) ListWorkspaceReportMailboxItems(ctx context.Context, workspaceRoot string) ([]types.ReportMailboxItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		select
+			d.payload,
+			d.observed_at,
+			d.injected_turn_id,
+			d.injected_at,
+			d.created_at,
+			d.updated_at,
+			r.payload,
+			r.observed_at,
+			r.created_at,
+			r.updated_at,
+			d.workspace_root
+		from report_deliveries d
+		join reports r on r.id = d.report_id
+		where d.workspace_root = ? and d.channel = ?
+		order by d.observed_at desc, d.created_at desc, d.id asc
+	`, strings.TrimSpace(workspaceRoot), string(types.ReportChannelMailbox))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanReportMailboxRows(rows)
 }
 
 func (s *Store) ListReports(ctx context.Context, sessionID string) ([]types.ReportRecord, error) {
@@ -38,6 +88,9 @@ func (s *Store) ListReportDeliveries(ctx context.Context, sessionID string, chan
 }
 
 func (s *Store) UpsertReportMailboxItem(ctx context.Context, item types.ReportMailboxItem) error {
+	if strings.TrimSpace(item.WorkspaceRoot) == "" && strings.TrimSpace(item.SessionID) != "" {
+		item.WorkspaceRoot = s.workspaceRootForSession(ctx, item.SessionID)
+	}
 	report, delivery := mailboxItemToRecordDelivery(item)
 	if err := s.UpsertReport(ctx, report); err != nil {
 		return err
@@ -46,37 +99,28 @@ func (s *Store) UpsertReportMailboxItem(ctx context.Context, item types.ReportMa
 }
 
 func (s *Store) ListReportMailboxItems(ctx context.Context, sessionID string) ([]types.ReportMailboxItem, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		select
-			d.payload,
-			d.observed_at,
-			d.injected_turn_id,
-			d.injected_at,
-			d.created_at,
-			d.updated_at,
-			r.payload,
-			r.observed_at,
-			r.created_at,
-			r.updated_at
-		from report_deliveries d
-		join reports r on r.id = d.report_id
-		where d.session_id = ? and d.channel = ?
-		order by d.observed_at desc, d.created_at desc, d.id asc
-	`, strings.TrimSpace(sessionID), string(types.ReportChannelMailbox))
-	if err != nil {
-		return nil, err
+	workspaceRoot := s.workspaceRootForSession(ctx, sessionID)
+	if workspaceRoot == "" || workspaceRoot == strings.TrimSpace(sessionID) {
+		return listSessionReportMailboxItemsWithQuery(ctx, s.db, sessionID, "")
 	}
-	defer rows.Close()
-	return scanReportMailboxRows(rows)
+	return s.ListWorkspaceReportMailboxItems(ctx, workspaceRoot)
 }
 
 func (s *Store) CountPendingReportMailboxItems(ctx context.Context, sessionID string) (int, error) {
+	workspaceRoot := s.workspaceRootForSession(ctx, sessionID)
+	if workspaceRoot == "" || workspaceRoot == strings.TrimSpace(sessionID) {
+		return countPendingSessionReportMailboxItemsWithQuery(ctx, s.db, sessionID)
+	}
+	return s.CountPendingWorkspaceReportMailboxItems(ctx, workspaceRoot)
+}
+
+func (s *Store) CountPendingWorkspaceReportMailboxItems(ctx context.Context, workspaceRoot string) (int, error) {
 	var count int
 	if err := s.db.QueryRowContext(ctx, `
 		select count(*)
 		from report_deliveries
-		where session_id = ? and channel = ? and state = ?
-	`, strings.TrimSpace(sessionID), string(types.ReportChannelMailbox), string(types.ReportDeliveryStatePending)).Scan(&count); err != nil {
+		where workspace_root = ? and channel = ? and state = ?
+	`, strings.TrimSpace(workspaceRoot), string(types.ReportChannelMailbox), string(types.ReportDeliveryStatePending)).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -89,6 +133,60 @@ func (s *Store) ClaimPendingReportMailboxItemsForTurn(ctx context.Context, sessi
 		return nil, nil
 	}
 
+	workspaceRoot := s.workspaceRootForSession(ctx, sessionID)
+	if workspaceRoot == "" || workspaceRoot == strings.TrimSpace(sessionID) {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			_ = tx.Rollback()
+		}()
+
+		claimed, err := listSessionReportMailboxItemsWithQuery(ctx, tx, sessionID, turnID)
+		if err != nil {
+			return nil, err
+		}
+		if len(claimed) > 0 {
+			if err := tx.Commit(); err != nil {
+				return nil, err
+			}
+			return claimed, nil
+		}
+
+		pending, err := listPendingMailboxDeliveriesWithSessionQuery(ctx, tx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if len(pending) == 0 {
+			if err := tx.Commit(); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}
+
+		now := time.Now().UTC()
+		for index := range pending {
+			pending[index].State = types.ReportDeliveryStateDelivered
+			pending[index].InjectedTurnID = turnID
+			pending[index].InjectedAt = now
+			pending[index].UpdatedAt = now
+			pending[index].SessionID = sessionID
+			if err := upsertReportDeliveryWithExec(ctx, tx, pending[index]); err != nil {
+				return nil, err
+			}
+		}
+
+		claimed, err = listSessionReportMailboxItemsWithQuery(ctx, tx, sessionID, turnID)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return claimed, nil
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -97,7 +195,7 @@ func (s *Store) ClaimPendingReportMailboxItemsForTurn(ctx context.Context, sessi
 		_ = tx.Rollback()
 	}()
 
-	claimed, err := listReportMailboxItemsWithQuery(ctx, tx, sessionID, turnID)
+	claimed, err := listWorkspaceReportMailboxItemsWithQuery(ctx, tx, workspaceRoot, turnID)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +206,7 @@ func (s *Store) ClaimPendingReportMailboxItemsForTurn(ctx context.Context, sessi
 		return claimed, nil
 	}
 
-	pending, err := listPendingMailboxDeliveriesWithQuery(ctx, tx, sessionID)
+	pending, err := listPendingMailboxDeliveriesWithWorkspaceQuery(ctx, tx, workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -125,12 +223,13 @@ func (s *Store) ClaimPendingReportMailboxItemsForTurn(ctx context.Context, sessi
 		pending[index].InjectedTurnID = turnID
 		pending[index].InjectedAt = now
 		pending[index].UpdatedAt = now
+		pending[index].SessionID = sessionID
 		if err := upsertReportDeliveryWithExec(ctx, tx, pending[index]); err != nil {
 			return nil, err
 		}
 	}
 
-	claimed, err = listReportMailboxItemsWithQuery(ctx, tx, sessionID, turnID)
+	claimed, err = listWorkspaceReportMailboxItemsWithQuery(ctx, tx, workspaceRoot, turnID)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +243,11 @@ type reportMailboxQueryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-func listReportMailboxItemsWithQuery(ctx context.Context, queryer reportMailboxQueryer, sessionID, injectedTurnID string) ([]types.ReportMailboxItem, error) {
+type reportMailboxRowQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func listWorkspaceReportMailboxItemsWithQuery(ctx context.Context, queryer reportMailboxQueryer, workspaceRoot, injectedTurnID string) ([]types.ReportMailboxItem, error) {
 	rows, err := queryer.QueryContext(ctx, `
 		select
 			d.payload,
@@ -156,12 +259,13 @@ func listReportMailboxItemsWithQuery(ctx context.Context, queryer reportMailboxQ
 			r.payload,
 			r.observed_at,
 			r.created_at,
-			r.updated_at
+			r.updated_at,
+			d.workspace_root
 		from report_deliveries d
 		join reports r on r.id = d.report_id
-		where d.session_id = ? and d.channel = ? and d.injected_turn_id = ?
+		where d.workspace_root = ? and d.channel = ? and d.injected_turn_id = ?
 		order by d.observed_at asc, d.created_at asc, d.id asc
-	`, strings.TrimSpace(sessionID), string(types.ReportChannelMailbox), strings.TrimSpace(injectedTurnID))
+	`, strings.TrimSpace(workspaceRoot), string(types.ReportChannelMailbox), strings.TrimSpace(injectedTurnID))
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +273,53 @@ func listReportMailboxItemsWithQuery(ctx context.Context, queryer reportMailboxQ
 	return scanReportMailboxRows(rows)
 }
 
-func listPendingMailboxDeliveriesWithQuery(ctx context.Context, queryer reportMailboxQueryer, sessionID string) ([]types.ReportDelivery, error) {
+func listSessionReportMailboxItemsWithQuery(ctx context.Context, queryer reportMailboxQueryer, sessionID, injectedTurnID string) ([]types.ReportMailboxItem, error) {
+	query := `
+		select
+			d.payload,
+			d.observed_at,
+			d.injected_turn_id,
+			d.injected_at,
+			d.created_at,
+			d.updated_at,
+			r.payload,
+			r.observed_at,
+			r.created_at,
+			r.updated_at,
+			d.workspace_root
+		from report_deliveries d
+		join reports r on r.id = d.report_id
+		where d.session_id = ? and d.channel = ?
+	`
+	args := []any{strings.TrimSpace(sessionID), string(types.ReportChannelMailbox)}
+	if trimmed := strings.TrimSpace(injectedTurnID); trimmed != "" {
+		query += ` and d.injected_turn_id = ?`
+		args = append(args, trimmed)
+	}
+	query += ` order by d.observed_at asc, d.created_at asc, d.id asc`
+	rows, err := queryer.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanReportMailboxRows(rows)
+}
+
+func listPendingMailboxDeliveriesWithWorkspaceQuery(ctx context.Context, queryer reportMailboxQueryer, workspaceRoot string) ([]types.ReportDelivery, error) {
+	rows, err := queryer.QueryContext(ctx, `
+		select payload, observed_at, injected_turn_id, injected_at, created_at, updated_at
+		from report_deliveries
+		where workspace_root = ? and channel = ? and state = ?
+		order by observed_at asc, created_at asc, id asc
+	`, strings.TrimSpace(workspaceRoot), string(types.ReportChannelMailbox), string(types.ReportDeliveryStatePending))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanReportDeliveryRows(rows)
+}
+
+func listPendingMailboxDeliveriesWithSessionQuery(ctx context.Context, queryer reportMailboxQueryer, sessionID string) ([]types.ReportDelivery, error) {
 	rows, err := queryer.QueryContext(ctx, `
 		select payload, observed_at, injected_turn_id, injected_at, created_at, updated_at
 		from report_deliveries
@@ -181,6 +331,18 @@ func listPendingMailboxDeliveriesWithQuery(ctx context.Context, queryer reportMa
 	}
 	defer rows.Close()
 	return scanReportDeliveryRows(rows)
+}
+
+func countPendingSessionReportMailboxItemsWithQuery(ctx context.Context, queryer reportMailboxRowQueryer, sessionID string) (int, error) {
+	var count int
+	if err := queryer.QueryRowContext(ctx, `
+		select count(*)
+		from report_deliveries
+		where session_id = ? and channel = ? and state = ?
+	`, strings.TrimSpace(sessionID), string(types.ReportChannelMailbox), string(types.ReportDeliveryStatePending)).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func scanReportMailboxRows(rows *sql.Rows) ([]types.ReportMailboxItem, error) {
@@ -197,6 +359,7 @@ func scanReportMailboxRows(rows *sql.Rows) ([]types.ReportMailboxItem, error) {
 			reportObserved   string
 			reportCreated    string
 			reportUpdated    string
+			workspaceRoot    string
 		)
 		if err := rows.Scan(
 			&rawDelivery,
@@ -209,6 +372,7 @@ func scanReportMailboxRows(rows *sql.Rows) ([]types.ReportMailboxItem, error) {
 			&reportObserved,
 			&reportCreated,
 			&reportUpdated,
+			&workspaceRoot,
 		); err != nil {
 			return nil, err
 		}
@@ -218,12 +382,18 @@ func scanReportMailboxRows(rows *sql.Rows) ([]types.ReportMailboxItem, error) {
 			return nil, err
 		}
 		applyReportDeliveryTimes(&delivery, deliveryObserved, injectedTurnID, injectedAt, deliveryCreated, deliveryUpdated)
+		if strings.TrimSpace(delivery.WorkspaceRoot) == "" {
+			delivery.WorkspaceRoot = strings.TrimSpace(workspaceRoot)
+		}
 
 		var report types.ReportRecord
 		if err := json.Unmarshal([]byte(rawReport), &report); err != nil {
 			return nil, err
 		}
 		applyReportTimes(&report, reportObserved, reportCreated, reportUpdated)
+		if strings.TrimSpace(report.WorkspaceRoot) == "" {
+			report.WorkspaceRoot = strings.TrimSpace(workspaceRoot)
+		}
 
 		out = append(out, types.ReportMailboxItemFromRecordDelivery(report, delivery))
 	}
@@ -294,10 +464,11 @@ func upsertReportWithExec(ctx context.Context, execer execContexter, report type
 
 	_, err = execer.ExecContext(ctx, `
 		insert into reports (
-			id, session_id, source_kind, source_id, severity, observed_at, payload, created_at, updated_at
+			id, workspace_root, session_id, source_kind, source_id, severity, observed_at, payload, created_at, updated_at
 		)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set
+			workspace_root = excluded.workspace_root,
 			session_id = excluded.session_id,
 			source_kind = excluded.source_kind,
 			source_id = excluded.source_id,
@@ -307,6 +478,7 @@ func upsertReportWithExec(ctx context.Context, execer execContexter, report type
 			updated_at = excluded.updated_at
 	`,
 		report.ID,
+		strings.TrimSpace(report.WorkspaceRoot),
 		report.SessionID,
 		report.SourceKind,
 		report.SourceID,
@@ -328,10 +500,11 @@ func upsertReportDeliveryWithExec(ctx context.Context, execer execContexter, del
 
 	_, err = execer.ExecContext(ctx, `
 		insert into report_deliveries (
-			id, session_id, report_id, channel, state, observed_at, injected_turn_id, injected_at, payload, created_at, updated_at
+			id, workspace_root, session_id, report_id, channel, state, observed_at, injected_turn_id, injected_at, payload, created_at, updated_at
 		)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set
+			workspace_root = excluded.workspace_root,
 			session_id = excluded.session_id,
 			report_id = excluded.report_id,
 			channel = excluded.channel,
@@ -343,6 +516,7 @@ func upsertReportDeliveryWithExec(ctx context.Context, execer execContexter, del
 			updated_at = excluded.updated_at
 	`,
 		delivery.ID,
+		strings.TrimSpace(delivery.WorkspaceRoot),
 		delivery.SessionID,
 		delivery.ReportID,
 		delivery.Channel,
@@ -379,6 +553,7 @@ func listReportDeliveriesWithQuery(ctx context.Context, queryer reportMailboxQue
 
 func normalizeReport(report types.ReportRecord) types.ReportRecord {
 	now := time.Now().UTC()
+	report.WorkspaceRoot = strings.TrimSpace(report.WorkspaceRoot)
 	report.SessionID = strings.TrimSpace(report.SessionID)
 	report.SourceKind = types.ReportMailboxSourceKind(strings.TrimSpace(string(report.SourceKind)))
 	report.SourceID = strings.TrimSpace(report.SourceID)
@@ -417,6 +592,7 @@ func normalizeReport(report types.ReportRecord) types.ReportRecord {
 
 func normalizeReportDelivery(delivery types.ReportDelivery) types.ReportDelivery {
 	now := time.Now().UTC()
+	delivery.WorkspaceRoot = strings.TrimSpace(delivery.WorkspaceRoot)
 	delivery.SessionID = strings.TrimSpace(delivery.SessionID)
 	delivery.ReportID = strings.TrimSpace(delivery.ReportID)
 	delivery.Channel = types.ReportChannel(strings.TrimSpace(string(delivery.Channel)))
@@ -488,17 +664,19 @@ func applyReportDeliveryTimes(delivery *types.ReportDelivery, observedAtRaw, inj
 
 func mailboxItemToRecordDelivery(item types.ReportMailboxItem) (types.ReportRecord, types.ReportDelivery) {
 	report := normalizeReport(types.ReportRecord{
-		ID:         firstNonEmptyReportString(item.ReportID, item.ID),
-		SessionID:  item.SessionID,
-		SourceKind: item.SourceKind,
-		SourceID:   item.SourceID,
-		Envelope:   item.Envelope,
-		ObservedAt: item.ObservedAt,
-		CreatedAt:  item.CreatedAt,
-		UpdatedAt:  item.UpdatedAt,
+		ID:            firstNonEmptyReportString(item.ReportID, item.ID),
+		WorkspaceRoot: strings.TrimSpace(item.WorkspaceRoot),
+		SessionID:     item.SessionID,
+		SourceKind:    item.SourceKind,
+		SourceID:      item.SourceID,
+		Envelope:      item.Envelope,
+		ObservedAt:    item.ObservedAt,
+		CreatedAt:     item.CreatedAt,
+		UpdatedAt:     item.UpdatedAt,
 	})
 	delivery := normalizeReportDelivery(types.ReportDelivery{
 		ID:             firstNonEmptyReportString(item.DeliveryID, item.ID, report.ID),
+		WorkspaceRoot:  strings.TrimSpace(item.WorkspaceRoot),
 		SessionID:      item.SessionID,
 		ReportID:       report.ID,
 		Channel:        firstNonEmptyReportChannel(item.Channel, types.ReportChannelMailbox),

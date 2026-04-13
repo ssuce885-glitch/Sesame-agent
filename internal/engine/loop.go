@@ -75,14 +75,15 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	}
 	permissionEngine := effectivePermissionEngine(e.permission, in)
 	toolExecCtx := tools.ExecContext{
-		WorkspaceRoot:    in.Session.WorkspaceRoot,
-		GlobalConfigRoot: e.globalConfigRoot,
-		PermissionEngine: permissionEngine,
-		TaskManager:      e.taskManager,
-		RuntimeService:   e.runtimeService,
-		SchedulerService: e.schedulerService,
-		TurnContext:      turnCtx,
-		EventSink:        in.Sink,
+		WorkspaceRoot:     in.Session.WorkspaceRoot,
+		GlobalConfigRoot:  e.globalConfigRoot,
+		PermissionEngine:  permissionEngine,
+		AutomationService: e.automationService,
+		TaskManager:       e.taskManager,
+		RuntimeService:    e.runtimeService,
+		SchedulerService:  e.schedulerService,
+		TurnContext:       turnCtx,
+		EventSink:         in.Sink,
 	}
 	toolRuntime := tools.NewRuntime(e.registry, toolRunStoreFromConversationStore(e.store))
 
@@ -437,26 +438,31 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				output := execResult.Output
 				execErr := execResult.Err
 
+				modelToolResult := execResult.ModelResult
 				var toolResultText string
-				var toolIsError bool
+				toolIsError := execErr != nil
 				if execErr != nil {
 					toolResultText = execErr.Error()
-					toolIsError = true
-					stopAfterBatch = true
+					if modelToolResult.Structured == nil {
+						modelToolResult.Structured = structuredToolError(execErr)
+					}
 				} else {
 					toolResultText = result.Text
 					if strings.TrimSpace(output.PreviewText) != "" {
 						toolResultText = output.PreviewText
 					}
 				}
-				modelToolResult := execResult.ModelResult
+				if modelToolResult.IsError {
+					toolIsError = true
+				}
+				if toolIsError {
+					stopAfterBatch = true
+				}
 				modelToolResultText := toolResultText
-				if !toolIsError {
-					if strings.TrimSpace(modelToolResult.Text) != "" {
-						modelToolResultText = modelToolResult.Text
-					} else if strings.TrimSpace(result.ModelText) != "" {
-						modelToolResultText = result.ModelText
-					}
+				if strings.TrimSpace(modelToolResult.Text) != "" {
+					modelToolResultText = modelToolResult.Text
+				} else if strings.TrimSpace(result.ModelText) != "" {
+					modelToolResultText = result.ModelText
 				}
 
 				payload := types.ToolEventPayload{
@@ -1142,6 +1148,14 @@ func marshalStructuredToolResult(value any) string {
 		return ""
 	}
 	return string(raw)
+}
+
+func structuredToolError(err error) any {
+	var validation *types.AutomationValidationError
+	if errors.As(err, &validation) {
+		return validation
+	}
+	return nil
 }
 
 func persistConversationItem(ctx context.Context, store ConversationStore, sessionID, turnID string, position int, item model.ConversationItem) error {

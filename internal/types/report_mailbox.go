@@ -20,18 +20,20 @@ const (
 )
 
 type ReportRecord struct {
-	ID         string                  `json:"id"`
-	SessionID  string                  `json:"session_id"`
-	SourceKind ReportMailboxSourceKind `json:"source_kind"`
-	SourceID   string                  `json:"source_id"`
-	Envelope   ReportEnvelope          `json:"envelope"`
-	ObservedAt time.Time               `json:"observed_at,omitempty"`
-	CreatedAt  time.Time               `json:"created_at,omitempty"`
-	UpdatedAt  time.Time               `json:"updated_at,omitempty"`
+	ID            string                  `json:"id"`
+	WorkspaceRoot string                  `json:"workspace_root"`
+	SessionID     string                  `json:"session_id"`
+	SourceKind    ReportMailboxSourceKind `json:"source_kind"`
+	SourceID      string                  `json:"source_id"`
+	Envelope      ReportEnvelope          `json:"envelope"`
+	ObservedAt    time.Time               `json:"observed_at,omitempty"`
+	CreatedAt     time.Time               `json:"created_at,omitempty"`
+	UpdatedAt     time.Time               `json:"updated_at,omitempty"`
 }
 
 type ReportDelivery struct {
 	ID             string              `json:"id"`
+	WorkspaceRoot  string              `json:"workspace_root"`
 	SessionID      string              `json:"session_id"`
 	ReportID       string              `json:"report_id"`
 	Channel        ReportChannel       `json:"channel"`
@@ -47,6 +49,7 @@ type ReportMailboxItem struct {
 	ID             string                  `json:"id"`
 	ReportID       string                  `json:"report_id,omitempty"`
 	DeliveryID     string                  `json:"delivery_id,omitempty"`
+	WorkspaceRoot  string                  `json:"workspace_root"`
 	SessionID      string                  `json:"session_id"`
 	SourceKind     ReportMailboxSourceKind `json:"source_kind"`
 	SourceID       string                  `json:"source_id"`
@@ -67,6 +70,14 @@ type SessionReportMailboxResponse struct {
 	Deliveries   []ReportDelivery    `json:"deliveries,omitempty"`
 }
 
+type WorkspaceReportMailboxResponse struct {
+	WorkspaceRoot string              `json:"workspace_root"`
+	Items         []ReportMailboxItem `json:"items"`
+	PendingCount  int                 `json:"pending_count"`
+	Reports       []ReportRecord      `json:"reports,omitempty"`
+	Deliveries    []ReportDelivery    `json:"deliveries,omitempty"`
+}
+
 func ReportMailboxItemFromRecordDelivery(report ReportRecord, delivery ReportDelivery) ReportMailboxItem {
 	itemID := delivery.ID
 	if itemID == "" {
@@ -76,6 +87,7 @@ func ReportMailboxItemFromRecordDelivery(report ReportRecord, delivery ReportDel
 		ID:             itemID,
 		ReportID:       report.ID,
 		DeliveryID:     delivery.ID,
+		WorkspaceRoot:  report.WorkspaceRoot,
 		SessionID:      report.SessionID,
 		SourceKind:     report.SourceKind,
 		SourceID:       report.SourceID,

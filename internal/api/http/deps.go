@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 
+	"go-agent/internal/automation"
 	"go-agent/internal/model"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
@@ -44,3 +45,21 @@ type CronScheduler interface {
 }
 
 var _ CronScheduler = (*scheduler.Service)(nil)
+
+type AutomationService interface {
+	ApplyRequest(context.Context, types.ApplyAutomationRequest) (types.AutomationSpec, error)
+	Apply(context.Context, types.AutomationSpec) (types.AutomationSpec, error)
+	Get(context.Context, string) (types.AutomationSpec, bool, error)
+	List(context.Context, types.AutomationListFilter) ([]types.AutomationSpec, error)
+	Control(context.Context, string, types.AutomationControlAction) (types.AutomationSpec, bool, error)
+	InstallWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
+	ReinstallWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
+	GetWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
+	Delete(context.Context, string) (bool, error)
+	EmitTrigger(context.Context, types.AutomationTriggerRequest) (types.AutomationIncident, error)
+	RecordHeartbeat(context.Context, types.AutomationHeartbeatRequest) (types.AutomationHeartbeat, error)
+	ListIncidents(context.Context, types.AutomationIncidentFilter) ([]types.AutomationIncident, error)
+	GetIncident(context.Context, string) (types.AutomationIncident, bool, error)
+}
+
+var _ AutomationService = (*automation.Service)(nil)

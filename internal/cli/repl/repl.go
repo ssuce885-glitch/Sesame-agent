@@ -26,7 +26,7 @@ type RuntimeClient interface {
 	DecidePermission(context.Context, types.PermissionDecisionRequest) (types.PermissionDecisionResponse, error)
 	StreamEvents(context.Context, string, int64) (<-chan types.Event, error)
 	GetTimeline(context.Context, string) (types.SessionTimelineResponse, error)
-	GetReportMailbox(context.Context, string) (types.SessionReportMailboxResponse, error)
+	GetWorkspaceMailbox(context.Context) (types.WorkspaceReportMailboxResponse, error)
 	GetRuntimeGraph(context.Context, string) (types.SessionRuntimeGraphResponse, error)
 	GetReportingOverview(context.Context, string) (types.ReportingOverview, error)
 	ListCronJobs(context.Context, string) (types.ListScheduledJobsResponse, error)
@@ -215,14 +215,16 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 	case "approve", "allow", "deny":
 		return r.handlePermissionDecisionCommand(ctx, fields[0], fields[1:])
 	case "mailbox", "inbox":
-		if strings.TrimSpace(r.sessionID) == "" {
-			return errors.New("session is not selected")
-		}
-		resp, err := r.client.GetReportMailbox(ctx, r.sessionID)
+		resp, err := r.client.GetWorkspaceMailbox(ctx)
 		if err != nil {
 			return err
 		}
-		r.renderer.RenderReportMailbox(resp)
+		r.renderer.RenderReportMailbox(types.SessionReportMailboxResponse{
+			Items:        resp.Items,
+			PendingCount: resp.PendingCount,
+			Reports:      resp.Reports,
+			Deliveries:   resp.Deliveries,
+		})
 		return nil
 	case "cron":
 		return r.handleCronCommand(ctx, fields[1:])

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	httpapi "go-agent/internal/api/http"
+	"go-agent/internal/automation"
 	"go-agent/internal/config"
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/engine"
@@ -163,12 +164,20 @@ func buildAgentTaskExecutor(runner *engine.Engine) task.AgentExecutor {
 	return agentTaskExecutor{runner: runner}
 }
 
-func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus) *taskTerminalNotifier {
+func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus, workspaceRoot string) *taskTerminalNotifier {
 	if store == nil || bus == nil {
 		return nil
 	}
 	reportingService := reporting.NewService(store)
+	reportingService.SetWorkspaceRoot(workspaceRoot)
 	reportingService.SetReportReadySink(func(ctx context.Context, sessionID, turnID string, item types.ReportMailboxItem) error {
+		// Transport compatibility shim: report-ready notifications are still emitted to the currently
+		// selected session, but durable mailbox persistence is workspace-scoped.
+		selected, ok, err := store.GetSelectedSessionID(ctx)
+		if err != nil || !ok || strings.TrimSpace(selected) == "" {
+			return nil
+		}
+		sessionID = selected
 		eventSink := storeAndBusSink{store: store, bus: bus}
 		event, err := types.NewEvent(sessionID, turnID, types.EventReportReady, item)
 		if err != nil {
@@ -408,11 +417,19 @@ func ensureDataDir(path string) error {
 	return os.MkdirAll(path, 0o755)
 }
 
-func writePIDFile(path string) error {
+func writePIDFile(path string, daemonID string, fingerprint string) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
-	return os.WriteFile(path, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644)
+	raw, err := json.Marshal(map[string]any{
+		"pid":                os.Getpid(),
+		"daemon_id":          strings.TrimSpace(daemonID),
+		"config_fingerprint": strings.TrimSpace(fingerprint),
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, raw, 0o644)
 }
 
 func Run(ctx context.Context) error {
@@ -433,7 +450,7 @@ func Run(ctx context.Context) error {
 	if err := ensureDataDir(cfg.DataDir); err != nil {
 		return err
 	}
-	if err := writePIDFile(cfg.Paths.PIDFile); err != nil {
+	if err := writePIDFile(cfg.Paths.PIDFile, cfg.DaemonID, cfg.ConfigFingerprint); err != nil {
 		return err
 	}
 	defer os.Remove(cfg.Paths.PIDFile)
@@ -444,6 +461,7 @@ func Run(ctx context.Context) error {
 	}
 	defer store.Close()
 	runtimeService := runtimegraph.NewService(store)
+	automationService := automation.NewService(store)
 
 	_, err = artifacts.New(filepath.Join(cfg.DataDir, "artifacts"))
 	if err != nil {
@@ -478,12 +496,21 @@ func Run(ctx context.Context) error {
 	runner.SetSessionMemoryAsync(true)
 	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
 	runner.SetRuntimeService(runtimeService)
-	taskNotifier := buildTaskTerminalNotifier(store, bus)
+	runner.SetAutomationService(automationService)
+	taskNotifier := buildTaskTerminalNotifier(store, bus, cfg.Paths.WorkspaceRoot)
 	taskManager := task.NewManager(task.Config{
 		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
 		TaskOutputMaxBytes: cfg.TaskOutputMaxBytes,
 		TerminalNotifier:   taskNotifier,
 	}, nil, buildAgentTaskExecutor(runner))
+	executablePath, _ := os.Executable()
+	watcherService := automation.NewWatcherService(store, taskManager, automation.WatcherConfig{
+		DataRoot:       filepath.Join(cfg.DataDir, "automation"),
+		ExecutablePath: executablePath,
+		DataDir:        cfg.DataDir,
+		Addr:           cfg.Addr,
+	})
+	automationService.SetWatcherService(watcherService)
 	schedulerService := scheduler.NewService(store, taskManager)
 	if taskNotifier != nil {
 		taskNotifier.scheduler = schedulerService
@@ -509,6 +536,11 @@ func Run(ctx context.Context) error {
 			slog.Error("scheduler loop exited", "error", err)
 		}
 	}()
+	go func() {
+		if err := watcherService.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("watcher loop exited", "error", err)
+		}
+	}()
 	if taskNotifier != nil && taskNotifier.reporting != nil {
 		go func() {
 			if err := taskNotifier.reporting.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -517,14 +549,7 @@ func Run(ctx context.Context) error {
 		}()
 	}
 
-	handler := httpapi.NewRouter(httpapi.Dependencies{
-		Bus:         bus,
-		Store:       store,
-		Manager:     manager,
-		Scheduler:   schedulerService,
-		Status:      buildStatusPayload(cfg),
-		ConsoleRoot: filepath.Join("web", "console", "dist"),
-	})
+	handler := httpapi.NewRouter(buildHTTPDependencies(cfg, store, bus, manager, schedulerService, automationService))
 
 	slog.Info("sesame daemon listening", "addr", cfg.Addr)
 	return http.ListenAndServe(cfg.Addr, handler)
@@ -533,6 +558,22 @@ func Run(ctx context.Context) error {
 func configureRuntimeGuardrails(cfg config.Config) {
 	tools.SetShellCommandGuardrails(cfg.MaxShellOutputBytes, cfg.ShellTimeoutSeconds)
 	tools.SetFileWriteMaxBytes(cfg.MaxFileWriteBytes)
+}
+
+func buildHTTPDependencies(cfg config.Config, store *sqlite.Store, bus *stream.Bus, manager *session.Manager, schedulerService *scheduler.Service, automationService *automation.Service) httpapi.Dependencies {
+	if automationService == nil && store != nil {
+		automationService = automation.NewService(store)
+	}
+	return httpapi.Dependencies{
+		Bus:           bus,
+		Store:         store,
+		Manager:       manager,
+		Scheduler:     schedulerService,
+		Automation:    automationService,
+		Status:        buildStatusPayload(cfg),
+		ConsoleRoot:   filepath.Join("web", "console", "dist"),
+		WorkspaceRoot: cfg.Paths.WorkspaceRoot,
+	}
 }
 
 func buildPermissionEngine(cfg config.Config) *permissions.Engine {

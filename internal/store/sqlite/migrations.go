@@ -258,17 +258,29 @@ func (s *Store) migrate(ctx context.Context) error {
 		`create index if not exists automation_incidents_automation_status_idx
 			on automation_incidents(automation_id, status, observed_at desc, id asc);`,
 		`create table if not exists automation_heartbeats (
-			id text primary key,
 			automation_id text not null,
+			watcher_id text not null,
 			workspace_root text not null,
 			status text not null default '',
 			observed_at text not null default '',
 			payload text not null,
 			created_at text not null,
-			updated_at text not null
+			updated_at text not null,
+			primary key (automation_id, watcher_id)
 		);`,
 		`create index if not exists automation_heartbeats_automation_observed_idx
-			on automation_heartbeats(automation_id, observed_at desc, id asc);`,
+			on automation_heartbeats(automation_id, observed_at desc, watcher_id asc);`,
+		`create table if not exists automation_watchers (
+			id text primary key,
+			automation_id text not null unique,
+			workspace_root text not null,
+			state text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists automation_watchers_workspace_state_idx
+			on automation_watchers(workspace_root, state, updated_at desc, automation_id asc);`,
 		`create table if not exists report_groups (
 			id text primary key,
 			session_id text not null default '',
@@ -304,6 +316,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			on pending_task_completions(session_id, injected_turn_id, observed_at desc, id asc);`,
 		`create table if not exists reports (
 			id text primary key,
+			workspace_root text not null default '',
 			session_id text not null,
 			source_kind text not null,
 			source_id text not null default '',
@@ -317,6 +330,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			on reports(session_id, observed_at desc, id asc);`,
 		`create table if not exists report_deliveries (
 			id text primary key,
+			workspace_root text not null default '',
 			session_id text not null,
 			report_id text not null,
 			channel text not null,
@@ -332,6 +346,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			on report_deliveries(session_id, channel, state, observed_at desc, id asc);`,
 		`create table if not exists report_mailbox_items (
 			id text primary key,
+			workspace_root text not null default '',
 			session_id text not null,
 			source_kind text not null,
 			source_id text not null default '',
@@ -385,6 +400,15 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "digest_records", "session_id", `alter table digest_records add column session_id text not null default ''`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "reports", "workspace_root", `alter table reports add column workspace_root text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "report_deliveries", "workspace_root", `alter table report_deliveries add column workspace_root text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "report_mailbox_items", "workspace_root", `alter table report_mailbox_items add column workspace_root text not null default ''`); err != nil {
+		return err
+	}
 	indexStmts := []string{
 		`create index if not exists child_agent_specs_session_idx
 			on child_agent_specs(session_id, updated_at desc, id asc);`,
@@ -394,6 +418,10 @@ func (s *Store) migrate(ctx context.Context) error {
 			on child_agent_results(session_id, observed_at desc, id asc);`,
 		`create index if not exists digest_records_session_group_window_idx
 			on digest_records(session_id, group_id, window_end desc, id asc);`,
+		`create index if not exists reports_workspace_observed_idx
+			on reports(workspace_root, observed_at desc, id asc);`,
+		`create index if not exists report_deliveries_workspace_channel_state_idx
+			on report_deliveries(workspace_root, channel, state, observed_at desc, id asc);`,
 	}
 	for _, stmt := range indexStmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -404,6 +432,12 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.backfillLegacyReportMailboxItems(ctx); err != nil {
+		return err
+	}
+	if err := s.backfillLegacyReportWorkspaceRoots(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureAutomationHeartbeatSchema(ctx); err != nil {
 		return err
 	}
 
@@ -421,6 +455,111 @@ func (s *Store) ensureColumn(ctx context.Context, table, column, alterStmt strin
 	}
 	_, err := s.db.ExecContext(ctx, alterStmt)
 	return err
+}
+
+func (s *Store) ensureAutomationHeartbeatSchema(ctx context.Context) error {
+	hasWatcherID, err := s.tableHasColumn(ctx, "automation_heartbeats", "watcher_id")
+	if err != nil {
+		return err
+	}
+	hasLegacyID, err := s.tableHasColumn(ctx, "automation_heartbeats", "id")
+	if err != nil {
+		return err
+	}
+	if hasWatcherID && !hasLegacyID {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `drop index if exists automation_heartbeats_automation_observed_idx`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `alter table automation_heartbeats rename to automation_heartbeats_legacy`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		create table automation_heartbeats (
+			automation_id text not null,
+			watcher_id text not null,
+			workspace_root text not null,
+			status text not null default '',
+			observed_at text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null,
+			primary key (automation_id, watcher_id)
+		)
+	`); err != nil {
+		return err
+	}
+
+	insertStmt := `
+		insert into automation_heartbeats (
+			automation_id, watcher_id, workspace_root, status, observed_at, payload, created_at, updated_at
+		)
+		select
+			automation_id,
+			case
+				when trim(id) <> '' then 'legacy:' || trim(id)
+				else 'legacy:' || automation_id
+			end,
+			workspace_root,
+			status,
+			observed_at,
+			payload,
+			created_at,
+			updated_at
+		from automation_heartbeats_legacy
+	`
+	if hasWatcherID {
+		insertStmt = `
+			insert into automation_heartbeats (
+				automation_id, watcher_id, workspace_root, status, observed_at, payload, created_at, updated_at
+			)
+			select
+				automation_id,
+				case
+					when trim(watcher_id) <> '' then trim(watcher_id)
+					when trim(id) <> '' then 'legacy:' || trim(id)
+					else 'legacy:' || automation_id
+				end,
+				workspace_root,
+				status,
+				observed_at,
+				payload,
+				created_at,
+				updated_at
+			from automation_heartbeats_legacy
+		`
+	}
+	if _, err := tx.ExecContext(ctx, insertStmt); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `drop table automation_heartbeats_legacy`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		create index automation_heartbeats_automation_observed_idx
+			on automation_heartbeats(automation_id, observed_at desc, watcher_id asc)
+	`); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (s *Store) tableHasColumn(ctx context.Context, table, column string) (bool, error) {
+	var count int
+	query := fmt.Sprintf("select count(*) from pragma_table_info('%s') where name = ?", table)
+	if err := s.db.QueryRowContext(ctx, query, column).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (s *Store) backfillLegacyReportingSessions(ctx context.Context) error {
@@ -649,6 +788,9 @@ func (s *Store) backfillLegacyReportMailboxItems(ctx context.Context) error {
 			return err
 		}
 		applyLegacyReportMailboxTimes(&item, observedAt, injectedTurnID, injectedAt, createdAt, updatedAt)
+		if strings.TrimSpace(item.WorkspaceRoot) == "" && strings.TrimSpace(item.SessionID) != "" {
+			item.WorkspaceRoot = s.workspaceRootForSession(ctx, item.SessionID)
+		}
 		report, delivery := mailboxItemToRecordDelivery(item)
 		if err := s.UpsertReport(ctx, report); err != nil {
 			return err
@@ -658,6 +800,47 @@ func (s *Store) backfillLegacyReportMailboxItems(ctx context.Context) error {
 		}
 	}
 	return rows.Err()
+}
+
+func (s *Store) backfillLegacyReportWorkspaceRoots(ctx context.Context) error {
+	stmts := []string{
+		`
+		update reports
+		set workspace_root = (
+			select workspace_root
+			from sessions
+			where sessions.id = reports.session_id
+		)
+		where workspace_root = '' and session_id != ''
+			and exists (select 1 from sessions where sessions.id = reports.session_id and sessions.workspace_root != '')
+		`,
+		`
+		update report_deliveries
+		set workspace_root = (
+			select workspace_root
+			from sessions
+			where sessions.id = report_deliveries.session_id
+		)
+		where workspace_root = '' and session_id != ''
+			and exists (select 1 from sessions where sessions.id = report_deliveries.session_id and sessions.workspace_root != '')
+		`,
+		`
+		update report_mailbox_items
+		set workspace_root = (
+			select workspace_root
+			from sessions
+			where sessions.id = report_mailbox_items.session_id
+		)
+		where workspace_root = '' and session_id != ''
+			and exists (select 1 from sessions where sessions.id = report_mailbox_items.session_id and sessions.workspace_root != '')
+		`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) scheduledJobOwnerSession(ctx context.Context, jobID string) string {

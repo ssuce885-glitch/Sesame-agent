@@ -106,6 +106,14 @@ func (c *Client) GetReportMailbox(ctx context.Context, sessionID string) (types.
 	return out, nil
 }
 
+func (c *Client) GetWorkspaceMailbox(ctx context.Context) (types.WorkspaceReportMailboxResponse, error) {
+	var out types.WorkspaceReportMailboxResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/mailbox", nil, &out); err != nil {
+		return types.WorkspaceReportMailboxResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) GetRuntimeGraph(ctx context.Context, sessionID string) (types.SessionRuntimeGraphResponse, error) {
 	var out types.SessionRuntimeGraphResponse
 	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/sessions/%s/runtime_graph", sessionID), nil, &out); err != nil {
@@ -164,6 +172,131 @@ func (c *Client) ResumeCronJob(ctx context.Context, jobID string) (types.Schedul
 
 func (c *Client) DeleteCronJob(ctx context.Context, jobID string) error {
 	return c.doJSON(ctx, http.MethodDelete, fmt.Sprintf("/v1/cron/%s", jobID), nil, nil)
+}
+
+func (c *Client) ListAutomations(ctx context.Context, workspaceRoot string) (types.ListAutomationsResponse, error) {
+	var out types.ListAutomationsResponse
+	path := "/v1/automations"
+	q := url.Values{}
+	if trimmed := strings.TrimSpace(workspaceRoot); trimmed != "" {
+		q.Set("workspace_root", trimmed)
+	}
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return types.ListAutomationsResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ApplyAutomation(ctx context.Context, req types.ApplyAutomationRequest) (types.AutomationSpec, error) {
+	var out types.AutomationSpec
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/automations", req, &out); err != nil {
+		return types.AutomationSpec{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) GetAutomation(ctx context.Context, automationID string) (types.AutomationSpec, error) {
+	var out types.AutomationSpec
+	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/automations/%s", automationID), nil, &out); err != nil {
+		return types.AutomationSpec{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) DeleteAutomation(ctx context.Context, automationID string) error {
+	return c.doJSON(ctx, http.MethodDelete, fmt.Sprintf("/v1/automations/%s", automationID), nil, nil)
+}
+
+func (c *Client) PauseAutomation(ctx context.Context, automationID string) (types.AutomationSpec, error) {
+	var out types.AutomationSpec
+	if err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/automations/%s/pause", automationID), map[string]any{}, &out); err != nil {
+		return types.AutomationSpec{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ResumeAutomation(ctx context.Context, automationID string) (types.AutomationSpec, error) {
+	var out types.AutomationSpec
+	if err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/automations/%s/resume", automationID), map[string]any{}, &out); err != nil {
+		return types.AutomationSpec{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) InstallAutomation(ctx context.Context, automationID string) (types.AutomationWatcherRuntime, error) {
+	var out types.AutomationWatcherRuntime
+	if err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/automations/%s/install", automationID), map[string]any{}, &out); err != nil {
+		return types.AutomationWatcherRuntime{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ReinstallAutomation(ctx context.Context, automationID string) (types.AutomationWatcherRuntime, error) {
+	var out types.AutomationWatcherRuntime
+	if err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/automations/%s/reinstall", automationID), map[string]any{}, &out); err != nil {
+		return types.AutomationWatcherRuntime{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) GetAutomationWatcher(ctx context.Context, automationID string) (types.AutomationWatcherRuntime, error) {
+	var out types.AutomationWatcherRuntime
+	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/automations/%s/watcher", automationID), nil, &out); err != nil {
+		return types.AutomationWatcherRuntime{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) EmitTrigger(ctx context.Context, req types.TriggerEmitRequest) (types.AutomationIncident, error) {
+	var out types.AutomationIncident
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/triggers/emit", req, &out); err != nil {
+		return types.AutomationIncident{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) RecordHeartbeat(ctx context.Context, req types.TriggerHeartbeatRequest) (types.AutomationHeartbeat, error) {
+	var out types.AutomationHeartbeat
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/triggers/heartbeat", req, &out); err != nil {
+		return types.AutomationHeartbeat{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ListIncidents(ctx context.Context, filter types.IncidentListFilter) (types.ListAutomationIncidentsResponse, error) {
+	var out types.ListAutomationIncidentsResponse
+	path := "/v1/incidents"
+	q := url.Values{}
+	if trimmed := strings.TrimSpace(filter.WorkspaceRoot); trimmed != "" {
+		q.Set("workspace_root", trimmed)
+	}
+	if trimmed := strings.TrimSpace(filter.AutomationID); trimmed != "" {
+		q.Set("automation_id", trimmed)
+	}
+	if trimmed := strings.TrimSpace(string(filter.Status)); trimmed != "" {
+		q.Set("status", trimmed)
+	}
+	if filter.Limit > 0 {
+		q.Set("limit", strconv.Itoa(filter.Limit))
+	}
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return types.ListAutomationIncidentsResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) GetIncident(ctx context.Context, incidentID string) (types.AutomationIncident, error) {
+	var out types.AutomationIncident
+	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/incidents/%s", incidentID), nil, &out); err != nil {
+		return types.AutomationIncident{}, err
+	}
+	return out, nil
 }
 
 func (c *Client) FindOrCreateWorkspaceSession(ctx context.Context, workspaceRoot string) (string, bool, error) {
@@ -268,12 +401,26 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("%s %s: status %d", method, path, resp.StatusCode)
+		return decodeAPIError(resp, method, path)
 	}
 	if out == nil {
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func decodeAPIError(resp *http.Response, method string, path string) error {
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("%s %s: status %d", method, path, resp.StatusCode)
+	}
+
+	var validation types.AutomationValidationError
+	if len(raw) > 0 && json.Unmarshal(raw, &validation) == nil && strings.TrimSpace(validation.Code) != "" {
+		return &validation
+	}
+
+	return fmt.Errorf("%s %s: status %d", method, path, resp.StatusCode)
 }
 
 func parseEventFrame(frame string) (types.Event, bool) {

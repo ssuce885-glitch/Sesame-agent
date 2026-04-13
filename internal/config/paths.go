@@ -56,12 +56,11 @@ func ResolvePaths(workspaceRoot string, explicitDataDir string) (Paths, error) {
 		return paths, nil
 	}
 
-	workspaceDir := filepath.Join(workspaceRoot, DirName)
 	paths.WorkspaceRoot = workspaceRoot
-	paths.WorkspaceDir = workspaceDir
-	paths.WorkspacePromptFile = filepath.Join(workspaceDir, "prompt.md")
-	paths.WorkspaceRulesDir = filepath.Join(workspaceDir, "rules")
-	paths.WorkspaceSkillsDir = filepath.Join(workspaceDir, "skills")
-	paths.WorkspaceToolsDir = filepath.Join(workspaceDir, "tools")
+	paths.WorkspaceDir = workspaceRoot
+	paths.WorkspacePromptFile = filepath.Join(workspaceRoot, "docs", "prompt.md")
+	paths.WorkspaceRulesDir = filepath.Join(workspaceRoot, "rules")
+	paths.WorkspaceSkillsDir = filepath.Join(workspaceRoot, "skills")
+	paths.WorkspaceToolsDir = filepath.Join(workspaceRoot, "resources", "tools")
 	return paths, nil
 }

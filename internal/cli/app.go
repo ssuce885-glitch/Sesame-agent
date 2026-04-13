@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -16,12 +17,14 @@ import (
 	"go-agent/internal/cli/repl"
 	"go-agent/internal/config"
 	"go-agent/internal/extensions"
+	"go-agent/internal/workspace"
 )
 
 const Version = "dev"
 
 type RuntimeClient interface {
 	repl.RuntimeClient
+	automationClient
 	FindOrCreateWorkspaceSession(context.Context, string) (string, bool, error)
 }
 
@@ -53,6 +56,7 @@ func New() App {
 				Addr:           opts.Addr,
 				Model:          opts.Model,
 				PermissionMode: opts.PermissionMode,
+				WorkspaceRoot:  opts.WorkspaceRoot,
 			})
 		},
 		EnsureDaemon: func(ctx context.Context, cfg config.Config) error {
@@ -104,10 +108,15 @@ func (a App) Run(ctx context.Context, args []string) error {
 		a.Stderr = io.Discard
 	}
 
+	scriptArgs := isScriptCommandArgs(args)
 	opts, err := a.loadOptions(args)
 	if err != nil {
+		if scriptArgs {
+			return newScriptCommandError(err, nil)
+		}
 		return err
 	}
+	scriptCommand := scriptArgs || opts.Automation != nil || opts.Trigger != nil || opts.Incident != nil
 
 	if opts.ShowVersion {
 		_, err := fmt.Fprintln(a.Stdout, Version)
@@ -117,8 +126,25 @@ func (a App) Run(ctx context.Context, args []string) error {
 		return runSkillCommand(a.Stdout, *opts.Skill)
 	}
 
+	workspaceRoot, err := resolveWorkspaceRoot(opts.WorkspaceRoot)
+	if err != nil {
+		if scriptCommand {
+			return newScriptCommandError(err, nil)
+		}
+		return err
+	}
+	opts.WorkspaceRoot = workspaceRoot
+	if !opts.ListDaemons && !opts.ShowStatus && !scriptCommand && strings.TrimSpace(opts.ResumeID) == "" {
+		if _, err := workspace.Ensure(workspaceRoot, ""); err != nil {
+			return err
+		}
+	}
+
 	cfg, err := a.loadConfig(opts)
 	if err != nil {
+		if scriptCommand {
+			return newScriptCommandError(err, nil)
+		}
 		return err
 	}
 	if opts.ListDaemons {
@@ -126,6 +152,9 @@ func (a App) Run(ctx context.Context, args []string) error {
 	}
 	if opts.ShowStatus {
 		return a.runStatus(ctx, opts, cfg)
+	}
+	if opts.Automation != nil || opts.Trigger != nil || opts.Incident != nil {
+		return a.runScriptCommand(ctx, opts, cfg)
 	}
 	if err := ensureRuntimeConfigured(a.Stdin, a.Stdout, cfg); err != nil {
 		return err
@@ -139,11 +168,18 @@ func (a App) Run(ctx context.Context, args []string) error {
 	}
 
 	runtimeClient := a.newClient(cfg)
-	cliConfig, err := config.LoadCLIConfig()
+	sessionID, sessionWorkspaceRoot, err := resolveSessionBinding(ctx, runtimeClient, opts.ResumeID, workspaceRoot)
 	if err != nil {
 		return err
 	}
-	workspaceRoot, err := os.Getwd()
+	workspaceRoot = sessionWorkspaceRoot
+	opts.WorkspaceRoot = workspaceRoot
+	if !opts.ListDaemons && !opts.ShowStatus && !scriptCommand {
+		if _, err := workspace.Ensure(workspaceRoot, ""); err != nil {
+			return err
+		}
+	}
+	cliConfig, err := config.LoadCLIConfig()
 	if err != nil {
 		return err
 	}
@@ -151,11 +187,6 @@ func (a App) Run(ctx context.Context, args []string) error {
 		return extensions.LoadCatalog(cfg.Paths.GlobalRoot, workspaceRoot)
 	}
 	catalog, err := catalogLoader()
-	if err != nil {
-		return err
-	}
-
-	sessionID, err := resolveSessionID(ctx, runtimeClient, opts.ResumeID)
 	if err != nil {
 		return err
 	}
@@ -191,6 +222,54 @@ func (a App) Run(ctx context.Context, args []string) error {
 	return stopErr
 }
 
+func (a App) runScriptCommand(ctx context.Context, opts Options, cfg config.Config) error {
+	cfg, err := a.prepareDaemonConfig(opts, cfg)
+	if err != nil {
+		return newScriptCommandError(err, nil)
+	}
+	if err := a.ensureDaemon(ctx, cfg); err != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		stopErr := a.stopDaemon(stopCtx, cfg)
+		return newScriptCommandError(err, stopErr)
+	}
+
+	runtimeClient := a.newClient(cfg)
+	var runErr error
+	switch {
+	case opts.Automation != nil:
+		runErr = runAutomationCommand(ctx, a.Stdout, runtimeClient, *opts.Automation)
+	case opts.Trigger != nil:
+		runErr = runTriggerCommand(ctx, a.Stdout, runtimeClient, *opts.Trigger)
+	default:
+		runErr = runIncidentCommand(ctx, a.Stdout, runtimeClient, *opts.Incident)
+	}
+
+	if opts.Automation != nil && strings.EqualFold(strings.TrimSpace(opts.Automation.Action), "run") {
+		return runErr
+	}
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stopErr := a.stopDaemon(stopCtx, cfg)
+	if runErr != nil || stopErr != nil {
+		return newScriptCommandError(runErr, stopErr)
+	}
+	return nil
+}
+
+func isScriptCommandArgs(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch strings.TrimSpace(args[0]) {
+	case "automation", "trigger", "incident":
+		return true
+	default:
+		return false
+	}
+}
+
 func (a App) runStatus(ctx context.Context, opts Options, base config.Config) error {
 	cfg, err := a.prepareStatusConfig(opts, base)
 	if err != nil {
@@ -212,23 +291,44 @@ func (a App) runStatus(ctx context.Context, opts Options, base config.Config) er
 	return err
 }
 
-func resolveSessionID(ctx context.Context, runtimeClient RuntimeClient, resumeID string) (string, error) {
+func resolveWorkspaceRoot(explicitRoot string) (string, error) {
+	if trimmed := strings.TrimSpace(explicitRoot); trimmed != "" {
+		return filepath.Abs(trimmed)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(cwd)
+}
+
+func resolveSessionBinding(ctx context.Context, runtimeClient RuntimeClient, resumeID string, workspaceRoot string) (string, string, error) {
 	if strings.TrimSpace(resumeID) != "" {
-		if err := runtimeClient.SelectSession(ctx, resumeID); err != nil {
-			return "", err
+		resp, err := runtimeClient.ListSessions(ctx)
+		if err != nil {
+			return "", "", err
 		}
-		return strings.TrimSpace(resumeID), nil
+		for _, item := range resp.Sessions {
+			if item.ID != strings.TrimSpace(resumeID) {
+				continue
+			}
+			if err := runtimeClient.SelectSession(ctx, resumeID); err != nil {
+				return "", "", err
+			}
+			boundWorkspaceRoot := strings.TrimSpace(item.WorkspaceRoot)
+			if boundWorkspaceRoot == "" {
+				boundWorkspaceRoot = workspaceRoot
+			}
+			return strings.TrimSpace(resumeID), boundWorkspaceRoot, nil
+		}
+		return "", "", fmt.Errorf("session %q not found", strings.TrimSpace(resumeID))
 	}
 
-	workspaceRoot, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
 	sessionID, _, err := runtimeClient.FindOrCreateWorkspaceSession(ctx, workspaceRoot)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return sessionID, nil
+	return sessionID, workspaceRoot, nil
 }
 
 func (a App) loadOptions(args []string) (Options, error) {
@@ -245,6 +345,7 @@ func (a App) loadConfig(opts Options) (config.Config, error) {
 			Addr:           opts.Addr,
 			Model:          opts.Model,
 			PermissionMode: opts.PermissionMode,
+			WorkspaceRoot:  opts.WorkspaceRoot,
 		})
 	}
 	return a.LoadConfig(opts)

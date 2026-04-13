@@ -15,6 +15,7 @@ const (
 	ProfileSystemInspect     CapabilityProfile = "system_inspect"
 	ProfileWebLookup         CapabilityProfile = "web_lookup"
 	ProfileBrowserAutomation CapabilityProfile = "browser_automation"
+	ProfileAutomation        CapabilityProfile = "automation"
 	ProfileScheduledReport   CapabilityProfile = "scheduled_report"
 )
 
@@ -81,6 +82,14 @@ var (
 		"task_stop",
 		"task_update",
 		"task_wait",
+	}
+	automationTools = []string{
+		"automation_apply",
+		"automation_control",
+		"automation_get",
+		"automation_list",
+		"incident_get",
+		"incident_list",
 	}
 )
 
@@ -151,6 +160,9 @@ func detectProfile(userMessage string) CapabilityProfile {
 	if text == "" {
 		return ProfileCodebaseEdit
 	}
+	if isAutomationRequest(text) {
+		return ProfileAutomation
+	}
 	if isScheduledReportRequest(text) {
 		return ProfileScheduledReport
 	}
@@ -168,6 +180,29 @@ func detectProfile(userMessage string) CapabilityProfile {
 
 func profileFor(profile CapabilityProfile) profileSpec {
 	switch profile {
+	case ProfileAutomation:
+		return profileSpec{
+			Guidance: []string{
+				"This request is automation setup or automation management. Keep the turn in the automation compile-and-manage path.",
+				"Draft the script-backed automation first, then summarize assumptions, then wait for explicit user confirmation before automation_apply.",
+				"Use only the automation tools for apply, lookup, control, and incident inspection.",
+				"Do not fall back to schedule_report, task_create, shell_command, or ad hoc long-running loops for automation creation.",
+			},
+			VisibleTools:     append([]string(nil), automationTools...),
+			HiddenTools:      normalizeToolList(append(append(append([]string(nil), readOnlyTools...), editTools...), append(append([]string(nil), taskTools...), "schedule_report", "shell_command")...)),
+			PreferredTools:   []string{"automation_apply", "automation_get", "automation_list", "automation_control", "incident_get", "incident_list"},
+			MaxSteps:         8,
+			SkillTags:        []string{"automation_standard_behavior"},
+			ExposeSkillUse:   false,
+			AllowSkillGrants: false,
+			ForbiddenActions: []string{
+				"Do not fake automation with background shell loops, direct task launches, or delayed reports.",
+				"Do not use non-automation tools during an automation compile turn unless the runtime changes profiles later.",
+			},
+			StopConditions: []string{
+				"Stop after the automation definition is drafted, normalized, applied, or the missing automation fields are clarified.",
+			},
+		}
 	case ProfileSystemInspect:
 		return profileSpec{
 			Guidance: []string{
@@ -278,6 +313,26 @@ func profileFor(profile CapabilityProfile) profileSpec {
 			},
 		}
 	}
+}
+
+func isAutomationRequest(text string) bool {
+	longRunningMarkers := []string{
+		"持续", "一直", "盯着", "盯住", "监控", "监测", "巡检", "周期检查", "定期检查", "异常时", "出问题时", "失败时",
+		"watch", "monitor", "keep an eye on", "poll", "heartbeat", "on error", "on failure", "when it fails",
+	}
+	automationActionMarkers := []string{
+		"自动排查", "自动处理", "自动通知", "自动重启", "自动修复",
+		"automatically investigate", "automatically notify", "automatically restart", "auto-remediate",
+	}
+	targetMarkers := []string{
+		"服务器", "服务", "服务状态", "异常", "容器", "任务失败", "日志", "job failure",
+		"server", "service", "incident", "container", "logs", "error", "failure",
+	}
+
+	hasLongRunning := containsAny(text, longRunningMarkers)
+	hasAutomationAction := containsAny(text, automationActionMarkers)
+	hasTarget := containsAny(text, targetMarkers)
+	return hasTarget && (hasLongRunning || hasAutomationAction)
 }
 
 func isScheduledReportRequest(text string) bool {

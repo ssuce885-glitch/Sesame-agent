@@ -60,21 +60,35 @@ type ToolInterrupt struct {
 }
 
 type ExecContext struct {
-	WorkspaceRoot    string
-	GlobalConfigRoot string
-	ActiveSkillNames []string
-	InjectedEnv      map[string]string
-	PermissionEngine *permissions.Engine
-	TaskManager      *task.Manager
-	RuntimeService   *runtimegraph.Service
-	SchedulerService *scheduler.Service
-	TurnContext      *runtimegraph.TurnContext
-	ToolRunID        string
-	EventSink        EventSink
+	WorkspaceRoot     string
+	GlobalConfigRoot  string
+	ActiveSkillNames  []string
+	InjectedEnv       map[string]string
+	PermissionEngine  *permissions.Engine
+	AutomationService AutomationService
+	TaskManager       *task.Manager
+	RuntimeService    *runtimegraph.Service
+	SchedulerService  *scheduler.Service
+	TurnContext       *runtimegraph.TurnContext
+	ToolRunID         string
+	EventSink         EventSink
 }
 
 type EventSink interface {
 	Emit(context.Context, types.Event) error
+}
+
+type AutomationService interface {
+	ApplyRequest(context.Context, types.ApplyAutomationRequest) (types.AutomationSpec, error)
+	Apply(context.Context, types.AutomationSpec) (types.AutomationSpec, error)
+	Get(context.Context, string) (types.AutomationSpec, bool, error)
+	List(context.Context, types.AutomationListFilter) ([]types.AutomationSpec, error)
+	Control(context.Context, string, types.AutomationControlAction) (types.AutomationSpec, bool, error)
+	Delete(context.Context, string) (bool, error)
+	EmitTrigger(context.Context, types.AutomationTriggerRequest) (types.AutomationIncident, error)
+	RecordHeartbeat(context.Context, types.AutomationHeartbeatRequest) (types.AutomationHeartbeat, error)
+	ListIncidents(context.Context, types.AutomationIncidentFilter) ([]types.AutomationIncident, error)
+	GetIncident(context.Context, string) (types.AutomationIncident, bool, error)
 }
 
 type ResourceClaimMode string

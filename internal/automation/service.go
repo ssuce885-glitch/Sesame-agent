@@ -12,15 +12,12 @@ import (
 
 var (
 	errServiceNotConfigured = errors.New("automation service is not configured")
-	errMissingTitle         = errors.New("missing_title")
-	errMissingWorkspaceRoot = errors.New("missing_workspace_root")
-	errMissingGoal          = errors.New("missing_goal")
-	errMissingDispatchPlan  = errors.New("missing_dispatch_plan")
-	errMissingRuntimePolicy = errors.New("missing_runtime_policy")
-	errInvalidSpec          = errors.New("invalid_automation_spec")
-	errMissingAutomationID  = errors.New("missing_automation_id")
-	errAutomationNotFound   = errors.New("automation_not_found")
-	errInvalidControlAction = errors.New("invalid_control_action")
+	errMissingDispatchPlan  = &types.AutomationValidationError{Code: "missing_dispatch_plan", Message: "response_plan and delivery_policy are required"}
+	errMissingRuntimePolicy = &types.AutomationValidationError{Code: "missing_runtime_policy", Message: "runtime_policy is required"}
+	errMissingAutomationID  = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "automation_id is required"}
+	errMissingConfirmation  = &types.AutomationValidationError{Code: "missing_confirmation", Message: "automation_apply requires confirmed=true after user review"}
+	errAutomationNotFound   = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "automation not found"}
+	errInvalidControlAction = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "action must be pause or resume"}
 )
 
 type Store interface {
@@ -35,8 +32,18 @@ type Store interface {
 }
 
 type Service struct {
-	store Store
-	now   func() time.Time
+	store   Store
+	watcher watcherRuntimeManager
+	now     func() time.Time
+}
+
+type watcherRuntimeManager interface {
+	Install(context.Context, types.AutomationSpec) (types.AutomationWatcherRuntime, error)
+	Reinstall(context.Context, types.AutomationSpec) (types.AutomationWatcherRuntime, error)
+	Get(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
+	Pause(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
+	Delete(context.Context, string) error
+	Reconcile(context.Context) error
 }
 
 func NewService(store Store) *Service {
@@ -52,6 +59,12 @@ func (s *Service) SetClock(now func() time.Time) {
 	}
 }
 
+func (s *Service) SetWatcherService(watcher watcherRuntimeManager) {
+	if s != nil {
+		s.watcher = watcher
+	}
+}
+
 func (s *Service) Apply(ctx context.Context, spec types.AutomationSpec) (types.AutomationSpec, error) {
 	if s == nil || s.store == nil {
 		return types.AutomationSpec{}, errServiceNotConfigured
@@ -63,7 +76,41 @@ func (s *Service) Apply(ctx context.Context, spec types.AutomationSpec) (types.A
 	if err := s.store.UpsertAutomation(ctx, spec); err != nil {
 		return types.AutomationSpec{}, err
 	}
+	if s.watcher != nil {
+		switch spec.State {
+		case types.AutomationStateActive:
+			if _, err := s.watcher.Install(ctx, spec); err != nil {
+				return types.AutomationSpec{}, err
+			}
+		case types.AutomationStatePaused:
+			if _, ok, err := s.watcher.Pause(ctx, spec.ID); err != nil {
+				return types.AutomationSpec{}, err
+			} else if !ok {
+				// No runtime exists yet; paused automation remains persisted without an active watcher.
+			}
+		}
+	}
 	return spec, nil
+}
+
+func (s *Service) ApplyRequest(ctx context.Context, req types.ApplyAutomationRequest) (types.AutomationSpec, error) {
+	if !req.Confirmed {
+		return types.AutomationSpec{}, errMissingConfirmation
+	}
+	if s == nil || s.store == nil {
+		return types.AutomationSpec{}, errServiceNotConfigured
+	}
+	spec := normalizeAutomationSpec(req.Spec, s.currentTime())
+	if err := validateAutomationSpec(spec); err != nil {
+		return types.AutomationSpec{}, err
+	}
+	if err := PersistAutomationAssets(spec.WorkspaceRoot, spec.ID, req.Assets); err != nil {
+		return types.AutomationSpec{}, err
+	}
+	if err := ValidateAutomationScriptAssets(spec); err != nil {
+		return types.AutomationSpec{}, err
+	}
+	return s.Apply(ctx, spec)
 }
 
 func (s *Service) Get(ctx context.Context, id string) (types.AutomationSpec, bool, error) {
@@ -110,6 +157,18 @@ func (s *Service) Control(ctx context.Context, id string, action types.Automatio
 	if err := s.store.UpsertAutomation(ctx, spec); err != nil {
 		return types.AutomationSpec{}, false, err
 	}
+	if s.watcher != nil {
+		switch action {
+		case types.AutomationControlActionPause:
+			if _, _, err := s.watcher.Pause(ctx, spec.ID); err != nil {
+				return types.AutomationSpec{}, false, err
+			}
+		case types.AutomationControlActionResume:
+			if _, err := s.watcher.Install(ctx, spec); err != nil {
+				return types.AutomationSpec{}, false, err
+			}
+		}
+	}
 	return spec, true, nil
 }
 
@@ -120,6 +179,11 @@ func (s *Service) Delete(ctx context.Context, id string) (bool, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return false, nil
+	}
+	if s.watcher != nil {
+		if err := s.watcher.Delete(ctx, id); err != nil {
+			return false, err
+		}
 	}
 	return s.store.DeleteAutomation(ctx, id)
 }
@@ -146,14 +210,25 @@ func (s *Service) EmitTrigger(ctx context.Context, req types.AutomationTriggerRe
 		AutomationID:  spec.ID,
 		WorkspaceRoot: spec.WorkspaceRoot,
 		Status:        types.AutomationIncidentStatusOpen,
-		TriggerKind:   req.TriggerKind,
+		SignalKind:    req.SignalKind,
 		Source:        req.Source,
-		Title:         req.Title,
 		Summary:       req.Summary,
 		Payload:       normalizeRawJSON(req.Payload),
 		ObservedAt:    normalizeOptionalTime(req.ObservedAt, now),
 		CreatedAt:     now,
 		UpdatedAt:     now,
+	}
+	if incident.SignalKind == "" {
+		return types.AutomationIncident{}, &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "signal_kind is required",
+		}
+	}
+	if len(incident.Payload) > 0 && !isValidJSONValue(incident.Payload) {
+		return types.AutomationIncident{}, &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "payload must be valid JSON",
+		}
 	}
 	if err := s.store.UpsertAutomationIncident(ctx, incident); err != nil {
 		return types.AutomationIncident{}, err
@@ -179,15 +254,32 @@ func (s *Service) RecordHeartbeat(ctx context.Context, req types.AutomationHeart
 
 	now := s.currentTime()
 	heartbeat := types.AutomationHeartbeat{
-		ID:            types.NewID("heartbeat"),
 		AutomationID:  spec.ID,
+		WatcherID:     req.WatcherID,
 		WorkspaceRoot: spec.WorkspaceRoot,
 		Status:        req.Status,
-		Message:       req.Message,
 		Payload:       normalizeRawJSON(req.Payload),
 		ObservedAt:    normalizeOptionalTime(req.ObservedAt, now),
 		CreatedAt:     now,
 		UpdatedAt:     now,
+	}
+	if heartbeat.WatcherID == "" {
+		return types.AutomationHeartbeat{}, &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "watcher_id is required",
+		}
+	}
+	if heartbeat.Status == "" {
+		return types.AutomationHeartbeat{}, &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "status is required",
+		}
+	}
+	if len(heartbeat.Payload) > 0 && !isValidJSONValue(heartbeat.Payload) {
+		return types.AutomationHeartbeat{}, &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "payload must be valid JSON",
+		}
 	}
 	if err := s.store.UpsertAutomationHeartbeat(ctx, heartbeat); err != nil {
 		return types.AutomationHeartbeat{}, err
@@ -213,6 +305,32 @@ func (s *Service) ListIncidents(ctx context.Context, filter types.AutomationInci
 	return s.store.ListAutomationIncidents(ctx, normalizeIncidentFilter(filter))
 }
 
+func (s *Service) GetWatcher(ctx context.Context, id string) (types.AutomationWatcherRuntime, bool, error) {
+	if s == nil || s.watcher == nil {
+		return types.AutomationWatcherRuntime{}, false, nil
+	}
+	return s.watcher.Get(ctx, strings.TrimSpace(id))
+}
+
+func (s *Service) ReinstallWatcher(ctx context.Context, id string) (types.AutomationWatcherRuntime, bool, error) {
+	if s == nil || s.store == nil || s.watcher == nil {
+		return types.AutomationWatcherRuntime{}, false, errServiceNotConfigured
+	}
+	spec, ok, err := s.Get(ctx, id)
+	if err != nil || !ok {
+		return types.AutomationWatcherRuntime{}, ok, err
+	}
+	watcher, err := s.watcher.Reinstall(ctx, spec)
+	if err != nil {
+		return types.AutomationWatcherRuntime{}, false, err
+	}
+	return watcher, true, nil
+}
+
+func (s *Service) InstallWatcher(ctx context.Context, id string) (types.AutomationWatcherRuntime, bool, error) {
+	return s.ReinstallWatcher(ctx, id)
+}
+
 func (s *Service) currentTime() time.Time {
 	if s == nil || s.now == nil {
 		return time.Now().UTC()
@@ -222,13 +340,28 @@ func (s *Service) currentTime() time.Time {
 
 func validateAutomationSpec(spec types.AutomationSpec) error {
 	if strings.TrimSpace(spec.Title) == "" {
-		return errMissingTitle
+		return &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "title is required",
+		}
 	}
 	if strings.TrimSpace(spec.WorkspaceRoot) == "" {
-		return errMissingWorkspaceRoot
+		return &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "workspace_root is required",
+		}
 	}
 	if strings.TrimSpace(spec.Goal) == "" {
-		return errMissingGoal
+		return &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "goal is required",
+		}
+	}
+	if !isValidAutomationState(spec.State) {
+		return &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "state must be active or paused",
+		}
 	}
 	if !isPresentJSON(spec.ResponsePlan) || !isPresentJSON(spec.DeliveryPolicy) {
 		return errMissingDispatchPlan
@@ -236,8 +369,25 @@ func validateAutomationSpec(spec types.AutomationSpec) error {
 	if !isPresentJSON(spec.RuntimePolicy) {
 		return errMissingRuntimePolicy
 	}
-	if !isValidOptionalJSON(spec.ResponsePlan) || !isValidOptionalJSON(spec.DeliveryPolicy) || !isValidOptionalJSON(spec.RuntimePolicy) {
-		return errInvalidSpec
+	if !isJSONObject(spec.ResponsePlan) || !isJSONObject(spec.DeliveryPolicy) || !isJSONObject(spec.RuntimePolicy) {
+		return &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "response_plan, delivery_policy, and runtime_policy must be JSON objects",
+		}
+	}
+	if !isJSONObject(spec.IncidentPolicy) || !isJSONObject(spec.VerificationPlan) || !isJSONObject(spec.EscalationPolicy) || !isJSONObject(spec.WatcherLifecycle) || !isJSONObject(spec.RetriggerPolicy) || !isJSONObject(spec.RunPolicy) {
+		return &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "incident_policy, verification_plan, escalation_policy, watcher_lifecycle, retrigger_policy, and run_policy must be JSON objects",
+		}
+	}
+	for _, signal := range spec.Signals {
+		if len(signal.Payload) > 0 && !isValidJSONValue(signal.Payload) {
+			return &types.AutomationValidationError{
+				Code:    "invalid_automation_spec",
+				Message: "signals payloads must be valid JSON",
+			}
+		}
 	}
 	return nil
 }
@@ -256,20 +406,16 @@ func normalizeAutomationSpec(spec types.AutomationSpec, now time.Time) types.Aut
 	spec.Context.Environment = strings.TrimSpace(spec.Context.Environment)
 	spec.Context.Targets = normalizeStringList(spec.Context.Targets)
 	spec.Context.Labels = normalizeLabels(spec.Context.Labels)
-	if len(spec.Context.Labels) == 0 {
-		spec.Context.Labels = nil
-	}
-
 	spec.Signals = normalizeSignals(spec.Signals)
-	spec.IncidentPolicy = normalizeRawJSON(spec.IncidentPolicy)
+	spec.IncidentPolicy = normalizeObjectJSON(spec.IncidentPolicy)
 	spec.ResponsePlan = normalizeRawJSON(spec.ResponsePlan)
-	spec.VerificationPlan = normalizeRawJSON(spec.VerificationPlan)
-	spec.EscalationPolicy = normalizeRawJSON(spec.EscalationPolicy)
+	spec.VerificationPlan = normalizeObjectJSON(spec.VerificationPlan)
+	spec.EscalationPolicy = normalizeObjectJSON(spec.EscalationPolicy)
 	spec.DeliveryPolicy = normalizeRawJSON(spec.DeliveryPolicy)
 	spec.RuntimePolicy = normalizeRawJSON(spec.RuntimePolicy)
-	spec.WatcherLifecycle = normalizeRawJSON(spec.WatcherLifecycle)
-	spec.RetriggerPolicy = normalizeRawJSON(spec.RetriggerPolicy)
-	spec.RunPolicy = normalizeRawJSON(spec.RunPolicy)
+	spec.WatcherLifecycle = normalizeObjectJSON(spec.WatcherLifecycle)
+	spec.RetriggerPolicy = normalizeObjectJSON(spec.RetriggerPolicy)
+	spec.RunPolicy = normalizeObjectJSON(spec.RunPolicy)
 	spec.Assumptions = normalizeStringList(spec.Assumptions)
 
 	if spec.CreatedAt.IsZero() {
@@ -309,9 +455,8 @@ func normalizeIncidentFilter(filter types.AutomationIncidentFilter) types.Automa
 
 func normalizeTriggerRequest(req types.AutomationTriggerRequest) types.AutomationTriggerRequest {
 	req.AutomationID = strings.TrimSpace(req.AutomationID)
-	req.TriggerKind = strings.TrimSpace(req.TriggerKind)
+	req.SignalKind = strings.TrimSpace(req.SignalKind)
 	req.Source = strings.TrimSpace(req.Source)
-	req.Title = strings.TrimSpace(req.Title)
 	req.Summary = strings.TrimSpace(req.Summary)
 	req.Payload = normalizeRawJSON(req.Payload)
 	if !req.ObservedAt.IsZero() {
@@ -322,8 +467,8 @@ func normalizeTriggerRequest(req types.AutomationTriggerRequest) types.Automatio
 
 func normalizeHeartbeatRequest(req types.AutomationHeartbeatRequest) types.AutomationHeartbeatRequest {
 	req.AutomationID = strings.TrimSpace(req.AutomationID)
+	req.WatcherID = strings.TrimSpace(req.WatcherID)
 	req.Status = strings.TrimSpace(req.Status)
-	req.Message = strings.TrimSpace(req.Message)
 	req.Payload = normalizeRawJSON(req.Payload)
 	if !req.ObservedAt.IsZero() {
 		req.ObservedAt = req.ObservedAt.UTC()
@@ -339,13 +484,22 @@ func normalizeAutomationState(state types.AutomationState) types.AutomationState
 	return types.AutomationState(normalized)
 }
 
+func isValidAutomationState(state types.AutomationState) bool {
+	switch state {
+	case types.AutomationStateActive, types.AutomationStatePaused:
+		return true
+	default:
+		return false
+	}
+}
+
 func normalizeControlAction(action types.AutomationControlAction) types.AutomationControlAction {
 	return types.AutomationControlAction(strings.ToLower(strings.TrimSpace(string(action))))
 }
 
 func normalizeSignals(signals []types.AutomationSignal) []types.AutomationSignal {
 	if len(signals) == 0 {
-		return nil
+		return []types.AutomationSignal{}
 	}
 	out := make([]types.AutomationSignal, 0, len(signals))
 	for _, signal := range signals {
@@ -359,14 +513,14 @@ func normalizeSignals(signals []types.AutomationSignal) []types.AutomationSignal
 		out = append(out, signal)
 	}
 	if len(out) == 0 {
-		return nil
+		return []types.AutomationSignal{}
 	}
 	return out
 }
 
 func normalizeLabels(labels map[string]string) map[string]string {
 	if len(labels) == 0 {
-		return nil
+		return map[string]string{}
 	}
 	out := make(map[string]string, len(labels))
 	for key, value := range labels {
@@ -378,14 +532,14 @@ func normalizeLabels(labels map[string]string) map[string]string {
 		out[key] = value
 	}
 	if len(out) == 0 {
-		return nil
+		return map[string]string{}
 	}
 	return out
 }
 
 func normalizeStringList(values []string) []string {
 	if len(values) == 0 {
-		return nil
+		return []string{}
 	}
 	out := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -401,7 +555,7 @@ func normalizeStringList(values []string) []string {
 		out = append(out, trimmed)
 	}
 	if len(out) == 0 {
-		return nil
+		return []string{}
 	}
 	return out
 }
@@ -422,7 +576,28 @@ func isPresentJSON(raw json.RawMessage) bool {
 	return string(raw) != "null"
 }
 
-func isValidOptionalJSON(raw json.RawMessage) bool {
+func normalizeObjectJSON(raw json.RawMessage) json.RawMessage {
+	raw = normalizeRawJSON(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage("{}")
+	}
+	return raw
+}
+
+func isJSONObject(raw json.RawMessage) bool {
+	raw = normalizeRawJSON(raw)
+	if len(raw) == 0 || !json.Valid(raw) {
+		return false
+	}
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return false
+	}
+	_, ok := decoded.(map[string]any)
+	return ok
+}
+
+func isValidJSONValue(raw json.RawMessage) bool {
 	raw = normalizeRawJSON(raw)
 	if len(raw) == 0 {
 		return true

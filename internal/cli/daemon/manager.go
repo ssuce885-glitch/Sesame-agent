@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -58,6 +59,12 @@ type launchTarget struct {
 	executable string
 	args       []string
 	workdir    string
+}
+
+type pidRecord struct {
+	PID               int    `json:"pid"`
+	DaemonID          string `json:"daemon_id,omitempty"`
+	ConfigFingerprint string `json:"config_fingerprint,omitempty"`
 }
 
 func NewManager(opts Options) *Manager {
@@ -189,15 +196,70 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 	status, err := m.status(ctx, m.baseURL)
 	if err != nil {
-		return nil
+		return m.stopByPIDFile()
 	}
-	if !m.matchesConfig(status) {
-		return nil
+	if !m.matchesConfig(status) || status.PID <= 0 {
+		return m.stopByPIDFile()
 	}
 	if err := m.stopper(status.PID); err != nil {
 		return err
 	}
 	return m.waitForUnavailable(ctx)
+}
+
+func (m *Manager) stopByPIDFile() error {
+	if m == nil || strings.TrimSpace(m.config.DataDir) == "" {
+		return nil
+	}
+
+	raw, err := os.ReadFile(filepath.Join(m.config.DataDir, "sesame.pid"))
+	if err != nil {
+		return nil
+	}
+	record, ok := parsePIDRecord(raw)
+	if !ok || !m.pidRecordMatches(record) {
+		return nil
+	}
+	return m.stopper(record.PID)
+}
+
+func parsePIDRecord(raw []byte) (pidRecord, bool) {
+	var record pidRecord
+	if err := json.Unmarshal(raw, &record); err == nil && record.PID > 0 {
+		return record, true
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 {
+		return pidRecord{}, false
+	}
+	return pidRecord{PID: pid}, true
+}
+
+func (m *Manager) pidRecordMatches(record pidRecord) bool {
+	if record.PID <= 0 {
+		return false
+	}
+
+	wantDaemonID := strings.TrimSpace(m.config.DaemonID)
+	gotDaemonID := strings.TrimSpace(record.DaemonID)
+	if wantDaemonID != "" && gotDaemonID != "" && wantDaemonID != gotDaemonID {
+		return false
+	}
+	if wantDaemonID != "" && gotDaemonID == "" {
+		return false
+	}
+
+	wantFingerprint := strings.TrimSpace(m.config.ConfigFingerprint)
+	gotFingerprint := strings.TrimSpace(record.ConfigFingerprint)
+	if wantFingerprint != "" && gotFingerprint != "" && wantFingerprint != gotFingerprint {
+		return false
+	}
+	if wantFingerprint != "" && gotFingerprint == "" {
+		return false
+	}
+
+	return true
 }
 
 func (m *Manager) fetchStatus(ctx context.Context, baseURL string) (StatusInfo, error) {

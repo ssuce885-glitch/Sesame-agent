@@ -63,6 +63,7 @@ type Engine struct {
 	globalConfigRoot        string
 	maxWorkspacePromptBytes int
 	maxToolSteps            int
+	automationService       tools.AutomationService
 	taskManager             *task.Manager
 	runtimeService          *runtimegraph.Service
 	schedulerService        *scheduler.Service
@@ -153,6 +154,13 @@ func (e *Engine) SetTaskManager(manager *task.Manager) {
 		return
 	}
 	e.taskManager = manager
+}
+
+func (e *Engine) SetAutomationService(service tools.AutomationService) {
+	if e == nil {
+		return
+	}
+	e.automationService = service
 }
 
 func (e *Engine) SetRuntimeService(service *runtimegraph.Service) {

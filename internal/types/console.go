@@ -59,8 +59,9 @@ type ConversationTimelineItem struct {
 	Item   model.ConversationItem `json:"item"`
 }
 
-type SessionWorkspaceResponse struct {
-	SessionID            string `json:"session_id"`
+type WorkspaceResponse struct {
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
 	WorkspaceRoot        string `json:"workspace_root"`
 	Provider             string `json:"provider,omitempty"`
 	Model                string `json:"model,omitempty"`

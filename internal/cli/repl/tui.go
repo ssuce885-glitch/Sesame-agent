@@ -92,7 +92,7 @@ type tuiSessionsMsg struct {
 }
 
 type tuiMailboxMsg struct {
-	resp types.SessionReportMailboxResponse
+	resp types.WorkspaceReportMailboxResponse
 	err  error
 }
 
@@ -171,7 +171,7 @@ type tuiModel struct {
 	statusFlash        string
 	pendingReportCount int
 
-	mailbox       types.SessionReportMailboxResponse
+	mailbox       types.WorkspaceReportMailboxResponse
 	mailboxLoaded bool
 	mailboxErr    string
 	mailboxPushes []types.ReportMailboxItem
@@ -627,7 +627,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entries = nil
 		m.toolIndexByCall = make(map[string]int)
 		m.toolIndexByKey = make(map[string]int)
-		m.mailbox = types.SessionReportMailboxResponse{}
+		m.mailbox = types.WorkspaceReportMailboxResponse{}
 		m.mailboxLoaded = false
 		m.mailboxErr = ""
 		m.mailboxPushes = nil
@@ -743,12 +743,6 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	case "mailbox", "inbox":
-		if strings.TrimSpace(m.sessionID) == "" {
-			m.mailboxErr = "session is not selected"
-			m.setStatusFlash("Mailbox unavailable")
-			m.layout()
-			return m, nil
-		}
 		return m.switchView(tuiViewMailbox, m.loadMailboxCmd())
 	case "cron":
 		if len(fields) < 2 {
@@ -949,14 +943,10 @@ func (m tuiModel) permissionDecisionCmd(command string, args []string) (tea.Cmd,
 }
 
 func (m tuiModel) loadMailboxCmd() tea.Cmd {
-	if strings.TrimSpace(m.sessionID) == "" {
-		return nil
-	}
 	ctx := m.ctx
 	client := m.client
-	sessionID := m.sessionID
 	return func() tea.Msg {
-		resp, err := client.GetReportMailbox(ctx, sessionID)
+		resp, err := client.GetWorkspaceMailbox(ctx)
 		return tuiMailboxMsg{resp: resp, err: err}
 	}
 }
@@ -1539,8 +1529,7 @@ func (m tuiModel) renderMailboxContent(width int) string {
 		renderSectionHeading("Mailbox", fmt.Sprintf("%d items · %d pending", len(m.mailbox.Items), m.pendingReportCount), width),
 	}
 	if strings.TrimSpace(m.sessionID) == "" {
-		parts = append(parts, renderMutedBlock("Select a session to receive async reports.", width))
-		return strings.Join(parts, "\n\n")
+		parts = append(parts, renderMutedBlock("Select a session to receive async report push updates.", width))
 	}
 	if strings.TrimSpace(m.mailboxErr) != "" {
 		parts = append(parts, renderErrorBlock(m.mailboxErr, width))
@@ -1558,7 +1547,7 @@ func (m tuiModel) renderMailboxContent(width int) string {
 	pendingItems := reportMailboxItemsByDeliveryState(m.mailbox.Items, true)
 	deliveredItems := reportMailboxItemsByDeliveryState(m.mailbox.Items, false)
 	parts = append(parts, renderMailboxSection("Pending Delivery", pendingItems, "No pending reports.", width))
-	parts = append(parts, renderMailboxSection("Delivered To Session", deliveredItems, "No delivered reports yet.", width))
+	parts = append(parts, renderMailboxSection("Delivered To Turn", deliveredItems, "No delivered reports yet.", width))
 	return strings.Join(parts, "\n\n")
 }
 
