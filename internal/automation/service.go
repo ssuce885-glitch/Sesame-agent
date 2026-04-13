@@ -24,9 +24,11 @@ type Store interface {
 	GetAutomation(context.Context, string) (types.AutomationSpec, bool, error)
 	ListAutomations(context.Context, types.AutomationListFilter) ([]types.AutomationSpec, error)
 	DeleteAutomation(context.Context, string) (bool, error)
+	UpsertTriggerEvent(context.Context, types.TriggerEvent) error
 	UpsertAutomationIncident(context.Context, types.AutomationIncident) error
 	GetAutomationIncident(context.Context, string) (types.AutomationIncident, bool, error)
 	ListAutomationIncidents(context.Context, types.AutomationIncidentFilter) ([]types.AutomationIncident, error)
+	UpsertIncidentPhaseState(context.Context, types.IncidentPhaseState) error
 	UpsertAutomationHeartbeat(context.Context, types.AutomationHeartbeat) error
 }
 
@@ -210,32 +212,84 @@ func (s *Service) EmitTrigger(ctx context.Context, req types.AutomationTriggerRe
 	}
 
 	now := s.currentTime()
-	incident := types.AutomationIncident{
-		ID:            types.NewID("incident"),
-		AutomationID:  spec.ID,
-		WorkspaceRoot: spec.WorkspaceRoot,
-		Status:        types.AutomationIncidentStatusOpen,
-		SignalKind:    req.SignalKind,
-		Source:        req.Source,
-		Summary:       req.Summary,
-		Payload:       normalizeRawJSON(req.Payload),
-		ObservedAt:    normalizeOptionalTime(req.ObservedAt, now),
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-	if incident.SignalKind == "" {
+	trigger := buildTriggerEvent(spec, req, now)
+	if trigger.SignalKind == "" {
 		return types.AutomationIncident{}, &types.AutomationValidationError{
 			Code:    "invalid_automation_spec",
 			Message: "signal_kind is required",
 		}
 	}
-	if len(incident.Payload) > 0 && !isValidJSONValue(incident.Payload) {
+	if len(trigger.Payload) > 0 && !isValidJSONValue(trigger.Payload) {
 		return types.AutomationIncident{}, &types.AutomationValidationError{
 			Code:    "invalid_automation_spec",
 			Message: "payload must be valid JSON",
 		}
 	}
+	if err := s.store.UpsertTriggerEvent(ctx, trigger); err != nil {
+		return types.AutomationIncident{}, err
+	}
+
+	dedupeWindow := dedupeWindowForSpec(spec)
+	if strings.TrimSpace(trigger.DedupeKey) != "" {
+		incidents, err := s.store.ListAutomationIncidents(ctx, types.AutomationIncidentFilter{
+			AutomationID: spec.ID,
+			Status:       types.AutomationIncidentStatusOpen,
+		})
+		if err != nil {
+			return types.AutomationIncident{}, err
+		}
+		for _, incident := range incidents {
+			if !incidentMatchesTriggerDedupe(incident, trigger.DedupeKey, trigger.ObservedAt, dedupeWindow) {
+				continue
+			}
+			incident.SignalKind = trigger.SignalKind
+			incident.Source = trigger.Source
+			if trigger.Summary != "" {
+				incident.Summary = trigger.Summary
+			}
+			if len(trigger.Payload) > 0 {
+				incident.Payload = trigger.Payload
+			}
+			incident.ObservedAt = trigger.ObservedAt
+			incident.UpdatedAt = now
+			if err := s.store.UpsertAutomationIncident(ctx, incident); err != nil {
+				return types.AutomationIncident{}, err
+			}
+			trigger.IncidentID = incident.ID
+			trigger.UpdatedAt = now
+			if err := s.store.UpsertTriggerEvent(ctx, trigger); err != nil {
+				return types.AutomationIncident{}, err
+			}
+			return incident, nil
+		}
+	}
+
+	incident := types.AutomationIncident{
+		ID:            types.NewID("incident"),
+		AutomationID:  spec.ID,
+		WorkspaceRoot: spec.WorkspaceRoot,
+		Status:        types.AutomationIncidentStatusOpen,
+		SignalKind:    trigger.SignalKind,
+		Source:        trigger.Source,
+		Summary:       trigger.Summary,
+		Payload:       trigger.Payload,
+		ObservedAt:    trigger.ObservedAt,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
 	if err := s.store.UpsertAutomationIncident(ctx, incident); err != nil {
+		return types.AutomationIncident{}, err
+	}
+
+	for _, phase := range buildIncidentPhaseStates(spec, incident, now) {
+		if err := s.store.UpsertIncidentPhaseState(ctx, phase); err != nil {
+			return types.AutomationIncident{}, err
+		}
+	}
+
+	trigger.IncidentID = incident.ID
+	trigger.UpdatedAt = now
+	if err := s.store.UpsertTriggerEvent(ctx, trigger); err != nil {
 		return types.AutomationIncident{}, err
 	}
 	return incident, nil

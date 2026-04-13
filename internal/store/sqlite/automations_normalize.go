@@ -170,6 +170,75 @@ func normalizeAutomationWatcherForStore(watcher types.AutomationWatcherRuntime) 
 	return watcher
 }
 
+func normalizeTriggerEventForStore(event types.TriggerEvent) types.TriggerEvent {
+	now := time.Now().UTC()
+	event.EventID = strings.TrimSpace(event.EventID)
+	if event.EventID == "" {
+		event.EventID = types.NewID("trigger")
+	}
+	event.AutomationID = strings.TrimSpace(event.AutomationID)
+	event.WorkspaceRoot = strings.TrimSpace(event.WorkspaceRoot)
+	event.IncidentID = strings.TrimSpace(event.IncidentID)
+	event.SignalKind = strings.TrimSpace(event.SignalKind)
+	event.Source = strings.TrimSpace(event.Source)
+	event.Summary = strings.TrimSpace(event.Summary)
+	event.Payload = normalizeAutomationRawJSON(event.Payload)
+	event.DedupeKey = strings.TrimSpace(event.DedupeKey)
+	if event.ObservedAt.IsZero() {
+		event.ObservedAt = now
+	} else {
+		event.ObservedAt = event.ObservedAt.UTC()
+	}
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = now
+	} else {
+		event.CreatedAt = event.CreatedAt.UTC()
+	}
+	if event.UpdatedAt.IsZero() {
+		event.UpdatedAt = event.CreatedAt
+	} else {
+		event.UpdatedAt = event.UpdatedAt.UTC()
+	}
+	if event.UpdatedAt.Before(event.CreatedAt) {
+		event.UpdatedAt = event.CreatedAt
+	}
+	return event
+}
+
+func normalizeIncidentPhaseStateForStore(state types.IncidentPhaseState) types.IncidentPhaseState {
+	now := time.Now().UTC()
+	state.IncidentID = strings.TrimSpace(state.IncidentID)
+	state.AutomationID = strings.TrimSpace(state.AutomationID)
+	state.WorkspaceRoot = strings.TrimSpace(state.WorkspaceRoot)
+	state.Phase = normalizeAutomationPhaseNameForStore(state.Phase)
+	state.Reduction = normalizeIncidentPhaseReductionForStore(state.Reduction)
+	state.Status = normalizeIncidentPhaseStatusForStore(state.Status)
+	state.DispatchIDs = normalizeAutomationStringList(state.DispatchIDs)
+	if state.ActiveDispatchCount < 0 {
+		state.ActiveDispatchCount = 0
+	}
+	if state.CompletedDispatchCount < 0 {
+		state.CompletedDispatchCount = 0
+	}
+	if state.FailedDispatchCount < 0 {
+		state.FailedDispatchCount = 0
+	}
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = now
+	} else {
+		state.CreatedAt = state.CreatedAt.UTC()
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = state.CreatedAt
+	} else {
+		state.UpdatedAt = state.UpdatedAt.UTC()
+	}
+	if state.UpdatedAt.Before(state.CreatedAt) {
+		state.UpdatedAt = state.CreatedAt
+	}
+	return state
+}
+
 func normalizeDispatchAttemptForStore(attempt types.DispatchAttempt) types.DispatchAttempt {
 	now := time.Now().UTC()
 	attempt.DispatchID = strings.TrimSpace(attempt.DispatchID)
@@ -291,6 +360,17 @@ func normalizeAutomationWatcherStateForStore(state types.AutomationWatcherState)
 		return types.AutomationWatcherStatePending
 	}
 	return state
+}
+
+func normalizeTriggerEventFilterForStore(filter types.TriggerEventFilter) types.TriggerEventFilter {
+	filter.WorkspaceRoot = strings.TrimSpace(filter.WorkspaceRoot)
+	filter.AutomationID = strings.TrimSpace(filter.AutomationID)
+	filter.IncidentID = strings.TrimSpace(filter.IncidentID)
+	filter.DedupeKey = strings.TrimSpace(filter.DedupeKey)
+	if filter.Limit < 0 {
+		filter.Limit = 0
+	}
+	return filter
 }
 
 func normalizeAutomationStringList(values []string) []string {
@@ -428,6 +508,34 @@ func normalizeAutomationPhaseNameForStore(phase types.AutomationPhaseName) types
 		return types.AutomationPhaseEscalate
 	default:
 		return types.AutomationPhaseDiagnose
+	}
+}
+
+func normalizeIncidentPhaseReductionForStore(reduction types.IncidentPhaseReduction) types.IncidentPhaseReduction {
+	switch strings.ToLower(strings.TrimSpace(string(reduction))) {
+	case string(types.IncidentPhaseReductionAnySuccess):
+		return types.IncidentPhaseReductionAnySuccess
+	case string(types.IncidentPhaseReductionBestEffort):
+		return types.IncidentPhaseReductionBestEffort
+	default:
+		return types.IncidentPhaseReductionAllMustSucceed
+	}
+}
+
+func normalizeIncidentPhaseStatusForStore(status types.IncidentPhaseStatus) types.IncidentPhaseStatus {
+	switch strings.ToLower(strings.TrimSpace(string(status))) {
+	case string(types.IncidentPhaseStatusRunning):
+		return types.IncidentPhaseStatusRunning
+	case string(types.IncidentPhaseStatusAwaitingApproval):
+		return types.IncidentPhaseStatusAwaitingApproval
+	case string(types.IncidentPhaseStatusCompleted):
+		return types.IncidentPhaseStatusCompleted
+	case string(types.IncidentPhaseStatusFailed):
+		return types.IncidentPhaseStatusFailed
+	case string(types.IncidentPhaseStatusCanceled):
+		return types.IncidentPhaseStatusCanceled
+	default:
+		return types.IncidentPhaseStatusPending
 	}
 }
 

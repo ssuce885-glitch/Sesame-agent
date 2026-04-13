@@ -12,6 +12,8 @@ type AutomationIncidentStatus string
 type AutomationWatcherState string
 type AutomationPhaseName string
 type AutomationPhaseTransitionAction string
+type IncidentPhaseReduction string
+type IncidentPhaseStatus string
 type AutomationAssumptionSource string
 type DispatchAttemptStatus string
 type DeliveryChannelStatus string
@@ -57,6 +59,21 @@ const (
 	AutomationPhaseTransitionComplete  AutomationPhaseTransitionAction = "complete"
 	AutomationPhaseTransitionEscalate  AutomationPhaseTransitionAction = "escalate"
 	AutomationPhaseTransitionCancel    AutomationPhaseTransitionAction = "cancel"
+)
+
+const (
+	IncidentPhaseReductionAllMustSucceed IncidentPhaseReduction = "all_must_succeed"
+	IncidentPhaseReductionAnySuccess     IncidentPhaseReduction = "any_success"
+	IncidentPhaseReductionBestEffort     IncidentPhaseReduction = "best_effort"
+)
+
+const (
+	IncidentPhaseStatusPending          IncidentPhaseStatus = "pending"
+	IncidentPhaseStatusRunning          IncidentPhaseStatus = "running"
+	IncidentPhaseStatusAwaitingApproval IncidentPhaseStatus = "awaiting_approval"
+	IncidentPhaseStatusCompleted        IncidentPhaseStatus = "completed"
+	IncidentPhaseStatusFailed           IncidentPhaseStatus = "failed"
+	IncidentPhaseStatusCanceled         IncidentPhaseStatus = "canceled"
 )
 
 const (
@@ -195,6 +212,36 @@ type AutomationWatcherRuntime struct {
 	UpdatedAt     time.Time              `json:"updated_at,omitempty"`
 }
 
+type TriggerEvent struct {
+	EventID       string          `json:"event_id"`
+	AutomationID  string          `json:"automation_id"`
+	WorkspaceRoot string          `json:"workspace_root"`
+	IncidentID    string          `json:"incident_id,omitempty"`
+	SignalKind    string          `json:"signal_kind,omitempty"`
+	Source        string          `json:"source,omitempty"`
+	Summary       string          `json:"summary,omitempty"`
+	Payload       json.RawMessage `json:"payload,omitempty"`
+	DedupeKey     string          `json:"dedupe_key,omitempty"`
+	ObservedAt    time.Time       `json:"observed_at,omitempty"`
+	CreatedAt     time.Time       `json:"created_at,omitempty"`
+	UpdatedAt     time.Time       `json:"updated_at,omitempty"`
+}
+
+type IncidentPhaseState struct {
+	IncidentID             string                 `json:"incident_id"`
+	AutomationID           string                 `json:"automation_id"`
+	WorkspaceRoot          string                 `json:"workspace_root"`
+	Phase                  AutomationPhaseName    `json:"phase"`
+	Reduction              IncidentPhaseReduction `json:"reduction"`
+	Status                 IncidentPhaseStatus    `json:"status"`
+	DispatchIDs            []string               `json:"dispatch_ids"`
+	ActiveDispatchCount    int                    `json:"active_dispatch_count"`
+	CompletedDispatchCount int                    `json:"completed_dispatch_count"`
+	FailedDispatchCount    int                    `json:"failed_dispatch_count"`
+	CreatedAt              time.Time              `json:"created_at,omitempty"`
+	UpdatedAt              time.Time              `json:"updated_at,omitempty"`
+}
+
 type DispatchAttempt struct {
 	DispatchID          string                `json:"dispatch_id"`
 	IncidentID          string                `json:"incident_id"`
@@ -267,6 +314,14 @@ type AutomationWatcherFilter struct {
 	AutomationID  string                 `json:"automation_id,omitempty"`
 	State         AutomationWatcherState `json:"state,omitempty"`
 	Limit         int                    `json:"limit,omitempty"`
+}
+
+type TriggerEventFilter struct {
+	WorkspaceRoot string `json:"workspace_root,omitempty"`
+	AutomationID  string `json:"automation_id,omitempty"`
+	IncidentID    string `json:"incident_id,omitempty"`
+	DedupeKey     string `json:"dedupe_key,omitempty"`
+	Limit         int    `json:"limit,omitempty"`
 }
 
 type DispatchAttemptFilter struct {

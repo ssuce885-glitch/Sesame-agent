@@ -257,6 +257,34 @@ func (s *Store) migrate(ctx context.Context) error {
 		);`,
 		`create index if not exists automation_incidents_automation_status_idx
 			on automation_incidents(automation_id, status, observed_at desc, id asc);`,
+		`create table if not exists automation_trigger_events (
+			event_id text primary key,
+			workspace_root text not null,
+			automation_id text not null,
+			incident_id text not null default '',
+			dedupe_key text not null default '',
+			signal_kind text not null default '',
+			source text not null default '',
+			observed_at text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists automation_trigger_events_automation_dedupe_idx
+			on automation_trigger_events(automation_id, dedupe_key, observed_at desc, event_id asc);`,
+		`create table if not exists automation_incident_phase_states (
+			incident_id text not null,
+			phase text not null,
+			automation_id text not null,
+			workspace_root text not null,
+			status text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null,
+			primary key (incident_id, phase)
+		);`,
+		`create index if not exists automation_incident_phase_states_incident_idx
+			on automation_incident_phase_states(incident_id, updated_at desc, phase asc);`,
 		`create table if not exists automation_heartbeats (
 			automation_id text not null,
 			watcher_id text not null,

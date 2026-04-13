@@ -222,6 +222,130 @@ func normalizeOptionalTime(value, fallback time.Time) time.Time {
 	return value.UTC()
 }
 
+func buildTriggerEvent(spec types.AutomationSpec, req types.AutomationTriggerRequest, now time.Time) types.TriggerEvent {
+	observedAt := normalizeOptionalTime(req.ObservedAt, now)
+	payload := normalizeRawJSON(req.Payload)
+	return types.TriggerEvent{
+		EventID:       types.NewID("trigger"),
+		AutomationID:  spec.ID,
+		WorkspaceRoot: spec.WorkspaceRoot,
+		SignalKind:    req.SignalKind,
+		Source:        req.Source,
+		Summary:       req.Summary,
+		Payload:       payload,
+		DedupeKey:     extractTriggerDedupeKey(payload, req.SignalKind, req.Source, req.Summary),
+		ObservedAt:    observedAt,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+}
+
+func loadResponsePlanV2(raw json.RawMessage) types.ResponsePlanV2 {
+	raw = normalizeRawJSON(raw)
+	if len(raw) == 0 {
+		return types.ResponsePlanV2{}
+	}
+	var plan types.ResponsePlanV2
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return types.ResponsePlanV2{}
+	}
+	return plan
+}
+
+func buildIncidentPhaseStates(spec types.AutomationSpec, incident types.AutomationIncident, now time.Time) []types.IncidentPhaseState {
+	plan := loadResponsePlanV2(spec.ResponsePlan)
+	if len(plan.Phases) == 0 {
+		return []types.IncidentPhaseState{}
+	}
+	states := make([]types.IncidentPhaseState, 0, len(plan.Phases))
+	for _, phase := range plan.Phases {
+		if phase.Phase == "" {
+			continue
+		}
+		states = append(states, types.IncidentPhaseState{
+			IncidentID:             incident.ID,
+			AutomationID:           incident.AutomationID,
+			WorkspaceRoot:          incident.WorkspaceRoot,
+			Phase:                  phase.Phase,
+			Reduction:              types.IncidentPhaseReductionAllMustSucceed,
+			Status:                 types.IncidentPhaseStatusPending,
+			DispatchIDs:            []string{},
+			ActiveDispatchCount:    0,
+			CompletedDispatchCount: 0,
+			FailedDispatchCount:    0,
+			CreatedAt:              now,
+			UpdatedAt:              now,
+		})
+	}
+	return states
+}
+
+func dedupeWindowForSpec(spec types.AutomationSpec) time.Duration {
+	cfg := struct {
+		DedupeWindowSeconds int `json:"dedupe_window_seconds"`
+	}{}
+	_ = json.Unmarshal(spec.RetriggerPolicy, &cfg)
+	if cfg.DedupeWindowSeconds <= 0 {
+		cfg.DedupeWindowSeconds = 600
+	}
+	return time.Duration(cfg.DedupeWindowSeconds) * time.Second
+}
+
+func incidentMatchesTriggerDedupe(incident types.AutomationIncident, dedupeKey string, observedAt time.Time, window time.Duration) bool {
+	if strings.TrimSpace(dedupeKey) == "" {
+		return false
+	}
+	if strings.TrimSpace(incidentDedupeKey(incident)) != strings.TrimSpace(dedupeKey) {
+		return false
+	}
+	if observedAt.IsZero() || incident.ObservedAt.IsZero() || window <= 0 {
+		return true
+	}
+	delta := observedAt.Sub(incident.ObservedAt)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= window
+}
+
+func incidentDedupeKey(incident types.AutomationIncident) string {
+	if dedupeKey := incidentPayloadDedupeKey(incident.Payload); dedupeKey != "" {
+		return dedupeKey
+	}
+	return extractTriggerDedupeKey(nil, incident.SignalKind, incident.Source, incident.Summary)
+}
+
+func incidentPayloadDedupeKey(raw json.RawMessage) string {
+	raw = normalizeRawJSON(raw)
+	if len(raw) == 0 || !json.Valid(raw) {
+		return ""
+	}
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return ""
+	}
+	text, _ := object["dedupe_key"].(string)
+	return strings.TrimSpace(text)
+}
+
+func extractTriggerDedupeKey(raw json.RawMessage, signalKind string, source string, summary string) string {
+	if dedupeKey := incidentPayloadDedupeKey(raw); dedupeKey != "" {
+		return dedupeKey
+	}
+	parts := []string{
+		strings.TrimSpace(signalKind),
+		strings.TrimSpace(source),
+		strings.TrimSpace(summary),
+	}
+	nonEmpty := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			nonEmpty = append(nonEmpty, part)
+		}
+	}
+	return strings.Join(nonEmpty, "|")
+}
+
 func validateResponsePlanDraftMode(raw json.RawMessage) error {
 	raw = normalizeRawJSON(raw)
 	if len(raw) == 0 || !json.Valid(raw) {
