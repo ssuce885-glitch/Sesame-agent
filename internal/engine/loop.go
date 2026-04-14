@@ -673,6 +673,7 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 		return 0, contextstate.WorkingSet{}, nil, err
 	}
 	hasSessionMemory := summaryBundle.SessionMemory != nil
+	sessionMemoryUpTo := loadSessionMemoryUpTo(ctx, e.store, sessionID)
 
 	entries, err := e.store.ListMemoryEntriesByWorkspace(ctx, in.Session.WorkspaceRoot)
 	if err != nil {
@@ -682,13 +683,13 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	memoryRefs := buildMemoryRefs(entries, hasSessionMemory, in.Session.WorkspaceRoot, in.Turn.UserMessage)
 
 	persistedMicroItems := activeMicrocompactItems(compactions)
-	recentWindowItems := recentRawItemsForCompactionWindow(items, compactions)
+	recentWindowItems, recentWindowOverride := recentRawItemsForCompactionWindow(items, compactions)
 	working := e.ctxManager.Build(in.Turn.UserMessage, items, summaryBundle, memoryRefs)
-	working = setPromptItems(working, persistedMicroItems, recentWindowItems, in.Turn.UserMessage)
+	working = setPromptItems(working, persistedMicroItems, recentWindowItems, recentWindowOverride, in.Turn.UserMessage)
 	if e.compactor != nil {
 		switch working.Action.Kind {
 		case contextstate.CompactionActionRolling:
-			working, summaryBundle, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaryBundle, memoryRefs, compactions, working, len(compactions)+1, types.ConversationCompactionKindRolling, "rolling_summary")
+			working, summaryBundle, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaryBundle, memoryRefs, compactions, sessionMemoryUpTo, working, len(compactions)+1, types.ConversationCompactionKindRolling, "rolling_summary")
 			if err != nil {
 				return 0, contextstate.WorkingSet{}, nil, err
 			}
@@ -715,13 +716,13 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 					if candidatePayload.RecentStart >= 0 && candidatePayload.RecentStart <= len(items) {
 						candidateRecentRawItems = cloneConversationItemsForPrompt(items[candidatePayload.RecentStart:])
 					}
-					working = setPromptItems(working, candidatePayload.Items, candidateRecentRawItems, in.Turn.UserMessage)
+					working = setPromptItems(working, candidatePayload.Items, candidateRecentRawItems, true, in.Turn.UserMessage)
 					working.EstimatedTokens = candidateEstimate
 					working.CompactionApplied = true
 					break
 				}
 			}
-			working, summaryBundle, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaryBundle, memoryRefs, compactions, working, len(compactions)+1, types.ConversationCompactionKindRolling, "microcompact_escalated_to_rolling")
+			working, summaryBundle, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaryBundle, memoryRefs, compactions, sessionMemoryUpTo, working, len(compactions)+1, types.ConversationCompactionKindRolling, "microcompact_escalated_to_rolling")
 			if err != nil {
 				return 0, contextstate.WorkingSet{}, nil, err
 			}
@@ -745,6 +746,7 @@ func applySummaryCompaction(
 	summaryBundle SummaryBundle,
 	memoryRefs []string,
 	compactions []types.ConversationCompaction,
+	sessionMemoryUpTo int,
 	working contextstate.WorkingSet,
 	generation int,
 	kind types.ConversationCompactionKind,
@@ -780,7 +782,7 @@ func applySummaryCompaction(
 		MetadataJSON: encodeBoundaryMetadata(newBoundaryMetadata(
 			generation,
 			cutoff,
-			sessionMemoryUpTo(summaryBundle, cutoff),
+			sessionMemoryUpTo,
 			len(items),
 			reason,
 			string(e.model.Capabilities().Profile),
@@ -798,9 +800,9 @@ func applySummaryCompaction(
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
 	persistedMicroItems := activeMicrocompactItems(compactions)
-	recentWindowItems := recentRawItemsForCompactionWindow(items, compactions)
+	recentWindowItems, recentWindowOverride := recentRawItemsForCompactionWindow(items, compactions)
 	working = e.ctxManager.Build(userMessage, items, summaryBundle, memoryRefs)
-	working = setPromptItems(working, persistedMicroItems, recentWindowItems, userMessage)
+	working = setPromptItems(working, persistedMicroItems, recentWindowItems, recentWindowOverride, userMessage)
 	working.CompactionApplied = true
 	return working, summaryBundle, nil
 }
@@ -821,13 +823,6 @@ func newBoundaryMetadata(generation int, cutoff int, sessionMemoryUpTo int, sour
 	}
 }
 
-func sessionMemoryUpTo(summaryBundle SummaryBundle, cutoff int) int {
-	if summaryBundle.SessionMemory == nil {
-		return 0
-	}
-	return cutoff
-}
-
 func marshalCompactionSummary(summary model.Summary) string {
 	raw, err := json.Marshal(summary)
 	if err != nil {
@@ -836,9 +831,9 @@ func marshalCompactionSummary(summary model.Summary) string {
 	return string(raw)
 }
 
-func setPromptItems(working contextstate.WorkingSet, carryForwardItems []model.ConversationItem, recentRawItems []model.ConversationItem, userMessage string) contextstate.WorkingSet {
+func setPromptItems(working contextstate.WorkingSet, carryForwardItems []model.ConversationItem, recentRawItems []model.ConversationItem, overrideRecentRaw bool, userMessage string) contextstate.WorkingSet {
 	working.CarryForwardItems = cloneConversationItemsForPrompt(carryForwardItems)
-	if len(recentRawItems) > 0 {
+	if overrideRecentRaw {
 		working.RecentRawItems = cloneConversationItemsForPrompt(recentRawItems)
 	}
 	recentItems := working.RecentRawItems
@@ -848,6 +843,20 @@ func setPromptItems(working contextstate.WorkingSet, carryForwardItems []model.C
 	working.PromptItems = appendPromptItems(working.CarryForwardItems, recentItems)
 	working.EstimatedTokens = contextstate.EstimatePromptTokens(userMessage, working.PromptItems, working.Summaries, working.MemoryRefs)
 	return working
+}
+
+func loadSessionMemoryUpTo(ctx context.Context, store ConversationStore, sessionID string) int {
+	if store == nil || strings.TrimSpace(sessionID) == "" {
+		return 0
+	}
+	memory, ok, err := store.GetSessionMemory(ctx, sessionID)
+	if err != nil || !ok {
+		return 0
+	}
+	if memory.UpToPosition < 0 {
+		return 0
+	}
+	return memory.UpToPosition
 }
 
 func appendPromptItems(carryForwardItems, recentItems []model.ConversationItem) []model.ConversationItem {

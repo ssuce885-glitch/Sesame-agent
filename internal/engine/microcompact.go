@@ -49,12 +49,12 @@ func activeMicrocompactItems(compactions []types.ConversationCompaction) []model
 	return active
 }
 
-func recentRawItemsForCompactionWindow(items []model.ConversationItem, compactions []types.ConversationCompaction) []model.ConversationItem {
+func recentRawItemsForCompactionWindow(items []model.ConversationItem, compactions []types.ConversationCompaction) ([]model.ConversationItem, bool) {
 	start, ok := compactionWindowStart(items, compactions)
 	if !ok {
-		return nil
+		return nil, false
 	}
-	return cloneConversationItemsForPrompt(items[start:])
+	return cloneConversationItemsForPrompt(items[start:]), true
 }
 
 func compactionWindowStart(items []model.ConversationItem, compactions []types.ConversationCompaction) (int, bool) {

@@ -86,10 +86,7 @@ func loadSummaryBundle(ctx context.Context, store ConversationStore, sessionID s
 
 	if boundaryCompaction, ok := activeBoundaryCompaction(compactions); ok {
 		boundarySummary, hasBoundarySummary, err := decodeCompactionSummaryPayload(boundaryCompaction.SummaryPayload)
-		if err != nil {
-			return SummaryBundle{}, nil, err
-		}
-		if hasBoundarySummary {
+		if err == nil && hasBoundarySummary {
 			rollingSummaries := removeMatchingSummary(dedupeSummaries(summaries), boundarySummary)
 			var sessionMemorySummary *model.Summary
 			if hasSessionMemory {
