@@ -276,6 +276,13 @@ func cloneToolCallForPrompt(item model.ConversationItem) model.ConversationItem 
 	return out
 }
 
+func recentRawItemsFromMicrocompact(items []model.ConversationItem, recentStart int, fallback []model.ConversationItem) []model.ConversationItem {
+	if recentStart >= 0 && recentStart <= len(items) {
+		return cloneConversationItemsForPrompt(items[recentStart:])
+	}
+	return cloneConversationItemsForPrompt(fallback)
+}
+
 func cloneConversationItemsForPrompt(items []model.ConversationItem) []model.ConversationItem {
 	if len(items) == 0 {
 		return nil

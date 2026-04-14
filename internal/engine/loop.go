@@ -687,45 +687,21 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	working := e.ctxManager.Build(in.Turn.UserMessage, items, summaryBundle, memoryRefs)
 	working = setPromptItems(working, persistedMicroItems, recentWindowItems, recentWindowOverride, in.Turn.UserMessage)
 	if e.compactor != nil {
-		switch working.Action.Kind {
-		case contextstate.CompactionActionRolling:
-			working, summaryBundle, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaryBundle, memoryRefs, compactions, sessionMemoryUpTo, working, len(compactions)+1, types.ConversationCompactionKindRolling, "rolling_summary")
-			if err != nil {
-				return 0, contextstate.WorkingSet{}, nil, err
-			}
-		case contextstate.CompactionActionMicrocompact:
-			candidatePayload, candidatePromptItems, ok := buildAppliedMicrocompact(items, working.Action.MicrocompactPositions, working.CompactionStart)
-			if ok {
-				candidateEstimate := contextstate.EstimatePromptTokens(in.Turn.UserMessage, candidatePromptItems, summaryBundle, memoryRefs)
-				if candidateEstimate <= e.ctxManager.Config().MaxEstimatedTokens {
-					if err := e.store.InsertConversationCompaction(ctx, types.ConversationCompaction{
-						ID:              types.NewID("compact"),
-						SessionID:       sessionID,
-						Kind:            types.ConversationCompactionKindMicro,
-						Generation:      len(compactions) + 1,
-						StartPosition:   firstPayloadPosition(candidatePayload),
-						EndPosition:     lastPayloadPosition(candidatePayload),
-						SummaryPayload:  encodeMicrocompactPayload(candidatePayload),
-						Reason:          "microcompact_tool_results",
-						ProviderProfile: string(e.model.Capabilities().Profile),
-						CreatedAt:       time.Now().UTC(),
-					}); err != nil {
-						return 0, contextstate.WorkingSet{}, nil, err
-					}
-					candidateRecentRawItems := recentWindowItems
-					if candidatePayload.RecentStart >= 0 && candidatePayload.RecentStart <= len(items) {
-						candidateRecentRawItems = cloneConversationItemsForPrompt(items[candidatePayload.RecentStart:])
-					}
-					working = setPromptItems(working, candidatePayload.Items, candidateRecentRawItems, true, in.Turn.UserMessage)
-					working.EstimatedTokens = candidateEstimate
-					working.CompactionApplied = true
-					break
-				}
-			}
-			working, summaryBundle, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaryBundle, memoryRefs, compactions, sessionMemoryUpTo, working, len(compactions)+1, types.ConversationCompactionKindRolling, "microcompact_escalated_to_rolling")
-			if err != nil {
-				return 0, contextstate.WorkingSet{}, nil, err
-			}
+		working, summaryBundle, err = runCompactionPasses(
+			ctx,
+			e,
+			sessionID,
+			in.Turn.UserMessage,
+			items,
+			summaryBundle,
+			memoryRefs,
+			compactions,
+			recentWindowItems,
+			sessionMemoryUpTo,
+			working,
+		)
+		if err != nil {
+			return 0, contextstate.WorkingSet{}, nil, err
 		}
 	}
 
@@ -735,6 +711,144 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	}
 
 	return totalItems, working, completionNotices, nil
+}
+
+func runCompactionPasses(
+	ctx context.Context,
+	e *Engine,
+	sessionID string,
+	userMessage string,
+	items []model.ConversationItem,
+	summaryBundle SummaryBundle,
+	memoryRefs []string,
+	compactions []types.ConversationCompaction,
+	recentWindowItems []model.ConversationItem,
+	sessionMemoryUpTo int,
+	working contextstate.WorkingSet,
+) (contextstate.WorkingSet, SummaryBundle, error) {
+	switch working.Action.Kind {
+	case contextstate.CompactionActionRolling:
+		return applySummaryCompaction(
+			ctx,
+			e,
+			sessionID,
+			userMessage,
+			items,
+			summaryBundle,
+			memoryRefs,
+			compactions,
+			sessionMemoryUpTo,
+			working,
+			len(compactions)+1,
+			types.ConversationCompactionKindRolling,
+			"rolling_summary",
+		)
+	case contextstate.CompactionActionMicrocompact:
+		nextWorking, nextBundle, nextCompactions, applied, err := applyMicrocompactPass(
+			ctx,
+			e,
+			sessionID,
+			userMessage,
+			items,
+			summaryBundle,
+			memoryRefs,
+			compactions,
+			recentWindowItems,
+			working,
+		)
+		if err != nil {
+			return contextstate.WorkingSet{}, SummaryBundle{}, err
+		}
+		if !applied {
+			return applySummaryCompaction(
+				ctx,
+				e,
+				sessionID,
+				userMessage,
+				items,
+				summaryBundle,
+				memoryRefs,
+				compactions,
+				sessionMemoryUpTo,
+				working,
+				len(compactions)+1,
+				types.ConversationCompactionKindRolling,
+				"microcompact_escalated_to_rolling",
+			)
+		}
+		if !shouldApplyBoundaryCompaction(nextWorking, e.ctxManager.Config()) {
+			return nextWorking, nextBundle, nil
+		}
+		return applySummaryCompaction(
+			ctx,
+			e,
+			sessionID,
+			userMessage,
+			items,
+			nextBundle,
+			memoryRefs,
+			nextCompactions,
+			sessionMemoryUpTo,
+			nextWorking,
+			len(nextCompactions)+1,
+			types.ConversationCompactionKindRolling,
+			"microcompact_escalated_to_rolling",
+		)
+	default:
+		return working, summaryBundle, nil
+	}
+}
+
+func applyMicrocompactPass(
+	ctx context.Context,
+	e *Engine,
+	sessionID string,
+	userMessage string,
+	items []model.ConversationItem,
+	summaryBundle SummaryBundle,
+	memoryRefs []string,
+	compactions []types.ConversationCompaction,
+	recentWindowItems []model.ConversationItem,
+	working contextstate.WorkingSet,
+) (contextstate.WorkingSet, SummaryBundle, []types.ConversationCompaction, bool, error) {
+	candidatePayload, _, ok := buildAppliedMicrocompact(items, working.Action.MicrocompactPositions, working.CompactionStart)
+	if !ok {
+		return working, summaryBundle, compactions, false, nil
+	}
+	if err := e.store.InsertConversationCompaction(ctx, types.ConversationCompaction{
+		ID:              types.NewID("compact"),
+		SessionID:       sessionID,
+		Kind:            types.ConversationCompactionKindMicro,
+		Generation:      len(compactions) + 1,
+		StartPosition:   firstPayloadPosition(candidatePayload),
+		EndPosition:     lastPayloadPosition(candidatePayload),
+		SummaryPayload:  encodeMicrocompactPayload(candidatePayload),
+		Reason:          "microcompact_tool_results",
+		ProviderProfile: string(e.model.Capabilities().Profile),
+		CreatedAt:       time.Now().UTC(),
+	}); err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
+	}
+
+	nextBundle, nextCompactions, err := loadSummaryBundle(ctx, e.store, sessionID)
+	if err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
+	}
+	persistedMicroItems := activeMicrocompactItems(nextCompactions)
+	working = e.ctxManager.Build(userMessage, items, nextBundle, memoryRefs)
+	working = setPromptItems(
+		working,
+		persistedMicroItems,
+		recentRawItemsFromMicrocompact(items, candidatePayload.RecentStart, recentWindowItems),
+		true,
+		userMessage,
+	)
+	working.CompactionApplied = true
+	return working, nextBundle, nextCompactions, true, nil
+}
+
+func shouldApplyBoundaryCompaction(working contextstate.WorkingSet, cfg contextstate.Config) bool {
+	return working.EstimatedTokens > cfg.MaxEstimatedTokens
 }
 
 func applySummaryCompaction(
