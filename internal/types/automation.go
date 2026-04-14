@@ -18,6 +18,7 @@ type IncidentPhaseStatus string
 type AutomationAssumptionSource string
 type DispatchAttemptStatus string
 type DeliveryChannelStatus string
+type AutomationDetectorStatus string
 
 const (
 	AutomationStateActive AutomationState = "active"
@@ -121,6 +122,13 @@ const (
 	DeliveryChannelStatusFailed   DeliveryChannelStatus = "failed"
 )
 
+const (
+	AutomationDetectorStatusHealthy    AutomationDetectorStatus = "healthy"
+	AutomationDetectorStatusRecovered  AutomationDetectorStatus = "recovered"
+	AutomationDetectorStatusNeedsAgent AutomationDetectorStatus = "needs_agent"
+	AutomationDetectorStatusNeedsHuman AutomationDetectorStatus = "needs_human"
+)
+
 type AutomationContext struct {
 	Targets     []string          `json:"targets"`
 	Labels      map[string]string `json:"labels"`
@@ -133,6 +141,21 @@ type AutomationSignal struct {
 	Source   string          `json:"source,omitempty"`
 	Selector string          `json:"selector,omitempty"`
 	Payload  json.RawMessage `json:"payload,omitempty"`
+}
+
+type AutomationDetectorActionResult struct {
+	Name    string `json:"name"`
+	Result  string `json:"result"`
+	Summary string `json:"summary,omitempty"`
+}
+
+type AutomationDetectorSignal struct {
+	Status       AutomationDetectorStatus `json:"status"`
+	Summary      string                   `json:"summary"`
+	Facts        map[string]any           `json:"facts"`
+	ActionsTaken []string                 `json:"actions_taken"`
+	Hints        []string                 `json:"hints"`
+	DedupeKey    string                   `json:"dedupe_key,omitempty"`
 }
 
 type AutomationAssumption struct {

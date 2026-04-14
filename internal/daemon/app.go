@@ -102,7 +102,14 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	var observerSink *taskEventSink
 	var observer task.AgentTaskObserver
 	var finalDispatchText string
-	if dispatchObserver, ok, err := a.dispatchObserverForRun(ctx, in.Session.ID, in.TurnID); err != nil {
+	dispatchAttempt, hasDispatchAttempt, err := a.dispatchAttemptForRun(ctx, in.Session.ID, in.TurnID)
+	if err != nil {
+		return err
+	}
+	if hasDispatchAttempt {
+		in.Session.PermissionProfile = firstNonEmptyTrimmed(in.Session.PermissionProfile, "read_only")
+	}
+	if dispatchObserver, ok, err := a.dispatchObserverForRun(ctx, dispatchAttempt, hasDispatchAttempt); err != nil {
 		return err
 	} else if ok {
 		observer = dispatchObserver
@@ -114,7 +121,7 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		}
 	}
 
-	err := a.engine.RunTurn(ctx, engine.Input{
+	err = a.engine.RunTurn(ctx, engine.Input{
 		Session: in.Session,
 		Turn: types.Turn{
 			ID:           in.TurnID,
@@ -122,8 +129,9 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 			ClientTurnID: "",
 			UserMessage:  in.Message,
 		},
-		Sink:   sink,
-		Resume: in.Resume,
+		Sink:                sink,
+		Resume:              in.Resume,
+		ActivatedSkillNames: append([]string(nil), dispatchAttempt.ActivatedSkillNames...),
 	})
 	if observerSink != nil && observer != nil && err == nil {
 		if turn, ok, turnErr := a.store.GetTurn(ctx, in.TurnID); turnErr != nil {
@@ -240,13 +248,19 @@ func (s combinedEventSink) FinalizeTurn(ctx context.Context, usage *types.TurnUs
 	return s.finalizer.FinalizeTurn(ctx, usage, events)
 }
 
-func (a sessionRunnerAdapter) dispatchObserverForRun(ctx context.Context, sessionID, turnID string) (task.AgentTaskObserver, bool, error) {
+func (a sessionRunnerAdapter) dispatchAttemptForRun(ctx context.Context, sessionID, turnID string) (types.DispatchAttempt, bool, error) {
+	if a.store == nil {
+		return types.DispatchAttempt{}, false, nil
+	}
+	return a.store.FindDispatchAttemptByBackgroundRun(ctx, sessionID, turnID)
+}
+
+func (a sessionRunnerAdapter) dispatchObserverForRun(ctx context.Context, attempt types.DispatchAttempt, ok bool) (task.AgentTaskObserver, bool, error) {
 	if a.store == nil {
 		return nil, false, nil
 	}
-	attempt, ok, err := a.store.FindDispatchAttemptByBackgroundRun(ctx, sessionID, turnID)
-	if err != nil || !ok {
-		return nil, ok, err
+	if !ok {
+		return nil, false, nil
 	}
 	return automation.NewDispatchTaskObserverWithDelivery(a.store, a.delivery, attempt.DispatchID, a.currentTime), true, nil
 }
@@ -474,7 +488,7 @@ func (a sessionRunnerAdapter) currentTime() time.Time {
 	return time.Now().UTC()
 }
 
-func (m automationDispatchManager) StartAutomationDispatch(ctx context.Context, attempt types.DispatchAttempt, template types.ChildAgentTemplate) error {
+func (m automationDispatchManager) StartAutomationDispatch(ctx context.Context, attempt types.DispatchAttempt, template types.ChildAgentTemplate, incident types.AutomationIncident, bundle automation.ChildAgentRuntimeBundle) error {
 	if m.store == nil || m.manager == nil {
 		return errors.New("automation dispatch manager is not configured")
 	}
@@ -499,7 +513,14 @@ func (m automationDispatchManager) StartAutomationDispatch(ctx context.Context, 
 		ID:          firstNonEmptyTrimmed(attempt.BackgroundTurnID, types.NewID("auto_turn")),
 		SessionID:   sessionRow.ID,
 		State:       types.TurnStateCreated,
-		UserMessage: buildAutomationDispatchPrompt(attempt, template),
+		UserMessage: automation.BuildAutomationChildAgentPrompt(automation.AutomationChildAgentPromptInput{
+			Attempt:          attempt,
+			Template:         template,
+			Strategy:         bundle.Strategy,
+			PromptSupplement: bundle.PromptSupplement,
+			DetectorSignal:   mustParseDetectorSignalForPrompt(incident),
+			SelectedSkills:   bundle.Skills.Required,
+		}),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -533,23 +554,15 @@ func (m automationDispatchManager) currentTime() time.Time {
 	return time.Now().UTC()
 }
 
-func buildAutomationDispatchPrompt(attempt types.DispatchAttempt, template types.ChildAgentTemplate) string {
-	lines := []string{
-		"Run this automation child-agent task in the background.",
+func mustParseDetectorSignalForPrompt(incident types.AutomationIncident) types.AutomationDetectorSignal {
+	detectorSignal, err := automation.ParseAutomationDetectorSignalPayload(incident.Payload)
+	if err != nil {
+		return types.AutomationDetectorSignal{
+			Summary: strings.TrimSpace(incident.Summary),
+			Facts:   map[string]any{},
+		}
 	}
-	if purpose := strings.TrimSpace(template.Purpose); purpose != "" {
-		lines = append(lines, "Goal: "+purpose)
-	}
-	if agentID := strings.TrimSpace(template.AgentID); agentID != "" {
-		lines = append(lines, "Template: "+agentID)
-	}
-	if incidentID := strings.TrimSpace(attempt.IncidentID); incidentID != "" {
-		lines = append(lines, "Incident: "+incidentID)
-	}
-	if dispatchID := strings.TrimSpace(attempt.DispatchID); dispatchID != "" {
-		lines = append(lines, "Dispatch: "+dispatchID)
-	}
-	return strings.Join(lines, "\n")
+	return detectorSignal
 }
 
 func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, observer task.AgentTaskObserver) error {

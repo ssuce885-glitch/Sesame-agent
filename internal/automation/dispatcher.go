@@ -24,7 +24,7 @@ type DispatcherStore interface {
 }
 
 type DispatchTaskManager interface {
-	StartAutomationDispatch(context.Context, types.DispatchAttempt, types.ChildAgentTemplate) error
+	StartAutomationDispatch(context.Context, types.DispatchAttempt, types.ChildAgentTemplate, types.AutomationIncident, ChildAgentRuntimeBundle) error
 }
 
 type DispatcherConfig struct {
@@ -110,6 +110,17 @@ func (d *Dispatcher) dispatchIncident(ctx context.Context, incident types.Automa
 	if !ok {
 		return nil
 	}
+	bundle, err := loadChildAgentRuntimeBundle(spec, phase.Phase, template.AgentID)
+	if err != nil {
+		return err
+	}
+	detectorSignal, err := ParseAutomationDetectorSignalPayload(incident.Payload)
+	if err != nil {
+		return err
+	}
+	if !detectorStatusAllowed(bundle.Strategy.EscalationCondition.WhenStatus, detectorSignal.Status) {
+		return nil
+	}
 
 	attempts, err := d.store.ListDispatchAttempts(ctx, types.DispatchAttemptFilter{IncidentID: incident.ID})
 	if err != nil {
@@ -120,7 +131,7 @@ func (d *Dispatcher) dispatchIncident(ctx context.Context, incident types.Automa
 	}
 
 	if template.AllowElevation && !approvalBindingResolvable(spec.RuntimePolicy) {
-		return d.failApprovalUnroutable(ctx, incident, phase, template, attempts)
+		return d.failApprovalUnroutable(ctx, incident, phase, template, bundle, attempts)
 	}
 
 	now := d.currentTime()
@@ -134,7 +145,7 @@ func (d *Dispatcher) dispatchIncident(ctx context.Context, incident types.Automa
 		Attempt:             nextDispatchAttemptNumber(attempts, phase.Phase),
 		Status:              types.DispatchAttemptStatusRunning,
 		ChildAgentID:        template.AgentID,
-		ActivatedSkillNames: append([]string(nil), template.ActivatedSkillNames...),
+		ActivatedSkillNames: append([]string(nil), bundle.Skills.Required...),
 		OutputContractRef:   template.OutputContractRef,
 		ApprovalQueueKey:    approvalQueueKey,
 		PreferredSessionID:  preferredSessionID,
@@ -160,7 +171,7 @@ func (d *Dispatcher) dispatchIncident(ctx context.Context, incident types.Automa
 		return err
 	}
 
-	if err := d.taskManager.StartAutomationDispatch(ctx, attempt, template); err != nil {
+	if err := d.taskManager.StartAutomationDispatch(ctx, attempt, template, incident, bundle); err != nil {
 		attempt.Status = types.DispatchAttemptStatusFailed
 		attempt.Error = strings.TrimSpace(err.Error())
 		attempt.FinishedAt = now
@@ -183,7 +194,7 @@ func (d *Dispatcher) dispatchIncident(ctx context.Context, incident types.Automa
 	return nil
 }
 
-func (d *Dispatcher) failApprovalUnroutable(ctx context.Context, incident types.AutomationIncident, phase types.IncidentPhaseState, template types.ChildAgentTemplate, attempts []types.DispatchAttempt) error {
+func (d *Dispatcher) failApprovalUnroutable(ctx context.Context, incident types.AutomationIncident, phase types.IncidentPhaseState, template types.ChildAgentTemplate, bundle ChildAgentRuntimeBundle, attempts []types.DispatchAttempt) error {
 	now := d.currentTime()
 	attempt := types.DispatchAttempt{
 		DispatchID:          types.NewID("dispatch"),
@@ -194,7 +205,7 @@ func (d *Dispatcher) failApprovalUnroutable(ctx context.Context, incident types.
 		Attempt:             nextDispatchAttemptNumber(attempts, phase.Phase),
 		Status:              types.DispatchAttemptStatusFailed,
 		ChildAgentID:        template.AgentID,
-		ActivatedSkillNames: append([]string(nil), template.ActivatedSkillNames...),
+		ActivatedSkillNames: append([]string(nil), bundle.Skills.Required...),
 		OutputContractRef:   template.OutputContractRef,
 		Error:               "approval_unroutable",
 		FinishedAt:          now,
