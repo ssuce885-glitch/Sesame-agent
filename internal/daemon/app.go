@@ -78,27 +78,11 @@ type automationDispatchManager struct {
 }
 
 func (s storeAndBusSink) Emit(ctx context.Context, event types.Event) error {
-	seq, err := s.store.AppendEvent(ctx, event)
+	persisted, err := s.store.AppendEventWithState(ctx, event)
 	if err != nil {
 		return err
 	}
-	event.Seq = seq
-	s.bus.Publish(event)
-	switch event.Type {
-	case types.EventTurnStarted:
-		_ = s.store.UpdateTurnState(ctx, event.TurnID, types.TurnStateBuildingContext)
-		_ = s.store.UpdateSessionState(ctx, event.SessionID, types.SessionStateRunning, event.TurnID)
-	case types.EventTurnFailed:
-		_ = s.store.UpdateTurnState(ctx, event.TurnID, types.TurnStateFailed)
-		_ = s.store.UpdateSessionState(ctx, event.SessionID, types.SessionStateIdle, "")
-	case types.EventTurnInterrupted:
-		var payload map[string]string
-		_ = json.Unmarshal(event.Payload, &payload)
-		if payload["reason"] != "permission_requested" {
-			_ = s.store.UpdateTurnState(ctx, event.TurnID, types.TurnStateInterrupted)
-			_ = s.store.UpdateSessionState(ctx, event.SessionID, types.SessionStateIdle, "")
-		}
-	}
+	s.bus.Publish(persisted)
 	return nil
 }
 
@@ -109,11 +93,6 @@ func (s storeAndBusSink) FinalizeTurn(ctx context.Context, usage *types.TurnUsag
 	}
 	for _, event := range persisted {
 		s.bus.Publish(event)
-	}
-	if len(persisted) > 0 {
-		last := persisted[len(persisted)-1]
-		_ = s.store.UpdateTurnState(ctx, last.TurnID, types.TurnStateCompleted)
-		_ = s.store.UpdateSessionState(ctx, last.SessionID, types.SessionStateIdle, "")
 	}
 	return nil
 }
@@ -1106,13 +1085,6 @@ func resumeResolvedContinuations(ctx context.Context, store *sqlite.Store, manag
 		if decisionScope == "" {
 			decisionScope = request.Decision
 		}
-		if err := store.UpdateTurnState(ctx, turn.ID, types.TurnStateLoopContinue); err != nil {
-			return nil, err
-		}
-		if err := store.UpdateSessionState(ctx, sessionRow.ID, types.SessionStateRunning, turn.ID); err != nil {
-			return nil, err
-		}
-
 		resume := &types.TurnResume{
 			ContinuationID:             continuation.ID,
 			PermissionRequestID:        request.ID,
@@ -1140,9 +1112,7 @@ func resumeResolvedContinuations(ctx context.Context, store *sqlite.Store, manag
 		continuation.Decision = request.Decision
 		continuation.DecisionScope = decisionScope
 		continuation.UpdatedAt = now
-		if err := store.UpsertTurnContinuation(ctx, continuation); err != nil {
-			return nil, err
-		}
+		var resumedToolRun *types.ToolRun
 		if strings.TrimSpace(continuation.ToolRunID) != "" {
 			toolRun, found, err := store.GetToolRun(ctx, continuation.ToolRunID)
 			if err != nil {
@@ -1160,10 +1130,12 @@ func resumeResolvedContinuations(ctx context.Context, store *sqlite.Store, manag
 					toolRun.State = types.ToolRunStateCompleted
 					toolRun.Error = ""
 				}
-				if err := store.UpsertToolRun(ctx, toolRun); err != nil {
-					return nil, err
-				}
+				resumedToolRun = &toolRun
 			}
+		}
+		if err := store.CommitPermissionResume(ctx, sessionRow.ID, turn.ID, continuation, resumedToolRun); err != nil {
+			manager.InterruptTurn(sessionRow.ID, turn.ID)
+			return nil, err
 		}
 
 		resumed[turn.ID] = struct{}{}

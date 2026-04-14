@@ -22,6 +22,7 @@ type permissionStore interface {
 	UpsertPermissionRequest(context.Context, types.PermissionRequest) error
 	UpsertTurnContinuation(context.Context, types.TurnContinuation) error
 	UpsertToolRun(context.Context, types.ToolRun) error
+	CommitPermissionResume(context.Context, string, string, types.TurnContinuation, *types.ToolRun) error
 	UpdateSessionPermissionProfile(context.Context, string, string) (types.Session, bool, error)
 	UpdateTurnState(context.Context, string, types.TurnState) error
 	UpdateSessionState(context.Context, string, types.SessionState, string) error
@@ -247,15 +248,6 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 			return
 		}
 
-		if err := store.UpdateTurnState(r.Context(), turn.ID, types.TurnStateLoopContinue); err != nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		if err := store.UpdateSessionState(r.Context(), sessionRow.ID, types.SessionStateRunning, turn.ID); err != nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-
 		resume := &types.TurnResume{
 			ContinuationID:             continuation.ID,
 			PermissionRequestID:        permissionRequest.ID,
@@ -283,10 +275,6 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 		continuation.Decision = req.Decision
 		continuation.DecisionScope = req.Decision
 		continuation.UpdatedAt = now
-		if err := store.UpsertTurnContinuation(r.Context(), continuation); err != nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
 
 		toolRun.PermissionRequestID = permissionRequest.ID
 		toolRun.UpdatedAt = now
@@ -299,7 +287,12 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 			toolRun.State = types.ToolRunStateCompleted
 			toolRun.Error = ""
 		}
-		if err := store.UpsertToolRun(r.Context(), toolRun); err != nil {
+		if err := store.CommitPermissionResume(r.Context(), sessionRow.ID, turn.ID, continuation, &toolRun); err != nil {
+			if interrupter, ok := deps.Manager.(interface {
+				InterruptTurn(string, string) bool
+			}); ok {
+				interrupter.InterruptTurn(sessionRow.ID, turn.ID)
+			}
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}

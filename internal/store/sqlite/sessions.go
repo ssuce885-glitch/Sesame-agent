@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"go-agent/internal/types"
@@ -156,7 +157,11 @@ func (s *Store) UpdateSessionPermissionProfile(ctx context.Context, sessionID, p
 }
 
 func (s *Store) UpdateSessionState(ctx context.Context, sessionID string, state types.SessionState, activeTurnID string) error {
-	_, err := s.db.ExecContext(ctx, `
+	return updateSessionStateWithExec(ctx, s.db, sessionID, state, activeTurnID, false)
+}
+
+func updateSessionStateWithExec(ctx context.Context, execer execContexter, sessionID string, state types.SessionState, activeTurnID string, requireExisting bool) error {
+	result, err := execer.ExecContext(ctx, `
 		update sessions
 		set state = ?, active_turn_id = ?, updated_at = ?
 		where id = ?`,
@@ -165,7 +170,13 @@ func (s *Store) UpdateSessionState(ctx context.Context, sessionID string, state 
 		time.Now().UTC().Format(timeLayout),
 		sessionID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if !requireExisting {
+		return nil
+	}
+	return requireSingleRow(result)
 }
 
 func (s *Store) DeleteSession(ctx context.Context, sessionID string) (string, bool, error) {
@@ -402,7 +413,11 @@ func (s *Store) GetTurn(ctx context.Context, turnID string) (types.Turn, bool, e
 }
 
 func (s *Store) UpdateTurnState(ctx context.Context, turnID string, state types.TurnState) error {
-	_, err := s.db.ExecContext(ctx, `
+	return updateTurnStateWithExec(ctx, s.db, turnID, state, false)
+}
+
+func updateTurnStateWithExec(ctx context.Context, execer execContexter, turnID string, state types.TurnState, requireExisting bool) error {
+	result, err := execer.ExecContext(ctx, `
 		update turns
 		set state = ?, updated_at = ?
 		where id = ?`,
@@ -410,7 +425,13 @@ func (s *Store) UpdateTurnState(ctx context.Context, turnID string, state types.
 		time.Now().UTC().Format(timeLayout),
 		turnID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if !requireExisting {
+		return nil
+	}
+	return requireSingleRow(result)
 }
 
 func (s *Store) ListRunningTurns(ctx context.Context) ([]types.Turn, error) {
@@ -489,4 +510,89 @@ func (s *Store) MarkTurnInterrupted(ctx context.Context, turnID string) error {
 	}
 
 	return tx.Commit()
+}
+
+func (s *Store) TryMarkTurnInterrupted(ctx context.Context, sessionID, turnID string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var activeTurnID string
+	if err := tx.QueryRowContext(ctx, `
+		select active_turn_id
+		from sessions
+		where id = ?`,
+		sessionID,
+	).Scan(&activeTurnID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if activeTurnID != turnID {
+		return false, nil
+	}
+
+	var turnState string
+	if err := tx.QueryRowContext(ctx, `
+		select state
+		from turns
+		where id = ? and session_id = ?`,
+		turnID,
+		sessionID,
+	).Scan(&turnState); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if isTerminalTurnState(types.TurnState(turnState)) {
+		return false, nil
+	}
+
+	if err := updateTurnStateWithExec(ctx, tx, turnID, types.TurnStateInterrupted, true); err != nil {
+		return false, err
+	}
+	result, err := tx.ExecContext(ctx, `
+		update sessions
+		set state = ?, active_turn_id = '', updated_at = ?
+		where id = ? and active_turn_id = ?`,
+		types.SessionStateIdle,
+		time.Now().UTC().Format(timeLayout),
+		sessionID,
+		turnID,
+	)
+	if err != nil {
+		return false, err
+	}
+	if err := requireSingleRow(result); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func requireSingleRow(result sql.Result) error {
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func isTerminalTurnState(state types.TurnState) bool {
+	return state == types.TurnStateCompleted || state == types.TurnStateFailed || state == types.TurnStateInterrupted
 }

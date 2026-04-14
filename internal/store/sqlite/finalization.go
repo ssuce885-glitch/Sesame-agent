@@ -28,6 +28,9 @@ func (s *Store) FinalizeTurn(ctx context.Context, usage *types.TurnUsage, events
 			return nil, err
 		}
 		event.Seq = seq
+		if err := applyEventStateTransition(ctx, tx, event); err != nil {
+			return nil, err
+		}
 		persisted = append(persisted, event)
 	}
 

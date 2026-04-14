@@ -185,13 +185,17 @@ func (s *Store) GetTaskRecord(ctx context.Context, id string) (types.TaskRecord,
 }
 
 func (s *Store) UpsertToolRun(ctx context.Context, toolRun types.ToolRun) error {
+	return upsertToolRunWithExec(ctx, s.db, toolRun)
+}
+
+func upsertToolRunWithExec(ctx context.Context, execer execContexter, toolRun types.ToolRun) error {
 	toolRun = normalizeToolRun(toolRun)
 	payload, err := marshalRuntimePayload(toolRun)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err = execer.ExecContext(ctx, `
 		insert into tool_runs (id, run_id, task_id, state, payload, created_at, updated_at)
 		values (?, ?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set
@@ -275,13 +279,17 @@ func (s *Store) UpsertPermissionRequest(ctx context.Context, request types.Permi
 }
 
 func (s *Store) UpsertTurnContinuation(ctx context.Context, continuation types.TurnContinuation) error {
+	return upsertTurnContinuationWithExec(ctx, s.db, continuation)
+}
+
+func upsertTurnContinuationWithExec(ctx context.Context, execer execContexter, continuation types.TurnContinuation) error {
 	continuation = normalizeTurnContinuation(continuation)
 	payload, err := marshalRuntimePayload(continuation)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err = execer.ExecContext(ctx, `
 		insert into turn_continuations (id, session_id, turn_id, permission_request_id, state, payload, created_at, updated_at)
 		values (?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set

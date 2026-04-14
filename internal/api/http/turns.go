@@ -13,7 +13,7 @@ import (
 
 type turnInterruptStore interface {
 	GetSession(context.Context, string) (types.Session, bool, error)
-	MarkTurnInterrupted(context.Context, string) error
+	TryMarkTurnInterrupted(context.Context, string, string) (bool, error)
 }
 
 func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
@@ -117,12 +117,20 @@ func handleInterruptTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 		if interrupter, ok := deps.Manager.(interface {
 			InterruptTurn(string, string) bool
 		}); ok {
-			interrupter.InterruptTurn(sessionID, turnID)
+			if !interrupter.InterruptTurn(sessionID, turnID) {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 		}
 
 		bg := context.WithoutCancel(r.Context())
-		if err := store.MarkTurnInterrupted(bg, turnID); err != nil {
+		interrupted, err := store.TryMarkTurnInterrupted(bg, sessionID, turnID)
+		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if !interrupted {
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		if err := appendRuntimeTimelineEvent(bg, deps, sessionID, turnID, types.EventTurnInterrupted, map[string]string{
