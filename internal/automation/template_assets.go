@@ -1,8 +1,10 @@
 package automation
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -309,7 +311,7 @@ func validateChildAgentTemplateBundleRequiredSkills(bundles map[string]childAgen
 
 func decodeChildAgentTemplateStrategy(raw []byte, assetPath string) (types.ChildAgentTemplateStrategy, error) {
 	var strategy types.ChildAgentTemplateStrategy
-	if err := json.Unmarshal(raw, &strategy); err != nil {
+	if err := decodeStrictJSON(raw, &strategy); err != nil {
 		return types.ChildAgentTemplateStrategy{}, invalidAutomationSpec(fmt.Sprintf("%s must be valid JSON: %v", assetPath, err))
 	}
 	if strings.TrimSpace(strategy.Goal) == "" {
@@ -338,53 +340,27 @@ func decodeChildAgentTemplateStrategy(raw []byte, assetPath string) (types.Child
 }
 
 func decodeChildAgentTemplateSkills(raw []byte, assetPath string) (types.ChildAgentTemplateSkills, error) {
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &object); err != nil {
+	type templateSkillsDecode struct {
+		Required *[]string `json:"required"`
+		Optional *[]string `json:"optional"`
+	}
+
+	var decoded templateSkillsDecode
+	if err := decodeStrictJSON(raw, &decoded); err != nil {
 		return types.ChildAgentTemplateSkills{}, invalidAutomationSpec(fmt.Sprintf("%s must be valid JSON: %v", assetPath, err))
 	}
-	requiredRaw, ok := object["required"]
-	if !ok {
+	if decoded.Required == nil {
 		return types.ChildAgentTemplateSkills{}, invalidAutomationSpec(fmt.Sprintf("%s.required is required", assetPath))
 	}
-	optionalRaw, ok := object["optional"]
-	if !ok {
+	if decoded.Optional == nil {
 		return types.ChildAgentTemplateSkills{}, invalidAutomationSpec(fmt.Sprintf("%s.optional is required", assetPath))
 	}
-	required, err := decodeChildAgentStringArray(requiredRaw, assetPath, "required")
-	if err != nil {
-		return types.ChildAgentTemplateSkills{}, err
-	}
-	optional, err := decodeChildAgentStringArray(optionalRaw, assetPath, "optional")
-	if err != nil {
-		return types.ChildAgentTemplateSkills{}, err
-	}
+	required := normalizeStringList(*decoded.Required)
+	optional := normalizeStringList(*decoded.Optional)
 	return types.ChildAgentTemplateSkills{
 		Required: required,
 		Optional: optional,
 	}, nil
-}
-
-func decodeChildAgentStringArray(raw json.RawMessage, assetPath, field string) ([]string, error) {
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil, invalidAutomationSpec(fmt.Sprintf("%s.%s must be an array of strings", assetPath, field))
-	}
-	items, ok := value.([]any)
-	if !ok {
-		return nil, invalidAutomationSpec(fmt.Sprintf("%s.%s must be an array of strings", assetPath, field))
-	}
-
-	values := make([]string, 0, len(items))
-	for _, item := range items {
-		text, ok := item.(string)
-		if !ok {
-			return nil, invalidAutomationSpec(fmt.Sprintf("%s.%s must be an array of strings", assetPath, field))
-		}
-		if trimmed := strings.TrimSpace(text); trimmed != "" {
-			values = append(values, trimmed)
-		}
-	}
-	return normalizeStringList(values), nil
 }
 
 func readRequiredAutomationAsset(workspaceRoot, automationID, assetPath string) ([]byte, error) {
@@ -420,4 +396,19 @@ func invalidAutomationSpec(message string) error {
 		Code:    "invalid_automation_spec",
 		Message: strings.TrimSpace(message),
 	}
+}
+
+func decodeStrictJSON(raw []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("unexpected trailing JSON content")
+		}
+		return err
+	}
+	return nil
 }
