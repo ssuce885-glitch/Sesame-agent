@@ -116,6 +116,7 @@ func (s *Service) ApplyRequest(ctx context.Context, req types.ApplyAutomationReq
 	if err := validateResponsePlanDraftMode(req.Spec.ResponsePlan); err != nil {
 		return types.AutomationSpec{}, err
 	}
+	explicitChildAgentTemplateRefs := collectExplicitChildAgentTemplateReferences(req.Spec.ResponsePlan)
 	spec := normalizeAutomationSpec(req.Spec, s.currentTime())
 	if err := validateAutomationSpec(spec); err != nil {
 		return types.AutomationSpec{}, err
@@ -126,7 +127,7 @@ func (s *Service) ApplyRequest(ctx context.Context, req types.ApplyAutomationReq
 	if err := ValidateAutomationScriptAssets(spec); err != nil {
 		return types.AutomationSpec{}, err
 	}
-	childAgentBundles, err := loadChildAgentTemplateBundles(spec)
+	childAgentBundles, err := loadChildAgentTemplateBundles(spec, explicitChildAgentTemplateRefs)
 	if err != nil {
 		return types.AutomationSpec{}, err
 	}

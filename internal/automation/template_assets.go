@@ -26,31 +26,169 @@ type childAgentTemplateAssetBundle struct {
 	Skills   types.ChildAgentTemplateSkills
 }
 
-func loadChildAgentTemplateBundles(spec types.AutomationSpec) (map[string]childAgentTemplateAssetBundle, error) {
-	plan := loadResponsePlanV2(spec.ResponsePlan)
-	if len(plan.Phases) == 0 {
+type childAgentTemplateReference struct {
+	Phase   types.AutomationPhaseName
+	AgentID string
+}
+
+func loadChildAgentTemplateBundles(spec types.AutomationSpec, refs []childAgentTemplateReference) (map[string]childAgentTemplateAssetBundle, error) {
+	if len(refs) == 0 {
 		return map[string]childAgentTemplateAssetBundle{}, nil
 	}
 
 	out := make(map[string]childAgentTemplateAssetBundle)
-	for _, phase := range plan.Phases {
-		for _, childAgent := range phase.ChildAgents {
-			agentID := strings.TrimSpace(childAgent.AgentID)
-			if phase.Phase == "" || agentID == "" {
-				continue
-			}
-			key := childAgentTemplateBundleKey(phase.Phase, agentID)
-			if _, ok := out[key]; ok {
-				continue
-			}
-			bundle, err := loadChildAgentTemplateBundle(spec.WorkspaceRoot, spec.ID, phase.Phase, agentID)
-			if err != nil {
-				return nil, err
-			}
-			out[key] = bundle
+	for _, ref := range refs {
+		phase := normalizeChildAgentTemplatePhaseName(ref.Phase)
+		agentID := strings.TrimSpace(ref.AgentID)
+		if phase == "" || agentID == "" {
+			continue
 		}
+		key := childAgentTemplateBundleKey(phase, agentID)
+		if _, ok := out[key]; ok {
+			continue
+		}
+		bundle, err := loadChildAgentTemplateBundle(spec.WorkspaceRoot, spec.ID, phase, agentID)
+		if err != nil {
+			return nil, err
+		}
+		out[key] = bundle
 	}
 	return out, nil
+}
+
+func collectExplicitChildAgentTemplateReferences(raw json.RawMessage) []childAgentTemplateReference {
+	raw = normalizeRawJSON(raw)
+	if len(raw) == 0 || !json.Valid(raw) {
+		return nil
+	}
+
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil
+	}
+
+	if strings.EqualFold(strings.TrimSpace(asStringForChildAgentRefCollection(object["schema_version"])), types.ResponsePlanSchemaVersionV2) {
+		return collectExplicitChildAgentTemplateReferencesV2(object)
+	}
+	return collectExplicitChildAgentTemplateReferencesDraft(object)
+}
+
+func collectExplicitChildAgentTemplateReferencesV2(object map[string]any) []childAgentTemplateReference {
+	phases, _ := object["phases"].([]any)
+	out := make([]childAgentTemplateReference, 0, len(phases))
+	seen := make(map[string]struct{}, len(phases))
+
+	for _, phaseValue := range phases {
+		phaseObject, _ := phaseValue.(map[string]any)
+		phaseName := normalizeChildAgentTemplatePhaseName(asStringForChildAgentRefCollection(phaseObject["phase"]))
+		if phaseName == "" {
+			continue
+		}
+		rawChildAgents, hasChildAgents := phaseObject["child_agents"]
+		if !hasChildAgents {
+			continue
+		}
+		childAgents, _ := rawChildAgents.([]any)
+		for _, childValue := range childAgents {
+			childObject, _ := childValue.(map[string]any)
+			agentID := strings.TrimSpace(asStringForChildAgentRefCollection(childObject["agent_id"]))
+			if agentID == "" {
+				continue
+			}
+			key := childAgentTemplateBundleKey(phaseName, agentID)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, childAgentTemplateReference{
+				Phase:   phaseName,
+				AgentID: agentID,
+			})
+		}
+	}
+	return out
+}
+
+func collectExplicitChildAgentTemplateReferencesDraft(object map[string]any) []childAgentTemplateReference {
+	phaseNames := draftResponsePlanPhaseOrder(asStringForChildAgentRefCollection(object["mode"]))
+	if len(phaseNames) == 0 {
+		return nil
+	}
+	refs := asStringSliceForChildAgentRefCollection(object["child_agent_template_refs"])
+	if len(refs) == 0 {
+		return nil
+	}
+
+	out := make([]childAgentTemplateReference, 0, len(refs))
+	seen := make(map[string]struct{}, len(refs))
+	for idx, ref := range refs {
+		if idx >= len(phaseNames) {
+			break
+		}
+		agentID := strings.TrimSpace(ref)
+		phaseName := normalizeChildAgentTemplatePhaseName(phaseNames[idx])
+		if phaseName == "" || agentID == "" {
+			continue
+		}
+		key := childAgentTemplateBundleKey(phaseName, agentID)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, childAgentTemplateReference{
+			Phase:   phaseName,
+			AgentID: agentID,
+		})
+	}
+	return out
+}
+
+func draftResponsePlanPhaseOrder(mode string) []types.AutomationPhaseName {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "act_only":
+		return []types.AutomationPhaseName{types.AutomationPhaseRemediate}
+	case "investigate_then_act":
+		return []types.AutomationPhaseName{types.AutomationPhaseDiagnose, types.AutomationPhaseRemediate}
+	default:
+		return []types.AutomationPhaseName{types.AutomationPhaseDiagnose}
+	}
+}
+
+func normalizeChildAgentTemplatePhaseName(value any) types.AutomationPhaseName {
+	switch strings.ToLower(strings.TrimSpace(asStringForChildAgentRefCollection(value))) {
+	case string(types.AutomationPhaseDiagnose):
+		return types.AutomationPhaseDiagnose
+	case string(types.AutomationPhaseRemediate):
+		return types.AutomationPhaseRemediate
+	case string(types.AutomationPhaseVerify):
+		return types.AutomationPhaseVerify
+	case string(types.AutomationPhaseEscalate):
+		return types.AutomationPhaseEscalate
+	default:
+		return ""
+	}
+}
+
+func asStringSliceForChildAgentRefCollection(value any) []string {
+	values, _ := value.([]any)
+	out := make([]string, 0, len(values))
+	for _, item := range values {
+		if text := strings.TrimSpace(asStringForChildAgentRefCollection(item)); text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func asStringForChildAgentRefCollection(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case types.AutomationPhaseName:
+		return string(typed)
+	default:
+		return ""
+	}
 }
 
 func loadChildAgentTemplateBundle(workspaceRoot, automationID string, phase types.AutomationPhaseName, agentID string) (childAgentTemplateAssetBundle, error) {
