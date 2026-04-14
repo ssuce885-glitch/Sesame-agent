@@ -744,7 +744,7 @@ func runCompactionPasses(
 			"rolling_summary",
 		)
 	case contextstate.CompactionActionMicrocompact:
-		nextWorking, nextBundle, nextCompactions, applied, err := applyMicrocompactPass(
+		nextWorking, nextBundle, nextCompactions, _, err := applyMicrocompactPass(
 			ctx,
 			e,
 			sessionID,
@@ -758,23 +758,6 @@ func runCompactionPasses(
 		)
 		if err != nil {
 			return contextstate.WorkingSet{}, SummaryBundle{}, err
-		}
-		if !applied {
-			return applySummaryCompaction(
-				ctx,
-				e,
-				sessionID,
-				userMessage,
-				items,
-				summaryBundle,
-				memoryRefs,
-				compactions,
-				sessionMemoryUpTo,
-				working,
-				len(compactions)+1,
-				types.ConversationCompactionKindRolling,
-				"microcompact_escalated_to_rolling",
-			)
 		}
 		if !shouldApplyBoundaryCompaction(nextWorking, e.ctxManager.Config()) {
 			return nextWorking, nextBundle, nil
