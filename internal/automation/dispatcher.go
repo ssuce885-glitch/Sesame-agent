@@ -15,25 +15,34 @@ var errDispatcherTaskManagerNotConfigured = errors.New("automation dispatcher ta
 
 type DispatcherStore interface {
 	GetAutomation(context.Context, string) (types.AutomationSpec, bool, error)
+	GetAutomationWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
 	ListAutomationIncidents(context.Context, types.AutomationIncidentFilter) ([]types.AutomationIncident, error)
 	UpsertAutomationIncident(context.Context, types.AutomationIncident) error
 	ListIncidentPhaseStates(context.Context, string) ([]types.IncidentPhaseState, error)
 	UpsertIncidentPhaseState(context.Context, types.IncidentPhaseState) error
 	ListDispatchAttempts(context.Context, types.DispatchAttemptFilter) ([]types.DispatchAttempt, error)
 	UpsertDispatchAttempt(context.Context, types.DispatchAttempt) error
+	ListAutomationWatcherHolds(context.Context, string) ([]types.AutomationWatcherHold, error)
+	ReplaceAutomationWatcherHolds(context.Context, string, string, []types.AutomationWatcherHold) error
 }
 
 type DispatchTaskManager interface {
 	StartAutomationDispatch(context.Context, types.DispatchAttempt, types.ChildAgentTemplate, types.AutomationIncident, ChildAgentRuntimeBundle) error
 }
 
+type DispatchWatcherSyncer interface {
+	SyncAutomation(context.Context, string) error
+}
+
 type DispatcherConfig struct {
-	Now func() time.Time
+	Now     func() time.Time
+	Watcher DispatchWatcherSyncer
 }
 
 type Dispatcher struct {
 	store       DispatcherStore
 	taskManager DispatchTaskManager
+	watcher     DispatchWatcherSyncer
 	now         func() time.Time
 }
 
@@ -41,6 +50,7 @@ func NewDispatcher(store DispatcherStore, taskManager DispatchTaskManager, cfg D
 	return &Dispatcher{
 		store:       store,
 		taskManager: taskManager,
+		watcher:     cfg.Watcher,
 		now:         firstNonNilClock(cfg.Now),
 	}
 }
@@ -156,6 +166,12 @@ func (d *Dispatcher) dispatchIncident(ctx context.Context, incident types.Automa
 	if err := d.store.UpsertDispatchAttempt(ctx, attempt); err != nil {
 		return err
 	}
+	if err := AcquireWatcherHoldByOwner(ctx, d.store, attempt.AutomationID, types.AutomationWatcherHoldKindDispatch, attempt.DispatchID, "dispatch active", now); err != nil {
+		return err
+	}
+	if err := d.syncWatcher(ctx, attempt.AutomationID); err != nil {
+		return err
+	}
 
 	phase.DispatchIDs = append(append([]string(nil), phase.DispatchIDs...), attempt.DispatchID)
 	phase.ActiveDispatchCount++
@@ -172,6 +188,8 @@ func (d *Dispatcher) dispatchIncident(ctx context.Context, incident types.Automa
 	}
 
 	if err := d.taskManager.StartAutomationDispatch(ctx, attempt, template, incident, bundle); err != nil {
+		_ = ReleaseWatcherHoldByOwner(ctx, d.store, attempt.AutomationID, types.AutomationWatcherHoldKindDispatch, attempt.DispatchID)
+		_ = d.syncWatcher(ctx, attempt.AutomationID)
 		attempt.Status = types.DispatchAttemptStatusFailed
 		attempt.Error = strings.TrimSpace(err.Error())
 		attempt.FinishedAt = now
@@ -192,6 +210,13 @@ func (d *Dispatcher) dispatchIncident(ctx context.Context, incident types.Automa
 	}
 
 	return nil
+}
+
+func (d *Dispatcher) syncWatcher(ctx context.Context, automationID string) error {
+	if d == nil || d.watcher == nil {
+		return nil
+	}
+	return d.watcher.SyncAutomation(ctx, automationID)
 }
 
 func (d *Dispatcher) failApprovalUnroutable(ctx context.Context, incident types.AutomationIncident, phase types.IncidentPhaseState, template types.ChildAgentTemplate, bundle ChildAgentRuntimeBundle, attempts []types.DispatchAttempt) error {

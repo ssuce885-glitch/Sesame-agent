@@ -11,6 +11,7 @@ type AutomationControlAction string
 type IncidentControlAction string
 type AutomationIncidentStatus string
 type AutomationWatcherState string
+type AutomationWatcherHoldKind string
 type AutomationPhaseName string
 type AutomationPhaseTransitionAction string
 type IncidentPhaseReduction string
@@ -61,6 +62,12 @@ const (
 	AutomationWatcherStatePaused  AutomationWatcherState = "paused"
 	AutomationWatcherStateFailed  AutomationWatcherState = "failed"
 	AutomationWatcherStateStopped AutomationWatcherState = "stopped"
+)
+
+const (
+	AutomationWatcherHoldKindManual   AutomationWatcherHoldKind = "manual"
+	AutomationWatcherHoldKindDispatch AutomationWatcherHoldKind = "dispatch"
+	AutomationWatcherHoldKindApproval AutomationWatcherHoldKind = "approval"
 )
 
 const ResponsePlanSchemaVersionV2 = "sesame.response_plan/v2"
@@ -264,19 +271,32 @@ type AutomationHeartbeat struct {
 	UpdatedAt     time.Time       `json:"updated_at,omitempty"`
 }
 
+type AutomationWatcherHold struct {
+	HoldID       string                    `json:"hold_id"`
+	AutomationID string                    `json:"automation_id"`
+	WatcherID    string                    `json:"watcher_id"`
+	Kind         AutomationWatcherHoldKind `json:"kind"`
+	OwnerID      string                    `json:"owner_id"`
+	Reason       string                    `json:"reason,omitempty"`
+	CreatedAt    time.Time                 `json:"created_at,omitempty"`
+	UpdatedAt    time.Time                 `json:"updated_at,omitempty"`
+}
+
 type AutomationWatcherRuntime struct {
-	ID            string                 `json:"id"`
-	AutomationID  string                 `json:"automation_id"`
-	WorkspaceRoot string                 `json:"workspace_root"`
-	WatcherID     string                 `json:"watcher_id"`
-	State         AutomationWatcherState `json:"state"`
-	ScriptPath    string                 `json:"script_path"`
-	StatePath     string                 `json:"state_path,omitempty"`
-	TaskID        string                 `json:"task_id,omitempty"`
-	Command       string                 `json:"command,omitempty"`
-	LastError     string                 `json:"last_error,omitempty"`
-	CreatedAt     time.Time              `json:"created_at,omitempty"`
-	UpdatedAt     time.Time              `json:"updated_at,omitempty"`
+	ID             string                  `json:"id"`
+	AutomationID   string                  `json:"automation_id"`
+	WorkspaceRoot  string                  `json:"workspace_root"`
+	WatcherID      string                  `json:"watcher_id"`
+	State          AutomationWatcherState  `json:"state"`
+	EffectiveState AutomationWatcherState  `json:"effective_state,omitempty"`
+	Holds          []AutomationWatcherHold `json:"holds,omitempty"`
+	ScriptPath     string                  `json:"script_path"`
+	StatePath      string                  `json:"state_path,omitempty"`
+	TaskID         string                  `json:"task_id,omitempty"`
+	Command        string                  `json:"command,omitempty"`
+	LastError      string                  `json:"last_error,omitempty"`
+	CreatedAt      time.Time               `json:"created_at,omitempty"`
+	UpdatedAt      time.Time               `json:"updated_at,omitempty"`
 }
 
 type TriggerEvent struct {

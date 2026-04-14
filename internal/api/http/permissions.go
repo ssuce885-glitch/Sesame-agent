@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"go-agent/internal/automation"
 	"go-agent/internal/session"
 	"go-agent/internal/types"
 )
@@ -19,9 +20,14 @@ type permissionStore interface {
 	GetToolRun(context.Context, string) (types.ToolRun, bool, error)
 	ListDispatchAttempts(context.Context, types.DispatchAttemptFilter) ([]types.DispatchAttempt, error)
 	ListPendingAutomationPermissions(context.Context, string) ([]types.PendingAutomationPermission, error)
+	FindDispatchAttemptByBackgroundRun(context.Context, string, string) (types.DispatchAttempt, bool, error)
+	GetAutomationWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
+	ListAutomationWatcherHolds(context.Context, string) ([]types.AutomationWatcherHold, error)
 	UpsertPermissionRequest(context.Context, types.PermissionRequest) error
+	UpsertDispatchAttempt(context.Context, types.DispatchAttempt) error
 	UpsertTurnContinuation(context.Context, types.TurnContinuation) error
 	UpsertToolRun(context.Context, types.ToolRun) error
+	ReplaceAutomationWatcherHolds(context.Context, string, string, []types.AutomationWatcherHold) error
 	CommitPermissionResume(context.Context, string, string, types.TurnContinuation, *types.ToolRun) error
 	UpdateSessionPermissionProfile(context.Context, string, string) (types.Session, bool, error)
 	UpdateTurnState(context.Context, string, types.TurnState) error
@@ -293,6 +299,10 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 			}); ok {
 				interrupter.InterruptTurn(sessionRow.ID, turn.ID)
 			}
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if err := automation.RestoreDispatchAfterApprovalResume(r.Context(), store, sessionRow.ID, turn.ID, permissionRequest.ID, now); err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}

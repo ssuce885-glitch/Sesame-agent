@@ -64,6 +64,18 @@ func loadChildAgentRuntimeBundle(spec types.AutomationSpec, phase types.Automati
 	}, nil
 }
 
+func LoadChildAgentRuntimeBundle(workspaceRoot, automationID string, phase types.AutomationPhaseName, agentID string) (ChildAgentRuntimeBundle, error) {
+	bundle, err := loadChildAgentTemplateBundle(workspaceRoot, automationID, phase, agentID)
+	if err != nil {
+		return ChildAgentRuntimeBundle{}, err
+	}
+	return ChildAgentRuntimeBundle{
+		Strategy:         bundle.Strategy,
+		PromptSupplement: bundle.Prompt,
+		Skills:           bundle.Skills,
+	}, nil
+}
+
 func renderSystemBackground(attempt types.DispatchAttempt, template types.ChildAgentTemplate) string {
 	lines := []string{
 		"Run this automation child-agent task in the background.",
