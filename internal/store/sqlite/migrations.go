@@ -177,6 +177,13 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists session_pending_confirmations (
+			session_id text primary key,
+			source_turn_id text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
 		`create table if not exists provider_cache_entries (
 			id text primary key,
 			session_id text not null,
@@ -257,6 +264,34 @@ func (s *Store) migrate(ctx context.Context) error {
 		);`,
 		`create index if not exists automation_incidents_automation_status_idx
 			on automation_incidents(automation_id, status, observed_at desc, id asc);`,
+		`create table if not exists automation_trigger_events (
+			event_id text primary key,
+			workspace_root text not null,
+			automation_id text not null,
+			incident_id text not null default '',
+			dedupe_key text not null default '',
+			signal_kind text not null default '',
+			source text not null default '',
+			observed_at text not null default '',
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists automation_trigger_events_automation_dedupe_idx
+			on automation_trigger_events(automation_id, dedupe_key, observed_at desc, event_id asc);`,
+		`create table if not exists automation_incident_phase_states (
+			incident_id text not null,
+			phase text not null,
+			automation_id text not null,
+			workspace_root text not null,
+			status text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null,
+			primary key (incident_id, phase)
+		);`,
+		`create index if not exists automation_incident_phase_states_incident_idx
+			on automation_incident_phase_states(incident_id, updated_at desc, phase asc);`,
 		`create table if not exists automation_heartbeats (
 			automation_id text not null,
 			watcher_id text not null,
@@ -281,41 +316,36 @@ func (s *Store) migrate(ctx context.Context) error {
 		);`,
 		`create index if not exists automation_watchers_workspace_state_idx
 			on automation_watchers(workspace_root, state, updated_at desc, automation_id asc);`,
-		`create table if not exists dispatch_attempts (
-			dispatch_id text not null,
-			attempt integer not null,
-			incident_id text not null default '',
-			automation_id text not null default '',
-			workspace_root text not null default '',
-			phase text not null default '',
-			status text not null default '',
+		`create table if not exists automation_dispatch_attempts (
+			dispatch_id text primary key,
+			workspace_root text not null,
+			automation_id text not null,
+			incident_id text not null,
+			phase text not null,
+			status text not null,
 			task_id text not null default '',
 			background_session_id text not null default '',
 			background_turn_id text not null default '',
-			continuation_id text not null default '',
 			permission_request_id text not null default '',
-			approval_queue_key text not null default '',
-			preferred_session_id text not null default '',
-			payload text not null,
-			created_at text not null,
-			updated_at text not null,
-			primary key (dispatch_id, attempt)
-		);`,
-		`create index if not exists dispatch_attempts_incident_status_idx
-			on dispatch_attempts(incident_id, status, updated_at desc, dispatch_id asc, attempt asc);`,
-		`create table if not exists delivery_records (
-			delivery_id text primary key,
-			workspace_root text not null default '',
-			automation_id text not null default '',
-			incident_id text not null default '',
-			dispatch_id text not null default '',
-			summary_ref text not null default '',
+			continuation_id text not null default '',
 			payload text not null,
 			created_at text not null,
 			updated_at text not null
 		);`,
-		`create index if not exists delivery_records_dispatch_idx
-			on delivery_records(dispatch_id, updated_at desc, delivery_id asc);`,
+		`create index if not exists automation_dispatch_attempts_incident_status_idx
+			on automation_dispatch_attempts(incident_id, status, updated_at desc, dispatch_id asc);`,
+		`create table if not exists automation_delivery_records (
+			delivery_id text primary key,
+			workspace_root text not null,
+			automation_id text not null,
+			incident_id text not null,
+			dispatch_id text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists automation_delivery_records_dispatch_idx
+			on automation_delivery_records(dispatch_id, updated_at desc, delivery_id asc);`,
 		`create table if not exists report_groups (
 			id text primary key,
 			session_id text not null default '',
@@ -475,6 +505,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureAutomationHeartbeatSchema(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureAutomationDispatchDeliverySchema(ctx); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -586,6 +619,242 @@ func (s *Store) ensureAutomationHeartbeatSchema(ctx context.Context) error {
 	}
 
 	return tx.Commit()
+}
+
+func (s *Store) ensureAutomationDispatchDeliverySchema(ctx context.Context) error {
+	hasLegacyDispatch, err := s.tableExists(ctx, "dispatch_attempts")
+	if err != nil {
+		return err
+	}
+	hasLegacyDelivery, err := s.tableExists(ctx, "delivery_records")
+	if err != nil {
+		return err
+	}
+	if !hasLegacyDispatch && !hasLegacyDelivery {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if hasLegacyDispatch {
+		rows, err := tx.QueryContext(ctx, `
+			select
+				dispatch_id,
+				workspace_root,
+				automation_id,
+				incident_id,
+				phase,
+				status,
+				task_id,
+				background_session_id,
+				background_turn_id,
+				permission_request_id,
+				continuation_id,
+				payload,
+				created_at,
+				updated_at
+			from dispatch_attempts
+			order by updated_at asc, created_at asc, dispatch_id asc, attempt asc
+		`)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var (
+				dispatchID          string
+				workspaceRoot       string
+				automationID        string
+				incidentID          string
+				phase               string
+				status              string
+				taskID              string
+				backgroundSessionID string
+				backgroundTurnID    string
+				permissionRequestID string
+				continuationID      string
+				payload             string
+				createdAt           string
+				updatedAt           string
+			)
+			if err := rows.Scan(
+				&dispatchID,
+				&workspaceRoot,
+				&automationID,
+				&incidentID,
+				&phase,
+				&status,
+				&taskID,
+				&backgroundSessionID,
+				&backgroundTurnID,
+				&permissionRequestID,
+				&continuationID,
+				&payload,
+				&createdAt,
+				&updatedAt,
+			); err != nil {
+				rows.Close()
+				return err
+			}
+			if strings.TrimSpace(dispatchID) == "" {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				insert into automation_dispatch_attempts (
+					dispatch_id, workspace_root, automation_id, incident_id, phase, status,
+					task_id, background_session_id, background_turn_id, permission_request_id,
+					continuation_id, payload, created_at, updated_at
+				)
+				values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				on conflict(dispatch_id) do update set
+					workspace_root = excluded.workspace_root,
+					automation_id = excluded.automation_id,
+					incident_id = excluded.incident_id,
+					phase = excluded.phase,
+					status = excluded.status,
+					task_id = excluded.task_id,
+					background_session_id = excluded.background_session_id,
+					background_turn_id = excluded.background_turn_id,
+					permission_request_id = excluded.permission_request_id,
+					continuation_id = excluded.continuation_id,
+					payload = excluded.payload,
+					updated_at = excluded.updated_at
+			`,
+				strings.TrimSpace(dispatchID),
+				strings.TrimSpace(workspaceRoot),
+				strings.TrimSpace(automationID),
+				strings.TrimSpace(incidentID),
+				strings.TrimSpace(phase),
+				strings.TrimSpace(status),
+				strings.TrimSpace(taskID),
+				strings.TrimSpace(backgroundSessionID),
+				strings.TrimSpace(backgroundTurnID),
+				strings.TrimSpace(permissionRequestID),
+				strings.TrimSpace(continuationID),
+				payload,
+				createdAt,
+				updatedAt,
+			); err != nil {
+				rows.Close()
+				return err
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `drop index if exists dispatch_attempts_incident_status_idx`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `drop table dispatch_attempts`); err != nil {
+			return err
+		}
+	}
+
+	if hasLegacyDelivery {
+		rows, err := tx.QueryContext(ctx, `
+			select
+				delivery_id,
+				workspace_root,
+				automation_id,
+				incident_id,
+				dispatch_id,
+				payload,
+				created_at,
+				updated_at
+			from delivery_records
+			order by updated_at asc, created_at asc, delivery_id asc
+		`)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var (
+				deliveryID    string
+				workspaceRoot string
+				automationID  string
+				incidentID    string
+				dispatchID    string
+				payload       string
+				createdAt     string
+				updatedAt     string
+			)
+			if err := rows.Scan(
+				&deliveryID,
+				&workspaceRoot,
+				&automationID,
+				&incidentID,
+				&dispatchID,
+				&payload,
+				&createdAt,
+				&updatedAt,
+			); err != nil {
+				rows.Close()
+				return err
+			}
+			if strings.TrimSpace(deliveryID) == "" {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				insert into automation_delivery_records (
+					delivery_id, workspace_root, automation_id, incident_id, dispatch_id, payload, created_at, updated_at
+				)
+				values (?, ?, ?, ?, ?, ?, ?, ?)
+				on conflict(delivery_id) do update set
+					workspace_root = excluded.workspace_root,
+					automation_id = excluded.automation_id,
+					incident_id = excluded.incident_id,
+					dispatch_id = excluded.dispatch_id,
+					payload = excluded.payload,
+					updated_at = excluded.updated_at
+			`,
+				strings.TrimSpace(deliveryID),
+				strings.TrimSpace(workspaceRoot),
+				strings.TrimSpace(automationID),
+				strings.TrimSpace(incidentID),
+				strings.TrimSpace(dispatchID),
+				payload,
+				createdAt,
+				updatedAt,
+			); err != nil {
+				rows.Close()
+				return err
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `drop index if exists delivery_records_dispatch_idx`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `drop table delivery_records`); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *Store) tableExists(ctx context.Context, table string) (bool, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `
+		select count(*)
+		from sqlite_master
+		where type = 'table' and name = ?
+	`, strings.TrimSpace(table)).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (s *Store) tableHasColumn(ctx context.Context, table, column string) (bool, error) {

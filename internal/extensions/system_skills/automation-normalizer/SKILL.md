@@ -39,10 +39,13 @@ If the task should be saved without starting, use a paused automation instead of
 ## Hard Rules
 
 - Missing certainty becomes an explicit item in `assumptions`.
+- Normalize `response_plan` to `schema_version = "sesame.response_plan/v2"` before apply.
+- Normalize `assumptions` to structured `{field,value,reason}` records.
 - Main-session delivery stays out-of-band through notice-first runtime reporting; never write the final result directly into the active main chat turn.
 - Long-running behavior belongs only to runtime-managed watchers or external scripts.
 - Child agents are one-shot execution units, not long-lived workers.
 - Never place skill names, prompts, or session ids into trigger payload assumptions.
+- If any child-agent template allows elevation, require `approval_binding.workspace_binding` and `approval_binding.owner_key`.
 - Do not call `automation_apply` with an active automation that has no runnable watcher signal, because runtime install will fail.
 - Do not call `automation_apply` before the user has explicitly confirmed the final summary.
 

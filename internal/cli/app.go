@@ -241,11 +241,13 @@ func (a App) runScriptCommand(ctx context.Context, opts Options, cfg config.Conf
 		runErr = runAutomationCommand(ctx, a.Stdout, runtimeClient, *opts.Automation)
 	case opts.Trigger != nil:
 		runErr = runTriggerCommand(ctx, a.Stdout, runtimeClient, *opts.Trigger)
+	case opts.Permissions != nil:
+		runErr = runPermissionsCommand(ctx, a.Stdout, runtimeClient, *opts.Permissions)
 	default:
 		runErr = runIncidentCommand(ctx, a.Stdout, runtimeClient, *opts.Incident)
 	}
 
-	if opts.Automation != nil && strings.EqualFold(strings.TrimSpace(opts.Automation.Action), "run") {
+	if opts.Trigger != nil && strings.EqualFold(strings.TrimSpace(opts.Trigger.Action), "watch") {
 		return runErr
 	}
 
@@ -263,7 +265,7 @@ func isScriptCommandArgs(args []string) bool {
 		return false
 	}
 	switch strings.TrimSpace(args[0]) {
-	case "automation", "trigger", "incident":
+	case "automation", "trigger", "incident", "permissions":
 		return true
 	default:
 		return false

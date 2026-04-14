@@ -299,6 +299,30 @@ func (c *Client) GetIncident(ctx context.Context, incidentID string) (types.Auto
 	return out, nil
 }
 
+func (c *Client) ControlIncident(ctx context.Context, incidentID string, action types.IncidentControlAction) (types.AutomationIncident, error) {
+	var out types.AutomationIncident
+	if err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/incidents/%s/%s", incidentID, action), map[string]any{}, &out); err != nil {
+		return types.AutomationIncident{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ListPendingAutomationPermissions(ctx context.Context) (types.ListPendingAutomationPermissionsResponse, error) {
+	var out types.ListPendingAutomationPermissionsResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/permissions/pending", nil, &out); err != nil {
+		return types.ListPendingAutomationPermissionsResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) GetPendingAutomationPermission(ctx context.Context, requestID string) (types.PendingAutomationPermission, error) {
+	var out types.PendingAutomationPermission
+	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/permissions/pending/%s", requestID), nil, &out); err != nil {
+		return types.PendingAutomationPermission{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) FindOrCreateWorkspaceSession(ctx context.Context, workspaceRoot string) (string, bool, error) {
 	resp, err := c.ListSessions(ctx)
 	if err != nil {

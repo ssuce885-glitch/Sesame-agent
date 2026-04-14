@@ -16,6 +16,7 @@ Use this when the runtime is already in the automation compile path and you spec
 
 - Produce or refine an `AutomationSpec` draft before any install or apply step.
 - Keep the task in the automation lifecycle: draft, normalize, dispatch-plan, confirm, apply, manage.
+- Treat watcher or manual input as `TriggerEvent -> Incident`; do not skip incident ingest and do not launch child agents directly.
 - Ask only for fields that matter to the spec and its operating boundary.
 - Prefer stable watcher or external-script contracts over ad hoc shell loops.
 - Assume `automation_apply` will auto-install and start the watcher when the spec state is `active`.
@@ -27,3 +28,4 @@ Use this when the runtime is already in the automation compile path and you spec
 - Do not propose `while true`, infinite polling shells, or background shell hacks as the automation implementation.
 - Do not redirect the user toward `schedule_report`, `task_create`, or direct child-agent launch for automation setup.
 - Do not treat an automation request as a normal one-shot repair task.
+- Do not suggest any direct-run backdoor for manual testing; synthetic triggers are the only supported test path.

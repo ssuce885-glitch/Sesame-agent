@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
-	"time"
 
 	"go-agent/internal/types"
 )
@@ -261,6 +260,168 @@ func listAutomationIncidentsWithQueryer(ctx context.Context, queryer queryContex
 	return scanAutomationIncidents(rows)
 }
 
+func (s *Store) UpsertTriggerEvent(ctx context.Context, event types.TriggerEvent) error {
+	return upsertTriggerEventWithExec(ctx, s.db, event)
+}
+
+func (t runtimeTx) UpsertTriggerEvent(ctx context.Context, event types.TriggerEvent) error {
+	return upsertTriggerEventWithExec(ctx, t.tx, event)
+}
+
+func upsertTriggerEventWithExec(ctx context.Context, execer execContexter, event types.TriggerEvent) error {
+	event = normalizeTriggerEventForStore(event)
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		insert into automation_trigger_events (
+			event_id, workspace_root, automation_id, incident_id, dedupe_key, signal_kind,
+			source, observed_at, payload, created_at, updated_at
+		)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		on conflict(event_id) do update set
+			workspace_root = excluded.workspace_root,
+			automation_id = excluded.automation_id,
+			incident_id = excluded.incident_id,
+			dedupe_key = excluded.dedupe_key,
+			signal_kind = excluded.signal_kind,
+			source = excluded.source,
+			observed_at = excluded.observed_at,
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+	`,
+		event.EventID,
+		event.WorkspaceRoot,
+		event.AutomationID,
+		event.IncidentID,
+		event.DedupeKey,
+		event.SignalKind,
+		event.Source,
+		formatPendingOptionalTime(event.ObservedAt),
+		string(payload),
+		event.CreatedAt.UTC().Format(timeLayout),
+		event.UpdatedAt.UTC().Format(timeLayout),
+	)
+	return err
+}
+
+func (s *Store) ListTriggerEvents(ctx context.Context, filter types.TriggerEventFilter) ([]types.TriggerEvent, error) {
+	return listTriggerEventsWithQueryer(ctx, s.db, filter)
+}
+
+func (t runtimeTx) ListTriggerEvents(ctx context.Context, filter types.TriggerEventFilter) ([]types.TriggerEvent, error) {
+	return listTriggerEventsWithQueryer(ctx, t.tx, filter)
+}
+
+func listTriggerEventsWithQueryer(ctx context.Context, queryer queryContexter, filter types.TriggerEventFilter) ([]types.TriggerEvent, error) {
+	filter = normalizeTriggerEventFilterForStore(filter)
+	query := `
+		select payload, observed_at, created_at, updated_at
+		from automation_trigger_events
+	`
+	args := make([]any, 0, 5)
+	conditions := make([]string, 0, 4)
+	if filter.WorkspaceRoot != "" {
+		conditions = append(conditions, "workspace_root = ?")
+		args = append(args, filter.WorkspaceRoot)
+	}
+	if filter.AutomationID != "" {
+		conditions = append(conditions, "automation_id = ?")
+		args = append(args, filter.AutomationID)
+	}
+	if filter.IncidentID != "" {
+		conditions = append(conditions, "incident_id = ?")
+		args = append(args, filter.IncidentID)
+	}
+	if filter.DedupeKey != "" {
+		conditions = append(conditions, "dedupe_key = ?")
+		args = append(args, filter.DedupeKey)
+	}
+	if len(conditions) > 0 {
+		query += " where " + strings.Join(conditions, " and ")
+	}
+	query += " order by observed_at desc, created_at desc, event_id asc"
+	if filter.Limit > 0 {
+		query += " limit ?"
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := queryer.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTriggerEvents(rows)
+}
+
+func (s *Store) UpsertIncidentPhaseState(ctx context.Context, state types.IncidentPhaseState) error {
+	return upsertIncidentPhaseStateWithExec(ctx, s.db, state)
+}
+
+func (t runtimeTx) UpsertIncidentPhaseState(ctx context.Context, state types.IncidentPhaseState) error {
+	return upsertIncidentPhaseStateWithExec(ctx, t.tx, state)
+}
+
+func upsertIncidentPhaseStateWithExec(ctx context.Context, execer execContexter, state types.IncidentPhaseState) error {
+	state = normalizeIncidentPhaseStateForStore(state)
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		insert into automation_incident_phase_states (
+			incident_id, phase, automation_id, workspace_root, status, payload, created_at, updated_at
+		)
+		values (?, ?, ?, ?, ?, ?, ?, ?)
+		on conflict(incident_id, phase) do update set
+			automation_id = excluded.automation_id,
+			workspace_root = excluded.workspace_root,
+			status = excluded.status,
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+	`,
+		state.IncidentID,
+		state.Phase,
+		state.AutomationID,
+		state.WorkspaceRoot,
+		state.Status,
+		string(payload),
+		state.CreatedAt.UTC().Format(timeLayout),
+		state.UpdatedAt.UTC().Format(timeLayout),
+	)
+	return err
+}
+
+func (s *Store) ListIncidentPhaseStates(ctx context.Context, incidentID string) ([]types.IncidentPhaseState, error) {
+	return listIncidentPhaseStatesWithQueryer(ctx, s.db, incidentID)
+}
+
+func (t runtimeTx) ListIncidentPhaseStates(ctx context.Context, incidentID string) ([]types.IncidentPhaseState, error) {
+	return listIncidentPhaseStatesWithQueryer(ctx, t.tx, incidentID)
+}
+
+func listIncidentPhaseStatesWithQueryer(ctx context.Context, queryer queryContexter, incidentID string) ([]types.IncidentPhaseState, error) {
+	incidentID = strings.TrimSpace(incidentID)
+	if incidentID == "" {
+		return []types.IncidentPhaseState{}, nil
+	}
+
+	rows, err := queryer.QueryContext(ctx, `
+		select payload, created_at, updated_at
+		from automation_incident_phase_states
+		where incident_id = ?
+		order by created_at asc, phase asc
+	`, incidentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanIncidentPhaseStates(rows)
+}
+
 func (s *Store) UpsertAutomationHeartbeat(ctx context.Context, heartbeat types.AutomationHeartbeat) error {
 	return upsertAutomationHeartbeatWithExec(ctx, s.db, heartbeat)
 }
@@ -296,129 +457,6 @@ func upsertAutomationHeartbeatWithExec(ctx context.Context, execer execContexter
 		string(payload),
 		heartbeat.CreatedAt.UTC().Format(timeLayout),
 		heartbeat.UpdatedAt.UTC().Format(timeLayout),
-	)
-	return err
-}
-
-func (s *Store) UpsertDispatchAttempt(ctx context.Context, attempt types.DispatchAttempt) error {
-	return upsertDispatchAttemptWithExec(ctx, s.db, attempt)
-}
-
-func (t runtimeTx) UpsertDispatchAttempt(ctx context.Context, attempt types.DispatchAttempt) error {
-	return upsertDispatchAttemptWithExec(ctx, t.tx, attempt)
-}
-
-func upsertDispatchAttemptWithExec(ctx context.Context, execer execContexter, attempt types.DispatchAttempt) error {
-	attempt = normalizeDispatchAttemptForStore(attempt)
-	payload, err := json.Marshal(attempt)
-	if err != nil {
-		return err
-	}
-
-	_, err = execer.ExecContext(ctx, `
-		insert into dispatch_attempts (
-			dispatch_id,
-			attempt,
-			incident_id,
-			automation_id,
-			workspace_root,
-			phase,
-			status,
-			task_id,
-			background_session_id,
-			background_turn_id,
-			continuation_id,
-			permission_request_id,
-			approval_queue_key,
-			preferred_session_id,
-			payload,
-			created_at,
-			updated_at
-		)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		on conflict(dispatch_id, attempt) do update set
-			incident_id = excluded.incident_id,
-			automation_id = excluded.automation_id,
-			workspace_root = excluded.workspace_root,
-			phase = excluded.phase,
-			status = excluded.status,
-			task_id = excluded.task_id,
-			background_session_id = excluded.background_session_id,
-			background_turn_id = excluded.background_turn_id,
-			continuation_id = excluded.continuation_id,
-			permission_request_id = excluded.permission_request_id,
-			approval_queue_key = excluded.approval_queue_key,
-			preferred_session_id = excluded.preferred_session_id,
-			payload = excluded.payload,
-			updated_at = excluded.updated_at
-	`,
-		attempt.DispatchID,
-		attempt.Attempt,
-		attempt.IncidentID,
-		attempt.AutomationID,
-		attempt.WorkspaceRoot,
-		attempt.Phase,
-		attempt.Status,
-		attempt.TaskID,
-		attempt.BackgroundSessionID,
-		attempt.BackgroundTurnID,
-		attempt.ContinuationID,
-		attempt.PermissionRequestID,
-		attempt.ApprovalQueueKey,
-		attempt.PreferredSessionID,
-		string(payload),
-		attempt.CreatedAt.UTC().Format(timeLayout),
-		attempt.UpdatedAt.UTC().Format(timeLayout),
-	)
-	return err
-}
-
-func (s *Store) UpsertDeliveryRecord(ctx context.Context, record types.DeliveryRecord) error {
-	return upsertDeliveryRecordWithExec(ctx, s.db, record)
-}
-
-func (t runtimeTx) UpsertDeliveryRecord(ctx context.Context, record types.DeliveryRecord) error {
-	return upsertDeliveryRecordWithExec(ctx, t.tx, record)
-}
-
-func upsertDeliveryRecordWithExec(ctx context.Context, execer execContexter, record types.DeliveryRecord) error {
-	record = normalizeDeliveryRecordForStore(record)
-	payload, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-
-	_, err = execer.ExecContext(ctx, `
-		insert into delivery_records (
-			delivery_id,
-			workspace_root,
-			automation_id,
-			incident_id,
-			dispatch_id,
-			summary_ref,
-			payload,
-			created_at,
-			updated_at
-		)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		on conflict(delivery_id) do update set
-			workspace_root = excluded.workspace_root,
-			automation_id = excluded.automation_id,
-			incident_id = excluded.incident_id,
-			dispatch_id = excluded.dispatch_id,
-			summary_ref = excluded.summary_ref,
-			payload = excluded.payload,
-			updated_at = excluded.updated_at
-	`,
-		record.DeliveryID,
-		record.WorkspaceRoot,
-		record.AutomationID,
-		record.IncidentID,
-		record.DispatchID,
-		record.SummaryRef,
-		string(payload),
-		record.CreatedAt.UTC().Format(timeLayout),
-		record.UpdatedAt.UTC().Format(timeLayout),
 	)
 	return err
 }
@@ -562,6 +600,334 @@ func deleteAutomationWatcherWithExec(ctx context.Context, execer execContexter, 
 	return affected > 0, nil
 }
 
+func (s *Store) UpsertDispatchAttempt(ctx context.Context, attempt types.DispatchAttempt) error {
+	return upsertDispatchAttemptWithExec(ctx, s.db, attempt)
+}
+
+func (t runtimeTx) UpsertDispatchAttempt(ctx context.Context, attempt types.DispatchAttempt) error {
+	return upsertDispatchAttemptWithExec(ctx, t.tx, attempt)
+}
+
+func upsertDispatchAttemptWithExec(ctx context.Context, execer execContexter, attempt types.DispatchAttempt) error {
+	attempt = normalizeDispatchAttemptForStore(attempt)
+	payload, err := json.Marshal(attempt)
+	if err != nil {
+		return err
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		insert into automation_dispatch_attempts (
+			dispatch_id, workspace_root, automation_id, incident_id, phase, status,
+			task_id, background_session_id, background_turn_id, permission_request_id,
+			continuation_id, payload, created_at, updated_at
+		)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		on conflict(dispatch_id) do update set
+			workspace_root = excluded.workspace_root,
+			automation_id = excluded.automation_id,
+			incident_id = excluded.incident_id,
+			phase = excluded.phase,
+			status = excluded.status,
+			task_id = excluded.task_id,
+			background_session_id = excluded.background_session_id,
+			background_turn_id = excluded.background_turn_id,
+			permission_request_id = excluded.permission_request_id,
+			continuation_id = excluded.continuation_id,
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+	`,
+		attempt.DispatchID,
+		attempt.WorkspaceRoot,
+		attempt.AutomationID,
+		attempt.IncidentID,
+		attempt.Phase,
+		attempt.Status,
+		attempt.TaskID,
+		attempt.BackgroundSessionID,
+		attempt.BackgroundTurnID,
+		attempt.PermissionRequestID,
+		attempt.ContinuationID,
+		string(payload),
+		attempt.CreatedAt.UTC().Format(timeLayout),
+		attempt.UpdatedAt.UTC().Format(timeLayout),
+	)
+	return err
+}
+
+func (s *Store) GetDispatchAttempt(ctx context.Context, dispatchID string) (types.DispatchAttempt, bool, error) {
+	return getDispatchAttemptWithQueryer(ctx, s.db, dispatchID)
+}
+
+func (t runtimeTx) GetDispatchAttempt(ctx context.Context, dispatchID string) (types.DispatchAttempt, bool, error) {
+	return getDispatchAttemptWithQueryer(ctx, t.tx, dispatchID)
+}
+
+func getDispatchAttemptWithQueryer(ctx context.Context, queryer queryContexter, dispatchID string) (types.DispatchAttempt, bool, error) {
+	dispatchID = strings.TrimSpace(dispatchID)
+	if dispatchID == "" {
+		return types.DispatchAttempt{}, false, nil
+	}
+	rows, err := queryer.QueryContext(ctx, `
+		select payload, created_at, updated_at
+		from automation_dispatch_attempts
+		where dispatch_id = ?
+	`, dispatchID)
+	if err != nil {
+		return types.DispatchAttempt{}, false, err
+	}
+	defer rows.Close()
+
+	items, err := scanDispatchAttempts(rows)
+	if err != nil {
+		return types.DispatchAttempt{}, false, err
+	}
+	if len(items) == 0 {
+		return types.DispatchAttempt{}, false, nil
+	}
+	return items[0], true, nil
+}
+
+func (s *Store) FindDispatchAttemptByBackgroundRun(ctx context.Context, sessionID, turnID string) (types.DispatchAttempt, bool, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	turnID = strings.TrimSpace(turnID)
+	if sessionID == "" || turnID == "" {
+		return types.DispatchAttempt{}, false, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		select payload, created_at, updated_at
+		from automation_dispatch_attempts
+		where background_session_id = ? and background_turn_id = ?
+		order by updated_at desc, created_at desc, dispatch_id asc
+		limit 1
+	`, sessionID, turnID)
+	if err != nil {
+		return types.DispatchAttempt{}, false, err
+	}
+	defer rows.Close()
+
+	items, err := scanDispatchAttempts(rows)
+	if err != nil {
+		return types.DispatchAttempt{}, false, err
+	}
+	if len(items) == 0 {
+		return types.DispatchAttempt{}, false, nil
+	}
+	return items[0], true, nil
+}
+
+func (s *Store) ListDispatchAttempts(ctx context.Context, filter types.DispatchAttemptFilter) ([]types.DispatchAttempt, error) {
+	return listDispatchAttemptsWithQueryer(ctx, s.db, filter)
+}
+
+func (t runtimeTx) ListDispatchAttempts(ctx context.Context, filter types.DispatchAttemptFilter) ([]types.DispatchAttempt, error) {
+	return listDispatchAttemptsWithQueryer(ctx, t.tx, filter)
+}
+
+func listDispatchAttemptsWithQueryer(ctx context.Context, queryer queryContexter, filter types.DispatchAttemptFilter) ([]types.DispatchAttempt, error) {
+	filter = normalizeDispatchAttemptFilterForStore(filter)
+	query := `
+		select payload, created_at, updated_at
+		from automation_dispatch_attempts
+	`
+	args := make([]any, 0, 5)
+	conditions := make([]string, 0, 4)
+	if filter.WorkspaceRoot != "" {
+		conditions = append(conditions, "workspace_root = ?")
+		args = append(args, filter.WorkspaceRoot)
+	}
+	if filter.AutomationID != "" {
+		conditions = append(conditions, "automation_id = ?")
+		args = append(args, filter.AutomationID)
+	}
+	if filter.IncidentID != "" {
+		conditions = append(conditions, "incident_id = ?")
+		args = append(args, filter.IncidentID)
+	}
+	if filter.Status != "" {
+		conditions = append(conditions, "status = ?")
+		args = append(args, filter.Status)
+	}
+	if len(conditions) > 0 {
+		query += " where " + strings.Join(conditions, " and ")
+	}
+	query += " order by updated_at desc, created_at desc, dispatch_id asc"
+	if filter.Limit > 0 {
+		query += " limit ?"
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := queryer.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanDispatchAttempts(rows)
+}
+
+func (s *Store) UpsertDeliveryRecord(ctx context.Context, delivery types.DeliveryRecord) error {
+	return upsertDeliveryRecordWithExec(ctx, s.db, delivery)
+}
+
+func (t runtimeTx) UpsertDeliveryRecord(ctx context.Context, delivery types.DeliveryRecord) error {
+	return upsertDeliveryRecordWithExec(ctx, t.tx, delivery)
+}
+
+func upsertDeliveryRecordWithExec(ctx context.Context, execer execContexter, delivery types.DeliveryRecord) error {
+	delivery = normalizeDeliveryRecordForStore(delivery)
+	payload, err := json.Marshal(delivery)
+	if err != nil {
+		return err
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		insert into automation_delivery_records (
+			delivery_id, workspace_root, automation_id, incident_id, dispatch_id, payload, created_at, updated_at
+		)
+		values (?, ?, ?, ?, ?, ?, ?, ?)
+		on conflict(delivery_id) do update set
+			workspace_root = excluded.workspace_root,
+			automation_id = excluded.automation_id,
+			incident_id = excluded.incident_id,
+			dispatch_id = excluded.dispatch_id,
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+	`,
+		delivery.DeliveryID,
+		delivery.WorkspaceRoot,
+		delivery.AutomationID,
+		delivery.IncidentID,
+		delivery.DispatchID,
+		string(payload),
+		delivery.CreatedAt.UTC().Format(timeLayout),
+		delivery.UpdatedAt.UTC().Format(timeLayout),
+	)
+	return err
+}
+
+func (s *Store) GetDeliveryRecord(ctx context.Context, deliveryID string) (types.DeliveryRecord, bool, error) {
+	return getDeliveryRecordWithQueryer(ctx, s.db, deliveryID)
+}
+
+func (t runtimeTx) GetDeliveryRecord(ctx context.Context, deliveryID string) (types.DeliveryRecord, bool, error) {
+	return getDeliveryRecordWithQueryer(ctx, t.tx, deliveryID)
+}
+
+func getDeliveryRecordWithQueryer(ctx context.Context, queryer queryContexter, deliveryID string) (types.DeliveryRecord, bool, error) {
+	deliveryID = strings.TrimSpace(deliveryID)
+	if deliveryID == "" {
+		return types.DeliveryRecord{}, false, nil
+	}
+	rows, err := queryer.QueryContext(ctx, `
+		select payload, created_at, updated_at
+		from automation_delivery_records
+		where delivery_id = ?
+	`, deliveryID)
+	if err != nil {
+		return types.DeliveryRecord{}, false, err
+	}
+	defer rows.Close()
+
+	items, err := scanDeliveryRecords(rows)
+	if err != nil {
+		return types.DeliveryRecord{}, false, err
+	}
+	if len(items) == 0 {
+		return types.DeliveryRecord{}, false, nil
+	}
+	return items[0], true, nil
+}
+
+func (s *Store) ListDeliveryRecords(ctx context.Context, filter types.DeliveryRecordFilter) ([]types.DeliveryRecord, error) {
+	return listDeliveryRecordsWithQueryer(ctx, s.db, filter)
+}
+
+func (t runtimeTx) ListDeliveryRecords(ctx context.Context, filter types.DeliveryRecordFilter) ([]types.DeliveryRecord, error) {
+	return listDeliveryRecordsWithQueryer(ctx, t.tx, filter)
+}
+
+func listDeliveryRecordsWithQueryer(ctx context.Context, queryer queryContexter, filter types.DeliveryRecordFilter) ([]types.DeliveryRecord, error) {
+	filter = normalizeDeliveryRecordFilterForStore(filter)
+	query := `
+		select payload, created_at, updated_at
+		from automation_delivery_records
+	`
+	args := make([]any, 0, 5)
+	conditions := make([]string, 0, 4)
+	if filter.WorkspaceRoot != "" {
+		conditions = append(conditions, "workspace_root = ?")
+		args = append(args, filter.WorkspaceRoot)
+	}
+	if filter.AutomationID != "" {
+		conditions = append(conditions, "automation_id = ?")
+		args = append(args, filter.AutomationID)
+	}
+	if filter.IncidentID != "" {
+		conditions = append(conditions, "incident_id = ?")
+		args = append(args, filter.IncidentID)
+	}
+	if filter.DispatchID != "" {
+		conditions = append(conditions, "dispatch_id = ?")
+		args = append(args, filter.DispatchID)
+	}
+	if len(conditions) > 0 {
+		query += " where " + strings.Join(conditions, " and ")
+	}
+	query += " order by updated_at desc, created_at desc, delivery_id asc"
+	if filter.Limit > 0 {
+		query += " limit ?"
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := queryer.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanDeliveryRecords(rows)
+}
+
+func (s *Store) ListPendingAutomationPermissions(ctx context.Context, workspaceRoot string) ([]types.PendingAutomationPermission, error) {
+	attempts, err := s.ListDispatchAttempts(ctx, types.DispatchAttemptFilter{
+		WorkspaceRoot: strings.TrimSpace(workspaceRoot),
+		Status:        types.DispatchAttemptStatusAwaitingApproval,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]types.PendingAutomationPermission, 0)
+	for _, attempt := range attempts {
+		requestID := strings.TrimSpace(attempt.PermissionRequestID)
+		if requestID == "" {
+			continue
+		}
+		request, ok, err := s.GetPermissionRequest(ctx, requestID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || request.Status != types.PermissionRequestStatusRequested {
+			continue
+		}
+		continuation, ok, err := s.GetTurnContinuationByPermissionRequest(ctx, requestID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || continuation.State != types.TurnContinuationStatePending {
+			continue
+		}
+		out = append(out, types.PendingAutomationPermission{
+			RequestID:           requestID,
+			WorkspaceRoot:       attempt.WorkspaceRoot,
+			AutomationID:        attempt.AutomationID,
+			IncidentID:          attempt.IncidentID,
+			DispatchID:          attempt.DispatchID,
+			BackgroundSessionID: attempt.BackgroundSessionID,
+			BackgroundTurnID:    attempt.BackgroundTurnID,
+			PreferredSessionID:  attempt.PreferredSessionID,
+		})
+	}
+	return out, nil
+}
+
 func scanAutomationSpecs(rows *sql.Rows) ([]types.AutomationSpec, error) {
 	out := make([]types.AutomationSpec, 0)
 	for rows.Next() {
@@ -653,401 +1019,122 @@ func scanAutomationIncidents(rows *sql.Rows) ([]types.AutomationIncident, error)
 	return out, nil
 }
 
-func normalizeAutomationSpecForStore(spec types.AutomationSpec) types.AutomationSpec {
-	now := time.Now().UTC()
-	spec.ID = strings.TrimSpace(spec.ID)
-	if spec.ID == "" {
-		spec.ID = types.NewID("automation")
-	}
-	spec.Title = strings.TrimSpace(spec.Title)
-	spec.WorkspaceRoot = strings.TrimSpace(spec.WorkspaceRoot)
-	spec.Goal = strings.TrimSpace(spec.Goal)
-	spec.State = normalizeAutomationStateForStore(spec.State)
-	spec.Assumptions = normalizeAutomationAssumptions(spec.Assumptions)
-
-	spec.Context.Owner = strings.TrimSpace(spec.Context.Owner)
-	spec.Context.Environment = strings.TrimSpace(spec.Context.Environment)
-	spec.Context.Targets = normalizeAutomationStringList(spec.Context.Targets)
-	labels := make(map[string]string, len(spec.Context.Labels))
-	for key, value := range spec.Context.Labels {
-		key = strings.TrimSpace(key)
-		if key == "" {
-			continue
+func scanTriggerEvents(rows *sql.Rows) ([]types.TriggerEvent, error) {
+	out := make([]types.TriggerEvent, 0)
+	for rows.Next() {
+		var (
+			payload    string
+			observedAt string
+			createdAt  string
+			updatedAt  string
+		)
+		if err := rows.Scan(&payload, &observedAt, &createdAt, &updatedAt); err != nil {
+			return nil, err
 		}
-		labels[key] = strings.TrimSpace(value)
-	}
-	spec.Context.Labels = labels
-
-	signals := make([]types.AutomationSignal, 0, len(spec.Signals))
-	for _, signal := range spec.Signals {
-		signal.Kind = strings.TrimSpace(signal.Kind)
-		signal.Source = strings.TrimSpace(signal.Source)
-		signal.Selector = strings.TrimSpace(signal.Selector)
-		signal.Payload = normalizeAutomationRawJSON(signal.Payload)
-		if signal.Kind == "" && signal.Source == "" && signal.Selector == "" && len(signal.Payload) == 0 {
-			continue
+		var event types.TriggerEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			return nil, err
 		}
-		signals = append(signals, signal)
-	}
-	spec.Signals = signals
-	spec.IncidentPolicy = normalizeAutomationObjectJSON(spec.IncidentPolicy)
-	spec.ResponsePlan = normalizeAutomationRawJSON(spec.ResponsePlan)
-	spec.VerificationPlan = normalizeAutomationObjectJSON(spec.VerificationPlan)
-	spec.EscalationPolicy = normalizeAutomationObjectJSON(spec.EscalationPolicy)
-	spec.DeliveryPolicy = normalizeAutomationRawJSON(spec.DeliveryPolicy)
-	spec.RuntimePolicy = normalizeAutomationRawJSON(spec.RuntimePolicy)
-	spec.WatcherLifecycle = normalizeAutomationObjectJSON(spec.WatcherLifecycle)
-	spec.RetriggerPolicy = normalizeAutomationObjectJSON(spec.RetriggerPolicy)
-	spec.RunPolicy = normalizeAutomationObjectJSON(spec.RunPolicy)
-
-	if spec.CreatedAt.IsZero() {
-		spec.CreatedAt = now
-	} else {
-		spec.CreatedAt = spec.CreatedAt.UTC()
-	}
-	if spec.UpdatedAt.IsZero() {
-		spec.UpdatedAt = spec.CreatedAt
-	} else {
-		spec.UpdatedAt = spec.UpdatedAt.UTC()
-	}
-	if spec.UpdatedAt.Before(spec.CreatedAt) {
-		spec.UpdatedAt = spec.CreatedAt
-	}
-	return spec
-}
-
-func normalizeAutomationIncidentForStore(incident types.AutomationIncident) types.AutomationIncident {
-	now := time.Now().UTC()
-	incident.ID = strings.TrimSpace(incident.ID)
-	if incident.ID == "" {
-		incident.ID = types.NewID("incident")
-	}
-	incident.AutomationID = strings.TrimSpace(incident.AutomationID)
-	incident.WorkspaceRoot = strings.TrimSpace(incident.WorkspaceRoot)
-	incident.Status = types.AutomationIncidentStatus(strings.ToLower(strings.TrimSpace(string(incident.Status))))
-	if incident.Status == "" {
-		incident.Status = types.AutomationIncidentStatusOpen
-	}
-	incident.SignalKind = strings.TrimSpace(incident.SignalKind)
-	incident.Source = strings.TrimSpace(incident.Source)
-	incident.Summary = strings.TrimSpace(incident.Summary)
-	incident.Payload = normalizeAutomationRawJSON(incident.Payload)
-	if incident.ObservedAt.IsZero() {
-		incident.ObservedAt = now
-	} else {
-		incident.ObservedAt = incident.ObservedAt.UTC()
-	}
-	if incident.CreatedAt.IsZero() {
-		incident.CreatedAt = now
-	} else {
-		incident.CreatedAt = incident.CreatedAt.UTC()
-	}
-	if incident.UpdatedAt.IsZero() {
-		incident.UpdatedAt = incident.CreatedAt
-	} else {
-		incident.UpdatedAt = incident.UpdatedAt.UTC()
-	}
-	if incident.UpdatedAt.Before(incident.CreatedAt) {
-		incident.UpdatedAt = incident.CreatedAt
-	}
-	return incident
-}
-
-func normalizeAutomationHeartbeatForStore(heartbeat types.AutomationHeartbeat) types.AutomationHeartbeat {
-	now := time.Now().UTC()
-	heartbeat.AutomationID = strings.TrimSpace(heartbeat.AutomationID)
-	heartbeat.WatcherID = strings.TrimSpace(heartbeat.WatcherID)
-	heartbeat.WorkspaceRoot = strings.TrimSpace(heartbeat.WorkspaceRoot)
-	heartbeat.Status = strings.TrimSpace(heartbeat.Status)
-	heartbeat.Payload = normalizeAutomationRawJSON(heartbeat.Payload)
-	if heartbeat.ObservedAt.IsZero() {
-		heartbeat.ObservedAt = now
-	} else {
-		heartbeat.ObservedAt = heartbeat.ObservedAt.UTC()
-	}
-	if heartbeat.CreatedAt.IsZero() {
-		heartbeat.CreatedAt = now
-	} else {
-		heartbeat.CreatedAt = heartbeat.CreatedAt.UTC()
-	}
-	if heartbeat.UpdatedAt.IsZero() {
-		heartbeat.UpdatedAt = heartbeat.CreatedAt
-	} else {
-		heartbeat.UpdatedAt = heartbeat.UpdatedAt.UTC()
-	}
-	if heartbeat.UpdatedAt.Before(heartbeat.CreatedAt) {
-		heartbeat.UpdatedAt = heartbeat.CreatedAt
-	}
-	return heartbeat
-}
-
-func normalizeAutomationWatcherForStore(watcher types.AutomationWatcherRuntime) types.AutomationWatcherRuntime {
-	now := time.Now().UTC()
-	watcher.ID = strings.TrimSpace(watcher.ID)
-	if watcher.ID == "" {
-		watcher.ID = types.NewID("watcher")
-	}
-	watcher.AutomationID = strings.TrimSpace(watcher.AutomationID)
-	watcher.WorkspaceRoot = strings.TrimSpace(watcher.WorkspaceRoot)
-	watcher.WatcherID = strings.TrimSpace(watcher.WatcherID)
-	if watcher.WatcherID == "" {
-		watcher.WatcherID = watcher.ID
-	}
-	watcher.State = normalizeAutomationWatcherStateForStore(watcher.State)
-	watcher.ScriptPath = strings.TrimSpace(watcher.ScriptPath)
-	watcher.StatePath = strings.TrimSpace(watcher.StatePath)
-	watcher.TaskID = strings.TrimSpace(watcher.TaskID)
-	watcher.Command = strings.TrimSpace(watcher.Command)
-	watcher.LastError = strings.TrimSpace(watcher.LastError)
-	if watcher.CreatedAt.IsZero() {
-		watcher.CreatedAt = now
-	} else {
-		watcher.CreatedAt = watcher.CreatedAt.UTC()
-	}
-	if watcher.UpdatedAt.IsZero() {
-		watcher.UpdatedAt = watcher.CreatedAt
-	} else {
-		watcher.UpdatedAt = watcher.UpdatedAt.UTC()
-	}
-	if watcher.UpdatedAt.Before(watcher.CreatedAt) {
-		watcher.UpdatedAt = watcher.CreatedAt
-	}
-	return watcher
-}
-
-func normalizeAutomationAssumptions(values []types.AutomationAssumption) []types.AutomationAssumption {
-	if len(values) == 0 {
-		return []types.AutomationAssumption{}
-	}
-	out := make([]types.AutomationAssumption, 0, len(values))
-	for _, value := range values {
-		value.Field = strings.TrimSpace(value.Field)
-		value.Value = strings.TrimSpace(value.Value)
-		value.Reason = strings.TrimSpace(value.Reason)
-		if value.Field == "" && value.Value == "" && value.Reason == "" {
-			continue
+		if parsed, err := parsePendingOptionalTime(observedAt); err == nil && !parsed.IsZero() {
+			event.ObservedAt = parsed
 		}
-		out = append(out, value)
-	}
-	if len(out) == 0 {
-		return []types.AutomationAssumption{}
-	}
-	return out
-}
-
-func normalizeDispatchAttemptForStore(attempt types.DispatchAttempt) types.DispatchAttempt {
-	now := time.Now().UTC()
-	attempt.DispatchID = strings.TrimSpace(attempt.DispatchID)
-	if attempt.DispatchID == "" {
-		attempt.DispatchID = types.NewID("dispatch")
-	}
-	attempt.IncidentID = strings.TrimSpace(attempt.IncidentID)
-	attempt.AutomationID = strings.TrimSpace(attempt.AutomationID)
-	attempt.WorkspaceRoot = strings.TrimSpace(attempt.WorkspaceRoot)
-	attempt.Phase = normalizeAutomationPhaseForStore(attempt.Phase)
-	attempt.Status = normalizeDispatchAttemptStatusForStore(attempt.Status)
-	if attempt.Attempt <= 0 {
-		attempt.Attempt = 1
-	}
-	attempt.TaskID = strings.TrimSpace(attempt.TaskID)
-	attempt.BackgroundSessionID = strings.TrimSpace(attempt.BackgroundSessionID)
-	attempt.BackgroundTurnID = strings.TrimSpace(attempt.BackgroundTurnID)
-	attempt.ContinuationID = strings.TrimSpace(attempt.ContinuationID)
-	attempt.PermissionRequestID = strings.TrimSpace(attempt.PermissionRequestID)
-	attempt.ApprovalQueueKey = strings.TrimSpace(attempt.ApprovalQueueKey)
-	attempt.PreferredSessionID = strings.TrimSpace(attempt.PreferredSessionID)
-	if attempt.CreatedAt.IsZero() {
-		attempt.CreatedAt = now
-	} else {
-		attempt.CreatedAt = attempt.CreatedAt.UTC()
-	}
-	if attempt.UpdatedAt.IsZero() {
-		attempt.UpdatedAt = attempt.CreatedAt
-	} else {
-		attempt.UpdatedAt = attempt.UpdatedAt.UTC()
-	}
-	if attempt.UpdatedAt.Before(attempt.CreatedAt) {
-		attempt.UpdatedAt = attempt.CreatedAt
-	}
-	return attempt
-}
-
-func normalizeDeliveryRecordForStore(record types.DeliveryRecord) types.DeliveryRecord {
-	now := time.Now().UTC()
-	record.DeliveryID = strings.TrimSpace(record.DeliveryID)
-	if record.DeliveryID == "" {
-		record.DeliveryID = types.NewID("delivery")
-	}
-	record.WorkspaceRoot = strings.TrimSpace(record.WorkspaceRoot)
-	record.AutomationID = strings.TrimSpace(record.AutomationID)
-	record.IncidentID = strings.TrimSpace(record.IncidentID)
-	record.DispatchID = strings.TrimSpace(record.DispatchID)
-	record.SummaryRef = strings.TrimSpace(record.SummaryRef)
-	record.Channels = normalizeDeliveryChannelsForStore(record.Channels)
-	if record.CreatedAt.IsZero() {
-		record.CreatedAt = now
-	} else {
-		record.CreatedAt = record.CreatedAt.UTC()
-	}
-	if record.UpdatedAt.IsZero() {
-		record.UpdatedAt = record.CreatedAt
-	} else {
-		record.UpdatedAt = record.UpdatedAt.UTC()
-	}
-	if record.UpdatedAt.Before(record.CreatedAt) {
-		record.UpdatedAt = record.CreatedAt
-	}
-	return record
-}
-
-func normalizeAutomationPhaseForStore(phase types.AutomationPhase) types.AutomationPhase {
-	switch strings.ToLower(strings.TrimSpace(string(phase))) {
-	case string(types.AutomationPhaseDiagnose):
-		return types.AutomationPhaseDiagnose
-	case string(types.AutomationPhaseRemediate):
-		return types.AutomationPhaseRemediate
-	case string(types.AutomationPhaseVerify):
-		return types.AutomationPhaseVerify
-	default:
-		return ""
-	}
-}
-
-func normalizeDispatchAttemptStatusForStore(status types.DispatchAttemptStatus) types.DispatchAttemptStatus {
-	switch strings.ToLower(strings.TrimSpace(string(status))) {
-	case string(types.DispatchAttemptStatusAwaitingApproval):
-		return types.DispatchAttemptStatusAwaitingApproval
-	default:
-		return types.DispatchAttemptStatusAwaitingApproval
-	}
-}
-
-func normalizeDeliveryChannelsForStore(channels types.DeliveryChannelSet) types.DeliveryChannelSet {
-	channels.Notice.Status = normalizeNoticeDeliveryChannelStatusForStore(channels.Notice.Status)
-	channels.Mailbox.Status = normalizeMailboxDeliveryChannelStatusForStore(channels.Mailbox.Status)
-	channels.Injection.Status = normalizeInjectionDeliveryChannelStatusForStore(channels.Injection.Status)
-	return channels
-}
-
-func normalizeNoticeDeliveryChannelStatusForStore(status types.DeliveryChannelStatus) types.DeliveryChannelStatus {
-	switch strings.ToLower(strings.TrimSpace(string(status))) {
-	case string(types.DeliveryChannelStatusPending):
-		return types.DeliveryChannelStatusPending
-	case string(types.DeliveryChannelStatusDisabled):
-		return types.DeliveryChannelStatusDisabled
-	default:
-		return types.DeliveryChannelStatusPending
-	}
-}
-
-func normalizeMailboxDeliveryChannelStatusForStore(status types.DeliveryChannelStatus) types.DeliveryChannelStatus {
-	switch strings.ToLower(strings.TrimSpace(string(status))) {
-	case string(types.DeliveryChannelStatusPending):
-		return types.DeliveryChannelStatusPending
-	case string(types.DeliveryChannelStatusReady):
-		return types.DeliveryChannelStatusReady
-	case string(types.DeliveryChannelStatusDisabled):
-		return types.DeliveryChannelStatusDisabled
-	default:
-		return types.DeliveryChannelStatusPending
-	}
-}
-
-func normalizeInjectionDeliveryChannelStatusForStore(status types.DeliveryChannelStatus) types.DeliveryChannelStatus {
-	switch strings.ToLower(strings.TrimSpace(string(status))) {
-	case string(types.DeliveryChannelStatusPending):
-		return types.DeliveryChannelStatusPending
-	case string(types.DeliveryChannelStatusReady):
-		return types.DeliveryChannelStatusReady
-	case string(types.DeliveryChannelStatusDisabled):
-		return types.DeliveryChannelStatusDisabled
-	default:
-		return types.DeliveryChannelStatusDisabled
-	}
-}
-
-func normalizeAutomationStateForStore(state types.AutomationState) types.AutomationState {
-	state = types.AutomationState(strings.ToLower(strings.TrimSpace(string(state))))
-	if state == "" {
-		return types.AutomationStateActive
-	}
-	return state
-}
-
-func normalizeAutomationListFilterForStore(filter types.AutomationListFilter) types.AutomationListFilter {
-	filter.WorkspaceRoot = strings.TrimSpace(filter.WorkspaceRoot)
-	filter.State = types.AutomationState(strings.ToLower(strings.TrimSpace(string(filter.State))))
-	if filter.Limit < 0 {
-		filter.Limit = 0
-	}
-	return filter
-}
-
-func normalizeAutomationIncidentFilterForStore(filter types.AutomationIncidentFilter) types.AutomationIncidentFilter {
-	filter.WorkspaceRoot = strings.TrimSpace(filter.WorkspaceRoot)
-	filter.AutomationID = strings.TrimSpace(filter.AutomationID)
-	filter.Status = types.AutomationIncidentStatus(strings.ToLower(strings.TrimSpace(string(filter.Status))))
-	if filter.Limit < 0 {
-		filter.Limit = 0
-	}
-	return filter
-}
-
-func normalizeAutomationWatcherFilterForStore(filter types.AutomationWatcherFilter) types.AutomationWatcherFilter {
-	filter.WorkspaceRoot = strings.TrimSpace(filter.WorkspaceRoot)
-	filter.AutomationID = strings.TrimSpace(filter.AutomationID)
-	if strings.TrimSpace(string(filter.State)) != "" {
-		filter.State = normalizeAutomationWatcherStateForStore(filter.State)
-	}
-	if filter.Limit < 0 {
-		filter.Limit = 0
-	}
-	return filter
-}
-
-func normalizeAutomationWatcherStateForStore(state types.AutomationWatcherState) types.AutomationWatcherState {
-	state = types.AutomationWatcherState(strings.ToLower(strings.TrimSpace(string(state))))
-	if state == "" {
-		return types.AutomationWatcherStatePending
-	}
-	return state
-}
-
-func normalizeAutomationStringList(values []string) []string {
-	if len(values) == 0 {
-		return []string{}
-	}
-	out := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			continue
+		if parsed, err := parsePendingOptionalTime(createdAt); err == nil && !parsed.IsZero() {
+			event.CreatedAt = parsed
 		}
-		if _, ok := seen[trimmed]; ok {
-			continue
+		if parsed, err := parsePendingOptionalTime(updatedAt); err == nil && !parsed.IsZero() {
+			event.UpdatedAt = parsed
 		}
-		seen[trimmed] = struct{}{}
-		out = append(out, trimmed)
+		out = append(out, normalizeTriggerEventForStore(event))
 	}
-	if len(out) == 0 {
-		return []string{}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
-func normalizeAutomationRawJSON(raw json.RawMessage) json.RawMessage {
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" {
-		return nil
+func scanIncidentPhaseStates(rows *sql.Rows) ([]types.IncidentPhaseState, error) {
+	out := make([]types.IncidentPhaseState, 0)
+	for rows.Next() {
+		var (
+			payload   string
+			createdAt string
+			updatedAt string
+		)
+		if err := rows.Scan(&payload, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		var state types.IncidentPhaseState
+		if err := json.Unmarshal([]byte(payload), &state); err != nil {
+			return nil, err
+		}
+		if parsed, err := parsePendingOptionalTime(createdAt); err == nil && !parsed.IsZero() {
+			state.CreatedAt = parsed
+		}
+		if parsed, err := parsePendingOptionalTime(updatedAt); err == nil && !parsed.IsZero() {
+			state.UpdatedAt = parsed
+		}
+		out = append(out, normalizeIncidentPhaseStateForStore(state))
 	}
-	return json.RawMessage(trimmed)
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
-func normalizeAutomationObjectJSON(raw json.RawMessage) json.RawMessage {
-	raw = normalizeAutomationRawJSON(raw)
-	if len(raw) == 0 || string(raw) == "null" {
-		return json.RawMessage("{}")
+func scanDispatchAttempts(rows *sql.Rows) ([]types.DispatchAttempt, error) {
+	out := make([]types.DispatchAttempt, 0)
+	for rows.Next() {
+		var (
+			payload   string
+			createdAt string
+			updatedAt string
+		)
+		if err := rows.Scan(&payload, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		var attempt types.DispatchAttempt
+		if err := json.Unmarshal([]byte(payload), &attempt); err != nil {
+			return nil, err
+		}
+		if parsed, err := parsePendingOptionalTime(createdAt); err == nil && !parsed.IsZero() {
+			attempt.CreatedAt = parsed
+		}
+		if parsed, err := parsePendingOptionalTime(updatedAt); err == nil && !parsed.IsZero() {
+			attempt.UpdatedAt = parsed
+		}
+		out = append(out, normalizeDispatchAttemptForStore(attempt))
 	}
-	return raw
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func scanDeliveryRecords(rows *sql.Rows) ([]types.DeliveryRecord, error) {
+	out := make([]types.DeliveryRecord, 0)
+	for rows.Next() {
+		var (
+			payload   string
+			createdAt string
+			updatedAt string
+		)
+		if err := rows.Scan(&payload, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		var delivery types.DeliveryRecord
+		if err := json.Unmarshal([]byte(payload), &delivery); err != nil {
+			return nil, err
+		}
+		if parsed, err := parsePendingOptionalTime(createdAt); err == nil && !parsed.IsZero() {
+			delivery.CreatedAt = parsed
+		}
+		if parsed, err := parsePendingOptionalTime(updatedAt); err == nil && !parsed.IsZero() {
+			delivery.UpdatedAt = parsed
+		}
+		out = append(out, normalizeDeliveryRecordForStore(delivery))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

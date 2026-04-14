@@ -223,6 +223,36 @@ func (s *Service) EnqueueScheduledJobReport(ctx context.Context, completed task.
 	return childResult, items, true, nil
 }
 
+func (s *Service) EnqueueAutomationChildResult(ctx context.Context, workspaceRoot string, result types.ChildAgentResult, now time.Time) (types.ReportMailboxItem, error) {
+	if strings.TrimSpace(result.ResultID) == "" {
+		result.ResultID = types.NewID("child_result")
+	}
+	if result.ObservedAt.IsZero() {
+		result.ObservedAt = now
+	} else {
+		result.ObservedAt = result.ObservedAt.UTC()
+	}
+	if result.CreatedAt.IsZero() {
+		result.CreatedAt = now
+	} else {
+		result.CreatedAt = result.CreatedAt.UTC()
+	}
+	if result.UpdatedAt.IsZero() {
+		result.UpdatedAt = result.CreatedAt
+	} else {
+		result.UpdatedAt = result.UpdatedAt.UTC()
+	}
+	if s == nil || s.store == nil {
+		report := ReportFromChildAgentResult(strings.TrimSpace(workspaceRoot), result.SessionID, result, now)
+		return types.ReportMailboxItemFromRecordDelivery(report, MailboxDeliveryFromReport(report, now)), nil
+	}
+	if err := s.store.UpsertChildAgentResult(ctx, result); err != nil {
+		return types.ReportMailboxItem{}, err
+	}
+	report := ReportFromChildAgentResult(strings.TrimSpace(workspaceRoot), result.SessionID, result, now)
+	return s.persistReportMailboxItem(ctx, report, now)
+}
+
 func ReportFromTask(workspaceRoot string, completed task.Task, now time.Time) (types.ReportRecord, bool) {
 	result, ready := completed.FinalResult()
 	if !ready {

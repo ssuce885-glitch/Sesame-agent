@@ -27,6 +27,9 @@ type automationClient interface {
 	RecordHeartbeat(context.Context, types.TriggerHeartbeatRequest) (types.AutomationHeartbeat, error)
 	ListIncidents(context.Context, types.IncidentListFilter) (types.ListAutomationIncidentsResponse, error)
 	GetIncident(context.Context, string) (types.AutomationIncident, error)
+	ControlIncident(context.Context, string, types.IncidentControlAction) (types.AutomationIncident, error)
+	ListPendingAutomationPermissions(context.Context) (types.ListPendingAutomationPermissionsResponse, error)
+	GetPendingAutomationPermission(context.Context, string) (types.PendingAutomationPermission, error)
 }
 
 type scriptCommandError struct {
@@ -130,9 +133,6 @@ func runAutomationCommand(ctx context.Context, stdout io.Writer, client automati
 			return err
 		}
 		return writeJSON(stdout, watcher)
-	case "run":
-		runner := automationrt.NewWatcherRunner(client, automationrt.WatcherRunnerConfig{})
-		return runner.Run(ctx, cmd.ID, cmd.WatcherID, cmd.StateFile)
 	case "remove":
 		if err := client.DeleteAutomation(ctx, cmd.ID); err != nil {
 			return err
@@ -149,9 +149,18 @@ func runAutomationCommand(ctx context.Context, stdout io.Writer, client automati
 func runTriggerCommand(ctx context.Context, stdout io.Writer, client automationClient, cmd TriggerCommand) error {
 	switch cmd.Action {
 	case "emit":
-		var req types.TriggerEmitRequest
-		if err := readJSONFile(cmd.File, &req); err != nil {
-			return err
+		req := types.TriggerEmitRequest{}
+		if strings.TrimSpace(cmd.File) != "" {
+			if err := readJSONFile(cmd.File, &req); err != nil {
+				return err
+			}
+		} else {
+			req = types.TriggerEmitRequest{
+				AutomationID: strings.TrimSpace(cmd.AutomationID),
+				SignalKind:   strings.TrimSpace(cmd.SignalKind),
+				Source:       strings.TrimSpace(cmd.Source),
+				Summary:      strings.TrimSpace(cmd.Summary),
+			}
 		}
 		incident, err := client.EmitTrigger(ctx, req)
 		if err != nil {
@@ -159,15 +168,26 @@ func runTriggerCommand(ctx context.Context, stdout io.Writer, client automationC
 		}
 		return writeJSON(stdout, incident)
 	case "heartbeat":
-		var req types.TriggerHeartbeatRequest
-		if err := readJSONFile(cmd.File, &req); err != nil {
-			return err
+		req := types.TriggerHeartbeatRequest{}
+		if strings.TrimSpace(cmd.File) != "" {
+			if err := readJSONFile(cmd.File, &req); err != nil {
+				return err
+			}
+		} else {
+			req = types.TriggerHeartbeatRequest{
+				AutomationID: strings.TrimSpace(cmd.AutomationID),
+				WatcherID:    strings.TrimSpace(cmd.WatcherID),
+				Status:       strings.TrimSpace(cmd.Status),
+			}
 		}
 		heartbeat, err := client.RecordHeartbeat(ctx, req)
 		if err != nil {
 			return err
 		}
 		return writeJSON(stdout, heartbeat)
+	case "watch":
+		runner := automationrt.NewWatcherRunner(client, automationrt.WatcherRunnerConfig{})
+		return runner.Run(ctx, cmd.AutomationID, cmd.WatcherID, cmd.StateFile)
 	default:
 		return fmt.Errorf("unknown trigger command %q", cmd.Action)
 	}
@@ -192,8 +212,34 @@ func runIncidentCommand(ctx context.Context, stdout io.Writer, client automation
 			return err
 		}
 		return writeJSON(stdout, incident)
+	case "ack", "close", "reopen", "escalate":
+		incident, err := client.ControlIncident(ctx, cmd.ID, types.IncidentControlAction(strings.TrimSpace(cmd.Action)))
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, incident)
 	default:
 		return fmt.Errorf("unknown incident command %q", cmd.Action)
+	}
+}
+
+func runPermissionsCommand(ctx context.Context, stdout io.Writer, client automationClient, cmd PermissionCommand) error {
+	switch cmd.Action {
+	case "pending":
+		if strings.TrimSpace(cmd.RequestID) != "" {
+			item, err := client.GetPendingAutomationPermission(ctx, cmd.RequestID)
+			if err != nil {
+				return err
+			}
+			return writeJSON(stdout, item)
+		}
+		items, err := client.ListPendingAutomationPermissions(ctx)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, items)
+	default:
+		return fmt.Errorf("unknown permissions command %q", cmd.Action)
 	}
 }
 

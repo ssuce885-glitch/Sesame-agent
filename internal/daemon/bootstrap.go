@@ -47,6 +47,12 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	runner.SetAutomationService(automationService)
 
 	taskNotifier := buildTaskTerminalNotifier(store, bus, cfg.Paths.WorkspaceRoot)
+	var deliveryService *automation.DeliveryService
+	if taskNotifier != nil {
+		deliveryService = automation.NewDeliveryService(store, taskNotifier.reporting, nil)
+	} else {
+		deliveryService = automation.NewDeliveryService(store, nil, nil)
+	}
 	taskManager := task.NewManager(task.Config{
 		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
 		TaskOutputMaxBytes: cfg.TaskOutputMaxBytes,
@@ -73,7 +79,9 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	runner.SetSchedulerService(schedulerService)
 
 	sessionManager := session.NewManager(sessionRunnerAdapter{
-		engine: runner,
+		engine:   runner,
+		store:    store,
+		delivery: deliveryService,
 		sink: storeAndBusSink{
 			store: store,
 			bus:   bus,

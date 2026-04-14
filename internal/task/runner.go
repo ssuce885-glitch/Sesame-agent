@@ -53,6 +53,10 @@ func (w outputSinkObserver) SetFinalText(text string) error {
 	return w.resultSink.SetFinalText(w.taskID, text)
 }
 
+func (w outputSinkObserver) SetRunContext(_, _ string) error {
+	return nil
+}
+
 func (w outputSinkObserver) Write(p []byte) (int, error) {
 	if err := w.AppendLog(p); err != nil {
 		return 0, err

@@ -89,6 +89,7 @@ type AutomationService interface {
 	RecordHeartbeat(context.Context, types.AutomationHeartbeatRequest) (types.AutomationHeartbeat, error)
 	ListIncidents(context.Context, types.AutomationIncidentFilter) ([]types.AutomationIncident, error)
 	GetIncident(context.Context, string) (types.AutomationIncident, bool, error)
+	ControlIncident(context.Context, string, types.IncidentControlAction) (types.AutomationIncident, bool, error)
 }
 
 type ResourceClaimMode string

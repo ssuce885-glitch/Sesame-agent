@@ -16,10 +16,9 @@ type TaskUnderstanding struct {
 }
 
 type RetrievalCandidate struct {
-	Skill        SkillSpec
-	Score        int
-	Reasons      []string
-	AutoActivate bool
+	Skill   SkillSpec
+	Score   int
+	Reasons []string
 }
 
 type RetrievalResult struct {
@@ -58,17 +57,8 @@ func retrieveForTask(catalog Catalog, task TaskUnderstanding, already []Activate
 		return RetrievalResult{Task: task}
 	}
 
-	selected := make([]ActivatedSkill, 0, 3)
 	suggested := make([]RetrievalCandidate, 0, 3)
 	for _, candidate := range candidates {
-		if candidate.AutoActivate && len(selected) < 3 {
-			selected = append(selected, ActivatedSkill{
-				Skill:       candidate.Skill,
-				Reason:      ActivationReasonRetrieved,
-				MatchedText: strings.Join(candidate.Reasons, ", "),
-			})
-			continue
-		}
 		if len(suggested) < 3 {
 			suggested = append(suggested, candidate)
 		}
@@ -76,7 +66,6 @@ func retrieveForTask(catalog Catalog, task TaskUnderstanding, already []Activate
 
 	return RetrievalResult{
 		Task:      task,
-		Selected:  selected,
 		Suggested: suggested,
 	}
 }
@@ -168,7 +157,6 @@ func rankRetrievalCandidates(catalog Catalog, task TaskUnderstanding, already []
 			Score:   score,
 			Reasons: reasons,
 		}
-		candidate.AutoActivate = shouldAutoActivateCandidate(task, candidate)
 		out = append(out, candidate)
 	}
 
@@ -256,25 +244,6 @@ func scoreRetrievalCandidate(task TaskUnderstanding, skill SkillSpec) (int, []st
 	return score, reasons
 }
 
-func shouldAutoActivateCandidate(task TaskUnderstanding, candidate RetrievalCandidate) bool {
-	if task.WantsScheduling || candidate.Score < 80 {
-		return false
-	}
-	traits := inferSkillTraits(candidate.Skill)
-	switch {
-	case traits.EmailDelivery && task.WantsEmailDelivery:
-		return true
-	case traits.SystemInspect && task.WantsSystemInspect:
-		return true
-	case traits.BrowserAutomation && task.WantsBrowserAutomation:
-		return true
-	case traits.CodeEdit && task.WantsCodeEdit && candidate.Score >= 100:
-		return true
-	default:
-		return candidate.Score >= 140
-	}
-}
-
 func inferSkillTraits(skill SkillSpec) skillTraits {
 	text := skillSearchText(skill)
 	grantsShell := false
@@ -296,8 +265,8 @@ func inferSkillTraits(skill SkillSpec) skillTraits {
 	return skillTraits{
 		BrowserAutomation: hasCapabilityTag(skill, "browser_automation") || hasBrowserAutomationSignal(text),
 		EmailDelivery: containsAny(text, []string{
-			"send-email", "email", "mail", "smtp", "邮件", "邮箱",
-		}),
+			"send-email", "email", "smtp", "邮件", "邮箱",
+		}) || containsEnglishToken(text, "mail"),
 		SystemInspect: containsAny(text, []string{
 			"system", "environment", "version", "binary", "process", "wsl", "which ", "系统", "环境", "版本", "路径",
 		}),
@@ -359,6 +328,21 @@ func skillSearchText(skill SkillSpec) string {
 func containsAny(text string, needles []string) bool {
 	for _, needle := range needles {
 		if needle != "" && strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEnglishToken(text, token string) bool {
+	token = strings.ToLower(strings.TrimSpace(token))
+	if token == "" {
+		return false
+	}
+	for _, field := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	}) {
+		if field == token {
 			return true
 		}
 	}

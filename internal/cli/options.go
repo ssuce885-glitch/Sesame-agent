@@ -27,8 +27,20 @@ type AutomationCommand struct {
 }
 
 type TriggerCommand struct {
-	Action string
-	File   string
+	Action       string
+	File         string
+	AutomationID string
+	SignalKind   string
+	Source       string
+	Summary      string
+	Status       string
+	WatcherID    string
+	StateFile    string
+}
+
+type PermissionCommand struct {
+	Action    string
+	RequestID string
 }
 
 type IncidentCommand struct {
@@ -57,6 +69,7 @@ type Options struct {
 	Automation     *AutomationCommand
 	Trigger        *TriggerCommand
 	Incident       *IncidentCommand
+	Permissions    *PermissionCommand
 }
 
 func ParseOptions(args []string) (Options, error) {
@@ -70,6 +83,8 @@ func ParseOptions(args []string) (Options, error) {
 			return parseTriggerOptions(args[1:])
 		case "incident":
 			return parseIncidentOptions(args[1:])
+		case "permissions":
+			return parsePermissionOptions(args[1:])
 		}
 	}
 
@@ -181,7 +196,10 @@ func parseSkillOptions(args []string) (Options, error) {
 
 func parseAutomationOptions(args []string) (Options, error) {
 	if len(args) == 0 {
-		return Options{}, fmt.Errorf("usage: sesame automation <apply|list|get|pause|resume|remove|install|reinstall|watcher|run> ...")
+		return Options{}, fmt.Errorf("usage: sesame automation <apply|list|get|pause|resume|remove|install|reinstall|watcher> ...")
+	}
+	if strings.EqualFold(strings.TrimSpace(args[0]), "run") {
+		return Options{}, fmt.Errorf("automation run is removed; emit a synthetic trigger with `sesame trigger emit --automation <id> --source manual_test --signal manual`")
 	}
 
 	cmd := &AutomationCommand{Action: strings.ToLower(strings.TrimSpace(args[0]))}
@@ -192,9 +210,6 @@ func parseAutomationOptions(args []string) (Options, error) {
 		fs.StringVar(&cmd.File, "file", "", "json file containing the automation request")
 	case "list":
 		fs.StringVar(&cmd.WorkspaceRoot, "workspace-root", "", "optional workspace root filter")
-	case "run":
-		fs.StringVar(&cmd.WatcherID, "watcher-id", "", "watcher runtime identifier")
-		fs.StringVar(&cmd.StateFile, "state-file", "", "watcher state file path")
 	case "get", "pause", "resume", "remove", "install", "reinstall", "watcher":
 	default:
 		return Options{}, fmt.Errorf("unknown automation command %q", cmd.Action)
@@ -213,11 +228,6 @@ func parseAutomationOptions(args []string) (Options, error) {
 		if len(rest) != 0 {
 			return Options{}, fmt.Errorf("usage: sesame automation list [--workspace-root <path>]")
 		}
-	case "run":
-		if len(rest) != 1 {
-			return Options{}, fmt.Errorf("usage: sesame automation run [--watcher-id <id>] [--state-file <path>] <automation-id>")
-		}
-		cmd.ID = strings.TrimSpace(rest[0])
 	case "get", "pause", "resume", "remove", "install", "reinstall", "watcher":
 		if len(rest) != 1 {
 			return Options{}, fmt.Errorf("usage: sesame automation %s <id>", cmd.Action)
@@ -230,21 +240,35 @@ func parseAutomationOptions(args []string) (Options, error) {
 
 func parseTriggerOptions(args []string) (Options, error) {
 	if len(args) == 0 {
-		return Options{}, fmt.Errorf("usage: sesame trigger <emit|heartbeat> --file <path>")
+		return Options{}, fmt.Errorf("usage: sesame trigger <emit|heartbeat|watch> ...")
 	}
 
 	cmd := &TriggerCommand{Action: strings.ToLower(strings.TrimSpace(args[0]))}
 	fs := flag.NewFlagSet("sesame trigger "+cmd.Action, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&cmd.File, "file", "", "json file containing the trigger request")
+	fs.StringVar(&cmd.AutomationID, "automation", "", "automation identifier")
+	fs.StringVar(&cmd.SignalKind, "signal", "", "trigger signal kind")
+	fs.StringVar(&cmd.Source, "source", "", "trigger source")
+	fs.StringVar(&cmd.Summary, "summary", "", "trigger summary")
+	fs.StringVar(&cmd.Status, "status", "", "watcher heartbeat status")
+	fs.StringVar(&cmd.WatcherID, "watcher-id", "", "watcher runtime identifier")
+	fs.StringVar(&cmd.StateFile, "state-file", "", "watcher state file path")
 	if err := fs.Parse(reorderInterspersedArgs(args[1:])); err != nil {
 		return Options{}, err
 	}
 
 	switch cmd.Action {
 	case "emit", "heartbeat":
-		if cmd.File == "" || len(fs.Args()) != 0 {
-			return Options{}, fmt.Errorf("usage: sesame trigger %s --file <path>", cmd.Action)
+		if len(fs.Args()) != 0 {
+			return Options{}, fmt.Errorf("usage: sesame trigger %s [--file <path>] [--automation <id> ...]", cmd.Action)
+		}
+		if strings.TrimSpace(cmd.File) == "" && strings.TrimSpace(cmd.AutomationID) == "" {
+			return Options{}, fmt.Errorf("usage: sesame trigger %s [--file <path>] [--automation <id> ...]", cmd.Action)
+		}
+	case "watch":
+		if len(fs.Args()) != 0 || strings.TrimSpace(cmd.AutomationID) == "" {
+			return Options{}, fmt.Errorf("usage: sesame trigger watch --automation <id> [--watcher-id <id>] [--state-file <path>]")
 		}
 	default:
 		return Options{}, fmt.Errorf("unknown trigger command %q", cmd.Action)
@@ -255,7 +279,7 @@ func parseTriggerOptions(args []string) (Options, error) {
 
 func parseIncidentOptions(args []string) (Options, error) {
 	if len(args) == 0 {
-		return Options{}, fmt.Errorf("usage: sesame incident <list|get> ...")
+		return Options{}, fmt.Errorf("usage: sesame incident <list|get|ack|close|reopen|escalate> ...")
 	}
 
 	cmd := &IncidentCommand{Action: strings.ToLower(strings.TrimSpace(args[0]))}
@@ -267,7 +291,7 @@ func parseIncidentOptions(args []string) (Options, error) {
 		fs.StringVar(&cmd.WorkspaceRoot, "workspace-root", "", "optional workspace root filter")
 		fs.StringVar(&cmd.Status, "status", "", "optional incident status filter")
 		fs.IntVar(&cmd.Limit, "limit", 0, "optional limit")
-	case "get":
+	case "get", "ack", "close", "reopen", "escalate":
 	default:
 		return Options{}, fmt.Errorf("unknown incident command %q", cmd.Action)
 	}
@@ -284,14 +308,34 @@ func parseIncidentOptions(args []string) (Options, error) {
 		if cmd.Limit < 0 {
 			return Options{}, fmt.Errorf("usage: sesame incident list [--automation-id <id>] [--workspace-root <path>] [--status <status>] [--limit <n>]")
 		}
-	case "get":
+	case "get", "ack", "close", "reopen", "escalate":
 		if len(rest) != 1 {
-			return Options{}, fmt.Errorf("usage: sesame incident get <id>")
+			return Options{}, fmt.Errorf("usage: sesame incident %s <id>", cmd.Action)
 		}
 		cmd.ID = strings.TrimSpace(rest[0])
 	}
 
 	return Options{Incident: cmd}, nil
+}
+
+func parsePermissionOptions(args []string) (Options, error) {
+	if len(args) == 0 {
+		return Options{}, fmt.Errorf("usage: sesame permissions pending [request_id]")
+	}
+
+	cmd := &PermissionCommand{Action: strings.ToLower(strings.TrimSpace(args[0]))}
+	switch cmd.Action {
+	case "pending":
+	default:
+		return Options{}, fmt.Errorf("unknown permissions command %q", cmd.Action)
+	}
+	if len(args[1:]) > 1 {
+		return Options{}, fmt.Errorf("usage: sesame permissions pending [request_id]")
+	}
+	if len(args) == 2 {
+		cmd.RequestID = strings.TrimSpace(args[1])
+	}
+	return Options{Permissions: cmd}, nil
 }
 
 func reorderInterspersedArgs(args []string) []string {

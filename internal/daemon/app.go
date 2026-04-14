@@ -31,8 +31,11 @@ import (
 )
 
 type sessionRunnerAdapter struct {
-	engine *engine.Engine
-	sink   engine.EventSink
+	engine   *engine.Engine
+	sink     storeAndBusSink
+	store    *sqlite.Store
+	delivery *automation.DeliveryService
+	now      func() time.Time
 }
 
 type storeAndBusSink struct {
@@ -60,6 +63,18 @@ type taskTerminalNotifier struct {
 	bus       *stream.Bus
 	scheduler *scheduler.Service
 	reporting *reporting.Service
+}
+
+type combinedEventSink struct {
+	primary   engine.EventSink
+	finalizer engine.TurnFinalizingSink
+	observer  engine.EventSink
+}
+
+type automationDispatchManager struct {
+	store   *sqlite.Store
+	manager *session.Manager
+	now     func() time.Time
 }
 
 func (s storeAndBusSink) Emit(ctx context.Context, event types.Event) error {
@@ -104,6 +119,22 @@ func (s storeAndBusSink) FinalizeTurn(ctx context.Context, usage *types.TurnUsag
 }
 
 func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) error {
+	sink := engine.EventSink(a.sink)
+	var observerSink *taskEventSink
+	var observer task.AgentTaskObserver
+	var finalDispatchText string
+	if dispatchObserver, ok, err := a.dispatchObserverForRun(ctx, in.Session.ID, in.TurnID); err != nil {
+		return err
+	} else if ok {
+		observer = dispatchObserver
+		observerSink = &taskEventSink{observer: observer}
+		sink = combinedEventSink{
+			primary:   a.sink,
+			finalizer: a.sink,
+			observer:  observerSink,
+		}
+	}
+
 	err := a.engine.RunTurn(ctx, engine.Input{
 		Session: in.Session,
 		Turn: types.Turn{
@@ -112,9 +143,27 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 			ClientTurnID: "",
 			UserMessage:  in.Message,
 		},
-		Sink:   a.sink,
+		Sink:   sink,
 		Resume: in.Resume,
 	})
+	if observerSink != nil && observer != nil && err == nil {
+		if turn, ok, turnErr := a.store.GetTurn(ctx, in.TurnID); turnErr != nil {
+			return turnErr
+		} else if ok && turn.State != types.TurnStateAwaitingPermission {
+			finalDispatchText = strings.TrimSpace(observerSink.FinalText())
+		}
+	}
+	if reconcileErr := a.reconcileDispatchRun(ctx, in.Session.ID, in.TurnID, err); reconcileErr != nil {
+		if err != nil {
+			return errors.Join(err, reconcileErr)
+		}
+		return reconcileErr
+	}
+	if observer != nil && finalDispatchText != "" {
+		if err := observer.SetFinalText(finalDispatchText); err != nil {
+			return err
+		}
+	}
 	return err
 }
 
@@ -191,6 +240,339 @@ func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus, workspaceRo
 	}
 }
 
+func (s combinedEventSink) Emit(ctx context.Context, event types.Event) error {
+	if s.primary != nil {
+		if err := s.primary.Emit(ctx, event); err != nil {
+			return err
+		}
+	}
+	if s.observer != nil {
+		if err := s.observer.Emit(ctx, event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s combinedEventSink) FinalizeTurn(ctx context.Context, usage *types.TurnUsage, events []types.Event) error {
+	if s.finalizer == nil {
+		return nil
+	}
+	return s.finalizer.FinalizeTurn(ctx, usage, events)
+}
+
+func (a sessionRunnerAdapter) dispatchObserverForRun(ctx context.Context, sessionID, turnID string) (task.AgentTaskObserver, bool, error) {
+	if a.store == nil {
+		return nil, false, nil
+	}
+	attempt, ok, err := a.store.FindDispatchAttemptByBackgroundRun(ctx, sessionID, turnID)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return automation.NewDispatchTaskObserverWithDelivery(a.store, a.delivery, attempt.DispatchID, a.currentTime), true, nil
+}
+
+func (a sessionRunnerAdapter) reconcileDispatchRun(ctx context.Context, sessionID, turnID string, runErr error) error {
+	if a.store == nil {
+		return nil
+	}
+	attempt, ok, err := a.store.FindDispatchAttemptByBackgroundRun(ctx, sessionID, turnID)
+	if err != nil || !ok {
+		return err
+	}
+	now := a.currentTime()
+	if runErr != nil {
+		attempt.Status = types.DispatchAttemptStatusFailed
+		attempt.Error = strings.TrimSpace(runErr.Error())
+		attempt.FinishedAt = now
+		attempt.UpdatedAt = now
+		if err := a.store.UpsertDispatchAttempt(ctx, attempt); err != nil {
+			return err
+		}
+		return a.applyDispatchOutcome(ctx, attempt, dispatchOutcomeFailed, now)
+	}
+
+	turn, ok, err := a.store.GetTurn(ctx, turnID)
+	if err != nil || !ok {
+		return err
+	}
+	if turn.State != types.TurnStateAwaitingPermission {
+		attempt.Status = types.DispatchAttemptStatusCompleted
+		attempt.Error = ""
+		if attempt.FinishedAt.IsZero() {
+			attempt.FinishedAt = now
+		}
+		attempt.UpdatedAt = now
+		if err := a.store.UpsertDispatchAttempt(ctx, attempt); err != nil {
+			return err
+		}
+		return a.applyDispatchOutcome(ctx, attempt, dispatchOutcomeCompleted, now)
+	}
+
+	requests, err := a.store.ListPermissionRequestsBySession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	var request types.PermissionRequest
+	foundRequest := false
+	for _, candidate := range requests {
+		if candidate.TurnID != turnID || candidate.Status != types.PermissionRequestStatusRequested {
+			continue
+		}
+		if !foundRequest || candidate.CreatedAt.After(request.CreatedAt) {
+			request = candidate
+			foundRequest = true
+		}
+	}
+	if !foundRequest {
+		return nil
+	}
+
+	continuation, ok, err := a.store.GetTurnContinuationByPermissionRequest(ctx, request.ID)
+	if err != nil || !ok {
+		return err
+	}
+	attempt.Status = types.DispatchAttemptStatusAwaitingApproval
+	attempt.PermissionRequestID = request.ID
+	attempt.ContinuationID = continuation.ID
+	attempt.BackgroundSessionID = sessionID
+	attempt.BackgroundTurnID = turnID
+	attempt.UpdatedAt = now
+	if err := a.store.UpsertDispatchAttempt(ctx, attempt); err != nil {
+		return err
+	}
+	if phases, err := a.store.ListIncidentPhaseStates(ctx, attempt.IncidentID); err == nil {
+		for _, phase := range phases {
+			if phase.Phase != attempt.Phase {
+				continue
+			}
+			phase.Status = types.IncidentPhaseStatusAwaitingApproval
+			phase.UpdatedAt = now
+			if err := a.store.UpsertIncidentPhaseState(ctx, phase); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	if incident, ok, err := a.store.GetAutomationIncident(ctx, attempt.IncidentID); err == nil && ok {
+		incident.Status = types.AutomationIncidentStatusActive
+		incident.UpdatedAt = now
+		return a.store.UpsertAutomationIncident(ctx, incident)
+	} else if err != nil {
+		return err
+	}
+	return nil
+}
+
+type dispatchOutcome string
+
+const (
+	dispatchOutcomeCompleted dispatchOutcome = "completed"
+	dispatchOutcomeFailed    dispatchOutcome = "failed"
+)
+
+func (a sessionRunnerAdapter) applyDispatchOutcome(ctx context.Context, attempt types.DispatchAttempt, outcome dispatchOutcome, now time.Time) error {
+	phaseStatus, incidentStatus, err := a.resolveDispatchOutcome(ctx, attempt, outcome)
+	if err != nil {
+		return err
+	}
+	if err := updateIncidentPhaseState(ctx, a.store, attempt.IncidentID, attempt.Phase, now, func(phase *types.IncidentPhaseState) {
+		if phase.ActiveDispatchCount > 0 {
+			phase.ActiveDispatchCount--
+		}
+		phase.Status = phaseStatus
+		switch outcome {
+		case dispatchOutcomeCompleted:
+			phase.CompletedDispatchCount++
+		case dispatchOutcomeFailed:
+			phase.FailedDispatchCount++
+		}
+	}); err != nil {
+		return err
+	}
+	return updateAutomationIncidentStatus(ctx, a.store, attempt.IncidentID, incidentStatus, now)
+}
+
+func (a sessionRunnerAdapter) resolveDispatchOutcome(ctx context.Context, attempt types.DispatchAttempt, outcome dispatchOutcome) (types.IncidentPhaseStatus, types.AutomationIncidentStatus, error) {
+	action := types.AutomationPhaseTransitionComplete
+	phaseStatus := types.IncidentPhaseStatusCompleted
+	if outcome == dispatchOutcomeFailed {
+		action = types.AutomationPhaseTransitionEscalate
+		phaseStatus = types.IncidentPhaseStatusFailed
+	}
+
+	spec, ok, err := a.store.GetAutomation(ctx, attempt.AutomationID)
+	if err != nil {
+		return "", "", err
+	}
+	if ok {
+		if planPhase, found := findResponsePlanPhase(spec.ResponsePlan, attempt.Phase); found {
+			switch outcome {
+			case dispatchOutcomeCompleted:
+				if planPhase.OnSuccess != "" {
+					action = planPhase.OnSuccess
+				}
+			case dispatchOutcomeFailed:
+				if planPhase.OnFailure != "" {
+					action = planPhase.OnFailure
+				}
+			}
+		}
+	}
+
+	return phaseStatus, incidentStatusForPhaseTransition(action), nil
+}
+
+func findResponsePlanPhase(raw json.RawMessage, phaseName types.AutomationPhaseName) (types.AutomationPhasePlan, bool) {
+	normalized := types.NormalizeAutomationResponsePlanJSON(raw)
+	if len(normalized) == 0 {
+		return types.AutomationPhasePlan{}, false
+	}
+
+	var plan types.ResponsePlanV2
+	if err := json.Unmarshal(normalized, &plan); err != nil {
+		return types.AutomationPhasePlan{}, false
+	}
+	for _, phase := range plan.Phases {
+		if phase.Phase == phaseName {
+			return phase, true
+		}
+	}
+	return types.AutomationPhasePlan{}, false
+}
+
+func incidentStatusForPhaseTransition(action types.AutomationPhaseTransitionAction) types.AutomationIncidentStatus {
+	switch action {
+	case types.AutomationPhaseTransitionNextPhase:
+		return types.AutomationIncidentStatusQueued
+	case types.AutomationPhaseTransitionEscalate:
+		return types.AutomationIncidentStatusEscalated
+	case types.AutomationPhaseTransitionCancel:
+		return types.AutomationIncidentStatusCanceled
+	case types.AutomationPhaseTransitionComplete:
+		fallthrough
+	default:
+		return types.AutomationIncidentStatusResolved
+	}
+}
+
+func updateIncidentPhaseState(ctx context.Context, store *sqlite.Store, incidentID string, phaseName types.AutomationPhaseName, now time.Time, apply func(*types.IncidentPhaseState)) error {
+	if store == nil || strings.TrimSpace(incidentID) == "" {
+		return nil
+	}
+	phases, err := store.ListIncidentPhaseStates(ctx, incidentID)
+	if err != nil {
+		return err
+	}
+	for _, phase := range phases {
+		if phase.Phase != phaseName {
+			continue
+		}
+		apply(&phase)
+		phase.UpdatedAt = now
+		return store.UpsertIncidentPhaseState(ctx, phase)
+	}
+	return nil
+}
+
+func updateAutomationIncidentStatus(ctx context.Context, store *sqlite.Store, incidentID string, status types.AutomationIncidentStatus, now time.Time) error {
+	if store == nil || strings.TrimSpace(incidentID) == "" {
+		return nil
+	}
+	incident, ok, err := store.GetAutomationIncident(ctx, incidentID)
+	if err != nil || !ok {
+		return err
+	}
+	incident.Status = status
+	incident.UpdatedAt = now
+	return store.UpsertAutomationIncident(ctx, incident)
+}
+
+func (a sessionRunnerAdapter) currentTime() time.Time {
+	if a.now != nil {
+		return a.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (m automationDispatchManager) StartAutomationDispatch(ctx context.Context, attempt types.DispatchAttempt, template types.ChildAgentTemplate) error {
+	if m.store == nil || m.manager == nil {
+		return errors.New("automation dispatch manager is not configured")
+	}
+	now := m.currentTime()
+	sessionRow := types.Session{
+		ID:                firstNonEmptyTrimmed(attempt.BackgroundSessionID, types.NewID("auto_session")),
+		WorkspaceRoot:     strings.TrimSpace(attempt.WorkspaceRoot),
+		PermissionProfile: "read_only",
+		State:             types.SessionStateIdle,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if existing, ok, err := m.store.GetSession(ctx, sessionRow.ID); err != nil {
+		return err
+	} else if ok {
+		sessionRow = existing
+	} else if err := m.store.InsertSession(ctx, sessionRow); err != nil {
+		return err
+	}
+
+	turnRow := types.Turn{
+		ID:          firstNonEmptyTrimmed(attempt.BackgroundTurnID, types.NewID("auto_turn")),
+		SessionID:   sessionRow.ID,
+		State:       types.TurnStateCreated,
+		UserMessage: buildAutomationDispatchPrompt(attempt, template),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if _, ok, err := m.store.GetTurn(ctx, turnRow.ID); err != nil {
+		return err
+	} else if !ok {
+		if err := m.store.InsertTurn(ctx, turnRow); err != nil {
+			return err
+		}
+	}
+
+	attempt.BackgroundSessionID = sessionRow.ID
+	attempt.BackgroundTurnID = turnRow.ID
+	attempt.UpdatedAt = now
+	if err := m.store.UpsertDispatchAttempt(ctx, attempt); err != nil {
+		return err
+	}
+
+	m.manager.RegisterSession(sessionRow)
+	_, err := m.manager.SubmitTurn(ctx, sessionRow.ID, session.SubmitTurnInput{
+		TurnID:  turnRow.ID,
+		Message: turnRow.UserMessage,
+	})
+	return err
+}
+
+func (m automationDispatchManager) currentTime() time.Time {
+	if m.now != nil {
+		return m.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func buildAutomationDispatchPrompt(attempt types.DispatchAttempt, template types.ChildAgentTemplate) string {
+	lines := []string{
+		"Run this automation child-agent task in the background.",
+	}
+	if purpose := strings.TrimSpace(template.Purpose); purpose != "" {
+		lines = append(lines, "Goal: "+purpose)
+	}
+	if agentID := strings.TrimSpace(template.AgentID); agentID != "" {
+		lines = append(lines, "Template: "+agentID)
+	}
+	if incidentID := strings.TrimSpace(attempt.IncidentID); incidentID != "" {
+		lines = append(lines, "Incident: "+incidentID)
+	}
+	if dispatchID := strings.TrimSpace(attempt.DispatchID); dispatchID != "" {
+		lines = append(lines, "Dispatch: "+dispatchID)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, observer task.AgentTaskObserver) error {
 	if a.runner == nil {
 		return errors.New("engine runner is not configured")
@@ -199,6 +581,11 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, pr
 	sessionID := types.NewID("task_session")
 	turnID := types.NewID("task_turn")
 	sink := &taskEventSink{observer: observer}
+	if observer != nil {
+		if err := observer.SetRunContext(sessionID, turnID); err != nil {
+			return err
+		}
+	}
 	if err := a.runner.RunTurn(ctx, engine.Input{
 		Session: types.Session{
 			ID:            sessionID,
@@ -484,6 +871,10 @@ func Run(ctx context.Context) error {
 	if err := recoverRuntimeState(ctx, runtime.Store, runtime.SessionManager); err != nil {
 		return err
 	}
+	dispatcher := automation.NewDispatcher(runtime.Store, automationDispatchManager{
+		store:   runtime.Store,
+		manager: runtime.SessionManager,
+	}, automation.DispatcherConfig{})
 	go func() {
 		if err := runtime.SchedulerService.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("scheduler loop exited", "error", err)
@@ -503,6 +894,11 @@ func Run(ctx context.Context) error {
 			})
 		}()
 	}
+	go func() {
+		runSupervisedLoop(ctx, "automation_dispatcher", time.Second, dispatcher.Tick, func(_ context.Context, err error) {
+			slog.Error("automation dispatcher tick failed", "error", err)
+		})
+	}()
 
 	handler := httpapi.NewRouter(buildHTTPDependencies(cfg, runtime.Store, runtime.Bus, runtime.SessionManager, runtime.SchedulerService, runtime.AutomationService))
 
@@ -568,6 +964,28 @@ func buildRuntimeWiring(cfg config.Config, modelClient model.StreamingClient) ru
 	}
 }
 
+func runAutomationDispatcherLoop(ctx context.Context, dispatcher *automation.Dispatcher) error {
+	if dispatcher == nil {
+		return nil
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	if err := dispatcher.Tick(ctx); err != nil {
+		return err
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := dispatcher.Tick(ctx); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *session.Manager) error {
 	sessions, err := store.ListSessions(ctx)
 	if err != nil {
@@ -609,6 +1027,32 @@ func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *sess
 			return err
 		}
 		if _, err := store.AppendEvent(ctx, event); err != nil {
+			return err
+		}
+	}
+
+	attempts, err := store.ListDispatchAttempts(ctx, types.DispatchAttemptFilter{
+		Status: types.DispatchAttemptStatusRunning,
+	})
+	if err != nil {
+		return err
+	}
+	for _, attempt := range attempts {
+		attempt.Status = types.DispatchAttemptStatusInterrupted
+		attempt.Error = firstNonEmptyTrimmed(attempt.Error, "daemon_restart")
+		attempt.UpdatedAt = time.Now().UTC()
+		if err := store.UpsertDispatchAttempt(ctx, attempt); err != nil {
+			return err
+		}
+		if err := updateIncidentPhaseState(ctx, store, attempt.IncidentID, attempt.Phase, attempt.UpdatedAt, func(phase *types.IncidentPhaseState) {
+			if phase.ActiveDispatchCount > 0 {
+				phase.ActiveDispatchCount--
+			}
+			phase.Status = types.IncidentPhaseStatusPending
+		}); err != nil {
+			return err
+		}
+		if err := updateAutomationIncidentStatus(ctx, store, attempt.IncidentID, types.AutomationIncidentStatusQueued, attempt.UpdatedAt); err != nil {
 			return err
 		}
 	}
