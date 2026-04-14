@@ -3,6 +3,8 @@ package automation
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,7 @@ import (
 )
 
 const watcherTaskDescription = "automation watcher runtime"
+const watcherRunErrorBackoff = 25 * time.Millisecond
 
 type watcherStore interface {
 	GetAutomation(context.Context, string) (types.AutomationSpec, bool, error)
@@ -189,18 +192,27 @@ func (s *WatcherService) Run(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	if err := s.Reconcile(ctx); err != nil {
-		return err
-	}
-	timer := time.NewTicker(s.reconcileEvery)
-	defer timer.Stop()
 	for {
+		delay := s.ReconcileInterval()
+		if err := s.Reconcile(ctx); err != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				return ctx.Err()
+			}
+			slog.Error("watcher reconcile failed", "error", err)
+			if delay < watcherRunErrorBackoff {
+				delay = watcherRunErrorBackoff
+			}
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
 			return ctx.Err()
 		case <-timer.C:
-			if err := s.Reconcile(ctx); err != nil {
-				return err
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
 		}
 	}

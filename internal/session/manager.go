@@ -171,7 +171,7 @@ func (m *Manager) startTurn(ctx context.Context, sessionID string, in RunInput) 
 			Resume:  in.Resume,
 		})
 		if m.turnResultSink != nil {
-			m.turnResultSink.HandleTurnResult(runCtx, session, in.TurnID, runErr)
+			m.turnResultSink.HandleTurnResult(context.WithoutCancel(runCtx), session, in.TurnID, runErr)
 		}
 		m.finishTurn(sessionID, in.TurnID)
 	}()

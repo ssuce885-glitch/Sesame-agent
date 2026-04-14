@@ -2,7 +2,9 @@ package reporting
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -34,6 +36,8 @@ type Service struct {
 	reportReadySink func(context.Context, string, string, types.ReportMailboxItem) error
 	workspaceRoot   string
 }
+
+const reportingRunErrorBackoff = 25 * time.Millisecond
 
 func NewService(store Store) *Service {
 	return &Service{
@@ -71,19 +75,27 @@ func (s *Service) Run(ctx context.Context) error {
 	if s == nil || s.store == nil {
 		return nil
 	}
-	ticker := time.NewTicker(s.pollInterval)
-	defer ticker.Stop()
-
-	if err := s.Tick(ctx); err != nil {
-		return err
-	}
 	for {
+		delay := s.PollInterval()
+		if err := s.Tick(ctx); err != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				return ctx.Err()
+			}
+			slog.Error("reporting tick failed", "error", err)
+			if delay < reportingRunErrorBackoff {
+				delay = reportingRunErrorBackoff
+			}
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
 			return ctx.Err()
-		case <-ticker.C:
-			if err := s.Tick(ctx); err != nil {
-				return err
+		case <-timer.C:
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
 		}
 	}
