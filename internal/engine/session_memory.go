@@ -24,12 +24,15 @@ const (
 	sessionMemoryLongAssistantChars  = 320
 	sessionMemorySummaryMaxCount     = 1
 	conversationSummaryMaxCount      = 2
+	rollingSummaryMaxCount           = conversationSummaryMaxCount
 	workspaceDetailRecallMaxCount    = 2
 	globalMemoryRecallMaxCount       = 1
 	durableWorkspaceDetailCapPerKind = 4
 	durableGlobalMemoryCap           = 2
 	sessionMemorySummaryTokenBudget  = 256
 	conversationSummaryTokenBudget   = 256
+	boundarySummaryTokenBudget       = conversationSummaryTokenBudget
+	rollingSummaryTokenBudget        = conversationSummaryTokenBudget
 	workspaceOverviewTokenBudget     = 192
 	workspaceDetailTokenBudget       = 224
 	globalMemoryTokenBudget          = 128
@@ -353,14 +356,26 @@ func selectPromptSummaries(summaries []model.Summary, sessionMemoryPresent bool)
 		return nil
 	}
 
+	var sessionMemory *model.Summary
+	start := 0
 	if sessionMemoryPresent {
-		return takeSummaryBudget(summaries[:1], sessionMemorySummaryTokenBudget, sessionMemorySummaryMaxCount)
+		if selected := takeSummaryBudget(summaries[:1], sessionMemorySummaryTokenBudget, sessionMemorySummaryMaxCount); len(selected) > 0 {
+			value := selected[0]
+			sessionMemory = &value
+		}
+		start = 1
 	}
 
-	if len(summaries) > conversationSummaryMaxCount {
-		summaries = summaries[len(summaries)-conversationSummaryMaxCount:]
+	var boundary *model.Summary
+	if start < len(summaries) {
+		value := summaries[start]
+		boundary = &value
+		start++
 	}
-	return takeSummaryBudget(summaries, conversationSummaryTokenBudget, conversationSummaryMaxCount)
+
+	rolling := summaries[start:]
+	bundle := selectPromptSummaryBundle(sessionMemory, boundary, rolling)
+	return flattenSummaryBundle(bundle)
 }
 
 func takeSummaryBudget(summaries []model.Summary, tokenBudget int, maxCount int) []model.Summary {
