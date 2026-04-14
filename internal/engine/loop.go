@@ -679,7 +679,7 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	if hasSessionMemory {
 		summaries = prependSessionMemorySummary(summaries, sessionMemory)
 	}
-	summaries = selectPromptSummaries(summaries, hasSessionMemory)
+	summaryBundle := selectPromptSummaries(summaries, hasSessionMemory)
 	compactions, err := e.store.ListConversationCompactions(ctx, sessionID)
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, nil, err
@@ -693,19 +693,19 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	memoryRefs := buildMemoryRefs(entries, hasSessionMemory, in.Session.WorkspaceRoot, in.Turn.UserMessage)
 
 	persistedMicroItems := activeMicrocompactItems(compactions)
-	working := e.ctxManager.Build(in.Turn.UserMessage, items, summaries, memoryRefs)
+	working := e.ctxManager.Build(in.Turn.UserMessage, items, summaryBundle, memoryRefs)
 	working = setPromptItems(working, persistedMicroItems, in.Turn.UserMessage)
 	if e.compactor != nil {
 		switch working.Action.Kind {
 		case contextstate.CompactionActionRolling:
-			working, summaries, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaries, memoryRefs, working, len(compactions)+1, types.ConversationCompactionKindRolling, "rolling_summary")
+			working, summaryBundle, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaryBundle, memoryRefs, working, len(compactions)+1, types.ConversationCompactionKindRolling, "rolling_summary")
 			if err != nil {
 				return 0, contextstate.WorkingSet{}, nil, err
 			}
 		case contextstate.CompactionActionMicrocompact:
 			candidatePayload, candidatePromptItems, ok := buildAppliedMicrocompact(items, working.Action.MicrocompactPositions, working.CompactionStart)
 			if ok {
-				candidateEstimate := contextstate.EstimatePromptTokens(in.Turn.UserMessage, candidatePromptItems, summaries, memoryRefs)
+				candidateEstimate := contextstate.EstimatePromptTokens(in.Turn.UserMessage, candidatePromptItems, summaryBundle, memoryRefs)
 				if candidateEstimate <= e.ctxManager.Config().MaxEstimatedTokens {
 					if err := e.store.InsertConversationCompaction(ctx, types.ConversationCompaction{
 						ID:              types.NewID("compact"),
@@ -727,7 +727,7 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 					break
 				}
 			}
-			working, summaries, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaries, memoryRefs, working, len(compactions)+1, types.ConversationCompactionKindRolling, "microcompact_escalated_to_rolling")
+			working, summaryBundle, err = applySummaryCompaction(ctx, e, sessionID, in.Turn.UserMessage, items, summaryBundle, memoryRefs, working, len(compactions)+1, types.ConversationCompactionKindRolling, "microcompact_escalated_to_rolling")
 			if err != nil {
 				return 0, contextstate.WorkingSet{}, nil, err
 			}
@@ -748,13 +748,13 @@ func applySummaryCompaction(
 	sessionID string,
 	userMessage string,
 	items []model.ConversationItem,
-	summaries []model.Summary,
+	summaryBundle SummaryBundle,
 	memoryRefs []string,
 	working contextstate.WorkingSet,
 	generation int,
 	kind types.ConversationCompactionKind,
 	reason string,
-) (contextstate.WorkingSet, []model.Summary, error) {
+) (contextstate.WorkingSet, SummaryBundle, error) {
 	cutoff := working.CompactionStart
 	if cutoff < 0 {
 		cutoff = 0
@@ -764,15 +764,15 @@ func applySummaryCompaction(
 	}
 	cutoff = model.NearestSafeConversationBoundary(items, cutoff)
 	if cutoff == 0 {
-		return working, summaries, nil
+		return working, summaryBundle, nil
 	}
 
 	summary, err := e.compactor.Compact(ctx, items[:cutoff])
 	if err != nil {
-		return contextstate.WorkingSet{}, nil, err
+		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
 	if err := e.store.InsertConversationSummary(ctx, sessionID, cutoff, summary); err != nil {
-		return contextstate.WorkingSet{}, nil, err
+		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
 	if err := e.store.InsertConversationCompaction(ctx, types.ConversationCompaction{
 		ID:              types.NewID("compact"),
@@ -786,13 +786,13 @@ func applySummaryCompaction(
 		ProviderProfile: string(e.model.Capabilities().Profile),
 		CreatedAt:       time.Now().UTC(),
 	}); err != nil {
-		return contextstate.WorkingSet{}, nil, err
+		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
 
-	summaries = append(summaries, summary)
-	working = e.ctxManager.Build(userMessage, items, summaries, memoryRefs)
+	summaryBundle.Rolling = append(summaryBundle.Rolling, summary)
+	working = e.ctxManager.Build(userMessage, items, summaryBundle, memoryRefs)
 	working.CompactionApplied = true
-	return working, summaries, nil
+	return working, summaryBundle, nil
 }
 
 func marshalCompactionSummary(summary model.Summary) string {

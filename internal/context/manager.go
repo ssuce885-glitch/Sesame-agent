@@ -49,7 +49,7 @@ type WorkingSet struct {
 	CompactionApplied bool
 }
 
-func (m *Manager) Build(userText string, items []model.ConversationItem, summaries []model.Summary, memoryRefs []string) WorkingSet {
+func (m *Manager) Build(userText string, items []model.ConversationItem, summaries SummaryBundle, memoryRefs []string) WorkingSet {
 	start := 0
 	if max := m.cfg.MaxRecentItems; max > 0 && len(items) > max {
 		start = len(items) - max
@@ -58,17 +58,19 @@ func (m *Manager) Build(userText string, items []model.ConversationItem, summari
 	}
 	start = model.NearestSafeConversationBoundary(items, start)
 	recentItems := cloneConversationItems(items[start:])
-	estimated := estimateConversationTokens(userText, recentItems, summaries, memoryRefs)
+	estimated := EstimatePromptTokens(userText, recentItems, summaries, memoryRefs)
 	action := chooseCompactionAction(items, start, estimated, m.cfg)
 
 	return WorkingSet{
 		Instructions: userText,
 		WorkingContext: WorkingContext{
-			RecentItems:    recentItems,
-			PromptItems:    cloneConversationItems(recentItems),
-			RecentMessages: conversationItemsToMessages(recentItems),
-			Summaries:      cloneSummaries(summaries),
-			MemoryRefs:     cloneStrings(memoryRefs),
+			CarryForwardItems: nil,
+			RecentRawItems:    cloneConversationItems(recentItems),
+			RecentItems:       recentItems,
+			PromptItems:       cloneConversationItems(recentItems),
+			RecentMessages:    conversationItemsToMessages(recentItems),
+			Summaries:         cloneSummaryBundle(summaries),
+			MemoryRefs:        cloneStrings(memoryRefs),
 		},
 		CompactionStart: start,
 		EstimatedTokens: estimated,

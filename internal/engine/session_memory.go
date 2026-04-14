@@ -185,7 +185,7 @@ func shouldRefreshSessionMemory(hasExisting bool, freshItems []model.Conversatio
 		return false
 	}
 
-	estimatedTokens := contextstate.EstimatePromptTokens("", freshItems, nil, nil)
+	estimatedTokens := contextstate.EstimatePromptTokens("", freshItems, SummaryBundle{}, nil)
 	signals := countSessionMemorySignals(freshItems)
 	if hasExisting {
 		return len(freshItems) >= sessionMemoryUpdateMinItems ||
@@ -350,10 +350,10 @@ func findDurableWorkspaceMemory(entries []types.MemoryEntry, workspaceRoot strin
 	return types.MemoryEntry{}, false
 }
 
-func selectPromptSummaries(summaries []model.Summary, sessionMemoryPresent bool) []model.Summary {
+func selectPromptSummaries(summaries []model.Summary, sessionMemoryPresent bool) SummaryBundle {
 	summaries = dedupeSummaries(summaries)
 	if len(summaries) == 0 {
-		return nil
+		return SummaryBundle{}
 	}
 
 	var sessionMemory *model.Summary
@@ -374,8 +374,7 @@ func selectPromptSummaries(summaries []model.Summary, sessionMemoryPresent bool)
 	}
 
 	rolling := summaries[start:]
-	bundle := selectPromptSummaryBundle(sessionMemory, boundary, rolling)
-	return flattenSummaryBundle(bundle)
+	return selectPromptSummaryBundle(sessionMemory, boundary, rolling)
 }
 
 func takeSummaryBudget(summaries []model.Summary, tokenBudget int, maxCount int) []model.Summary {
@@ -518,11 +517,11 @@ func injectedMemoryRefCategory(entry types.MemoryEntry, workspaceRoot string) in
 }
 
 func estimateSummaryInjectionTokens(summary model.Summary) int {
-	return contextstate.EstimatePromptTokens("", nil, []model.Summary{summary}, nil)
+	return contextstate.EstimatePromptTokens("", nil, SummaryBundle{Rolling: []model.Summary{summary}}, nil)
 }
 
 func estimateMemoryRefTokens(ref string) int {
-	return contextstate.EstimatePromptTokens("", nil, nil, []string{ref})
+	return contextstate.EstimatePromptTokens("", nil, SummaryBundle{}, []string{ref})
 }
 
 func buildWorkspaceDurableMemory(memory types.SessionMemory, summary model.Summary) (types.MemoryEntry, bool) {

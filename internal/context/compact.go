@@ -2,8 +2,8 @@ package contextstate
 
 import "go-agent/internal/model"
 
-func EstimatePromptTokens(userText string, items []model.ConversationItem, summaries any, memoryRefs []string) int {
-	return estimateConversationTokens(userText, items, normalizeSummaryInput(summaries), memoryRefs)
+func EstimatePromptTokens(userText string, items []model.ConversationItem, summaries SummaryBundle, memoryRefs []string) int {
+	return estimateConversationTokens(userText, items, flattenSummaryBundle(summaries), memoryRefs)
 }
 
 func estimateConversationTokens(userText string, recentItems []model.ConversationItem, summaries []model.Summary, memoryRefs []string) int {
@@ -20,19 +20,6 @@ func estimateConversationTokens(userText string, recentItems []model.Conversatio
 	}
 
 	return total
-}
-
-func normalizeSummaryInput(summaries any) []model.Summary {
-	switch typed := summaries.(type) {
-	case nil:
-		return nil
-	case []model.Summary:
-		return typed
-	case SummaryBundle:
-		return flattenSummaryBundle(typed)
-	default:
-		return nil
-	}
 }
 
 func estimateConversationItemTokens(item model.ConversationItem) int {

@@ -26,8 +26,9 @@ func (r *Runtime) PrepareRequest(plan WorkingSet, head *types.ProviderCacheHead,
 	}
 
 	hasUserItem := userItem.Kind != ""
-	fullItems := make([]model.ConversationItem, 0, len(plan.Summaries)+len(promptItems)+map[bool]int{true: 1, false: 0}[hasUserItem])
-	for _, summary := range plan.Summaries {
+	flatSummaries := flattenSummaryBundle(plan.Summaries)
+	fullItems := make([]model.ConversationItem, 0, len(flatSummaries)+len(promptItems)+map[bool]int{true: 1, false: 0}[hasUserItem])
+	for _, summary := range flatSummaries {
 		summary := summary
 		fullItems = append(fullItems, model.ConversationItem{
 			Kind:    model.ConversationItemSummary,

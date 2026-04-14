@@ -21,11 +21,13 @@ type SummaryBundle struct {
 }
 
 type WorkingContext struct {
-	RecentItems    []model.ConversationItem `json:"recent_items"`
-	PromptItems    []model.ConversationItem `json:"prompt_items,omitempty"`
-	Summaries      []model.Summary          `json:"summaries"`
-	MemoryRefs     []string                 `json:"memory_refs"`
-	RecentMessages []Message                `json:"recent_messages,omitempty"`
+	CarryForwardItems []model.ConversationItem `json:"carry_forward_items,omitempty"`
+	RecentRawItems    []model.ConversationItem `json:"recent_raw_items,omitempty"`
+	RecentItems       []model.ConversationItem `json:"recent_items"`
+	PromptItems       []model.ConversationItem `json:"prompt_items,omitempty"`
+	Summaries         SummaryBundle            `json:"summaries"`
+	MemoryRefs        []string                 `json:"memory_refs"`
+	RecentMessages    []Message                `json:"recent_messages,omitempty"`
 }
 
 func cloneSummary(summary model.Summary) model.Summary {
