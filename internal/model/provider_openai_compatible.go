@@ -188,7 +188,7 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 		}
 
 		switch frame.Event {
-		case "response.output_item.added", "response.output_item.done":
+		case "response.output_item.added":
 			var payload struct {
 				Item struct {
 					ID     string `json:"id"`
@@ -203,6 +203,12 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			if payload.Item.Type == "function_call" {
 				rememberFunctionCall(payload.Item.ID, payload.Item.CallID, payload.Item.Name)
 			}
+		case "response.output_item.done":
+			// No-op for function calls: by this point the call has already
+			// been finalized via response.function_call_arguments.done, and
+			// calling rememberFunctionCall here would re-insert the deleted
+			// entry, causing a duplicate StreamEventToolCallEnd with empty
+			// arguments when finalizeOutstandingFunctionCalls runs.
 		case "response.output_text.delta":
 			var payload struct {
 				Delta string `json:"delta"`
@@ -655,23 +661,53 @@ func toResponsesToolChoice(choice string, tools []ToolSchema) any {
 }
 
 func parseFunctionCallArguments(raw string, deltaFallback string) (map[string]any, error) {
-	input := map[string]any{}
-	candidate := strings.TrimSpace(raw)
-	if candidate == "" {
-		candidate = strings.TrimSpace(deltaFallback)
+	raw = strings.TrimSpace(raw)
+	deltaFallback = strings.TrimSpace(deltaFallback)
+	if raw == "" && deltaFallback == "" {
+		return map[string]any{}, nil
 	}
-	if candidate == "" {
-		return input, nil
-	}
-	if err := json.Unmarshal([]byte(candidate), &input); err == nil {
-		return input, nil
-	} else {
-		fallback := strings.TrimSpace(deltaFallback)
-		if fallback != "" && fallback != candidate {
-			if fallbackErr := json.Unmarshal([]byte(fallback), &input); fallbackErr == nil {
-				return input, nil
-			}
+
+	var lastErr error
+	for _, candidate := range functionCallArgumentCandidates(raw, deltaFallback) {
+		input := map[string]any{}
+		err := json.Unmarshal([]byte(candidate), &input)
+		if err == nil {
+			return input, nil
 		}
-		return nil, fmt.Errorf("decode function call arguments (raw=%q): %w", candidate, err)
+		lastErr = err
 	}
+
+	if deltaFallback == "" && raw != "" && isIncompleteJSONObjectError(raw, lastErr) {
+		return map[string]any{}, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("empty function call arguments")
+	}
+	reported := raw
+	if reported == "" {
+		reported = deltaFallback
+	}
+	return nil, fmt.Errorf("decode function call arguments (raw=%q): %w", reported, lastErr)
+}
+
+func functionCallArgumentCandidates(raw string, deltaFallback string) []string {
+	candidates := make([]string, 0, 3)
+	if raw != "" {
+		candidates = append(candidates, raw)
+	}
+	if deltaFallback != "" && deltaFallback != raw {
+		candidates = append(candidates, deltaFallback)
+	}
+	if combined := strings.TrimSpace(raw + deltaFallback); raw != "" && deltaFallback != "" && combined != raw && combined != deltaFallback {
+		candidates = append(candidates, combined)
+	}
+	return candidates
+}
+
+func isIncompleteJSONObjectError(candidate string, err error) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || !strings.HasPrefix(candidate, "{") || err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "unexpected end of JSON input")
 }
