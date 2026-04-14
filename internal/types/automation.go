@@ -155,6 +155,33 @@ type ChildAgentTemplate struct {
 	AllowElevation      bool     `json:"allow_elevation,omitempty"`
 }
 
+type ChildAgentStrategyEscalationCondition struct {
+	WhenStatus []string `json:"when_status"`
+}
+
+type ChildAgentStrategyCompletionPolicy struct {
+	ResumeWatcherOnSuccess *bool `json:"resume_watcher_on_success"`
+	ResumeWatcherOnFailure *bool `json:"resume_watcher_on_failure"`
+}
+
+type ChildAgentStrategyFailurePolicy struct {
+	HandoffToHuman         *bool `json:"handoff_to_human"`
+	KeepPaused             *bool `json:"keep_paused"`
+	NotifyViaExternalSkill *bool `json:"notify_via_external_skill"`
+}
+
+type ChildAgentTemplateStrategy struct {
+	Goal                string                                `json:"goal"`
+	EscalationCondition ChildAgentStrategyEscalationCondition `json:"escalation_condition"`
+	CompletionPolicy    ChildAgentStrategyCompletionPolicy    `json:"completion_policy"`
+	FailurePolicy       ChildAgentStrategyFailurePolicy       `json:"failure_policy"`
+}
+
+type ChildAgentTemplateSkills struct {
+	Required []string `json:"required"`
+	Optional []string `json:"optional"`
+}
+
 type AutomationPhasePlan struct {
 	Phase       AutomationPhaseName             `json:"phase"`
 	ChildAgents []ChildAgentTemplate            `json:"child_agents,omitempty"`

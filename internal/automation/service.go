@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"go-agent/internal/skills"
 	"go-agent/internal/types"
 )
 
@@ -34,9 +35,10 @@ type Store interface {
 }
 
 type Service struct {
-	store   Store
-	watcher watcherRuntimeManager
-	now     func() time.Time
+	store              Store
+	watcher            watcherRuntimeManager
+	now                func() time.Time
+	skillCatalogLoader func(string) (skills.Catalog, error)
 }
 
 type watcherRuntimeManager interface {
@@ -64,6 +66,12 @@ func (s *Service) SetClock(now func() time.Time) {
 func (s *Service) SetWatcherService(watcher watcherRuntimeManager) {
 	if s != nil {
 		s.watcher = watcher
+	}
+}
+
+func (s *Service) SetSkillCatalogLoader(loader func(string) (skills.Catalog, error)) {
+	if s != nil {
+		s.skillCatalogLoader = loader
 	}
 }
 
@@ -116,6 +124,23 @@ func (s *Service) ApplyRequest(ctx context.Context, req types.ApplyAutomationReq
 		return types.AutomationSpec{}, err
 	}
 	if err := ValidateAutomationScriptAssets(spec); err != nil {
+		return types.AutomationSpec{}, err
+	}
+	childAgentBundles, err := loadChildAgentTemplateBundles(spec)
+	if err != nil {
+		return types.AutomationSpec{}, err
+	}
+	if s.skillCatalogLoader != nil {
+		catalog, err := s.skillCatalogLoader(spec.WorkspaceRoot)
+		if err != nil {
+			return types.AutomationSpec{}, err
+		}
+		if err := validateChildAgentTemplateBundleRequiredSkills(childAgentBundles, catalog); err != nil {
+			return types.AutomationSpec{}, err
+		}
+	}
+	spec, err = backfillResponsePlanChildAgentTemplateCache(spec, childAgentBundles)
+	if err != nil {
 		return types.AutomationSpec{}, err
 	}
 	return s.Apply(ctx, spec)
