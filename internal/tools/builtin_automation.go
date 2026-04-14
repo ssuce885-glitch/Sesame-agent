@@ -94,7 +94,7 @@ func (incidentListTool) IsEnabled(execCtx ExecContext) bool {
 func (automationApplyTool) Definition() Definition {
 	return Definition{
 		Name:        "automation_apply",
-		Description: "Persist a normalized automation spec. Active specs auto-install their watcher runtime, so use this only after the draft has complete response, delivery, runtime, and runnable signal details.",
+		Description: "Persist an automation spec plus any workspace assets. For script-backed automations, save detector facts in scripts/detect.sh and child-agent strategy in child_agents/<phase>/<agent_id>/{strategy.json,prompt.md,skills.json} before applying.",
 		InputSchema: objectSchema(map[string]any{
 			"confirmed": map[string]any{
 				"type":        "boolean",
@@ -102,8 +102,9 @@ func (automationApplyTool) Definition() Definition {
 			},
 			"spec": automationSpecInputSchema(),
 			"assets": map[string]any{
-				"type":  "array",
-				"items": automationAssetSchema(),
+				"type":        "array",
+				"items":       automationAssetSchema(),
+				"description": "Workspace files to persist before validation, including scripts/detect.sh and child_agents/<phase>/<agent_id> asset bundles.",
 			},
 		}, "confirmed", "spec"),
 		OutputSchema: automationSpecOutputSchema(),

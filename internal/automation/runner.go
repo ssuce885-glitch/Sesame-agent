@@ -86,20 +86,6 @@ type watcherRetriggerPolicy struct {
 	CooldownSeconds int `json:"cooldown_seconds"`
 }
 
-type automationScriptAction struct {
-	Type  string `json:"type"`
-	Level string `json:"level,omitempty"`
-	Goal  string `json:"goal,omitempty"`
-}
-
-type automationScriptResult struct {
-	Status    string                   `json:"status"`
-	Summary   string                   `json:"summary"`
-	Details   json.RawMessage          `json:"details"`
-	DedupeKey string                   `json:"dedupe_key"`
-	Actions   []automationScriptAction `json:"actions"`
-}
-
 func NewWatcherRunner(client watcherRuntimeClient, cfg WatcherRunnerConfig) *WatcherRunner {
 	return &WatcherRunner{
 		client: client,
@@ -361,34 +347,24 @@ func evaluateWatcherSignal(signal compiledWatcherSignal, result watcherCommandRe
 func evaluateWatcherScriptSignal(signal compiledWatcherSignal, result watcherCommandResult, execErr error) (bool, string, json.RawMessage, error) {
 	parsed, payload, err := parseAutomationScriptResult(result.Stdout)
 	if err != nil {
-		return false, "", nil, &types.AutomationValidationError{
-			Code:    "invalid_signal_output",
-			Message: "script watcher stdout must be valid JSON",
-		}
+		return false, "", nil, err
 	}
-	status := strings.ToLower(strings.TrimSpace(parsed.Status))
-	if status == "" {
-		return false, "", nil, &types.AutomationValidationError{
-			Code:    "invalid_signal_output",
-			Message: "script watcher status is required",
-		}
-	}
-	if status == "healthy" || status == "ok" || status == "clear" || status == "noop" {
+	switch parsed.Status {
+	case types.AutomationDetectorStatusHealthy, types.AutomationDetectorStatusRecovered:
 		return false, "", payload, nil
+	case types.AutomationDetectorStatusNeedsAgent, types.AutomationDetectorStatusNeedsHuman:
+		return true, firstNonEmptyString(strings.TrimSpace(parsed.Summary), watcherSummary(signal, result, execErr)), payload, nil
+	default:
+		return false, "", nil, invalidSignalOutput("detector signal status is unsupported")
 	}
-	return true, firstNonEmptyString(strings.TrimSpace(parsed.Summary), watcherSummary(signal, result, execErr)), payload, nil
 }
 
-func parseAutomationScriptResult(stdout string) (automationScriptResult, json.RawMessage, error) {
-	var parsed automationScriptResult
+func parseAutomationScriptResult(stdout string) (types.AutomationDetectorSignal, json.RawMessage, error) {
 	raw := json.RawMessage(bytes.TrimSpace([]byte(stdout)))
 	if len(raw) == 0 {
-		return automationScriptResult{}, nil, fmt.Errorf("empty script output")
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("script watcher stdout must be non-empty JSON")
 	}
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return automationScriptResult{}, nil, err
-	}
-	return parsed, raw, nil
+	return parseAutomationDetectorSignalPayload(raw)
 }
 
 func watcherCommandPayload(signal compiledWatcherSignal, result watcherCommandResult) (json.RawMessage, error) {

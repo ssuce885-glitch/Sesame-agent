@@ -529,7 +529,11 @@ func getAutomationWatcherWithQueryer(ctx context.Context, queryer queryContexter
 	if len(items) == 0 {
 		return types.AutomationWatcherRuntime{}, false, nil
 	}
-	return items[0], true, nil
+	watcher, err := hydrateAutomationWatcherRuntime(ctx, queryer, items[0])
+	if err != nil {
+		return types.AutomationWatcherRuntime{}, false, err
+	}
+	return watcher, true, nil
 }
 
 func (s *Store) ListAutomationWatchers(ctx context.Context, filter types.AutomationWatcherFilter) ([]types.AutomationWatcherRuntime, error) {
@@ -574,7 +578,17 @@ func listAutomationWatchersWithQueryer(ctx context.Context, queryer queryContext
 		return nil, err
 	}
 	defer rows.Close()
-	return scanAutomationWatchers(rows)
+	items, err := scanAutomationWatchers(rows)
+	if err != nil {
+		return nil, err
+	}
+	for index := range items {
+		items[index], err = hydrateAutomationWatcherRuntime(ctx, queryer, items[index])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return items, nil
 }
 
 func (s *Store) DeleteAutomationWatcher(ctx context.Context, automationID string) (bool, error) {
@@ -586,6 +600,12 @@ func (t runtimeTx) DeleteAutomationWatcher(ctx context.Context, automationID str
 }
 
 func deleteAutomationWatcherWithExec(ctx context.Context, execer execContexter, automationID string) (bool, error) {
+	if _, err := execer.ExecContext(ctx, `
+		delete from automation_watcher_holds
+		where automation_id = ?
+	`, strings.TrimSpace(automationID)); err != nil {
+		return false, err
+	}
 	result, err := execer.ExecContext(ctx, `
 		delete from automation_watchers
 		where automation_id = ?
@@ -598,6 +618,94 @@ func deleteAutomationWatcherWithExec(ctx context.Context, execer execContexter, 
 		return false, err
 	}
 	return affected > 0, nil
+}
+
+func (s *Store) ListAutomationWatcherHolds(ctx context.Context, automationID string) ([]types.AutomationWatcherHold, error) {
+	return listAutomationWatcherHoldsWithQueryer(ctx, s.db, automationID)
+}
+
+func (t runtimeTx) ListAutomationWatcherHolds(ctx context.Context, automationID string) ([]types.AutomationWatcherHold, error) {
+	return listAutomationWatcherHoldsWithQueryer(ctx, t.tx, automationID)
+}
+
+func listAutomationWatcherHoldsWithQueryer(ctx context.Context, queryer queryContexter, automationID string) ([]types.AutomationWatcherHold, error) {
+	automationID = strings.TrimSpace(automationID)
+	if automationID == "" {
+		return []types.AutomationWatcherHold{}, nil
+	}
+	rows, err := queryer.QueryContext(ctx, `
+		select payload, created_at, updated_at
+		from automation_watcher_holds
+		where automation_id = ?
+		order by created_at asc, hold_id asc
+	`, automationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAutomationWatcherHolds(rows)
+}
+
+func (s *Store) ReplaceAutomationWatcherHolds(ctx context.Context, automationID, watcherID string, holds []types.AutomationWatcherHold) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	if err := replaceAutomationWatcherHoldsWithExec(ctx, tx, automationID, watcherID, holds); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (t runtimeTx) ReplaceAutomationWatcherHolds(ctx context.Context, automationID, watcherID string, holds []types.AutomationWatcherHold) error {
+	return replaceAutomationWatcherHoldsWithExec(ctx, t.tx, automationID, watcherID, holds)
+}
+
+func replaceAutomationWatcherHoldsWithExec(ctx context.Context, execer execContexter, automationID, watcherID string, holds []types.AutomationWatcherHold) error {
+	automationID = strings.TrimSpace(automationID)
+	watcherID = strings.TrimSpace(watcherID)
+	if automationID == "" {
+		return nil
+	}
+	if watcherID == "" {
+		watcherID = "watcher:" + automationID
+	}
+	if _, err := execer.ExecContext(ctx, `
+		delete from automation_watcher_holds
+		where automation_id = ?
+	`, automationID); err != nil {
+		return err
+	}
+	for _, hold := range holds {
+		hold = normalizeAutomationWatcherHoldForStore(hold)
+		hold.AutomationID = automationID
+		hold.WatcherID = watcherID
+		payload, err := json.Marshal(hold)
+		if err != nil {
+			return err
+		}
+		if _, err := execer.ExecContext(ctx, `
+			insert into automation_watcher_holds (
+				hold_id, automation_id, watcher_id, kind, owner_id, payload, created_at, updated_at
+			)
+			values (?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			hold.HoldID,
+			hold.AutomationID,
+			hold.WatcherID,
+			hold.Kind,
+			hold.OwnerID,
+			string(payload),
+			hold.CreatedAt.UTC().Format(timeLayout),
+			hold.UpdatedAt.UTC().Format(timeLayout),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) UpsertDispatchAttempt(ctx context.Context, attempt types.DispatchAttempt) error {
@@ -984,6 +1092,55 @@ func scanAutomationWatchers(rows *sql.Rows) ([]types.AutomationWatcherRuntime, e
 		return nil, err
 	}
 	return out, nil
+}
+
+func scanAutomationWatcherHolds(rows *sql.Rows) ([]types.AutomationWatcherHold, error) {
+	out := make([]types.AutomationWatcherHold, 0)
+	for rows.Next() {
+		var (
+			payload   string
+			createdAt string
+			updatedAt string
+		)
+		if err := rows.Scan(&payload, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		var hold types.AutomationWatcherHold
+		if err := json.Unmarshal([]byte(payload), &hold); err != nil {
+			return nil, err
+		}
+		if parsed, err := parsePendingOptionalTime(createdAt); err == nil && !parsed.IsZero() {
+			hold.CreatedAt = parsed
+		}
+		if parsed, err := parsePendingOptionalTime(updatedAt); err == nil && !parsed.IsZero() {
+			hold.UpdatedAt = parsed
+		}
+		out = append(out, normalizeAutomationWatcherHoldForStore(hold))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func hydrateAutomationWatcherRuntime(ctx context.Context, queryer queryContexter, watcher types.AutomationWatcherRuntime) (types.AutomationWatcherRuntime, error) {
+	holds, err := listAutomationWatcherHoldsWithQueryer(ctx, queryer, watcher.AutomationID)
+	if err != nil {
+		return types.AutomationWatcherRuntime{}, err
+	}
+	watcher.Holds = append([]types.AutomationWatcherHold(nil), holds...)
+	watcher.EffectiveState = effectiveAutomationWatcherState(watcher.State, holds)
+	return watcher, nil
+}
+
+func effectiveAutomationWatcherState(current types.AutomationWatcherState, holds []types.AutomationWatcherHold) types.AutomationWatcherState {
+	if len(holds) > 0 {
+		return types.AutomationWatcherStatePaused
+	}
+	if current == "" {
+		return types.AutomationWatcherStateRunning
+	}
+	return current
 }
 
 func scanAutomationIncidents(rows *sql.Rows) ([]types.AutomationIncident, error) {

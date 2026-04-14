@@ -82,6 +82,7 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 		engine:   runner,
 		store:    store,
 		delivery: deliveryService,
+		watcher:  watcherService,
 		sink: storeAndBusSink{
 			store: store,
 			bus:   bus,

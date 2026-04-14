@@ -350,6 +350,164 @@ func extractTriggerDedupeKey(raw json.RawMessage, signalKind string, source stri
 	return strings.Join(nonEmpty, "|")
 }
 
+type detectorSignalPayloadDecode struct {
+	Status       *string         `json:"status"`
+	Summary      *string         `json:"summary"`
+	Facts        json.RawMessage `json:"facts"`
+	ActionsTaken json.RawMessage `json:"actions_taken"`
+	Hints        *[]string       `json:"hints"`
+	DedupeKey    *string         `json:"dedupe_key"`
+}
+
+type detectorActionObjectDecode struct {
+	Name    *string `json:"name"`
+	Result  *string `json:"result"`
+	Summary *string `json:"summary"`
+}
+
+func ParseAutomationDetectorSignalPayload(raw json.RawMessage) (types.AutomationDetectorSignal, error) {
+	signal, _, err := parseAutomationDetectorSignalPayload(raw)
+	return signal, err
+}
+
+func parseAutomationDetectorSignalPayload(raw json.RawMessage) (types.AutomationDetectorSignal, json.RawMessage, error) {
+	raw = normalizeRawJSON(raw)
+	if len(raw) == 0 {
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal payload must be non-empty JSON")
+	}
+
+	var decoded detectorSignalPayloadDecode
+	if err := decodeStrictJSON(raw, &decoded); err != nil {
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal payload must be valid JSON")
+	}
+	if decoded.Status == nil {
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal status is required")
+	}
+	normalizedStatus, ok := normalizeDetectorStatus(*decoded.Status)
+	if !ok {
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal status is unsupported")
+	}
+	if decoded.Summary == nil {
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal summary is required")
+	}
+	summary := strings.TrimSpace(*decoded.Summary)
+	if summary == "" {
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal summary is required")
+	}
+	if len(normalizeRawJSON(decoded.ActionsTaken)) == 0 {
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal actions_taken is required")
+	}
+	if decoded.Hints == nil {
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal hints is required")
+	}
+	factsRaw := normalizeRawJSON(decoded.Facts)
+	if !isJSONObject(factsRaw) {
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal facts must be a JSON object")
+	}
+	facts := map[string]any{}
+	if err := json.Unmarshal(factsRaw, &facts); err != nil {
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal facts must be a JSON object")
+	}
+
+	actionsTaken, err := normalizeDetectorActions(decoded.ActionsTaken)
+	if err != nil {
+		return types.AutomationDetectorSignal{}, nil, err
+	}
+
+	signal := types.AutomationDetectorSignal{
+		Status:       types.AutomationDetectorStatus(normalizedStatus),
+		Summary:      summary,
+		Facts:        facts,
+		ActionsTaken: actionsTaken,
+		Hints:        normalizeStringList(*decoded.Hints),
+	}
+	if decoded.DedupeKey != nil {
+		signal.DedupeKey = strings.TrimSpace(*decoded.DedupeKey)
+	}
+
+	normalizedPayload, err := json.Marshal(signal)
+	if err != nil {
+		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal payload normalization failed")
+	}
+	return signal, normalizedPayload, nil
+}
+
+func normalizeDetectorActions(raw json.RawMessage) ([]string, error) {
+	raw = normalizeRawJSON(raw)
+	if len(raw) == 0 {
+		return nil, invalidSignalOutput("detector signal actions_taken is required")
+	}
+
+	var actionStrings []string
+	if err := json.Unmarshal(raw, &actionStrings); err == nil {
+		return normalizeStringList(actionStrings), nil
+	}
+
+	var actionObjects []detectorActionObjectDecode
+	if err := decodeStrictJSON(raw, &actionObjects); err != nil {
+		return nil, invalidSignalOutput("detector signal actions_taken must be an array of strings or action objects")
+	}
+	normalized := make([]string, 0, len(actionObjects))
+	for _, action := range actionObjects {
+		parts := make([]string, 0, 3)
+		if action.Name != nil {
+			if name := strings.TrimSpace(*action.Name); name != "" {
+				parts = append(parts, name)
+			}
+		}
+		if action.Result != nil {
+			if result := strings.TrimSpace(*action.Result); result != "" {
+				parts = append(parts, result)
+			}
+		}
+		if action.Summary != nil {
+			if summary := strings.TrimSpace(*action.Summary); summary != "" {
+				parts = append(parts, summary)
+			}
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		normalized = append(normalized, strings.Join(parts, " | "))
+	}
+	return normalizeStringList(normalized), nil
+}
+
+func normalizeDetectorStatus(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(types.AutomationDetectorStatusHealthy):
+		return string(types.AutomationDetectorStatusHealthy), true
+	case string(types.AutomationDetectorStatusRecovered):
+		return string(types.AutomationDetectorStatusRecovered), true
+	case string(types.AutomationDetectorStatusNeedsAgent):
+		return string(types.AutomationDetectorStatusNeedsAgent), true
+	case string(types.AutomationDetectorStatusNeedsHuman):
+		return string(types.AutomationDetectorStatusNeedsHuman), true
+	default:
+		return "", false
+	}
+}
+
+func detectorStatusAllowed(whenStatus []string, status types.AutomationDetectorStatus) bool {
+	for _, candidate := range whenStatus {
+		normalized, ok := normalizeDetectorStatus(candidate)
+		if !ok {
+			continue
+		}
+		if types.AutomationDetectorStatus(normalized) == status {
+			return true
+		}
+	}
+	return false
+}
+
+func invalidSignalOutput(message string) error {
+	return &types.AutomationValidationError{
+		Code:    "invalid_signal_output",
+		Message: strings.TrimSpace(message),
+	}
+}
+
 func validateResponsePlanDraftMode(raw json.RawMessage) error {
 	raw = normalizeRawJSON(raw)
 	if len(raw) == 0 || !json.Valid(raw) {

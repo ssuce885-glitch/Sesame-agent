@@ -316,6 +316,18 @@ func (s *Store) migrate(ctx context.Context) error {
 		);`,
 		`create index if not exists automation_watchers_workspace_state_idx
 			on automation_watchers(workspace_root, state, updated_at desc, automation_id asc);`,
+		`create table if not exists automation_watcher_holds (
+			hold_id text primary key,
+			automation_id text not null,
+			watcher_id text not null,
+			kind text not null,
+			owner_id text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists automation_watcher_holds_automation_kind_idx
+			on automation_watcher_holds(automation_id, kind, updated_at desc, hold_id asc);`,
 		`create table if not exists automation_dispatch_attempts (
 			dispatch_id text primary key,
 			workspace_root text not null,

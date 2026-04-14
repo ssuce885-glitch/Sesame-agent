@@ -19,6 +19,9 @@ Use this when the runtime is already in the automation compile path and you spec
 - Treat watcher or manual input as `TriggerEvent -> Incident`; do not skip incident ingest and do not launch child agents directly.
 - Ask only for fields that matter to the spec and its operating boundary.
 - Prefer stable watcher or external-script contracts over ad hoc shell loops.
+- Place detector logic in `scripts/detect.sh`, not inline shell prose inside the prompt.
+- Place child-agent strategy assets in `child_agents/<phase>/<agent_id>/strategy.json`, `prompt.md`, and `skills.json`.
+- If the user asks for email, Feishu, or similar notification, select that as an external skill and record it in `skills.json.required`; do not describe it as a built-in runtime notification channel.
 - Assume `automation_apply` will auto-install and start the watcher when the spec state is `active`.
 - If the user wants the automation to start now, the draft must already contain at least one runnable watcher signal, not only abstract intent text.
 - Hand off to `automation-standard-behavior` for the final confirmation summary before apply.

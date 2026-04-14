@@ -22,6 +22,8 @@ type watcherStore interface {
 	UpsertAutomationWatcher(context.Context, types.AutomationWatcherRuntime) error
 	GetAutomationWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
 	ListAutomationWatchers(context.Context, types.AutomationWatcherFilter) ([]types.AutomationWatcherRuntime, error)
+	ListAutomationWatcherHolds(context.Context, string) ([]types.AutomationWatcherHold, error)
+	ReplaceAutomationWatcherHolds(context.Context, string, string, []types.AutomationWatcherHold) error
 	DeleteAutomationWatcher(context.Context, string) (bool, error)
 }
 
@@ -90,7 +92,7 @@ func (s *WatcherService) Install(ctx context.Context, spec types.AutomationSpec)
 	if err != nil {
 		return types.AutomationWatcherRuntime{}, err
 	}
-	runtime, err = s.startRuntime(ctx, spec, runtime, ok)
+	runtime, err = s.installRuntime(ctx, spec, runtime, ok)
 	return runtime, err
 }
 
@@ -106,7 +108,7 @@ func (s *WatcherService) Reinstall(ctx context.Context, spec types.AutomationSpe
 	if err != nil {
 		return types.AutomationWatcherRuntime{}, err
 	}
-	runtime, err = s.startRuntime(ctx, spec, runtime, true)
+	runtime, err = s.installRuntime(ctx, spec, runtime, true)
 	return runtime, err
 }
 
@@ -125,10 +127,20 @@ func (s *WatcherService) Pause(ctx context.Context, automationID string) (types.
 	if err != nil || !ok {
 		return types.AutomationWatcherRuntime{}, ok, err
 	}
+	holds, err := s.store.ListAutomationWatcherHolds(ctx, runtime.AutomationID)
+	if err != nil {
+		return types.AutomationWatcherRuntime{}, false, err
+	}
+	holds = AcquireWatcherHold(holds, types.AutomationWatcherHoldKindManual, runtime.AutomationID, "manual pause", s.currentTime())
+	if err := s.store.ReplaceAutomationWatcherHolds(ctx, runtime.AutomationID, runtime.WatcherID, holds); err != nil {
+		return types.AutomationWatcherRuntime{}, false, err
+	}
 	if err := s.stopRuntimeTask(runtime); err != nil {
 		return types.AutomationWatcherRuntime{}, false, err
 	}
 	runtime.State = types.AutomationWatcherStatePaused
+	runtime.EffectiveState = EffectiveWatcherState(runtime.State, holds)
+	runtime.Holds = holds
 	runtime.LastError = ""
 	runtime.UpdatedAt = s.currentTime()
 	if err := writeWatcherRunnerState(runtime.StatePath, watcherRunnerState{
@@ -225,6 +237,17 @@ func (s *WatcherService) ReconcileInterval() time.Duration {
 	return s.reconcileEvery
 }
 
+func (s *WatcherService) SyncAutomation(ctx context.Context, automationID string) error {
+	if s == nil || s.store == nil {
+		return errServiceNotConfigured
+	}
+	runtime, ok, err := s.store.GetAutomationWatcher(ctx, strings.TrimSpace(automationID))
+	if err != nil || !ok {
+		return err
+	}
+	return s.reconcileWatcher(ctx, runtime)
+}
+
 func (s *WatcherService) reconcileWatcher(ctx context.Context, runtime types.AutomationWatcherRuntime) error {
 	spec, ok, err := s.store.GetAutomation(ctx, runtime.AutomationID)
 	if err != nil {
@@ -235,6 +258,17 @@ func (s *WatcherService) reconcileWatcher(ctx context.Context, runtime types.Aut
 	}
 	if spec.State == types.AutomationStatePaused {
 		runtime.State = types.AutomationWatcherStatePaused
+		runtime.EffectiveState = EffectiveWatcherState(runtime.State, runtime.Holds)
+		runtime.UpdatedAt = s.currentTime()
+		return s.store.UpsertAutomationWatcher(ctx, runtime)
+	}
+	if len(runtime.Holds) > 0 {
+		if err := s.stopRuntimeTask(runtime); err != nil {
+			return err
+		}
+		runtime.State = types.AutomationWatcherStatePaused
+		runtime.EffectiveState = EffectiveWatcherState(runtime.State, runtime.Holds)
+		runtime.LastError = ""
 		runtime.UpdatedAt = s.currentTime()
 		return s.store.UpsertAutomationWatcher(ctx, runtime)
 	}
@@ -267,6 +301,45 @@ func (s *WatcherService) loadOrInitRuntime(ctx context.Context, spec types.Autom
 		}
 	}
 	return runtime, ok, nil
+}
+
+func (s *WatcherService) installRuntime(ctx context.Context, spec types.AutomationSpec, runtime types.AutomationWatcherRuntime, stopExisting bool) (types.AutomationWatcherRuntime, error) {
+	holds, err := s.store.ListAutomationWatcherHolds(ctx, spec.ID)
+	if err != nil {
+		return types.AutomationWatcherRuntime{}, err
+	}
+	holds = ReleaseWatcherHold(holds, types.AutomationWatcherHoldKindManual, spec.ID)
+	if err := s.store.ReplaceAutomationWatcherHolds(ctx, spec.ID, runtime.WatcherID, holds); err != nil {
+		return types.AutomationWatcherRuntime{}, err
+	}
+	if len(holds) > 0 {
+		if err := s.stopRuntimeTask(runtime); err != nil {
+			return types.AutomationWatcherRuntime{}, err
+		}
+		runtime.State = types.AutomationWatcherStatePaused
+		runtime.Holds = holds
+		runtime.EffectiveState = EffectiveWatcherState(runtime.State, holds)
+		runtime.LastError = ""
+		runtime.UpdatedAt = s.currentTime()
+		if err := writeWatcherRunnerState(runtime.StatePath, watcherRunnerState{
+			DesiredState: string(types.AutomationWatcherStatePaused),
+			UpdatedAt:    runtime.UpdatedAt,
+		}); err != nil {
+			return types.AutomationWatcherRuntime{}, err
+		}
+		if err := s.store.UpsertAutomationWatcher(ctx, runtime); err != nil {
+			return types.AutomationWatcherRuntime{}, err
+		}
+		return runtime, nil
+	}
+
+	runtime, err = s.startRuntime(ctx, spec, runtime, stopExisting)
+	if err != nil {
+		return types.AutomationWatcherRuntime{}, err
+	}
+	runtime.Holds = holds
+	runtime.EffectiveState = EffectiveWatcherState(runtime.State, holds)
+	return runtime, nil
 }
 
 func (s *WatcherService) startRuntime(ctx context.Context, spec types.AutomationSpec, runtime types.AutomationWatcherRuntime, stopExisting bool) (types.AutomationWatcherRuntime, error) {

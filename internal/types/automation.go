@@ -11,6 +11,7 @@ type AutomationControlAction string
 type IncidentControlAction string
 type AutomationIncidentStatus string
 type AutomationWatcherState string
+type AutomationWatcherHoldKind string
 type AutomationPhaseName string
 type AutomationPhaseTransitionAction string
 type IncidentPhaseReduction string
@@ -18,6 +19,7 @@ type IncidentPhaseStatus string
 type AutomationAssumptionSource string
 type DispatchAttemptStatus string
 type DeliveryChannelStatus string
+type AutomationDetectorStatus string
 
 const (
 	AutomationStateActive AutomationState = "active"
@@ -60,6 +62,12 @@ const (
 	AutomationWatcherStatePaused  AutomationWatcherState = "paused"
 	AutomationWatcherStateFailed  AutomationWatcherState = "failed"
 	AutomationWatcherStateStopped AutomationWatcherState = "stopped"
+)
+
+const (
+	AutomationWatcherHoldKindManual   AutomationWatcherHoldKind = "manual"
+	AutomationWatcherHoldKindDispatch AutomationWatcherHoldKind = "dispatch"
+	AutomationWatcherHoldKindApproval AutomationWatcherHoldKind = "approval"
 )
 
 const ResponsePlanSchemaVersionV2 = "sesame.response_plan/v2"
@@ -121,6 +129,13 @@ const (
 	DeliveryChannelStatusFailed   DeliveryChannelStatus = "failed"
 )
 
+const (
+	AutomationDetectorStatusHealthy    AutomationDetectorStatus = "healthy"
+	AutomationDetectorStatusRecovered  AutomationDetectorStatus = "recovered"
+	AutomationDetectorStatusNeedsAgent AutomationDetectorStatus = "needs_agent"
+	AutomationDetectorStatusNeedsHuman AutomationDetectorStatus = "needs_human"
+)
+
 type AutomationContext struct {
 	Targets     []string          `json:"targets"`
 	Labels      map[string]string `json:"labels"`
@@ -133,6 +148,21 @@ type AutomationSignal struct {
 	Source   string          `json:"source,omitempty"`
 	Selector string          `json:"selector,omitempty"`
 	Payload  json.RawMessage `json:"payload,omitempty"`
+}
+
+type AutomationDetectorActionResult struct {
+	Name    string `json:"name"`
+	Result  string `json:"result"`
+	Summary string `json:"summary,omitempty"`
+}
+
+type AutomationDetectorSignal struct {
+	Status       AutomationDetectorStatus `json:"status"`
+	Summary      string                   `json:"summary"`
+	Facts        map[string]any           `json:"facts"`
+	ActionsTaken []string                 `json:"actions_taken"`
+	Hints        []string                 `json:"hints"`
+	DedupeKey    string                   `json:"dedupe_key,omitempty"`
 }
 
 type AutomationAssumption struct {
@@ -153,6 +183,33 @@ type ChildAgentTemplate struct {
 	MaxAttempts         int      `json:"max_attempts,omitempty"`
 	Concurrency         int      `json:"concurrency,omitempty"`
 	AllowElevation      bool     `json:"allow_elevation,omitempty"`
+}
+
+type ChildAgentStrategyEscalationCondition struct {
+	WhenStatus []string `json:"when_status"`
+}
+
+type ChildAgentStrategyCompletionPolicy struct {
+	ResumeWatcherOnSuccess *bool `json:"resume_watcher_on_success"`
+	ResumeWatcherOnFailure *bool `json:"resume_watcher_on_failure"`
+}
+
+type ChildAgentStrategyFailurePolicy struct {
+	HandoffToHuman         *bool `json:"handoff_to_human"`
+	KeepPaused             *bool `json:"keep_paused"`
+	NotifyViaExternalSkill *bool `json:"notify_via_external_skill"`
+}
+
+type ChildAgentTemplateStrategy struct {
+	Goal                string                                `json:"goal"`
+	EscalationCondition ChildAgentStrategyEscalationCondition `json:"escalation_condition"`
+	CompletionPolicy    ChildAgentStrategyCompletionPolicy    `json:"completion_policy"`
+	FailurePolicy       ChildAgentStrategyFailurePolicy       `json:"failure_policy"`
+}
+
+type ChildAgentTemplateSkills struct {
+	Required []string `json:"required"`
+	Optional []string `json:"optional"`
 }
 
 type AutomationPhasePlan struct {
@@ -214,19 +271,32 @@ type AutomationHeartbeat struct {
 	UpdatedAt     time.Time       `json:"updated_at,omitempty"`
 }
 
+type AutomationWatcherHold struct {
+	HoldID       string                    `json:"hold_id"`
+	AutomationID string                    `json:"automation_id"`
+	WatcherID    string                    `json:"watcher_id"`
+	Kind         AutomationWatcherHoldKind `json:"kind"`
+	OwnerID      string                    `json:"owner_id"`
+	Reason       string                    `json:"reason,omitempty"`
+	CreatedAt    time.Time                 `json:"created_at,omitempty"`
+	UpdatedAt    time.Time                 `json:"updated_at,omitempty"`
+}
+
 type AutomationWatcherRuntime struct {
-	ID            string                 `json:"id"`
-	AutomationID  string                 `json:"automation_id"`
-	WorkspaceRoot string                 `json:"workspace_root"`
-	WatcherID     string                 `json:"watcher_id"`
-	State         AutomationWatcherState `json:"state"`
-	ScriptPath    string                 `json:"script_path"`
-	StatePath     string                 `json:"state_path,omitempty"`
-	TaskID        string                 `json:"task_id,omitempty"`
-	Command       string                 `json:"command,omitempty"`
-	LastError     string                 `json:"last_error,omitempty"`
-	CreatedAt     time.Time              `json:"created_at,omitempty"`
-	UpdatedAt     time.Time              `json:"updated_at,omitempty"`
+	ID             string                  `json:"id"`
+	AutomationID   string                  `json:"automation_id"`
+	WorkspaceRoot  string                  `json:"workspace_root"`
+	WatcherID      string                  `json:"watcher_id"`
+	State          AutomationWatcherState  `json:"state"`
+	EffectiveState AutomationWatcherState  `json:"effective_state,omitempty"`
+	Holds          []AutomationWatcherHold `json:"holds,omitempty"`
+	ScriptPath     string                  `json:"script_path"`
+	StatePath      string                  `json:"state_path,omitempty"`
+	TaskID         string                  `json:"task_id,omitempty"`
+	Command        string                  `json:"command,omitempty"`
+	LastError      string                  `json:"last_error,omitempty"`
+	CreatedAt      time.Time               `json:"created_at,omitempty"`
+	UpdatedAt      time.Time               `json:"updated_at,omitempty"`
 }
 
 type TriggerEvent struct {

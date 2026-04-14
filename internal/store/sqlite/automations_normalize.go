@@ -149,6 +149,8 @@ func normalizeAutomationWatcherForStore(watcher types.AutomationWatcherRuntime) 
 		watcher.WatcherID = watcher.ID
 	}
 	watcher.State = normalizeAutomationWatcherStateForStore(watcher.State)
+	watcher.EffectiveState = ""
+	watcher.Holds = nil
 	watcher.ScriptPath = strings.TrimSpace(watcher.ScriptPath)
 	watcher.StatePath = strings.TrimSpace(watcher.StatePath)
 	watcher.TaskID = strings.TrimSpace(watcher.TaskID)
@@ -168,6 +170,33 @@ func normalizeAutomationWatcherForStore(watcher types.AutomationWatcherRuntime) 
 		watcher.UpdatedAt = watcher.CreatedAt
 	}
 	return watcher
+}
+
+func normalizeAutomationWatcherHoldForStore(hold types.AutomationWatcherHold) types.AutomationWatcherHold {
+	now := time.Now().UTC()
+	hold.HoldID = strings.TrimSpace(hold.HoldID)
+	if hold.HoldID == "" {
+		hold.HoldID = types.NewID("watcher_hold")
+	}
+	hold.AutomationID = strings.TrimSpace(hold.AutomationID)
+	hold.WatcherID = strings.TrimSpace(hold.WatcherID)
+	hold.Kind = normalizeAutomationWatcherHoldKindForStore(hold.Kind)
+	hold.OwnerID = strings.TrimSpace(hold.OwnerID)
+	hold.Reason = strings.TrimSpace(hold.Reason)
+	if hold.CreatedAt.IsZero() {
+		hold.CreatedAt = now
+	} else {
+		hold.CreatedAt = hold.CreatedAt.UTC()
+	}
+	if hold.UpdatedAt.IsZero() {
+		hold.UpdatedAt = hold.CreatedAt
+	} else {
+		hold.UpdatedAt = hold.UpdatedAt.UTC()
+	}
+	if hold.UpdatedAt.Before(hold.CreatedAt) {
+		hold.UpdatedAt = hold.CreatedAt
+	}
+	return hold
 }
 
 func normalizeTriggerEventForStore(event types.TriggerEvent) types.TriggerEvent {
@@ -508,6 +537,19 @@ func normalizeAutomationPhaseNameForStore(phase types.AutomationPhaseName) types
 		return types.AutomationPhaseEscalate
 	default:
 		return types.AutomationPhaseDiagnose
+	}
+}
+
+func normalizeAutomationWatcherHoldKindForStore(kind types.AutomationWatcherHoldKind) types.AutomationWatcherHoldKind {
+	switch strings.ToLower(strings.TrimSpace(string(kind))) {
+	case string(types.AutomationWatcherHoldKindManual):
+		return types.AutomationWatcherHoldKindManual
+	case string(types.AutomationWatcherHoldKindDispatch):
+		return types.AutomationWatcherHoldKindDispatch
+	case string(types.AutomationWatcherHoldKindApproval):
+		return types.AutomationWatcherHoldKindApproval
+	default:
+		return ""
 	}
 }
 

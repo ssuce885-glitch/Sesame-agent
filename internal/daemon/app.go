@@ -35,6 +35,7 @@ type sessionRunnerAdapter struct {
 	sink     storeAndBusSink
 	store    *sqlite.Store
 	delivery *automation.DeliveryService
+	watcher  automation.DispatchWatcherSyncer
 	now      func() time.Time
 }
 
@@ -102,7 +103,14 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	var observerSink *taskEventSink
 	var observer task.AgentTaskObserver
 	var finalDispatchText string
-	if dispatchObserver, ok, err := a.dispatchObserverForRun(ctx, in.Session.ID, in.TurnID); err != nil {
+	dispatchAttempt, hasDispatchAttempt, err := a.dispatchAttemptForRun(ctx, in.Session.ID, in.TurnID)
+	if err != nil {
+		return err
+	}
+	if hasDispatchAttempt {
+		in.Session.PermissionProfile = firstNonEmptyTrimmed(in.Session.PermissionProfile, "read_only")
+	}
+	if dispatchObserver, ok, err := a.dispatchObserverForRun(ctx, dispatchAttempt, hasDispatchAttempt); err != nil {
 		return err
 	} else if ok {
 		observer = dispatchObserver
@@ -114,7 +122,7 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		}
 	}
 
-	err := a.engine.RunTurn(ctx, engine.Input{
+	err = a.engine.RunTurn(ctx, engine.Input{
 		Session: in.Session,
 		Turn: types.Turn{
 			ID:           in.TurnID,
@@ -122,8 +130,9 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 			ClientTurnID: "",
 			UserMessage:  in.Message,
 		},
-		Sink:   sink,
-		Resume: in.Resume,
+		Sink:                sink,
+		Resume:              in.Resume,
+		ActivatedSkillNames: append([]string(nil), dispatchAttempt.ActivatedSkillNames...),
 	})
 	if observerSink != nil && observer != nil && err == nil {
 		if turn, ok, turnErr := a.store.GetTurn(ctx, in.TurnID); turnErr != nil {
@@ -240,13 +249,19 @@ func (s combinedEventSink) FinalizeTurn(ctx context.Context, usage *types.TurnUs
 	return s.finalizer.FinalizeTurn(ctx, usage, events)
 }
 
-func (a sessionRunnerAdapter) dispatchObserverForRun(ctx context.Context, sessionID, turnID string) (task.AgentTaskObserver, bool, error) {
+func (a sessionRunnerAdapter) dispatchAttemptForRun(ctx context.Context, sessionID, turnID string) (types.DispatchAttempt, bool, error) {
+	if a.store == nil {
+		return types.DispatchAttempt{}, false, nil
+	}
+	return a.store.FindDispatchAttemptByBackgroundRun(ctx, sessionID, turnID)
+}
+
+func (a sessionRunnerAdapter) dispatchObserverForRun(ctx context.Context, attempt types.DispatchAttempt, ok bool) (task.AgentTaskObserver, bool, error) {
 	if a.store == nil {
 		return nil, false, nil
 	}
-	attempt, ok, err := a.store.FindDispatchAttemptByBackgroundRun(ctx, sessionID, turnID)
-	if err != nil || !ok {
-		return nil, ok, err
+	if !ok {
+		return nil, false, nil
 	}
 	return automation.NewDispatchTaskObserverWithDelivery(a.store, a.delivery, attempt.DispatchID, a.currentTime), true, nil
 }
@@ -268,6 +283,9 @@ func (a sessionRunnerAdapter) reconcileDispatchRun(ctx context.Context, sessionI
 		if err := a.store.UpsertDispatchAttempt(ctx, attempt); err != nil {
 			return err
 		}
+		if err := a.releaseWatcherHoldForDispatchOutcome(ctx, attempt, false); err != nil {
+			return err
+		}
 		return a.applyDispatchOutcome(ctx, attempt, dispatchOutcomeFailed, now)
 	}
 
@@ -283,6 +301,9 @@ func (a sessionRunnerAdapter) reconcileDispatchRun(ctx context.Context, sessionI
 		}
 		attempt.UpdatedAt = now
 		if err := a.store.UpsertDispatchAttempt(ctx, attempt); err != nil {
+			return err
+		}
+		if err := a.releaseWatcherHoldForDispatchOutcome(ctx, attempt, true); err != nil {
 			return err
 		}
 		return a.applyDispatchOutcome(ctx, attempt, dispatchOutcomeCompleted, now)
@@ -305,6 +326,9 @@ func (a sessionRunnerAdapter) reconcileDispatchRun(ctx context.Context, sessionI
 	}
 	if !foundRequest {
 		return nil
+	}
+	if err := automation.ReplaceDispatchHoldWithApprovalHold(ctx, a.store, attempt.AutomationID, attempt.DispatchID, request.ID, now); err != nil {
+		return err
 	}
 
 	continuation, ok, err := a.store.GetTurnContinuationByPermissionRequest(ctx, request.ID)
@@ -341,6 +365,68 @@ func (a sessionRunnerAdapter) reconcileDispatchRun(ctx context.Context, sessionI
 		return err
 	}
 	return nil
+}
+
+func (a sessionRunnerAdapter) releaseWatcherHoldForDispatchOutcome(ctx context.Context, attempt types.DispatchAttempt, succeeded bool) error {
+	if a.store == nil {
+		return nil
+	}
+	spec, ok, err := a.store.GetAutomation(ctx, attempt.AutomationID)
+	if err != nil || !ok {
+		return err
+	}
+	bundle, err := automation.LoadChildAgentRuntimeBundle(spec.WorkspaceRoot, spec.ID, attempt.Phase, attempt.ChildAgentID)
+	if err != nil {
+		return err
+	}
+
+	kind, ownerID, err := a.activeWatcherHoldForAttempt(ctx, attempt)
+	if err != nil {
+		return err
+	}
+
+	if succeeded {
+		if bundle.Strategy.CompletionPolicy.ResumeWatcherOnSuccess == nil || !*bundle.Strategy.CompletionPolicy.ResumeWatcherOnSuccess {
+			return nil
+		}
+		if err := automation.ReleaseWatcherHoldByOwner(ctx, a.store, attempt.AutomationID, kind, ownerID); err != nil {
+			return err
+		}
+		return a.syncWatcher(ctx, attempt.AutomationID)
+	}
+	if bundle.Strategy.CompletionPolicy.ResumeWatcherOnFailure == nil || !*bundle.Strategy.CompletionPolicy.ResumeWatcherOnFailure {
+		return nil
+	}
+	if err := automation.ReleaseWatcherHoldByOwner(ctx, a.store, attempt.AutomationID, kind, ownerID); err != nil {
+		return err
+	}
+	return a.syncWatcher(ctx, attempt.AutomationID)
+}
+
+func (a sessionRunnerAdapter) activeWatcherHoldForAttempt(ctx context.Context, attempt types.DispatchAttempt) (types.AutomationWatcherHoldKind, string, error) {
+	if a.store == nil {
+		return types.AutomationWatcherHoldKindDispatch, attempt.DispatchID, nil
+	}
+	holds, err := a.store.ListAutomationWatcherHolds(ctx, attempt.AutomationID)
+	if err != nil {
+		return "", "", err
+	}
+	requestID := strings.TrimSpace(attempt.PermissionRequestID)
+	if requestID != "" {
+		for _, hold := range holds {
+			if hold.Kind == types.AutomationWatcherHoldKindApproval && strings.TrimSpace(hold.OwnerID) == requestID {
+				return types.AutomationWatcherHoldKindApproval, requestID, nil
+			}
+		}
+	}
+	return types.AutomationWatcherHoldKindDispatch, attempt.DispatchID, nil
+}
+
+func (a sessionRunnerAdapter) syncWatcher(ctx context.Context, automationID string) error {
+	if a.watcher == nil {
+		return nil
+	}
+	return a.watcher.SyncAutomation(ctx, automationID)
 }
 
 type dispatchOutcome string
@@ -474,7 +560,7 @@ func (a sessionRunnerAdapter) currentTime() time.Time {
 	return time.Now().UTC()
 }
 
-func (m automationDispatchManager) StartAutomationDispatch(ctx context.Context, attempt types.DispatchAttempt, template types.ChildAgentTemplate) error {
+func (m automationDispatchManager) StartAutomationDispatch(ctx context.Context, attempt types.DispatchAttempt, template types.ChildAgentTemplate, incident types.AutomationIncident, bundle automation.ChildAgentRuntimeBundle) error {
 	if m.store == nil || m.manager == nil {
 		return errors.New("automation dispatch manager is not configured")
 	}
@@ -496,12 +582,19 @@ func (m automationDispatchManager) StartAutomationDispatch(ctx context.Context, 
 	}
 
 	turnRow := types.Turn{
-		ID:          firstNonEmptyTrimmed(attempt.BackgroundTurnID, types.NewID("auto_turn")),
-		SessionID:   sessionRow.ID,
-		State:       types.TurnStateCreated,
-		UserMessage: buildAutomationDispatchPrompt(attempt, template),
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:        firstNonEmptyTrimmed(attempt.BackgroundTurnID, types.NewID("auto_turn")),
+		SessionID: sessionRow.ID,
+		State:     types.TurnStateCreated,
+		UserMessage: automation.BuildAutomationChildAgentPrompt(automation.AutomationChildAgentPromptInput{
+			Attempt:          attempt,
+			Template:         template,
+			Strategy:         bundle.Strategy,
+			PromptSupplement: bundle.PromptSupplement,
+			DetectorSignal:   mustParseDetectorSignalForPrompt(incident),
+			SelectedSkills:   bundle.Skills.Required,
+		}),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if _, ok, err := m.store.GetTurn(ctx, turnRow.ID); err != nil {
 		return err
@@ -533,23 +626,15 @@ func (m automationDispatchManager) currentTime() time.Time {
 	return time.Now().UTC()
 }
 
-func buildAutomationDispatchPrompt(attempt types.DispatchAttempt, template types.ChildAgentTemplate) string {
-	lines := []string{
-		"Run this automation child-agent task in the background.",
+func mustParseDetectorSignalForPrompt(incident types.AutomationIncident) types.AutomationDetectorSignal {
+	detectorSignal, err := automation.ParseAutomationDetectorSignalPayload(incident.Payload)
+	if err != nil {
+		return types.AutomationDetectorSignal{
+			Summary: strings.TrimSpace(incident.Summary),
+			Facts:   map[string]any{},
+		}
 	}
-	if purpose := strings.TrimSpace(template.Purpose); purpose != "" {
-		lines = append(lines, "Goal: "+purpose)
-	}
-	if agentID := strings.TrimSpace(template.AgentID); agentID != "" {
-		lines = append(lines, "Template: "+agentID)
-	}
-	if incidentID := strings.TrimSpace(attempt.IncidentID); incidentID != "" {
-		lines = append(lines, "Incident: "+incidentID)
-	}
-	if dispatchID := strings.TrimSpace(attempt.DispatchID); dispatchID != "" {
-		lines = append(lines, "Dispatch: "+dispatchID)
-	}
-	return strings.Join(lines, "\n")
+	return detectorSignal
 }
 
 func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, observer task.AgentTaskObserver) error {
@@ -853,7 +938,7 @@ func Run(ctx context.Context) error {
 	dispatcher := automation.NewDispatcher(runtime.Store, automationDispatchManager{
 		store:   runtime.Store,
 		manager: runtime.SessionManager,
-	}, automation.DispatcherConfig{})
+	}, automation.DispatcherConfig{Watcher: runtime.WatcherService})
 	go func() {
 		if err := runtime.SchedulerService.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("scheduler loop exited", "error", err)
@@ -1135,6 +1220,9 @@ func resumeResolvedContinuations(ctx context.Context, store *sqlite.Store, manag
 		}
 		if err := store.CommitPermissionResume(ctx, sessionRow.ID, turn.ID, continuation, resumedToolRun); err != nil {
 			manager.InterruptTurn(sessionRow.ID, turn.ID)
+			return nil, err
+		}
+		if err := automation.RestoreDispatchAfterApprovalResume(ctx, store, sessionRow.ID, turn.ID, request.ID, now); err != nil {
 			return nil, err
 		}
 
