@@ -355,7 +355,7 @@ type detectorSignalPayloadDecode struct {
 	Summary      *string         `json:"summary"`
 	Facts        json.RawMessage `json:"facts"`
 	ActionsTaken json.RawMessage `json:"actions_taken"`
-	Hints        *[]string       `json:"hints"`
+	Hints        json.RawMessage `json:"hints"`
 	DedupeKey    *string         `json:"dedupe_key"`
 }
 
@@ -394,13 +394,10 @@ func parseAutomationDetectorSignalPayload(raw json.RawMessage) (types.Automation
 	if summary == "" {
 		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal summary is required")
 	}
-	if len(normalizeRawJSON(decoded.ActionsTaken)) == 0 {
-		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal actions_taken is required")
-	}
-	if decoded.Hints == nil {
-		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal hints is required")
-	}
 	factsRaw := normalizeRawJSON(decoded.Facts)
+	if len(factsRaw) == 0 || string(factsRaw) == "null" {
+		factsRaw = json.RawMessage("{}")
+	}
 	if !isJSONObject(factsRaw) {
 		return types.AutomationDetectorSignal{}, nil, invalidSignalOutput("detector signal facts must be a JSON object")
 	}
@@ -413,13 +410,17 @@ func parseAutomationDetectorSignalPayload(raw json.RawMessage) (types.Automation
 	if err != nil {
 		return types.AutomationDetectorSignal{}, nil, err
 	}
+	hints, err := normalizeDetectorStringList(decoded.Hints, "hints")
+	if err != nil {
+		return types.AutomationDetectorSignal{}, nil, err
+	}
 
 	signal := types.AutomationDetectorSignal{
 		Status:       types.AutomationDetectorStatus(normalizedStatus),
 		Summary:      summary,
 		Facts:        facts,
 		ActionsTaken: actionsTaken,
-		Hints:        normalizeStringList(*decoded.Hints),
+		Hints:        hints,
 	}
 	if decoded.DedupeKey != nil {
 		signal.DedupeKey = strings.TrimSpace(*decoded.DedupeKey)
@@ -434,8 +435,8 @@ func parseAutomationDetectorSignalPayload(raw json.RawMessage) (types.Automation
 
 func normalizeDetectorActions(raw json.RawMessage) ([]string, error) {
 	raw = normalizeRawJSON(raw)
-	if len(raw) == 0 {
-		return nil, invalidSignalOutput("detector signal actions_taken is required")
+	if len(raw) == 0 || string(raw) == "null" {
+		return []string{}, nil
 	}
 
 	var actionStrings []string
@@ -471,6 +472,19 @@ func normalizeDetectorActions(raw json.RawMessage) ([]string, error) {
 		normalized = append(normalized, strings.Join(parts, " | "))
 	}
 	return normalizeStringList(normalized), nil
+}
+
+func normalizeDetectorStringList(raw json.RawMessage, field string) ([]string, error) {
+	raw = normalizeRawJSON(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return []string{}, nil
+	}
+
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, invalidSignalOutput("detector signal " + strings.TrimSpace(field) + " must be an array of strings")
+	}
+	return normalizeStringList(values), nil
 }
 
 func normalizeDetectorStatus(value string) (string, bool) {

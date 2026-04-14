@@ -124,11 +124,11 @@ func (d *Dispatcher) dispatchIncident(ctx context.Context, incident types.Automa
 	if err != nil {
 		return err
 	}
-	detectorSignal, err := ParseAutomationDetectorSignalPayload(incident.Payload)
+	detectorSignal, hasDetectorStatus, err := parseIncidentDetectorSignalForDispatch(incident.Payload)
 	if err != nil {
 		return err
 	}
-	if !detectorStatusAllowed(bundle.Strategy.EscalationCondition.WhenStatus, detectorSignal.Status) {
+	if hasDetectorStatus && !detectorStatusAllowed(bundle.Strategy.EscalationCondition.WhenStatus, detectorSignal.Status) {
 		return nil
 	}
 
@@ -252,6 +252,31 @@ func (d *Dispatcher) failApprovalUnroutable(ctx context.Context, incident types.
 	incident.Status = types.AutomationIncidentStatusEscalated
 	incident.UpdatedAt = now
 	return d.store.UpsertAutomationIncident(ctx, incident)
+}
+
+func parseIncidentDetectorSignalForDispatch(raw json.RawMessage) (types.AutomationDetectorSignal, bool, error) {
+	raw = normalizeRawJSON(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return types.AutomationDetectorSignal{}, false, nil
+	}
+
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return types.AutomationDetectorSignal{}, false, invalidSignalOutput("detector signal payload must be valid JSON")
+	}
+	object, ok := decoded.(map[string]any)
+	if !ok {
+		return types.AutomationDetectorSignal{}, false, nil
+	}
+	if _, ok := object["status"]; !ok {
+		return types.AutomationDetectorSignal{}, false, nil
+	}
+
+	signal, err := ParseAutomationDetectorSignalPayload(raw)
+	if err != nil {
+		return types.AutomationDetectorSignal{}, true, err
+	}
+	return signal, true, nil
 }
 
 func nextDispatchablePhaseState(phases []types.IncidentPhaseState) (types.IncidentPhaseState, bool) {
