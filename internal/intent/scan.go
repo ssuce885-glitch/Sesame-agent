@@ -5,22 +5,8 @@ import (
 	"strings"
 )
 
-type Flag int
-
-const (
-	FlagAutomation Flag = iota
-	FlagScheduling
-	FlagBrowser
-	FlagWebLookup
-	FlagSystemProbe
-	FlagCodeEdit
-	FlagEmail
-)
-
 type Signal struct {
 	Raw            string
-	Flags          map[Flag]bool
-	Strength       map[Flag]int
 	ExplicitSkills []string
 	NameMatches    []string
 }
@@ -41,65 +27,13 @@ func (v SkillCatalogView) SkillNames() []string {
 	return namesFromView(v.Skills)
 }
 
-var (
-	skillRefPattern         = regexp.MustCompile(`\$([A-Za-z0-9._-]+)`)
-	englishDelayPattern     = regexp.MustCompile(`\bin\s+\d+\s+(minute|minutes|hour|hours|day|days|week|weeks|month|months)\b`)
-	englishRecurringPattern = regexp.MustCompile(`\bevery\s+(day|week|month|hour|morning|evening)\b`)
-)
+var skillRefPattern = regexp.MustCompile(`\$([A-Za-z0-9._-]+)`)
 
-func Scan(userMessage string, catalog SkillCatalog) Signal {
+func ExtractSkillSignals(userMessage string, catalog SkillCatalog) Signal {
 	raw := strings.TrimSpace(userMessage)
-	signal := Signal{
-		Raw:      raw,
-		Flags:    make(map[Flag]bool),
-		Strength: make(map[Flag]int),
-	}
+	signal := Signal{Raw: raw}
 	if raw == "" {
-		signal.Flags[FlagCodeEdit] = true
-		signal.Strength[FlagCodeEdit] = 1
 		return signal
-	}
-
-	text := strings.ToLower(raw)
-	signal.Strength[FlagAutomation] = detectStrength(text, []string{
-		"自动", "异常时", "失败时", "监控", "巡检", "唤起代理",
-		"automatically", "on failure", "monitor", "watch", "poll", "incident",
-	}, 30)
-	signal.Strength[FlagScheduling] = detectStrength(text, []string{
-		"分钟后", "小时后", "天后", "稍后", "定时", "每天", "每周", "每月", "cron",
-		"later", "tomorrow", "every day", "every week", "every month",
-	}, 20)
-	if englishDelayPattern.MatchString(text) || englishRecurringPattern.MatchString(text) {
-		signal.Strength[FlagScheduling] += 20
-	}
-	signal.Strength[FlagBrowser] = detectStrength(text, []string{
-		"打开", "点击", "登录", "截图", "网页", "网站",
-		"open", "click", "login", "sign in", "screenshot", "website", "browser",
-	}, 20)
-	signal.Strength[FlagWebLookup] = detectStrength(text, []string{
-		"天气", "新闻", "网页", "网站", "http://", "https://",
-		"weather", "news", "headline", "url", "web page", "website",
-	}, 15)
-	signal.Strength[FlagSystemProbe] = detectStrength(text, []string{
-		"系统", "环境", "版本", "进程", "端口", "路径",
-		"system", "environment", "version", "process", "port", "which ",
-	}, 15)
-	signal.Strength[FlagEmail] = detectStrength(text, []string{
-		"邮箱", "邮件", "发邮件", "email", "mail", "send mail",
-	}, 20)
-	signal.Strength[FlagCodeEdit] = detectStrength(text, []string{
-		"脚本", "代码", "函数", "修复", "实现",
-		"script", "code", "function", "fix", "implement",
-	}, 10)
-
-	for flag, score := range signal.Strength {
-		if score > 0 {
-			signal.Flags[flag] = true
-		}
-	}
-	if len(signal.Flags) == 0 {
-		signal.Flags[FlagCodeEdit] = true
-		signal.Strength[FlagCodeEdit] = 1
 	}
 
 	skillNames := []string(nil)
@@ -114,6 +48,7 @@ func Scan(userMessage string, catalog SkillCatalog) Signal {
 		}
 		nameByKey[key] = name
 	}
+
 	expSeen := map[string]struct{}{}
 	for _, match := range skillRefPattern.FindAllStringSubmatch(raw, -1) {
 		if len(match) < 2 {
@@ -155,14 +90,9 @@ func Scan(userMessage string, catalog SkillCatalog) Signal {
 	return signal
 }
 
-func detectStrength(text string, markers []string, weight int) int {
-	score := 0
-	for _, marker := range markers {
-		if marker != "" && strings.Contains(text, marker) {
-			score += weight
-		}
-	}
-	return score
+// Scan is kept as a narrow compatibility wrapper while callers migrate.
+func Scan(userMessage string, catalog SkillCatalog) Signal {
+	return ExtractSkillSignals(userMessage, catalog)
 }
 
 func normalizeSkillText(value string) string {

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -9,6 +10,7 @@ import (
 	"go-agent/internal/config"
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/engine"
+	"go-agent/internal/intent"
 	"go-agent/internal/model"
 	"go-agent/internal/reporting"
 	"go-agent/internal/runtimegraph"
@@ -45,6 +47,12 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
 	runner.SetRuntimeService(runtimeService)
 	runner.SetAutomationService(automationService)
+	classifierClient, err := model.NewClassifierClient(cfg)
+	if err != nil {
+		slog.Warn("classifier setup failed, using fallback intent routing", "error", err)
+	} else if classifierClient != nil {
+		runner.SetClassifier(intent.NewModelClassifier(classifierClient, cfg.ClassifierModel))
+	}
 
 	taskNotifier := buildTaskTerminalNotifier(store, bus, cfg.Paths.WorkspaceRoot)
 	var deliveryService *automation.DeliveryService

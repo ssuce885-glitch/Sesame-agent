@@ -129,7 +129,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 		return err
 	}
-	plan, err := resolveIntentPlan(ctx, e.store, sessionID, in.Turn.UserMessage, catalog)
+	plan, err := resolveIntentPlan(ctx, e.store, sessionID, in.Turn.UserMessage, catalog, e.classifier)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
@@ -869,13 +869,13 @@ func applySummaryCompaction(
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
 	if err := e.store.InsertConversationCompaction(ctx, types.ConversationCompaction{
-		ID:              types.NewID("compact"),
-		SessionID:       sessionID,
-		Kind:            kind,
-		Generation:      generation,
-		StartPosition:   0,
-		EndPosition:     cutoff,
-		SummaryPayload:  marshalCompactionSummary(summary),
+		ID:             types.NewID("compact"),
+		SessionID:      sessionID,
+		Kind:           kind,
+		Generation:     generation,
+		StartPosition:  0,
+		EndPosition:    cutoff,
+		SummaryPayload: marshalCompactionSummary(summary),
 		MetadataJSON: encodeBoundaryMetadata(newBoundaryMetadata(
 			generation,
 			cutoff,
@@ -1242,14 +1242,17 @@ const (
 	pendingConfirmationReplaced
 )
 
-func resolveIntentPlan(ctx context.Context, store ConversationStore, sessionID, userMessage string, catalog skills.Catalog) (intent.Plan, error) {
+func resolveIntentPlan(ctx context.Context, store ConversationStore, sessionID, userMessage string, catalog skills.Catalog, classifier intent.Classifier) (intent.Plan, error) {
 	if confirmationStore, ok := store.(pendingIntentConfirmationStore); ok {
 		pending, found, err := confirmationStore.GetIntentConfirmation(ctx, sessionID)
 		if err != nil {
 			return intent.Plan{}, err
 		}
 		if found {
-			plan, resolution := resolvePendingIntentConfirmation(pending, userMessage, catalog)
+			plan, resolution, err := resolvePendingIntentConfirmation(ctx, pending, userMessage, catalog, classifier)
+			if err != nil {
+				return intent.Plan{}, err
+			}
 			if resolution == pendingConfirmationResolved || resolution == pendingConfirmationReplaced {
 				if err := confirmationStore.DeleteIntentConfirmation(ctx, sessionID); err != nil {
 					return intent.Plan{}, err
@@ -1258,11 +1261,14 @@ func resolveIntentPlan(ctx context.Context, store ConversationStore, sessionID, 
 			return plan, nil
 		}
 	}
-	return intent.Resolve(intent.Scan(userMessage, catalog)), nil
+	return intent.ClassifyIntent(ctx, classifier, userMessage, catalog)
 }
 
-func resolvePendingIntentConfirmation(pending types.IntentConfirmation, reply string, catalog skills.Catalog) (intent.Plan, pendingConfirmationResolution) {
-	plan := intent.Resolve(intent.Scan(pending.RawMessage, catalog))
+func resolvePendingIntentConfirmation(ctx context.Context, pending types.IntentConfirmation, reply string, catalog skills.Catalog, classifier intent.Classifier) (intent.Plan, pendingConfirmationResolution, error) {
+	plan, err := intent.ClassifyIntent(ctx, classifier, pending.RawMessage, catalog)
+	if err != nil {
+		return intent.Plan{}, pendingConfirmationKeep, err
+	}
 	if strings.TrimSpace(pending.ConfirmText) != "" {
 		plan.ConfirmText = pending.ConfirmText
 	}
@@ -1271,13 +1277,13 @@ func resolvePendingIntentConfirmation(pending types.IntentConfirmation, reply st
 	switch {
 	case reply == "", reply == "?" || reply == "不确定":
 		plan.NeedsConfirm = true
-		return plan, pendingConfirmationKeep
+		return plan, pendingConfirmationKeep, nil
 	case strings.Contains(reply, "automation"), strings.Contains(reply, "自动化"), strings.Contains(reply, "脚本"), strings.Contains(reply, "第一个"), reply == "1", reply == "yes", reply == "是":
 		plan.NeedsConfirm = false
 		if strings.TrimSpace(pending.RecommendedProfile) != "" {
 			plan.Profile = intent.CapabilityProfile(pending.RecommendedProfile)
 		}
-		return plan, pendingConfirmationResolved
+		return plan, pendingConfirmationResolved, nil
 	case strings.Contains(reply, "schedule"), strings.Contains(reply, "scheduled"), strings.Contains(reply, "定时"), strings.Contains(reply, "第二个"), reply == "2":
 		plan.NeedsConfirm = false
 		if strings.TrimSpace(pending.FallbackProfile) != "" {
@@ -1285,13 +1291,17 @@ func resolvePendingIntentConfirmation(pending types.IntentConfirmation, reply st
 		} else {
 			plan.Profile = intent.ProfileScheduledReport
 		}
-		return plan, pendingConfirmationResolved
+		return plan, pendingConfirmationResolved, nil
 	default:
 		if looksLikeUnrelatedIntentRequest(trimmedReply, catalog) {
-			return intent.Resolve(intent.Scan(trimmedReply, catalog)), pendingConfirmationReplaced
+			nextPlan, err := intent.ClassifyIntent(ctx, classifier, trimmedReply, catalog)
+			if err != nil {
+				return intent.Plan{}, pendingConfirmationKeep, err
+			}
+			return nextPlan, pendingConfirmationReplaced, nil
 		}
 		plan.NeedsConfirm = true
-		return plan, pendingConfirmationKeep
+		return plan, pendingConfirmationKeep, nil
 	}
 }
 
@@ -1309,19 +1319,12 @@ func looksLikeUnrelatedIntentRequest(reply string, catalog skills.Catalog) bool 
 			return true
 		}
 	}
-	signal := intent.Scan(reply, catalog)
+	signal := intent.ExtractSkillSignals(reply, catalog)
 	if len(signal.ExplicitSkills) > 0 || len(signal.NameMatches) > 0 {
 		return true
 	}
-	for flag, score := range signal.Strength {
-		if flag == intent.FlagCodeEdit && score == 1 {
-			continue
-		}
-		if score > 0 {
-			return true
-		}
-	}
-	return false
+	classified := intent.FallbackClassify(reply)
+	return classified.NeedsConfirm || classified.Profile != intent.ProfileCodebaseEdit
 }
 
 func emitPlanningConfirmationTurn(
@@ -1372,10 +1375,10 @@ func emitPlanningConfirmationTurn(
 }
 
 func fallbackConfirmationProfile(plan intent.Plan) string {
-	if plan.Signal.Flags[intent.FlagScheduling] {
-		return string(intent.ProfileScheduledReport)
+	if strings.TrimSpace(string(plan.Fallback)) != "" {
+		return string(plan.Fallback)
 	}
-	return string(plan.Fallback)
+	return string(intent.ProfileCodebaseEdit)
 }
 
 func appendTurnSupplementalPrompts(text string, completionNotices []string, reportMailboxItems []types.ReportMailboxItem) string {
