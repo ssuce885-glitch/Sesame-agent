@@ -49,6 +49,36 @@ func activeMicrocompactItems(compactions []types.ConversationCompaction) []model
 	return active
 }
 
+func recentRawItemsForCompactionWindow(items []model.ConversationItem, compactions []types.ConversationCompaction) []model.ConversationItem {
+	start, ok := compactionWindowStart(items, compactions)
+	if !ok {
+		return nil
+	}
+	return cloneConversationItemsForPrompt(items[start:])
+}
+
+func compactionWindowStart(items []model.ConversationItem, compactions []types.ConversationCompaction) (int, bool) {
+	boundary, ok := activeBoundaryCompaction(compactions)
+	if !ok {
+		return 0, false
+	}
+
+	start := boundary.EndPosition
+	if metadata, ok, err := decodeBoundaryMetadata(boundary.MetadataJSON); err == nil && ok {
+		if metadata.PreservedRecentStart > 0 {
+			start = metadata.PreservedRecentStart
+		}
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start > len(items) {
+		start = len(items)
+	}
+	start = model.NearestSafeConversationBoundary(items, start)
+	return start, true
+}
+
 func buildMicrocompactPayload(items []model.ConversationItem, positions []int, recentStart int) (persistedMicrocompactPayload, error) {
 	sourcePositions := make([]int, 0, len(positions))
 	for _, pos := range positions {

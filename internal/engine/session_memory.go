@@ -66,6 +66,46 @@ func loadSessionMemorySummary(ctx context.Context, store ConversationStore, sess
 	return decodeSessionMemorySummary(memory.SummaryPayload)
 }
 
+func loadSummaryBundle(ctx context.Context, store ConversationStore, sessionID string) (SummaryBundle, []types.ConversationCompaction, error) {
+	if store == nil || strings.TrimSpace(sessionID) == "" {
+		return SummaryBundle{}, nil, nil
+	}
+
+	summaries, err := store.ListConversationSummaries(ctx, sessionID)
+	if err != nil {
+		return SummaryBundle{}, nil, err
+	}
+	compactions, err := store.ListConversationCompactions(ctx, sessionID)
+	if err != nil {
+		return SummaryBundle{}, nil, err
+	}
+	sessionMemory, hasSessionMemory, err := loadSessionMemorySummary(ctx, store, sessionID)
+	if err != nil {
+		return SummaryBundle{}, nil, err
+	}
+
+	if boundaryCompaction, ok := activeBoundaryCompaction(compactions); ok {
+		boundarySummary, hasBoundarySummary, err := decodeCompactionSummaryPayload(boundaryCompaction.SummaryPayload)
+		if err != nil {
+			return SummaryBundle{}, nil, err
+		}
+		if hasBoundarySummary {
+			rollingSummaries := removeMatchingSummary(dedupeSummaries(summaries), boundarySummary)
+			var sessionMemorySummary *model.Summary
+			if hasSessionMemory {
+				value := cloneSummaryForSessionMemory(sessionMemory)
+				sessionMemorySummary = &value
+			}
+			return selectPromptSummaryBundle(sessionMemorySummary, &boundarySummary, rollingSummaries), compactions, nil
+		}
+	}
+
+	if hasSessionMemory {
+		summaries = prependSessionMemorySummary(summaries, sessionMemory)
+	}
+	return selectPromptSummaries(summaries, hasSessionMemory), compactions, nil
+}
+
 func maybeRefreshSessionMemory(ctx context.Context, e *Engine, in Input) error {
 	_, err := refreshSessionMemory(ctx, e, in)
 	return err
@@ -902,6 +942,74 @@ func decodeSessionMemorySummary(raw string) (model.Summary, bool, error) {
 		summary.RangeLabel = sessionMemoryRangeLabel
 	}
 	return summary, true, nil
+}
+
+type compactionSummaryPayload struct {
+	RangeLabel       string   `json:"range_label"`
+	UserGoals        []string `json:"user_goals"`
+	ImportantChoices []string `json:"important_choices"`
+	FilesTouched     []string `json:"files_touched"`
+	ToolOutcomes     []string `json:"tool_outcomes"`
+	OpenThreads      []string `json:"open_threads"`
+}
+
+func decodeCompactionSummaryPayload(raw string) (model.Summary, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return model.Summary{}, false, nil
+	}
+
+	var standard model.Summary
+	if err := json.Unmarshal([]byte(raw), &standard); err != nil {
+		return model.Summary{}, false, err
+	}
+
+	var snake compactionSummaryPayload
+	if err := json.Unmarshal([]byte(raw), &snake); err != nil {
+		return model.Summary{}, false, err
+	}
+
+	summary := standard
+	if strings.TrimSpace(summary.RangeLabel) == "" {
+		summary.RangeLabel = snake.RangeLabel
+	}
+	if len(summary.UserGoals) == 0 {
+		summary.UserGoals = append([]string(nil), snake.UserGoals...)
+	}
+	if len(summary.ImportantChoices) == 0 {
+		summary.ImportantChoices = append([]string(nil), snake.ImportantChoices...)
+	}
+	if len(summary.FilesTouched) == 0 {
+		summary.FilesTouched = append([]string(nil), snake.FilesTouched...)
+	}
+	if len(summary.ToolOutcomes) == 0 {
+		summary.ToolOutcomes = append([]string(nil), snake.ToolOutcomes...)
+	}
+	if len(summary.OpenThreads) == 0 {
+		summary.OpenThreads = append([]string(nil), snake.OpenThreads...)
+	}
+
+	if isZeroSummary(summary) {
+		return model.Summary{}, false, nil
+	}
+	return summary, true, nil
+}
+
+func removeMatchingSummary(summaries []model.Summary, target model.Summary) []model.Summary {
+	if len(summaries) == 0 {
+		return nil
+	}
+
+	targetKey := encodeSessionMemorySummary(normalizeSummaryForPrompt(target))
+	out := make([]model.Summary, 0, len(summaries))
+	for _, summary := range summaries {
+		summaryKey := encodeSessionMemorySummary(normalizeSummaryForPrompt(summary))
+		if summaryKey == targetKey {
+			continue
+		}
+		out = append(out, summary)
+	}
+	return out
 }
 
 func isZeroSummary(summary model.Summary) bool {
