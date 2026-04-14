@@ -24,12 +24,15 @@ const (
 	sessionMemoryLongAssistantChars  = 320
 	sessionMemorySummaryMaxCount     = 1
 	conversationSummaryMaxCount      = 2
+	rollingSummaryMaxCount           = conversationSummaryMaxCount
 	workspaceDetailRecallMaxCount    = 2
 	globalMemoryRecallMaxCount       = 1
 	durableWorkspaceDetailCapPerKind = 4
 	durableGlobalMemoryCap           = 2
 	sessionMemorySummaryTokenBudget  = 256
 	conversationSummaryTokenBudget   = 256
+	boundarySummaryTokenBudget       = conversationSummaryTokenBudget
+	rollingSummaryTokenBudget        = conversationSummaryTokenBudget
 	workspaceOverviewTokenBudget     = 192
 	workspaceDetailTokenBudget       = 224
 	globalMemoryTokenBudget          = 128
@@ -61,6 +64,43 @@ func loadSessionMemorySummary(ctx context.Context, store ConversationStore, sess
 		return model.Summary{}, false, err
 	}
 	return decodeSessionMemorySummary(memory.SummaryPayload)
+}
+
+func loadSummaryBundle(ctx context.Context, store ConversationStore, sessionID string) (SummaryBundle, []types.ConversationCompaction, error) {
+	if store == nil || strings.TrimSpace(sessionID) == "" {
+		return SummaryBundle{}, nil, nil
+	}
+
+	summaries, err := store.ListConversationSummaries(ctx, sessionID)
+	if err != nil {
+		return SummaryBundle{}, nil, err
+	}
+	compactions, err := store.ListConversationCompactions(ctx, sessionID)
+	if err != nil {
+		return SummaryBundle{}, nil, err
+	}
+	sessionMemory, hasSessionMemory, err := loadSessionMemorySummary(ctx, store, sessionID)
+	if err != nil {
+		return SummaryBundle{}, nil, err
+	}
+
+	if boundaryCompaction, ok := activeBoundaryCompaction(compactions); ok {
+		boundarySummary, hasBoundarySummary, err := decodeCompactionSummaryPayload(boundaryCompaction.SummaryPayload)
+		if err == nil && hasBoundarySummary {
+			rollingSummaries := removeMatchingSummary(dedupeSummaries(summaries), boundarySummary)
+			var sessionMemorySummary *model.Summary
+			if hasSessionMemory {
+				value := cloneSummaryForSessionMemory(sessionMemory)
+				sessionMemorySummary = &value
+			}
+			return selectPromptSummaryBundle(sessionMemorySummary, &boundarySummary, rollingSummaries), compactions, nil
+		}
+	}
+
+	if hasSessionMemory {
+		summaries = prependSessionMemorySummary(summaries, sessionMemory)
+	}
+	return selectPromptSummaries(summaries, hasSessionMemory), compactions, nil
 }
 
 func maybeRefreshSessionMemory(ctx context.Context, e *Engine, in Input) error {
@@ -182,7 +222,7 @@ func shouldRefreshSessionMemory(hasExisting bool, freshItems []model.Conversatio
 		return false
 	}
 
-	estimatedTokens := contextstate.EstimatePromptTokens("", freshItems, nil, nil)
+	estimatedTokens := contextstate.EstimatePromptTokens("", freshItems, SummaryBundle{}, nil)
 	signals := countSessionMemorySignals(freshItems)
 	if hasExisting {
 		return len(freshItems) >= sessionMemoryUpdateMinItems ||
@@ -347,20 +387,31 @@ func findDurableWorkspaceMemory(entries []types.MemoryEntry, workspaceRoot strin
 	return types.MemoryEntry{}, false
 }
 
-func selectPromptSummaries(summaries []model.Summary, sessionMemoryPresent bool) []model.Summary {
+func selectPromptSummaries(summaries []model.Summary, sessionMemoryPresent bool) SummaryBundle {
 	summaries = dedupeSummaries(summaries)
 	if len(summaries) == 0 {
-		return nil
+		return SummaryBundle{}
 	}
 
+	var sessionMemory *model.Summary
+	start := 0
 	if sessionMemoryPresent {
-		return takeSummaryBudget(summaries[:1], sessionMemorySummaryTokenBudget, sessionMemorySummaryMaxCount)
+		if selected := takeSummaryBudget(summaries[:1], sessionMemorySummaryTokenBudget, sessionMemorySummaryMaxCount); len(selected) > 0 {
+			value := selected[0]
+			sessionMemory = &value
+		}
+		start = 1
 	}
 
-	if len(summaries) > conversationSummaryMaxCount {
-		summaries = summaries[len(summaries)-conversationSummaryMaxCount:]
+	var boundary *model.Summary
+	if start < len(summaries) {
+		value := summaries[start]
+		boundary = &value
+		start++
 	}
-	return takeSummaryBudget(summaries, conversationSummaryTokenBudget, conversationSummaryMaxCount)
+
+	rolling := summaries[start:]
+	return selectPromptSummaryBundle(sessionMemory, boundary, rolling)
 }
 
 func takeSummaryBudget(summaries []model.Summary, tokenBudget int, maxCount int) []model.Summary {
@@ -503,11 +554,11 @@ func injectedMemoryRefCategory(entry types.MemoryEntry, workspaceRoot string) in
 }
 
 func estimateSummaryInjectionTokens(summary model.Summary) int {
-	return contextstate.EstimatePromptTokens("", nil, []model.Summary{summary}, nil)
+	return contextstate.EstimatePromptTokens("", nil, SummaryBundle{Rolling: []model.Summary{summary}}, nil)
 }
 
 func estimateMemoryRefTokens(ref string) int {
-	return contextstate.EstimatePromptTokens("", nil, nil, []string{ref})
+	return contextstate.EstimatePromptTokens("", nil, SummaryBundle{}, []string{ref})
 }
 
 func buildWorkspaceDurableMemory(memory types.SessionMemory, summary model.Summary) (types.MemoryEntry, bool) {
@@ -888,6 +939,74 @@ func decodeSessionMemorySummary(raw string) (model.Summary, bool, error) {
 		summary.RangeLabel = sessionMemoryRangeLabel
 	}
 	return summary, true, nil
+}
+
+type compactionSummaryPayload struct {
+	RangeLabel       string   `json:"range_label"`
+	UserGoals        []string `json:"user_goals"`
+	ImportantChoices []string `json:"important_choices"`
+	FilesTouched     []string `json:"files_touched"`
+	ToolOutcomes     []string `json:"tool_outcomes"`
+	OpenThreads      []string `json:"open_threads"`
+}
+
+func decodeCompactionSummaryPayload(raw string) (model.Summary, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return model.Summary{}, false, nil
+	}
+
+	var standard model.Summary
+	if err := json.Unmarshal([]byte(raw), &standard); err != nil {
+		return model.Summary{}, false, err
+	}
+
+	var snake compactionSummaryPayload
+	if err := json.Unmarshal([]byte(raw), &snake); err != nil {
+		return model.Summary{}, false, err
+	}
+
+	summary := standard
+	if strings.TrimSpace(summary.RangeLabel) == "" {
+		summary.RangeLabel = snake.RangeLabel
+	}
+	if len(summary.UserGoals) == 0 {
+		summary.UserGoals = append([]string(nil), snake.UserGoals...)
+	}
+	if len(summary.ImportantChoices) == 0 {
+		summary.ImportantChoices = append([]string(nil), snake.ImportantChoices...)
+	}
+	if len(summary.FilesTouched) == 0 {
+		summary.FilesTouched = append([]string(nil), snake.FilesTouched...)
+	}
+	if len(summary.ToolOutcomes) == 0 {
+		summary.ToolOutcomes = append([]string(nil), snake.ToolOutcomes...)
+	}
+	if len(summary.OpenThreads) == 0 {
+		summary.OpenThreads = append([]string(nil), snake.OpenThreads...)
+	}
+
+	if isZeroSummary(summary) {
+		return model.Summary{}, false, nil
+	}
+	return summary, true, nil
+}
+
+func removeMatchingSummary(summaries []model.Summary, target model.Summary) []model.Summary {
+	if len(summaries) == 0 {
+		return nil
+	}
+
+	targetKey := encodeSessionMemorySummary(normalizeSummaryForPrompt(target))
+	out := make([]model.Summary, 0, len(summaries))
+	for _, summary := range summaries {
+		summaryKey := encodeSessionMemorySummary(normalizeSummaryForPrompt(summary))
+		if summaryKey == targetKey {
+			continue
+		}
+		out = append(out, summary)
+	}
+	return out
 }
 
 func isZeroSummary(summary model.Summary) bool {

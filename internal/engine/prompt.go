@@ -96,7 +96,7 @@ func memoryRefsSection(memoryRefs []string) string {
 		return ""
 	}
 
-	return "Relevant memory:\n- " + strings.Join(memoryRefs, "\n- ")
+	return "# Background\nRelevant memory:\n- " + strings.Join(memoryRefs, "\n- ")
 }
 
 func validateWorkspacePath(workspaceRoot, target string) error {

@@ -14,12 +14,20 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+type SummaryBundle struct {
+	SessionMemory *model.Summary  `json:"session_memory,omitempty"`
+	Boundary      *model.Summary  `json:"boundary,omitempty"`
+	Rolling       []model.Summary `json:"rolling,omitempty"`
+}
+
 type WorkingContext struct {
-	RecentItems    []model.ConversationItem `json:"recent_items"`
-	PromptItems    []model.ConversationItem `json:"prompt_items,omitempty"`
-	Summaries      []model.Summary          `json:"summaries"`
-	MemoryRefs     []string                 `json:"memory_refs"`
-	RecentMessages []Message                `json:"recent_messages,omitempty"`
+	CarryForwardItems []model.ConversationItem `json:"carry_forward_items,omitempty"`
+	RecentRawItems    []model.ConversationItem `json:"recent_raw_items,omitempty"`
+	RecentItems       []model.ConversationItem `json:"recent_items"`
+	PromptItems       []model.ConversationItem `json:"prompt_items,omitempty"`
+	Summaries         SummaryBundle            `json:"summaries"`
+	MemoryRefs        []string                 `json:"memory_refs"`
+	RecentMessages    []Message                `json:"recent_messages,omitempty"`
 }
 
 func cloneSummary(summary model.Summary) model.Summary {
@@ -73,6 +81,38 @@ func cloneSummaries(summaries []model.Summary) []model.Summary {
 	for i, summary := range summaries {
 		out[i] = cloneSummary(summary)
 	}
+	return out
+}
+
+func cloneSummaryBundle(bundle SummaryBundle) SummaryBundle {
+	var sessionMemory *model.Summary
+	if bundle.SessionMemory != nil {
+		summary := cloneSummary(*bundle.SessionMemory)
+		sessionMemory = &summary
+	}
+
+	var boundary *model.Summary
+	if bundle.Boundary != nil {
+		summary := cloneSummary(*bundle.Boundary)
+		boundary = &summary
+	}
+
+	return SummaryBundle{
+		SessionMemory: sessionMemory,
+		Boundary:      boundary,
+		Rolling:       cloneSummaries(bundle.Rolling),
+	}
+}
+
+func flattenSummaryBundle(bundle SummaryBundle) []model.Summary {
+	out := make([]model.Summary, 0, 2+len(bundle.Rolling))
+	if bundle.SessionMemory != nil {
+		out = append(out, cloneSummary(*bundle.SessionMemory))
+	}
+	if bundle.Boundary != nil {
+		out = append(out, cloneSummary(*bundle.Boundary))
+	}
+	out = append(out, cloneSummaries(bundle.Rolling)...)
 	return out
 }
 

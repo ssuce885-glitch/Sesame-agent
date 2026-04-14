@@ -163,6 +163,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			start_position integer not null,
 			end_position integer not null,
 			summary_payload text not null,
+			metadata_json text not null default '',
 			reason text not null,
 			provider_profile text not null,
 			created_at text not null
@@ -484,6 +485,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "report_mailbox_items", "workspace_root", `alter table report_mailbox_items add column workspace_root text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "conversation_compactions", "metadata_json", `alter table conversation_compactions add column metadata_json text not null default ''`); err != nil {
 		return err
 	}
 	indexStmts := []string{

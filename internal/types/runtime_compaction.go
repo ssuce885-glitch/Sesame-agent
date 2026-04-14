@@ -62,7 +62,22 @@ type ConversationCompaction struct {
 	StartPosition   int                        `json:"start_position"`
 	EndPosition     int                        `json:"end_position"`
 	SummaryPayload  string                     `json:"summary_payload"`
+	MetadataJSON    string                     `json:"metadata_json,omitempty"`
 	Reason          string                     `json:"reason"`
 	ProviderProfile string                     `json:"provider_profile"`
 	CreatedAt       time.Time                  `json:"created_at"`
+}
+
+type CompactionBoundaryMetadata struct {
+	Version               int    `json:"version"`
+	PromptLayoutVersion   int    `json:"prompt_layout_version"`
+	Generation            int    `json:"generation"`
+	CompactedStart        int    `json:"compacted_start"`
+	CompactedEnd          int    `json:"compacted_end"`
+	PreservedRecentStart  int    `json:"preserved_recent_start"`
+	SessionMemoryUpTo     int    `json:"session_memory_up_to"`
+	SourceItemCount       int    `json:"source_item_count"`
+	Reason                string `json:"reason"`
+	ProviderProfile       string `json:"provider_profile"`
+	HasRecentMicrocompact bool   `json:"has_recent_microcompact"`
 }

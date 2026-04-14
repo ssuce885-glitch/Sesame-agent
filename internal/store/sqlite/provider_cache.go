@@ -93,10 +93,12 @@ func (s *Store) InsertProviderCacheEntry(ctx context.Context, entry types.Provid
 }
 
 func (s *Store) InsertConversationCompaction(ctx context.Context, compaction types.ConversationCompaction) error {
+	metadataJSON := compaction.MetadataJSON
+
 	_, err := s.db.ExecContext(ctx, `
 		insert into conversation_compactions (
-			id, session_id, kind, generation, start_position, end_position, summary_payload, reason, provider_profile, created_at
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			id, session_id, kind, generation, start_position, end_position, summary_payload, metadata_json, reason, provider_profile, created_at
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		compaction.ID,
 		compaction.SessionID,
@@ -105,6 +107,7 @@ func (s *Store) InsertConversationCompaction(ctx context.Context, compaction typ
 		compaction.StartPosition,
 		compaction.EndPosition,
 		compaction.SummaryPayload,
+		metadataJSON,
 		compaction.Reason,
 		compaction.ProviderProfile,
 		compaction.CreatedAt.UTC().Format(timeLayout),
@@ -114,7 +117,7 @@ func (s *Store) InsertConversationCompaction(ctx context.Context, compaction typ
 
 func (s *Store) ListConversationCompactions(ctx context.Context, sessionID string) ([]types.ConversationCompaction, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select id, session_id, kind, generation, start_position, end_position, summary_payload, reason, provider_profile, created_at
+		select id, session_id, kind, generation, start_position, end_position, summary_payload, metadata_json, reason, provider_profile, created_at
 		from conversation_compactions
 		where session_id = ?
 		order by created_at asc, id asc
@@ -136,6 +139,7 @@ func (s *Store) ListConversationCompactions(ctx context.Context, sessionID strin
 			&raw.StartPosition,
 			&raw.EndPosition,
 			&raw.SummaryPayload,
+			&raw.MetadataJSON,
 			&raw.Reason,
 			&raw.ProviderProfile,
 			&createdAt,

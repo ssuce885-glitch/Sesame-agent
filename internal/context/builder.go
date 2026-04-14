@@ -8,7 +8,7 @@ func NewBuilder(tailSize int) *Builder {
 	return &Builder{tailSize: tailSize}
 }
 
-func (b *Builder) Build(messages []Message, summaries []Summary, memoryRefs []string) WorkingContext {
+func (b *Builder) Build(messages []Message, summaries SummaryBundle, memoryRefs []string) WorkingContext {
 	start := 0
 	if len(messages) > b.tailSize {
 		start = len(messages) - b.tailSize
@@ -17,9 +17,12 @@ func (b *Builder) Build(messages []Message, summaries []Summary, memoryRefs []st
 	recentItems := messagesToConversationItems(recentMessages)
 
 	return WorkingContext{
-		RecentItems:    recentItems,
-		RecentMessages: recentMessages,
-		Summaries:      cloneSummaries(summaries),
-		MemoryRefs:     cloneStrings(memoryRefs),
+		CarryForwardItems: nil,
+		RecentRawItems:    cloneConversationItems(recentItems),
+		RecentItems:       recentItems,
+		PromptItems:       cloneConversationItems(recentItems),
+		RecentMessages:    recentMessages,
+		Summaries:         cloneSummaryBundle(summaries),
+		MemoryRefs:        cloneStrings(memoryRefs),
 	}
 }
