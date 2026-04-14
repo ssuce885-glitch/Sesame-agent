@@ -313,15 +313,9 @@ func skillSearchText(skill SkillSpec) string {
 	parts := []string{
 		skill.Name,
 		skill.Description,
-		skill.Body,
-		skill.Agent.Description,
-		skill.Agent.Instructions,
 	}
 	parts = append(parts, skill.Triggers...)
 	parts = append(parts, skill.Policy.CapabilityTags...)
-	parts = append(parts, skill.Policy.PreferredTools...)
-	parts = append(parts, skill.AllowedTools...)
-	parts = append(parts, skill.Agent.Tools...)
 	return strings.ToLower(strings.TrimSpace(strings.Join(parts, "\n")))
 }
 

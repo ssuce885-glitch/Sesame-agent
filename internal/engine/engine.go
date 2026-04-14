@@ -62,6 +62,7 @@ type Engine struct {
 	basePrompt              string
 	globalConfigRoot        string
 	maxWorkspacePromptBytes int
+	activeSkillTokenBudget  int
 	maxToolSteps            int
 	automationService       tools.AutomationService
 	taskManager             *task.Manager
@@ -74,6 +75,8 @@ type Engine struct {
 	sessionMemoryRunning    map[string]bool
 	sessionMemoryPending    map[string]Input
 }
+
+const defaultActiveSkillTokenBudget = 2048
 
 func New(
 	modelClient model.StreamingClient,
@@ -112,15 +115,16 @@ func NewWithRuntime(
 		runtime = contextstate.NewRuntime(86400, 3)
 	}
 	return &Engine{
-		model:        modelClient,
-		registry:     registry,
-		permission:   permission,
-		store:        store,
-		ctxManager:   ctxManager,
-		runtime:      runtime,
-		compactor:    compactor,
-		meta:         meta,
-		maxToolSteps: maxToolSteps,
+		model:                  modelClient,
+		registry:               registry,
+		permission:             permission,
+		store:                  store,
+		ctxManager:             ctxManager,
+		runtime:                runtime,
+		compactor:              compactor,
+		meta:                   meta,
+		activeSkillTokenBudget: defaultActiveSkillTokenBudget,
+		maxToolSteps:           maxToolSteps,
 	}
 }
 
@@ -147,6 +151,13 @@ func (e *Engine) SetMaxWorkspacePromptBytes(n int) {
 		return
 	}
 	e.maxWorkspacePromptBytes = n
+}
+
+func (e *Engine) SetActiveSkillTokenBudget(n int) {
+	if e == nil {
+		return
+	}
+	e.activeSkillTokenBudget = n
 }
 
 func (e *Engine) SetTaskManager(manager *task.Manager) {

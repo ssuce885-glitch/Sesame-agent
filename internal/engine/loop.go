@@ -10,8 +10,8 @@ import (
 
 	"go-agent/internal/config"
 	contextstate "go-agent/internal/context"
-	"go-agent/internal/intent"
 	"go-agent/internal/instructions"
+	"go-agent/internal/intent"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
@@ -162,7 +162,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		VisibleTools:           toolState.VisibleToolNames,
 		ActiveSkills:           activeSkills,
 		SuggestedSkills:        resolution.Suggested,
-		ActiveSkillTokenBudget: 0,
+		ActiveSkillTokenBudget: e.activeSkillTokenBudget,
 	})
 	runtimeInstructions.Text = appendTurnSupplementalPrompts(instructionBundle.Render(), completionNotices, reportMailboxItems)
 	runtimeInstructions.Notices = append(runtimeInstructions.Notices, instructionBundle.Notices...)
@@ -530,7 +530,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 							VisibleTools:           toolState.VisibleToolNames,
 							ActiveSkills:           activeSkills,
 							SuggestedSkills:        resolution.Suggested,
-							ActiveSkillTokenBudget: 0,
+							ActiveSkillTokenBudget: e.activeSkillTokenBudget,
 						}).Render(), completionNotices, reportMailboxItems)
 					}
 				}
@@ -1087,6 +1087,14 @@ type pendingIntentConfirmationStore interface {
 	DeleteIntentConfirmation(context.Context, string) error
 }
 
+type pendingConfirmationResolution int
+
+const (
+	pendingConfirmationKeep pendingConfirmationResolution = iota
+	pendingConfirmationResolved
+	pendingConfirmationReplaced
+)
+
 func resolveIntentPlan(ctx context.Context, store ConversationStore, sessionID, userMessage string, catalog skills.Catalog) (intent.Plan, error) {
 	if confirmationStore, ok := store.(pendingIntentConfirmationStore); ok {
 		pending, found, err := confirmationStore.GetIntentConfirmation(ctx, sessionID)
@@ -1094,8 +1102,8 @@ func resolveIntentPlan(ctx context.Context, store ConversationStore, sessionID, 
 			return intent.Plan{}, err
 		}
 		if found {
-			plan, resolved := resolvePendingIntentConfirmation(pending, userMessage, catalog)
-			if resolved {
+			plan, resolution := resolvePendingIntentConfirmation(pending, userMessage, catalog)
+			if resolution == pendingConfirmationResolved || resolution == pendingConfirmationReplaced {
 				if err := confirmationStore.DeleteIntentConfirmation(ctx, sessionID); err != nil {
 					return intent.Plan{}, err
 				}
@@ -1106,22 +1114,23 @@ func resolveIntentPlan(ctx context.Context, store ConversationStore, sessionID, 
 	return intent.Resolve(intent.Scan(userMessage, catalog)), nil
 }
 
-func resolvePendingIntentConfirmation(pending types.IntentConfirmation, reply string, catalog skills.Catalog) (intent.Plan, bool) {
+func resolvePendingIntentConfirmation(pending types.IntentConfirmation, reply string, catalog skills.Catalog) (intent.Plan, pendingConfirmationResolution) {
 	plan := intent.Resolve(intent.Scan(pending.RawMessage, catalog))
 	if strings.TrimSpace(pending.ConfirmText) != "" {
 		plan.ConfirmText = pending.ConfirmText
 	}
-	reply = strings.ToLower(strings.TrimSpace(reply))
+	trimmedReply := strings.TrimSpace(reply)
+	reply = strings.ToLower(trimmedReply)
 	switch {
 	case reply == "", reply == "?" || reply == "不确定":
 		plan.NeedsConfirm = true
-		return plan, false
+		return plan, pendingConfirmationKeep
 	case strings.Contains(reply, "automation"), strings.Contains(reply, "自动化"), strings.Contains(reply, "脚本"), strings.Contains(reply, "第一个"), reply == "1", reply == "yes", reply == "是":
 		plan.NeedsConfirm = false
 		if strings.TrimSpace(pending.RecommendedProfile) != "" {
 			plan.Profile = intent.CapabilityProfile(pending.RecommendedProfile)
 		}
-		return plan, true
+		return plan, pendingConfirmationResolved
 	case strings.Contains(reply, "schedule"), strings.Contains(reply, "scheduled"), strings.Contains(reply, "定时"), strings.Contains(reply, "第二个"), reply == "2":
 		plan.NeedsConfirm = false
 		if strings.TrimSpace(pending.FallbackProfile) != "" {
@@ -1129,11 +1138,43 @@ func resolvePendingIntentConfirmation(pending types.IntentConfirmation, reply st
 		} else {
 			plan.Profile = intent.ProfileScheduledReport
 		}
-		return plan, true
+		return plan, pendingConfirmationResolved
 	default:
+		if looksLikeUnrelatedIntentRequest(trimmedReply, catalog) {
+			return intent.Resolve(intent.Scan(trimmedReply, catalog)), pendingConfirmationReplaced
+		}
 		plan.NeedsConfirm = true
-		return plan, false
+		return plan, pendingConfirmationKeep
 	}
+}
+
+func looksLikeUnrelatedIntentRequest(reply string, catalog skills.Catalog) bool {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return false
+	}
+	lower := strings.ToLower(reply)
+	for _, marker := range []string{
+		"帮我", "看下", "看看", "解释", "说明", "写", "改", "修", "查", "打开", "创建",
+		"review", "fix", "implement", "check", "show", "inspect", "explain", "open", "create",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	signal := intent.Scan(reply, catalog)
+	if len(signal.ExplicitSkills) > 0 || len(signal.NameMatches) > 0 {
+		return true
+	}
+	for flag, score := range signal.Strength {
+		if flag == intent.FlagCodeEdit && score == 1 {
+			continue
+		}
+		if score > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func emitPlanningConfirmationTurn(
