@@ -804,7 +804,12 @@ func marshalCompactionSummary(summary model.Summary) string {
 }
 
 func setPromptItems(working contextstate.WorkingSet, carryForwardItems []model.ConversationItem, userMessage string) contextstate.WorkingSet {
-	working.PromptItems = appendPromptItems(carryForwardItems, working.RecentItems)
+	working.CarryForwardItems = cloneConversationItemsForPrompt(carryForwardItems)
+	recentItems := working.RecentRawItems
+	if len(recentItems) == 0 {
+		recentItems = working.RecentItems
+	}
+	working.PromptItems = appendPromptItems(working.CarryForwardItems, recentItems)
 	working.EstimatedTokens = contextstate.EstimatePromptTokens(userMessage, working.PromptItems, working.Summaries, working.MemoryRefs)
 	return working
 }
