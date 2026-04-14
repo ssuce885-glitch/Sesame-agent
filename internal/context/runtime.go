@@ -20,32 +20,54 @@ func NewRuntime(cacheExpirySeconds, maxCompactionPasses int) *Runtime {
 }
 
 func (r *Runtime) PrepareRequest(plan WorkingSet, head *types.ProviderCacheHead, caps model.ProviderCapabilities, userItem model.ConversationItem, instructions string) model.Request {
-	promptItems := plan.PromptItems
-	if len(promptItems) == 0 {
-		promptItems = plan.RecentItems
+	recentRawItems := plan.RecentRawItems
+	if len(recentRawItems) == 0 {
+		recentRawItems = plan.RecentItems
 	}
 
 	hasUserItem := userItem.Kind != ""
-	flatSummaries := flattenSummaryBundle(plan.Summaries)
-	fullItems := make([]model.ConversationItem, 0, len(flatSummaries)+len(promptItems)+map[bool]int{true: 1, false: 0}[hasUserItem])
-	for _, summary := range flatSummaries {
-		summary := summary
-		fullItems = append(fullItems, model.ConversationItem{
+	req := model.Request{
+		UserMessage:  userItem.Text,
+		Instructions: instructions,
+		Items:        BuildReinjectedPromptItems(plan.Summaries, plan.CarryForwardItems, recentRawItems, userItem),
+	}
+
+	return r.applyCachePlan(req, plan, head, caps, userItem, hasUserItem)
+}
+
+func BuildReinjectedPromptItems(bundle SummaryBundle, carryForward []model.ConversationItem, recentRaw []model.ConversationItem, userItem model.ConversationItem) []model.ConversationItem {
+	hasUserItem := userItem.Kind != ""
+	out := make([]model.ConversationItem, 0, 2+len(bundle.Rolling)+len(carryForward)+len(recentRaw)+map[bool]int{true: 1, false: 0}[hasUserItem])
+	if bundle.SessionMemory != nil {
+		summary := cloneSummary(*bundle.SessionMemory)
+		out = append(out, model.ConversationItem{
 			Kind:    model.ConversationItemSummary,
 			Summary: &summary,
 		})
 	}
-	fullItems = append(fullItems, cloneConversationItems(promptItems)...)
+	if bundle.Boundary != nil {
+		summary := cloneSummary(*bundle.Boundary)
+		out = append(out, model.ConversationItem{
+			Kind:    model.ConversationItemSummary,
+			Summary: &summary,
+		})
+	}
+	for _, summary := range bundle.Rolling {
+		summary := cloneSummary(summary)
+		out = append(out, model.ConversationItem{
+			Kind:    model.ConversationItemSummary,
+			Summary: &summary,
+		})
+	}
+	out = append(out, cloneConversationItems(carryForward)...)
+	out = append(out, cloneConversationItems(recentRaw)...)
 	if hasUserItem {
-		fullItems = append(fullItems, cloneConversationItem(userItem))
+		out = append(out, cloneConversationItem(userItem))
 	}
+	return out
+}
 
-	req := model.Request{
-		UserMessage:  userItem.Text,
-		Instructions: instructions,
-		Items:        fullItems,
-	}
-
+func (r *Runtime) applyCachePlan(req model.Request, plan WorkingSet, head *types.ProviderCacheHead, caps model.ProviderCapabilities, userItem model.ConversationItem, hasUserItem bool) model.Request {
 	if caps.Profile == model.CapabilityProfileNone {
 		return req
 	}
@@ -64,38 +86,38 @@ func (r *Runtime) PrepareRequest(plan WorkingSet, head *types.ProviderCacheHead,
 		return req
 	}
 
-	if caps.SupportsSessionCache {
-		if plan.CompactionApplied && caps.RotatesSessionRef {
-			req.Cache = &model.CacheDirective{
-				Mode:     model.CacheModeSession,
-				Store:    true,
-				ExpireAt: r.cacheExpiryUnix(),
-			}
-			return req
+	if !caps.SupportsSessionCache {
+		return req
+	}
+	if plan.CompactionApplied && caps.RotatesSessionRef {
+		req.Cache = &model.CacheDirective{
+			Mode:     model.CacheModeSession,
+			Store:    true,
+			ExpireAt: r.cacheExpiryUnix(),
 		}
-		if previous := previousSessionResponseID(head); previous != "" {
-			if hasUserItem {
-				req.Items = []model.ConversationItem{cloneConversationItem(userItem)}
-			} else {
-				req.Items = nil
-			}
-			req.Cache = &model.CacheDirective{
-				Mode:               model.CacheModeSession,
-				Store:              true,
-				PreviousResponseID: previous,
-				ExpireAt:           r.cacheExpiryUnix(),
-			}
-			return req
+		return req
+	}
+	if previous := previousSessionResponseID(head); previous != "" {
+		if hasUserItem {
+			req.Items = []model.ConversationItem{cloneConversationItem(userItem)}
+		} else {
+			req.Items = nil
 		}
-		if head == nil {
-			req.Cache = &model.CacheDirective{
-				Mode:     model.CacheModeSession,
-				Store:    true,
-				ExpireAt: r.cacheExpiryUnix(),
-			}
+		req.Cache = &model.CacheDirective{
+			Mode:               model.CacheModeSession,
+			Store:              true,
+			PreviousResponseID: previous,
+			ExpireAt:           r.cacheExpiryUnix(),
+		}
+		return req
+	}
+	if head == nil {
+		req.Cache = &model.CacheDirective{
+			Mode:     model.CacheModeSession,
+			Store:    true,
+			ExpireAt: r.cacheExpiryUnix(),
 		}
 	}
-
 	return req
 }
 
