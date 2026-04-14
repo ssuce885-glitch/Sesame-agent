@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	contextstate "go-agent/internal/context"
+	"go-agent/internal/intent"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
@@ -52,6 +53,7 @@ type SessionMemoryWorker interface {
 
 type Engine struct {
 	model                   model.StreamingClient
+	classifier              intent.Classifier
 	registry                *tools.Registry
 	permission              *permissions.Engine
 	store                   ConversationStore
@@ -137,6 +139,13 @@ func (e *Engine) SetBaseSystemPrompt(prompt string) {
 		return
 	}
 	e.basePrompt = prompt
+}
+
+func (e *Engine) SetClassifier(classifier intent.Classifier) {
+	if e == nil {
+		return
+	}
+	e.classifier = classifier
 }
 
 func (e *Engine) SetGlobalConfigRoot(root string) {
