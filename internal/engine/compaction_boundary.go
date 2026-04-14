@@ -32,12 +32,24 @@ func activeBoundaryCompaction(compactions []types.ConversationCompaction) (types
 	for _, compaction := range compactions {
 		switch compaction.Kind {
 		case types.ConversationCompactionKindRolling, types.ConversationCompactionKindFull:
-			boundary = compaction
-			found = true
+			if !found || boundaryCompactionLess(boundary, compaction) {
+				boundary = compaction
+				found = true
+			}
 		}
 	}
 	if !found {
 		return types.ConversationCompaction{}, false
 	}
 	return boundary, true
+}
+
+func boundaryCompactionLess(current, candidate types.ConversationCompaction) bool {
+	if current.Generation != candidate.Generation {
+		return current.Generation < candidate.Generation
+	}
+	if current.EndPosition != candidate.EndPosition {
+		return current.EndPosition < candidate.EndPosition
+	}
+	return current.ID < candidate.ID
 }
