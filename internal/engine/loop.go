@@ -789,7 +789,9 @@ func applySummaryCompaction(
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
 
-	summaryBundle.Rolling = append(summaryBundle.Rolling, summary)
+	allSummaries := flattenSummaryBundle(summaryBundle)
+	allSummaries = append(allSummaries, summary)
+	summaryBundle = selectPromptSummaries(allSummaries, summaryBundle.SessionMemory != nil)
 	working = e.ctxManager.Build(userMessage, items, summaryBundle, memoryRefs)
 	working.CompactionApplied = true
 	return working, summaryBundle, nil

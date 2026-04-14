@@ -8,6 +8,9 @@ import (
 type SummaryBundle = contextstate.SummaryBundle
 
 func selectPromptSummaryBundle(sessionMemory *model.Summary, boundary *model.Summary, rolling []model.Summary) SummaryBundle {
+	if rollingSummaryMaxCount > 0 && len(rolling) > rollingSummaryMaxCount {
+		rolling = rolling[len(rolling)-rollingSummaryMaxCount:]
+	}
 	return SummaryBundle{
 		SessionMemory: normalizeOptionalSummary(sessionMemory, sessionMemorySummaryTokenBudget),
 		Boundary:      normalizeOptionalSummary(boundary, boundarySummaryTokenBudget),
