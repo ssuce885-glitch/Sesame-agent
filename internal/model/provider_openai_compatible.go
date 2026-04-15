@@ -131,7 +131,10 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			return nil
 		}
 		callID, resolvedName := resolveFunctionCall(itemID, name)
-		input, err := parseFunctionCallArguments(functionCallArgumentDone[itemID], functionCallArgumentDeltas[itemID])
+		// Prefer the accumulated delta stream as the authoritative source.
+		// The done event's snapshot is only a fallback when no complete delta
+		// stream was available.
+		input, err := parseFunctionCallArguments(functionCallArgumentDeltas[itemID], functionCallArgumentDone[itemID])
 		if err != nil {
 			return err
 		}
@@ -204,11 +207,9 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 				rememberFunctionCall(payload.Item.ID, payload.Item.CallID, payload.Item.Name)
 			}
 		case "response.output_item.done":
-			// No-op for function calls: by this point the call has already
-			// been finalized via response.function_call_arguments.done, and
-			// calling rememberFunctionCall here would re-insert the deleted
-			// entry, causing a duplicate StreamEventToolCallEnd with empty
-			// arguments when finalizeOutstandingFunctionCalls runs.
+			// No-op for function calls: we finalize from the accumulated
+			// function-call argument stream, and re-registering the item here
+			// would risk duplicate StreamEventToolCallEnd emission.
 		case "response.output_text.delta":
 			var payload struct {
 				Delta string `json:"delta"`
@@ -272,9 +273,6 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			}
 			rememberFunctionCall(payload.ItemID, "", payload.Name)
 			functionCallArgumentDone[payload.ItemID] = payload.Arguments
-			if err := finalizeFunctionCall(payload.ItemID, payload.Name); err != nil {
-				continue
-			}
 		case "response.completed":
 			if err := finalizeOutstandingFunctionCalls(); err != nil {
 				return err
@@ -660,15 +658,16 @@ func toResponsesToolChoice(choice string, tools []ToolSchema) any {
 	}
 }
 
-func parseFunctionCallArguments(raw string, deltaFallback string) (map[string]any, error) {
-	raw = strings.TrimSpace(raw)
-	deltaFallback = strings.TrimSpace(deltaFallback)
-	if raw == "" && deltaFallback == "" {
+func parseFunctionCallArguments(preferred string, fallback string) (map[string]any, error) {
+	preferred = strings.TrimSpace(preferred)
+	fallback = strings.TrimSpace(fallback)
+	if preferred == "" && fallback == "" {
 		return map[string]any{}, nil
 	}
 
 	var lastErr error
-	for _, candidate := range functionCallArgumentCandidates(raw, deltaFallback) {
+	for _, candidate := range functionCallArgumentCandidates(preferred, fallback) {
+		candidate = unquoteDoubleEncodedJSON(candidate)
 		input := map[string]any{}
 		err := json.Unmarshal([]byte(candidate), &input)
 		if err == nil {
@@ -677,29 +676,29 @@ func parseFunctionCallArguments(raw string, deltaFallback string) (map[string]an
 		lastErr = err
 	}
 
-	if deltaFallback == "" && raw != "" && isIncompleteJSONObjectError(raw, lastErr) {
+	if fallback == "" && preferred != "" && isIncompleteJSONObjectError(preferred, lastErr) {
+		return map[string]any{}, nil
+	}
+	if preferred == "" && fallback != "" && isIncompleteJSONObjectError(fallback, lastErr) {
 		return map[string]any{}, nil
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("empty function call arguments")
 	}
-	reported := raw
+	reported := preferred
 	if reported == "" {
-		reported = deltaFallback
+		reported = fallback
 	}
 	return nil, fmt.Errorf("decode function call arguments (raw=%q): %w", reported, lastErr)
 }
 
-func functionCallArgumentCandidates(raw string, deltaFallback string) []string {
-	candidates := make([]string, 0, 3)
-	if raw != "" {
-		candidates = append(candidates, raw)
+func functionCallArgumentCandidates(preferred string, fallback string) []string {
+	candidates := make([]string, 0, 2)
+	if preferred != "" {
+		candidates = append(candidates, preferred)
 	}
-	if deltaFallback != "" && deltaFallback != raw {
-		candidates = append(candidates, deltaFallback)
-	}
-	if combined := strings.TrimSpace(raw + deltaFallback); raw != "" && deltaFallback != "" && combined != raw && combined != deltaFallback {
-		candidates = append(candidates, combined)
+	if fallback != "" && fallback != preferred {
+		candidates = append(candidates, fallback)
 	}
 	return candidates
 }
@@ -710,4 +709,26 @@ func isIncompleteJSONObjectError(candidate string, err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "unexpected end of JSON input")
+}
+
+// unquoteDoubleEncodedJSON handles the case where a JSON string is double-encoded.
+// If the input looks like a JSON string that was JSON-encoded again (e.g.,
+// "\"{\\\"questions\\\":...}\""), this function unquotes it to get the raw JSON.
+func unquoteDoubleEncodedJSON(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	// Check if it looks like a double-encoded JSON string: starts and ends with quotes
+	if len(candidate) < 2 || candidate[0] != '"' || candidate[len(candidate)-1] != '"' {
+		return candidate
+	}
+	// Try to unquote as a JSON string
+	var decoded string
+	if err := json.Unmarshal([]byte(candidate), &decoded); err != nil {
+		return candidate
+	}
+	// Check if the decoded result is valid JSON object/array
+	decoded = strings.TrimSpace(decoded)
+	if len(decoded) > 0 && ((decoded[0] == '{') || (decoded[0] == '[')) {
+		return decoded
+	}
+	return candidate
 }

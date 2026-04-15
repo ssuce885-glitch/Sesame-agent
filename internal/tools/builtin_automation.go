@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"go-agent/internal/types"
@@ -303,9 +304,18 @@ func (automationListTool) Decode(call Call) (DecodedCall, error) {
 	if err != nil {
 		return DecodedCall{}, fmt.Errorf("limit %w", err)
 	}
+	state := types.AutomationState(strings.TrimSpace(call.StringInput("state")))
+	if state != "" {
+		switch state {
+		case types.AutomationStateActive,
+			types.AutomationStatePaused:
+		default:
+			return DecodedCall{}, fmt.Errorf(`invalid state %q; must be one of active, paused`, state)
+		}
+	}
 	input := AutomationListInput{
 		WorkspaceRoot: strings.TrimSpace(call.StringInput("workspace_root")),
-		State:         types.AutomationState(strings.TrimSpace(call.StringInput("state"))),
+		State:         state,
 		Limit:         limit,
 	}
 	return DecodedCall{Call: call, Input: input}, nil
@@ -321,6 +331,12 @@ func (automationControlTool) Decode(call Call) (DecodedCall, error) {
 	}
 	if input.Action == "" {
 		return DecodedCall{}, fmt.Errorf("action is required")
+	}
+	switch input.Action {
+	case types.AutomationControlActionPause,
+		types.AutomationControlActionResume:
+	default:
+		return DecodedCall{}, fmt.Errorf(`invalid action %q; must be one of pause, resume`, input.Action)
 	}
 	return DecodedCall{Call: call, Input: input}, nil
 }
@@ -344,6 +360,14 @@ func (incidentControlTool) Decode(call Call) (DecodedCall, error) {
 	if input.Action == "" {
 		return DecodedCall{}, fmt.Errorf("action is required")
 	}
+	switch input.Action {
+	case types.IncidentControlActionAck,
+		types.IncidentControlActionClose,
+		types.IncidentControlActionReopen,
+		types.IncidentControlActionEscalate:
+	default:
+		return DecodedCall{}, fmt.Errorf(`invalid action %q; must be one of ack, close, reopen, escalate`, input.Action)
+	}
 	return DecodedCall{Call: call, Input: input}, nil
 }
 
@@ -360,10 +384,27 @@ func (incidentListTool) Decode(call Call) (DecodedCall, error) {
 	if err != nil {
 		return DecodedCall{}, fmt.Errorf("limit %w", err)
 	}
+	status := types.AutomationIncidentStatus(strings.TrimSpace(call.StringInput("status")))
+	if status != "" {
+		switch status {
+		case types.AutomationIncidentStatusOpen,
+			types.AutomationIncidentStatusSuppressed,
+			types.AutomationIncidentStatusQueued,
+			types.AutomationIncidentStatusActive,
+			types.AutomationIncidentStatusMonitoring,
+			types.AutomationIncidentStatusResolved,
+			types.AutomationIncidentStatusEscalated,
+			types.AutomationIncidentStatusFailed,
+			types.AutomationIncidentStatusCanceled,
+			types.AutomationIncidentStatusClosed:
+		default:
+			return DecodedCall{}, fmt.Errorf(`invalid status %q; must be one of open, suppressed, queued, active, monitoring, resolved, escalated, failed, canceled, closed`, status)
+		}
+	}
 	input := IncidentListInput{
 		WorkspaceRoot: strings.TrimSpace(call.StringInput("workspace_root")),
 		AutomationID:  strings.TrimSpace(call.StringInput("automation_id")),
-		Status:        types.AutomationIncidentStatus(strings.TrimSpace(call.StringInput("status"))),
+		Status:        status,
 		Limit:         limit,
 	}
 	return DecodedCall{Call: call, Input: input}, nil
@@ -447,6 +488,7 @@ func (automationApplyTool) ExecuteDecoded(ctx context.Context, decoded DecodedCa
 		return ToolExecutionResult{}, err
 	}
 	input, _ := decoded.Input.(AutomationApplyInput)
+	input.Spec.WorkspaceRoot = collapseAutomationAssetBundleWorkspaceRoot(input.Spec.WorkspaceRoot, execCtx.WorkspaceRoot)
 	spec, err := service.ApplyRequest(ctx, types.ApplyAutomationRequest{
 		Confirmed: input.Confirmed,
 		Spec:      input.Spec,
@@ -462,6 +504,26 @@ func (automationApplyTool) ExecuteDecoded(ctx context.Context, decoded DecodedCa
 		},
 		Data: spec,
 	}, nil
+}
+
+func collapseAutomationAssetBundleWorkspaceRoot(specRoot, sessionRoot string) string {
+	specRoot = strings.TrimSpace(specRoot)
+	sessionRoot = strings.TrimSpace(sessionRoot)
+	if specRoot == "" || sessionRoot == "" {
+		return specRoot
+	}
+	rel, err := filepath.Rel(sessionRoot, specRoot)
+	if err != nil {
+		return specRoot
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+		return specRoot
+	}
+	if rel == "automations" || strings.HasPrefix(rel, "automations/") {
+		return sessionRoot
+	}
+	return specRoot
 }
 
 func (automationGetTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {

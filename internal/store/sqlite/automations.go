@@ -9,6 +9,29 @@ import (
 	"go-agent/internal/types"
 )
 
+func appendAutomationWorkspaceRootCondition(conditions *[]string, args *[]any, column, workspaceRoot string) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return
+	}
+	escaped := escapeSQLiteLikePattern(workspaceRoot)
+	*conditions = append(*conditions, "("+column+" = ? or "+column+" like ? escape '\\' or "+column+" like ? escape '\\')")
+	*args = append(*args,
+		workspaceRoot,
+		escaped+"/automations/%",
+		escaped+"\\\\automations\\\\%",
+	)
+}
+
+func escapeSQLiteLikePattern(value string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	)
+	return replacer.Replace(value)
+}
+
 func (s *Store) UpsertAutomation(ctx context.Context, spec types.AutomationSpec) error {
 	return upsertAutomationWithExec(ctx, s.db, spec)
 }
@@ -95,8 +118,7 @@ func listAutomationsWithQueryer(ctx context.Context, queryer queryContexter, fil
 	args := make([]any, 0, 3)
 	conditions := make([]string, 0, 2)
 	if filter.WorkspaceRoot != "" {
-		conditions = append(conditions, "workspace_root = ?")
-		args = append(args, filter.WorkspaceRoot)
+		appendAutomationWorkspaceRootCondition(&conditions, &args, "workspace_root", filter.WorkspaceRoot)
 	}
 	if filter.State != "" {
 		conditions = append(conditions, "state = ?")
@@ -232,8 +254,7 @@ func listAutomationIncidentsWithQueryer(ctx context.Context, queryer queryContex
 	args := make([]any, 0, 4)
 	conditions := make([]string, 0, 3)
 	if filter.WorkspaceRoot != "" {
-		conditions = append(conditions, "workspace_root = ?")
-		args = append(args, filter.WorkspaceRoot)
+		appendAutomationWorkspaceRootCondition(&conditions, &args, "workspace_root", filter.WorkspaceRoot)
 	}
 	if filter.AutomationID != "" {
 		conditions = append(conditions, "automation_id = ?")
@@ -324,8 +345,7 @@ func listTriggerEventsWithQueryer(ctx context.Context, queryer queryContexter, f
 	args := make([]any, 0, 5)
 	conditions := make([]string, 0, 4)
 	if filter.WorkspaceRoot != "" {
-		conditions = append(conditions, "workspace_root = ?")
-		args = append(args, filter.WorkspaceRoot)
+		appendAutomationWorkspaceRootCondition(&conditions, &args, "workspace_root", filter.WorkspaceRoot)
 	}
 	if filter.AutomationID != "" {
 		conditions = append(conditions, "automation_id = ?")
@@ -553,8 +573,7 @@ func listAutomationWatchersWithQueryer(ctx context.Context, queryer queryContext
 	args := make([]any, 0, 4)
 	conditions := make([]string, 0, 3)
 	if filter.WorkspaceRoot != "" {
-		conditions = append(conditions, "workspace_root = ?")
-		args = append(args, filter.WorkspaceRoot)
+		appendAutomationWorkspaceRootCondition(&conditions, &args, "workspace_root", filter.WorkspaceRoot)
 	}
 	if filter.AutomationID != "" {
 		conditions = append(conditions, "automation_id = ?")
@@ -726,10 +745,9 @@ func upsertDispatchAttemptWithExec(ctx context.Context, execer execContexter, at
 	_, err = execer.ExecContext(ctx, `
 		insert into automation_dispatch_attempts (
 			dispatch_id, workspace_root, automation_id, incident_id, phase, status,
-			task_id, background_session_id, background_turn_id, permission_request_id,
-			continuation_id, payload, created_at, updated_at
+			task_id, background_session_id, background_turn_id, payload, created_at, updated_at
 		)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(dispatch_id) do update set
 			workspace_root = excluded.workspace_root,
 			automation_id = excluded.automation_id,
@@ -739,8 +757,6 @@ func upsertDispatchAttemptWithExec(ctx context.Context, execer execContexter, at
 			task_id = excluded.task_id,
 			background_session_id = excluded.background_session_id,
 			background_turn_id = excluded.background_turn_id,
-			permission_request_id = excluded.permission_request_id,
-			continuation_id = excluded.continuation_id,
 			payload = excluded.payload,
 			updated_at = excluded.updated_at
 	`,
@@ -753,8 +769,6 @@ func upsertDispatchAttemptWithExec(ctx context.Context, execer execContexter, at
 		attempt.TaskID,
 		attempt.BackgroundSessionID,
 		attempt.BackgroundTurnID,
-		attempt.PermissionRequestID,
-		attempt.ContinuationID,
 		string(payload),
 		attempt.CreatedAt.UTC().Format(timeLayout),
 		attempt.UpdatedAt.UTC().Format(timeLayout),
@@ -840,8 +854,7 @@ func listDispatchAttemptsWithQueryer(ctx context.Context, queryer queryContexter
 	args := make([]any, 0, 5)
 	conditions := make([]string, 0, 4)
 	if filter.WorkspaceRoot != "" {
-		conditions = append(conditions, "workspace_root = ?")
-		args = append(args, filter.WorkspaceRoot)
+		appendAutomationWorkspaceRootCondition(&conditions, &args, "workspace_root", filter.WorkspaceRoot)
 	}
 	if filter.AutomationID != "" {
 		conditions = append(conditions, "automation_id = ?")
@@ -962,8 +975,7 @@ func listDeliveryRecordsWithQueryer(ctx context.Context, queryer queryContexter,
 	args := make([]any, 0, 5)
 	conditions := make([]string, 0, 4)
 	if filter.WorkspaceRoot != "" {
-		conditions = append(conditions, "workspace_root = ?")
-		args = append(args, filter.WorkspaceRoot)
+		appendAutomationWorkspaceRootCondition(&conditions, &args, "workspace_root", filter.WorkspaceRoot)
 	}
 	if filter.AutomationID != "" {
 		conditions = append(conditions, "automation_id = ?")
@@ -992,48 +1004,6 @@ func listDeliveryRecordsWithQueryer(ctx context.Context, queryer queryContexter,
 	}
 	defer rows.Close()
 	return scanDeliveryRecords(rows)
-}
-
-func (s *Store) ListPendingAutomationPermissions(ctx context.Context, workspaceRoot string) ([]types.PendingAutomationPermission, error) {
-	attempts, err := s.ListDispatchAttempts(ctx, types.DispatchAttemptFilter{
-		WorkspaceRoot: strings.TrimSpace(workspaceRoot),
-		Status:        types.DispatchAttemptStatusAwaitingApproval,
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]types.PendingAutomationPermission, 0)
-	for _, attempt := range attempts {
-		requestID := strings.TrimSpace(attempt.PermissionRequestID)
-		if requestID == "" {
-			continue
-		}
-		request, ok, err := s.GetPermissionRequest(ctx, requestID)
-		if err != nil {
-			return nil, err
-		}
-		if !ok || request.Status != types.PermissionRequestStatusRequested {
-			continue
-		}
-		continuation, ok, err := s.GetTurnContinuationByPermissionRequest(ctx, requestID)
-		if err != nil {
-			return nil, err
-		}
-		if !ok || continuation.State != types.TurnContinuationStatePending {
-			continue
-		}
-		out = append(out, types.PendingAutomationPermission{
-			RequestID:           requestID,
-			WorkspaceRoot:       attempt.WorkspaceRoot,
-			AutomationID:        attempt.AutomationID,
-			IncidentID:          attempt.IncidentID,
-			DispatchID:          attempt.DispatchID,
-			BackgroundSessionID: attempt.BackgroundSessionID,
-			BackgroundTurnID:    attempt.BackgroundTurnID,
-			PreferredSessionID:  attempt.PreferredSessionID,
-		})
-	}
-	return out, nil
 }
 
 func scanAutomationSpecs(rows *sql.Rows) ([]types.AutomationSpec, error) {
