@@ -11,12 +11,10 @@ import (
 	"go-agent/internal/config"
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/instructions"
-	"go-agent/internal/intent"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
 	"go-agent/internal/skills"
-	"go-agent/internal/toolrouter"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
 )
@@ -139,21 +137,10 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 		return err
 	}
-	plan, err := resolveIntentPlan(ctx, e.store, sessionID, in.Turn.UserMessage, catalog, e.classifier)
-	if err != nil {
-		if emitErr := emitFailed(err.Error()); emitErr != nil {
-			return errors.Join(err, emitErr)
-		}
-		return err
-	}
-	if plan.NeedsConfirm {
-		return emitPlanningConfirmationTurn(ctx, e, in, emit, nextPosition, sessionID, plan)
-	}
-
 	baseInstructionsText := runtimeInstructions.Text
-	resolution := skills.Resolve(plan, catalog, in.ActivatedSkillNames)
-	toolState := resolveTurnToolState(plan, toolRuntime, toolExecCtx, resolution)
-	activeSkills := toolState.ActiveSkills
+	resolution := skills.Resolve(in.Turn.UserMessage, catalog, in.ActivatedSkillNames)
+	visibleDefs := toolRuntime.VisibleDefinitions(toolExecCtx)
+	activeSkills := append([]skills.ActivatedSkill(nil), resolution.Activated...)
 	toolExecCtx.ActiveSkillNames = activatedSkillNames(activeSkills)
 	toolExecCtx.InjectedEnv, err = loadActivatedSkillEnv(e.globalConfigRoot, activeSkills)
 	if err != nil {
@@ -162,14 +149,10 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 		return err
 	}
-	toolDecision := toolState.Decision
-	visibleDefs := toolState.VisibleDefs
 	instructionBundle := instructions.Compile(instructions.CompileInput{
 		BaseText:               baseInstructionsText,
 		Catalog:                catalog,
 		Message:                in.Turn.UserMessage,
-		Policy:                 toolDecision.Summary,
-		VisibleTools:           toolState.VisibleToolNames,
 		ActiveSkills:           activeSkills,
 		SuggestedSkills:        resolution.Suggested,
 		ActiveSkillTokenBudget: e.activeSkillTokenBudget,
@@ -524,22 +507,17 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 								return errors.Join(err, emitErr)
 							}
 							return err
-						}
-						resolution.Activated = activeSkills
-						toolState = resolveTurnToolState(plan, toolRuntime, toolExecCtx, resolution)
-						activeSkills = toolState.ActiveSkills
-						toolDecision = toolState.Decision
-						visibleDefs = toolState.VisibleDefs
-						req.Tools = buildToolSchemas(visibleDefs)
-						req.Instructions = appendTurnSupplementalPrompts(instructions.Compile(instructions.CompileInput{
-							BaseText:               baseInstructionsText,
-							Catalog:                catalog,
-							Message:                in.Turn.UserMessage,
-							Policy:                 toolDecision.Summary,
-							VisibleTools:           toolState.VisibleToolNames,
-							ActiveSkills:           activeSkills,
-							SuggestedSkills:        resolution.Suggested,
-							ActiveSkillTokenBudget: e.activeSkillTokenBudget,
+							}
+							resolution.Activated = activeSkills
+							visibleDefs = toolRuntime.VisibleDefinitions(toolExecCtx)
+							req.Tools = buildToolSchemas(visibleDefs)
+							req.Instructions = appendTurnSupplementalPrompts(instructions.Compile(instructions.CompileInput{
+								BaseText:               baseInstructionsText,
+								Catalog:                catalog,
+								Message:                in.Turn.UserMessage,
+								ActiveSkills:           activeSkills,
+								SuggestedSkills:        resolution.Suggested,
+								ActiveSkillTokenBudget: e.activeSkillTokenBudget,
 						}).Render(), completionNotices, reportMailboxItems)
 					}
 				}
@@ -1209,179 +1187,6 @@ func buildToolSchemas(defs []tools.Definition) []model.ToolSchema {
 	return schemas
 }
 
-type turnToolState struct {
-	ActiveSkills     []skills.ActivatedSkill
-	Decision         toolrouter.Decision
-	VisibleDefs      []tools.Definition
-	VisibleToolNames []string
-}
-
-func resolveTurnToolState(
-	plan intent.Plan,
-	toolRuntime *tools.Runtime,
-	toolExecCtx tools.ExecContext,
-	resolution skills.Resolution,
-) turnToolState {
-	activeSkills := append([]skills.ActivatedSkill(nil), resolution.Activated...)
-	decision := toolrouter.Decide(plan, resolution)
-	visibleDefs := decision.FilterDefinitions(toolRuntime.VisibleDefinitions(toolExecCtx))
-	visibleToolNames := make([]string, 0, len(visibleDefs))
-	for _, def := range visibleDefs {
-		visibleToolNames = append(visibleToolNames, def.Name)
-	}
-	return turnToolState{
-		ActiveSkills:     activeSkills,
-		Decision:         decision,
-		VisibleDefs:      visibleDefs,
-		VisibleToolNames: visibleToolNames,
-	}
-}
-
-type pendingIntentConfirmationStore interface {
-	UpsertIntentConfirmation(context.Context, types.IntentConfirmation) error
-	GetIntentConfirmation(context.Context, string) (types.IntentConfirmation, bool, error)
-	DeleteIntentConfirmation(context.Context, string) error
-}
-
-type pendingConfirmationResolution int
-
-const (
-	pendingConfirmationKeep pendingConfirmationResolution = iota
-	pendingConfirmationResolved
-	pendingConfirmationReplaced
-)
-
-func resolveIntentPlan(ctx context.Context, store ConversationStore, sessionID, userMessage string, catalog skills.Catalog, classifier intent.Classifier) (intent.Plan, error) {
-	if confirmationStore, ok := store.(pendingIntentConfirmationStore); ok {
-		pending, found, err := confirmationStore.GetIntentConfirmation(ctx, sessionID)
-		if err != nil {
-			return intent.Plan{}, err
-		}
-		if found {
-			plan, resolution, err := resolvePendingIntentConfirmation(ctx, pending, userMessage, catalog, classifier)
-			if err != nil {
-				return intent.Plan{}, err
-			}
-			if resolution == pendingConfirmationResolved || resolution == pendingConfirmationReplaced {
-				if err := confirmationStore.DeleteIntentConfirmation(ctx, sessionID); err != nil {
-					return intent.Plan{}, err
-				}
-			}
-			return plan, nil
-		}
-	}
-	return intent.ClassifyIntent(ctx, classifier, userMessage, catalog)
-}
-
-func resolvePendingIntentConfirmation(ctx context.Context, pending types.IntentConfirmation, reply string, catalog skills.Catalog, classifier intent.Classifier) (intent.Plan, pendingConfirmationResolution, error) {
-	plan, err := intent.ClassifyIntent(ctx, classifier, pending.RawMessage, catalog)
-	if err != nil {
-		return intent.Plan{}, pendingConfirmationKeep, err
-	}
-	if strings.TrimSpace(pending.ConfirmText) != "" {
-		plan.ConfirmText = pending.ConfirmText
-	}
-	trimmedReply := strings.TrimSpace(reply)
-	reply = strings.ToLower(trimmedReply)
-	switch {
-	case reply == "", reply == "?" || reply == "不确定":
-		plan.NeedsConfirm = true
-		return plan, pendingConfirmationKeep, nil
-	case strings.Contains(reply, "automation"), strings.Contains(reply, "自动化"), strings.Contains(reply, "脚本"), strings.Contains(reply, "第一个"), reply == "1", reply == "yes", reply == "是":
-		plan.NeedsConfirm = false
-		if strings.TrimSpace(pending.RecommendedProfile) != "" {
-			plan.Profile = intent.CapabilityProfile(pending.RecommendedProfile)
-		}
-		return plan, pendingConfirmationResolved, nil
-	case strings.Contains(reply, "schedule"), strings.Contains(reply, "scheduled"), strings.Contains(reply, "定时"), strings.Contains(reply, "第二个"), reply == "2":
-		plan.NeedsConfirm = false
-		if strings.TrimSpace(pending.FallbackProfile) != "" {
-			plan.Profile = intent.CapabilityProfile(pending.FallbackProfile)
-		} else {
-			plan.Profile = intent.ProfileScheduledReport
-		}
-		return plan, pendingConfirmationResolved, nil
-	default:
-		if looksLikeUnrelatedIntentRequest(trimmedReply, catalog) {
-			nextPlan, err := intent.ClassifyIntent(ctx, classifier, trimmedReply, catalog)
-			if err != nil {
-				return intent.Plan{}, pendingConfirmationKeep, err
-			}
-			return nextPlan, pendingConfirmationReplaced, nil
-		}
-		plan.NeedsConfirm = true
-		return plan, pendingConfirmationKeep, nil
-	}
-}
-
-func looksLikeUnrelatedIntentRequest(reply string, catalog skills.Catalog) bool {
-	reply = strings.TrimSpace(reply)
-	if reply == "" {
-		return false
-	}
-	lower := strings.ToLower(reply)
-	for _, marker := range []string{
-		"帮我", "看下", "看看", "解释", "说明", "写", "改", "修", "查", "打开", "创建",
-		"review", "fix", "implement", "check", "show", "inspect", "explain", "open", "create",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	signal := intent.ExtractSkillSignals(reply, catalog)
-	if len(signal.ExplicitSkills) > 0 || len(signal.NameMatches) > 0 {
-		return true
-	}
-	classified := intent.FallbackClassify(reply)
-	return classified.NeedsConfirm || classified.Profile != intent.ProfileCodebaseEdit
-}
-
-func emitPlanningConfirmationTurn(
-	ctx context.Context,
-	e *Engine,
-	in Input,
-	emit func(string, any) error,
-	nextPosition int,
-	sessionID string,
-	plan intent.Plan,
-) error {
-	if confirmationStore, ok := e.store.(pendingIntentConfirmationStore); ok {
-		pending := types.IntentConfirmation{
-			SessionID:          sessionID,
-			SourceTurnID:       in.Turn.ID,
-			RawMessage:         plan.Signal.Raw,
-			ConfirmText:        plan.ConfirmText,
-			RecommendedProfile: string(plan.Profile),
-			FallbackProfile:    fallbackConfirmationProfile(plan),
-		}
-		if err := confirmationStore.UpsertIntentConfirmation(ctx, pending); err != nil {
-			return err
-		}
-	}
-
-	if in.Resume == nil {
-		if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, model.UserMessageItem(in.Turn.UserMessage)); err != nil {
-			return err
-		}
-		nextPosition++
-	}
-	if err := emit(types.EventAssistantStarted, struct{}{}); err != nil {
-		return err
-	}
-	if text := strings.TrimSpace(plan.ConfirmText); text != "" {
-		if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, model.ConversationItem{
-			Kind: model.ConversationItemAssistantText,
-			Text: text,
-		}); err != nil {
-			return err
-		}
-		if err := emit(types.EventAssistantDelta, types.AssistantDeltaPayload{Text: text}); err != nil {
-			return err
-		}
-	}
-	return finalizeTurn(ctx, e, in, nil)
-}
-
 func nextConversationPosition(ctx context.Context, store ConversationStore, sessionID string) (int, error) {
 	if store == nil {
 		return 1, nil
@@ -1391,13 +1196,6 @@ func nextConversationPosition(ctx context.Context, store ConversationStore, sess
 		return 0, err
 	}
 	return len(items) + 1, nil
-}
-
-func fallbackConfirmationProfile(plan intent.Plan) string {
-	if strings.TrimSpace(string(plan.Fallback)) != "" {
-		return string(plan.Fallback)
-	}
-	return string(intent.ProfileCodebaseEdit)
 }
 
 func appendTurnSupplementalPrompts(text string, completionNotices []string, reportMailboxItems []types.ReportMailboxItem) string {

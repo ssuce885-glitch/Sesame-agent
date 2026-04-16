@@ -22,10 +22,6 @@ type UserConfig struct {
 	SystemPromptFile           string              `json:"system_prompt_file"`
 	Anthropic                  UserConfigAnthropic `json:"anthropic"`
 	OpenAI                     UserConfigOpenAI    `json:"openai"`
-	ClassifierModel            string              `json:"classifier_model"`
-	ClassifierProvider         string              `json:"classifier_provider"`
-	ClassifierAPIKey           string              `json:"classifier_api_key"`
-	ClassifierBaseURL          string              `json:"classifier_base_url"`
 	Skills                     UserConfigSkills    `json:"skills"`
 	MaxToolSteps               int                 `json:"max_tool_steps"`
 	MaxRecentItems             int                 `json:"max_recent_items"`

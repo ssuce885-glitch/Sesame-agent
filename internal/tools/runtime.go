@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"go-agent/internal/permissions"
 	"go-agent/internal/types"
 )
 
@@ -69,13 +68,6 @@ func (r *Runtime) VisibleDefinitions(execCtx ExecContext) []Definition {
 		for _, tool := range customTools {
 			if !toolEnabled(tool, execCtx) {
 				continue
-			}
-			if execCtx.PermissionEngine != nil {
-				switch execCtx.PermissionEngine.Decide(tool.spec.Name) {
-				case permissions.DecisionAllow:
-				case permissions.DecisionAsk, permissions.DecisionDeny:
-					continue
-				}
 			}
 			defs = append(defs, cloneDefinition(tool.Definition()))
 		}

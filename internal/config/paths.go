@@ -31,13 +31,18 @@ func ResolvePaths(workspaceRoot string, explicitDataDir string) (Paths, error) {
 		return Paths{}, err
 	}
 	globalRoot := filepath.Join(home, DirName)
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
 
 	dataDir := strings.TrimSpace(explicitDataDir)
 	if dataDir == "" {
 		dataDir = strings.TrimSpace(os.Getenv("SESAME_DATA_DIR"))
 	}
 	if dataDir == "" {
-		dataDir = globalRoot
+		if workspaceRoot != "" {
+			dataDir = filepath.Join(workspaceRoot, DirName)
+		} else {
+			dataDir = globalRoot
+		}
 	}
 
 	paths := Paths{
@@ -51,7 +56,6 @@ func ResolvePaths(workspaceRoot string, explicitDataDir string) (Paths, error) {
 		PIDFile:             filepath.Join(dataDir, "sesame.pid"),
 	}
 
-	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if workspaceRoot == "" {
 		return paths, nil
 	}

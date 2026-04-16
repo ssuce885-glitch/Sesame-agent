@@ -28,10 +28,6 @@ type Config struct {
 	AnthropicBaseURL             string
 	OpenAIAPIKey                 string
 	OpenAIBaseURL                string
-	ClassifierModel              string
-	ClassifierProvider           string
-	ClassifierAPIKey             string
-	ClassifierBaseURL            string
 	ProviderCacheProfile         string
 	CacheExpirySeconds           int
 	MicrocompactBytesThreshold   int
@@ -177,19 +173,6 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 	primaryAnthropicBaseURL := selectedProviderBaseURL(modelProvider == "anthropic", genericBaseURL, envOrDefaultWithFallback("ANTHROPIC_BASE_URL", uc.Anthropic.BaseURL, ""), "https://api.anthropic.com")
 	primaryOpenAIAPIKey := selectedProviderAPIKey(modelProvider == "openai_compatible", genericAPIKey, envOrDefaultWithFallback("OPENAI_API_KEY", uc.OpenAI.APIKey, ""))
 	primaryOpenAIBaseURL := selectedProviderBaseURL(modelProvider == "openai_compatible", genericBaseURL, envOrDefaultWithFallback("OPENAI_BASE_URL", uc.OpenAI.BaseURL, ""), "")
-	classifierProvider := firstNonEmpty(
-		envOrDefault("SESAME_CLASSIFIER_PROVIDER", ""),
-		uc.ClassifierProvider,
-		modelProvider,
-	)
-	classifierModel := firstNonEmpty(
-		envOrDefault("SESAME_CLASSIFIER_MODEL", ""),
-		uc.ClassifierModel,
-		classifierModelFallback(classifierProvider),
-	)
-	classifierPrimaryAPIKey := primaryProviderAPIKey(modelProvider, primaryAnthropicAPIKey, primaryOpenAIAPIKey)
-	classifierPrimaryBaseURL := primaryProviderBaseURL(modelProvider, primaryAnthropicBaseURL, primaryOpenAIBaseURL)
-
 	cfg := Config{
 		Addr:                         firstNonEmpty(strings.TrimSpace(overrides.Addr), envOrDefaultWithFallback("SESAME_ADDR", uc.Listen.Addr, "127.0.0.1:4317")),
 		DataDir:                      paths.DataDir,
@@ -200,10 +183,6 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		AnthropicBaseURL:             primaryAnthropicBaseURL,
 		OpenAIAPIKey:                 primaryOpenAIAPIKey,
 		OpenAIBaseURL:                primaryOpenAIBaseURL,
-		ClassifierModel:              classifierModel,
-		ClassifierProvider:           classifierProvider,
-		ClassifierAPIKey:             firstNonEmpty(envOrDefault("SESAME_CLASSIFIER_API_KEY", ""), uc.ClassifierAPIKey, classifierPrimaryAPIKey),
-		ClassifierBaseURL:            firstNonEmpty(envOrDefault("SESAME_CLASSIFIER_BASE_URL", ""), uc.ClassifierBaseURL, classifierPrimaryBaseURL),
 		ProviderCacheProfile:         firstNonEmpty(envOrDefault("SESAME_PROVIDER_CACHE_PROFILE", ""), defaultProviderCacheProfile(modelProvider, uc, genericBaseURL), "none"),
 		CacheExpirySeconds:           intEnvOrDefault("SESAME_CACHE_EXPIRY_SECONDS", 86400),
 		MicrocompactBytesThreshold:   intEnvOrDefaultWithFallback("SESAME_MICROCOMPACT_BYTES_THRESHOLD", uc.MicrocompactBytesThreshold, 8192),
@@ -242,10 +221,6 @@ func (c Config) Fingerprint() string {
 		AnthropicBaseURL             string `json:"anthropic_base_url"`
 		OpenAIAPIKey                 string `json:"openai_api_key"`
 		OpenAIBaseURL                string `json:"openai_base_url"`
-		ClassifierModel              string `json:"classifier_model"`
-		ClassifierProvider           string `json:"classifier_provider"`
-		ClassifierAPIKey             string `json:"classifier_api_key"`
-		ClassifierBaseURL            string `json:"classifier_base_url"`
 		ProviderCacheProfile         string `json:"provider_cache_profile"`
 		LogLevel                     string `json:"log_level"`
 		PermissionProfile            string `json:"permission_profile"`
@@ -274,10 +249,6 @@ func (c Config) Fingerprint() string {
 		AnthropicBaseURL:             c.AnthropicBaseURL,
 		OpenAIAPIKey:                 c.OpenAIAPIKey,
 		OpenAIBaseURL:                c.OpenAIBaseURL,
-		ClassifierModel:              c.ClassifierModel,
-		ClassifierProvider:           c.ClassifierProvider,
-		ClassifierAPIKey:             c.ClassifierAPIKey,
-		ClassifierBaseURL:            c.ClassifierBaseURL,
 		ProviderCacheProfile:         c.ProviderCacheProfile,
 		LogLevel:                     c.LogLevel,
 		PermissionProfile:            c.PermissionProfile,
@@ -365,39 +336,6 @@ func providerModelFallback(modelProvider string, uc UserConfig) string {
 		return "fake-smoke"
 	default:
 		return firstNonEmpty(uc.Anthropic.Model, "claude-sonnet-4-5")
-	}
-}
-
-func classifierModelFallback(provider string) string {
-	switch strings.TrimSpace(provider) {
-	case "openai_compatible":
-		return "gpt-4.1-nano"
-	case "fake":
-		return ""
-	default:
-		return "claude-haiku-4-5"
-	}
-}
-
-func primaryProviderAPIKey(provider, anthropicKey, openAIKey string) string {
-	switch strings.TrimSpace(provider) {
-	case "openai_compatible":
-		return openAIKey
-	case "anthropic":
-		return anthropicKey
-	default:
-		return ""
-	}
-}
-
-func primaryProviderBaseURL(provider, anthropicBaseURL, openAIBaseURL string) string {
-	switch strings.TrimSpace(provider) {
-	case "openai_compatible":
-		return openAIBaseURL
-	case "anthropic":
-		return anthropicBaseURL
-	default:
-		return ""
 	}
 }
 

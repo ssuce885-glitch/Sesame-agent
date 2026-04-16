@@ -22,6 +22,7 @@ import (
 	"go-agent/internal/reporting"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
+	"go-agent/internal/sessionbinding"
 	"go-agent/internal/store/artifacts"
 	"go-agent/internal/store/sqlite"
 	"go-agent/internal/stream"
@@ -159,7 +160,8 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, taskID string, workspace
 
 	sessionID := types.NewID("task_session")
 	turnID := types.NewID("task_turn")
-	if err := a.prepareTaskRun(ctx, sessionID, turnID, workspaceRoot, prompt); err != nil {
+	taskCtx := sessionbinding.WithContextBinding(ctx, taskContextBinding(sessionID))
+	if err := a.prepareTaskRun(taskCtx, sessionID, turnID, workspaceRoot, prompt); err != nil {
 		return err
 	}
 	sink := &taskEventSink{observer: observer}
@@ -168,7 +170,7 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, taskID string, workspace
 			return err
 		}
 	}
-	if err := a.runner.RunTurn(ctx, engine.Input{
+	if err := a.runner.RunTurn(taskCtx, engine.Input{
 		Session: types.Session{
 			ID:            sessionID,
 			WorkspaceRoot: workspaceRoot,
@@ -229,10 +231,50 @@ func (a agentTaskExecutor) prepareTaskRun(ctx context.Context, sessionID, turnID
 			return err
 		}
 	}
+	if err := a.ensureTaskContextHead(ctx, sessionRow); err != nil {
+		return err
+	}
 	if a.manager != nil {
 		a.manager.RegisterSession(sessionRow)
 	}
 	return nil
+}
+
+func (a agentTaskExecutor) ensureTaskContextHead(ctx context.Context, sessionRow types.Session) error {
+	if a.store == nil {
+		return nil
+	}
+	if headID, ok, err := a.store.GetCurrentContextHeadID(ctx); err != nil {
+		return err
+	} else if ok {
+		head, found, err := a.store.GetContextHead(ctx, headID)
+		if err != nil {
+			return err
+		}
+		if found && head.SessionID == sessionRow.ID {
+			return a.store.AssignTurnsWithoutHead(ctx, sessionRow.ID, head.ID)
+		}
+	}
+
+	now := a.currentTime()
+	head := types.ContextHead{
+		ID:         types.NewID("head"),
+		SessionID:  sessionRow.ID,
+		SourceKind: types.ContextHeadSourceBootstrap,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := a.store.InsertContextHead(ctx, head); err != nil {
+		return err
+	}
+	if err := a.store.AssignTurnsWithoutHead(ctx, sessionRow.ID, head.ID); err != nil {
+		return err
+	}
+	return a.store.SetCurrentContextHeadID(ctx, head.ID)
+}
+
+func taskContextBinding(sessionID string) string {
+	return "task:" + strings.TrimSpace(sessionID)
 }
 
 func (a agentTaskExecutor) currentTime() time.Time {

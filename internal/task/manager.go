@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"go-agent/internal/config"
 	"go-agent/internal/types"
 )
 
@@ -402,14 +403,14 @@ func (m *Manager) ensureWorkspaceLocked(workspaceRoot string) (*workspaceState, 
 	workspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
 	state, ok := m.workspaces[workspaceRoot]
 	if !ok {
-		claudeDir := filepath.Join(workspaceRoot, ".claude")
-		outputsDir := filepath.Join(claudeDir, "tasks")
+		workspaceStateDir := filepath.Join(workspaceRoot, config.DirName)
+		outputsDir := filepath.Join(workspaceStateDir, "tasks")
 		if err := os.MkdirAll(outputsDir, 0o755); err != nil {
 			return nil, err
 		}
 		state = &workspaceState{
-			tasksFile:  filepath.Join(claudeDir, "tasks.json"),
-			todosFile:  filepath.Join(claudeDir, "todos.json"),
+			tasksFile:  filepath.Join(workspaceStateDir, "tasks.json"),
+			todosFile:  filepath.Join(workspaceStateDir, "todos.json"),
 			outputsDir: outputsDir,
 		}
 		m.workspaces[workspaceRoot] = state

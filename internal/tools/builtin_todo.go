@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go-agent/internal/config"
 	"go-agent/internal/task"
 )
 
@@ -102,7 +103,7 @@ func (todoWriteTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, exec
 	}
 
 	input, _ := decoded.Input.(TodoWriteInput)
-	path := filepath.Join(execCtx.WorkspaceRoot, ".claude", "todos.json")
+	path := filepath.Join(execCtx.WorkspaceRoot, config.DirName, "todos.json")
 	oldTodos, err := readExistingTodos(path)
 	if err != nil {
 		return ToolExecutionResult{}, err

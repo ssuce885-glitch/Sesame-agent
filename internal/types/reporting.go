@@ -41,7 +41,6 @@ type OutputContractUIHints struct {
 
 type OutputContract struct {
 	ContractID string                `json:"contract_id"`
-	Intent     string                `json:"intent,omitempty"`
 	Sections   []ContractSection     `json:"sections,omitempty"`
 	Rules      OutputContractRules   `json:"rules,omitempty"`
 	Tone       string                `json:"tone,omitempty"`

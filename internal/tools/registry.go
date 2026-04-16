@@ -111,13 +111,6 @@ func (r *Registry) VisibleDefinitions(execCtx ExecContext) []Definition {
 		if !toolEnabled(tool, execCtx) {
 			continue
 		}
-		if execCtx.PermissionEngine != nil {
-			switch execCtx.PermissionEngine.Decide(name) {
-			case permissions.DecisionAllow:
-			case permissions.DecisionAsk, permissions.DecisionDeny:
-				continue
-			}
-		}
 		defs = append(defs, cloneDefinition(r.definitions[name]))
 	}
 	return defs

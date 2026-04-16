@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"go-agent/internal/skills"
-	"go-agent/internal/toolrouter"
 )
 
 type Section struct {
@@ -18,16 +17,12 @@ type Bundle struct {
 	Sections       []Section
 	Notices        []string
 	ActiveSkills   []skills.ActivatedSkill
-	ToolPolicy     toolrouter.PolicySummary
-	VisibleToolIDs []string
 }
 
 type CompileInput struct {
 	BaseText               string
 	Catalog                skills.Catalog
 	Message                string
-	Policy                 toolrouter.PolicySummary
-	VisibleTools           []string
 	ActiveSkills           []skills.ActivatedSkill
 	SuggestedSkills        []skills.SuggestedSkill
 	ActiveSkillTokenBudget int
@@ -55,20 +50,11 @@ func Compile(input CompileInput) Bundle {
 			Body:  catalogSnapshot,
 		})
 	}
-	if routingSection := renderToolPolicySection(input.Policy, input.VisibleTools); strings.TrimSpace(routingSection) != "" {
-		sections = append(sections, Section{
-			Title: "Tool guidance",
-			Body:  routingSection,
-		})
-	}
-
 	return Bundle{
-		BaseText:       strings.TrimSpace(input.BaseText),
-		Sections:       sections,
-		Notices:        notices,
-		ActiveSkills:   activated,
-		ToolPolicy:     input.Policy,
-		VisibleToolIDs: append([]string(nil), input.VisibleTools...),
+		BaseText:     strings.TrimSpace(input.BaseText),
+		Sections:     sections,
+		Notices:      notices,
+		ActiveSkills: activated,
 	}
 }
 
@@ -89,48 +75,6 @@ func (b Bundle) Render() string {
 		parts = append(parts, body)
 	}
 	return strings.Join(parts, "\n\n")
-}
-
-func renderToolPolicySection(policy toolrouter.PolicySummary, visibleTools []string) string {
-	lines := make([]string, 0, 12)
-	if policy.Profile != "" {
-		lines = append(lines, "Profile: "+string(policy.Profile))
-	}
-	for _, line := range policy.Guidance {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			lines = append(lines, "- "+trimmed)
-		}
-	}
-	if len(policy.PreferredTools) > 0 {
-		lines = append(lines, "- Preferred tools: "+strings.Join(policy.PreferredTools, ", "))
-	}
-	if len(policy.HiddenTools) > 0 {
-		lines = append(lines, "- Hidden tools for this turn: "+strings.Join(policy.HiddenTools, ", "))
-	}
-	if len(visibleTools) > 0 {
-		lines = append(lines, "- Model-visible tools: "+strings.Join(visibleTools, ", "))
-	}
-	if policy.MaxSteps > 0 || policy.MaxFetches > 0 {
-		parts := make([]string, 0, 2)
-		if policy.MaxSteps > 0 {
-			parts = append(parts, "max_steps="+fmt.Sprint(policy.MaxSteps))
-		}
-		if policy.MaxFetches > 0 {
-			parts = append(parts, "max_fetches="+fmt.Sprint(policy.MaxFetches))
-		}
-		lines = append(lines, "- Soft limits: "+strings.Join(parts, ", "))
-	}
-	for _, line := range policy.ForbiddenActions {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			lines = append(lines, "- Forbidden: "+trimmed)
-		}
-	}
-	for _, line := range policy.StopConditions {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			lines = append(lines, "- Stop when: "+trimmed)
-		}
-	}
-	return strings.Join(lines, "\n")
 }
 
 func renderCatalogSnapshotIfRequested(catalog skills.Catalog, message string) string {
