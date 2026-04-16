@@ -226,6 +226,21 @@ func (s *Store) migrate(ctx context.Context) error {
 			value text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists workspace_tasks (
+			workspace_root text not null,
+			task_id text not null,
+			payload text not null,
+			created_at text not null,
+			updated_at text not null,
+			primary key (workspace_root, task_id)
+		);`,
+		`create index if not exists workspace_tasks_root_updated_idx
+			on workspace_tasks(workspace_root, updated_at desc, task_id asc);`,
+		`create table if not exists workspace_todos (
+			workspace_root text primary key,
+			payload text not null,
+			updated_at text not null
+		);`,
 		`create table if not exists child_agent_specs (
 			id text primary key,
 			session_id text not null default '',

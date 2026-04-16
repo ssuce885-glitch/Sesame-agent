@@ -58,6 +58,7 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
 		TaskOutputMaxBytes: cfg.TaskOutputMaxBytes,
 		TerminalNotifier:   taskNotifier,
+		WorkspaceStore:     store,
 	}, nil, agentExecutor)
 	executablePath, _ := os.Executable()
 	watcherService := automation.NewWatcherService(store, taskManager, automation.WatcherConfig{

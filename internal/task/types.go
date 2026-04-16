@@ -73,6 +73,13 @@ type TodoItem struct {
 	ActiveForm string `json:"activeForm,omitempty"`
 }
 
+type WorkspaceStore interface {
+	ListWorkspaceTasks(ctx context.Context, workspaceRoot string) ([]Task, error)
+	UpsertWorkspaceTask(ctx context.Context, task Task) error
+	GetWorkspaceTodos(ctx context.Context, workspaceRoot string) ([]TodoItem, error)
+	ReplaceWorkspaceTodos(ctx context.Context, workspaceRoot string, todos []TodoItem) error
+}
+
 type CreateTaskInput struct {
 	ID                  string
 	Type                TaskType

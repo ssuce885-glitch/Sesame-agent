@@ -2,11 +2,7 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"go-agent/internal/config"
@@ -103,8 +99,11 @@ func (todoWriteTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, exec
 	}
 
 	input, _ := decoded.Input.(TodoWriteInput)
-	path := filepath.Join(execCtx.WorkspaceRoot, config.DirName, "todos.json")
-	oldTodos, err := readExistingTodos(path)
+	paths, err := config.ResolvePaths(execCtx.WorkspaceRoot, "")
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+	oldTodos, err := manager.ReadTodos(execCtx.WorkspaceRoot)
 	if err != nil {
 		return ToolExecutionResult{}, err
 	}
@@ -118,11 +117,11 @@ func (todoWriteTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, exec
 	}
 	return ToolExecutionResult{
 		Result: Result{
-			Text:      path,
+			Text:      paths.DatabaseFile,
 			ModelText: modelText,
 		},
 		Data: TodoWriteOutput{
-			Path:     path,
+			Path:     paths.DatabaseFile,
 			OldTodos: oldTodos,
 			NewTodos: input.Todos,
 			Count:    len(input.Todos),
@@ -180,21 +179,6 @@ func encodeTodoItems(todos []task.TodoItem) []any {
 		})
 	}
 	return encoded
-}
-
-func readExistingTodos(path string) ([]task.TodoItem, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var todos []task.TodoItem
-	if err := json.Unmarshal(data, &todos); err != nil {
-		return nil, err
-	}
-	return todos, nil
 }
 
 func asString(v any) string {

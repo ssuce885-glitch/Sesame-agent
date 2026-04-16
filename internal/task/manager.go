@@ -21,9 +21,8 @@ type runningTask struct {
 }
 
 type workspaceState struct {
-	tasksFile  string
-	todosFile  string
 	outputsDir string
+	todos      []TodoItem
 	loaded     bool
 }
 
@@ -31,6 +30,7 @@ type Config struct {
 	MaxConcurrentTasks int
 	TaskOutputMaxBytes int
 	TerminalNotifier   TerminalNotifier
+	WorkspaceStore     WorkspaceStore
 }
 
 type Manager struct {
@@ -43,6 +43,7 @@ type Manager struct {
 	cfg              Config
 	remote           RemoteExecutorConfig
 	terminalNotifier TerminalNotifier
+	workspaceStore   WorkspaceStore
 }
 
 func NewManager(cfg Config, runners map[TaskType]Runner, agentExecutor AgentExecutor) *Manager {
@@ -54,6 +55,7 @@ func NewManager(cfg Config, runners map[TaskType]Runner, agentExecutor AgentExec
 		runners:          make(map[TaskType]Runner),
 		cfg:              cfg,
 		terminalNotifier: cfg.TerminalNotifier,
+		workspaceStore:   cfg.WorkspaceStore,
 	}
 	manager.registerDefaultRunners(agentExecutor)
 	for taskType, runner := range runners {
@@ -106,18 +108,18 @@ func (m *Manager) Create(_ context.Context, in CreateTaskInput) (Task, error) {
 	}
 	m.tasks[task.ID] = task
 	m.waiterLocked(task)
-	if err := m.saveWorkspaceLocked(workspaceRoot); err != nil {
+	if !in.Start {
+		if err := m.saveTaskLocked(task); err != nil {
+			delete(m.tasks, task.ID)
+			delete(m.waiters, task.ID)
+			return Task{}, err
+		}
+		return *task, nil
+	}
+	if err := m.startLocked(task); err != nil {
 		delete(m.tasks, task.ID)
 		delete(m.waiters, task.ID)
 		return Task{}, err
-	}
-	if in.Start {
-		if err := m.startLocked(task); err != nil {
-			delete(m.tasks, task.ID)
-			delete(m.waiters, task.ID)
-			_ = m.saveWorkspaceLocked(workspaceRoot)
-			return Task{}, err
-		}
 	}
 	return *task, nil
 }
@@ -189,7 +191,7 @@ func (m *Manager) Update(taskID, workspaceRoot string, in UpdateTaskInput) error
 		task.EndTime = &now
 		m.markTerminalLocked(task)
 	}
-	return m.saveWorkspaceLocked(workspaceRoot)
+	return m.saveTaskLocked(task)
 }
 
 func (m *Manager) Stop(taskID, workspaceRoot string) error {
@@ -214,7 +216,7 @@ func (m *Manager) Stop(taskID, workspaceRoot string) error {
 		now := time.Now().UTC()
 		task.EndTime = &now
 		m.markTerminalLocked(task)
-		err := m.saveWorkspaceLocked(workspaceRoot)
+		err := m.saveTaskLocked(task)
 		m.mu.Unlock()
 		return err
 	}
@@ -308,7 +310,23 @@ func (m *Manager) WriteTodos(workspaceRoot string, todos []TodoItem) error {
 		return err
 	}
 
-	return writeTodosFile(state.todosFile, todos)
+	state.todos = copyTodoItems(todos)
+	if m.workspaceStore == nil {
+		return nil
+	}
+	return m.workspaceStore.ReplaceWorkspaceTodos(context.Background(), workspaceRoot, state.todos)
+}
+
+func (m *Manager) ReadTodos(workspaceRoot string) ([]TodoItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	workspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
+	state, err := m.ensureWorkspaceLocked(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	return copyTodoItems(state.todos), nil
 }
 
 func (m *Manager) ReadResult(taskID, workspaceRoot string) (FinalResult, bool, error) {
@@ -356,7 +374,7 @@ func (m *Manager) SetFinalText(taskID, text string) error {
 	task.FinalResultKind = FinalResultKindAssistantText
 	task.FinalResultText = text
 	task.FinalResultReadyAt = &now
-	return m.saveWorkspaceLocked(task.WorkspaceRoot)
+	return m.saveTaskLocked(task)
 }
 
 func (m *Manager) SetOutcome(taskID string, outcome types.ChildAgentOutcome, summary string) error {
@@ -369,7 +387,7 @@ func (m *Manager) SetOutcome(taskID string, outcome types.ChildAgentOutcome, sum
 	}
 	task.Outcome = normalizeChildAgentOutcome(outcome)
 	task.OutcomeSummary = strings.TrimSpace(summary)
-	return m.saveWorkspaceLocked(task.WorkspaceRoot)
+	return m.saveTaskLocked(task)
 }
 
 func normalizeChildAgentOutcome(outcome types.ChildAgentOutcome) types.ChildAgentOutcome {
@@ -409,8 +427,6 @@ func (m *Manager) ensureWorkspaceLocked(workspaceRoot string) (*workspaceState, 
 			return nil, err
 		}
 		state = &workspaceState{
-			tasksFile:  filepath.Join(workspaceStateDir, "tasks.json"),
-			todosFile:  filepath.Join(workspaceStateDir, "todos.json"),
 			outputsDir: outputsDir,
 		}
 		m.workspaces[workspaceRoot] = state
@@ -419,12 +435,20 @@ func (m *Manager) ensureWorkspaceLocked(workspaceRoot string) (*workspaceState, 
 		return state, nil
 	}
 
-	persistedTasks, err := loadTasksFile(state.tasksFile)
-	if err != nil {
-		return nil, err
+	persistedTasks := make([]Task, 0)
+	if m.workspaceStore != nil {
+		var err error
+		persistedTasks, err = m.workspaceStore.ListWorkspaceTasks(context.Background(), workspaceRoot)
+		if err != nil {
+			return nil, err
+		}
+		state.todos, err = m.workspaceStore.GetWorkspaceTodos(context.Background(), workspaceRoot)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	needsSave := false
+	pendingSaves := make([]*Task, 0)
 	for _, persistedTask := range persistedTasks {
 		taskCopy := persistedTask
 		if taskCopy.Status == TaskStatusRunning {
@@ -432,7 +456,7 @@ func (m *Manager) ensureWorkspaceLocked(workspaceRoot string) (*workspaceState, 
 			taskCopy.Error = "task interrupted by process restart"
 			now := time.Now().UTC()
 			taskCopy.EndTime = &now
-			needsSave = true
+			pendingSaves = append(pendingSaves, &taskCopy)
 		}
 		m.tasks[taskCopy.ID] = &taskCopy
 		waiter := m.waiterLocked(&taskCopy)
@@ -442,27 +466,19 @@ func (m *Manager) ensureWorkspaceLocked(workspaceRoot string) (*workspaceState, 
 	}
 
 	state.loaded = true
-	if needsSave {
-		if err := m.saveWorkspaceLocked(workspaceRoot); err != nil {
+	for _, persistedTask := range pendingSaves {
+		if err := m.saveTaskLocked(persistedTask); err != nil {
 			return nil, err
 		}
 	}
 	return state, nil
 }
 
-func (m *Manager) saveWorkspaceLocked(workspaceRoot string) error {
-	workspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
-	state := m.workspaces[workspaceRoot]
-	tasks := make([]Task, 0)
-	for _, task := range m.tasks {
-		if task.WorkspaceRoot == workspaceRoot {
-			tasks = append(tasks, *task)
-		}
+func (m *Manager) saveTaskLocked(task *Task) error {
+	if task == nil || m.workspaceStore == nil {
+		return nil
 	}
-	sort.Slice(tasks, func(i, j int) bool {
-		return tasks[i].StartTime.Before(tasks[j].StartTime)
-	})
-	return writeTasksFile(state.tasksFile, tasks)
+	return m.workspaceStore.UpsertWorkspaceTask(context.Background(), copyTask(*task))
 }
 
 func (m *Manager) startLocked(task *Task) error {
@@ -490,7 +506,7 @@ func (m *Manager) startLocked(task *Task) error {
 	}
 	m.running[task.ID] = handle
 	task.Status = TaskStatusRunning
-	if err := m.saveWorkspaceLocked(task.WorkspaceRoot); err != nil {
+	if err := m.saveTaskLocked(task); err != nil {
 		delete(m.running, task.ID)
 		cancel()
 		return err
@@ -526,7 +542,7 @@ func (m *Manager) finishRun(taskID, workspaceRoot string, runErr error, ctxErr e
 	m.markTerminalLocked(task)
 	snapshot := copyTask(*task)
 	notifier := m.terminalNotifier
-	_ = m.saveWorkspaceLocked(workspaceRoot)
+	_ = m.saveTaskLocked(task)
 	m.mu.Unlock()
 
 	if notifier == nil {
@@ -547,7 +563,7 @@ func (m *Manager) finishRun(taskID, workspaceRoot string, runErr error, ctxErr e
 	}
 	notifiedAt := time.Now().UTC()
 	current.CompletionNotifiedAt = &notifiedAt
-	_ = m.saveWorkspaceLocked(current.WorkspaceRoot)
+	_ = m.saveTaskLocked(current)
 }
 
 func (m *Manager) waiterLocked(task *Task) chan struct{} {
@@ -590,6 +606,7 @@ func normalizeWorkspaceRoot(workspaceRoot string) string {
 
 func copyTask(task Task) Task {
 	copy := task
+	copy.ActivatedSkillNames = append([]string(nil), task.ActivatedSkillNames...)
 	if task.EndTime != nil {
 		end := *task.EndTime
 		copy.EndTime = &end
@@ -603,6 +620,15 @@ func copyTask(task Task) Task {
 		copy.CompletionNotifiedAt = &notifiedAt
 	}
 	return copy
+}
+
+func copyTodoItems(todos []TodoItem) []TodoItem {
+	if len(todos) == 0 {
+		return nil
+	}
+	out := make([]TodoItem, len(todos))
+	copy(out, todos)
+	return out
 }
 
 func shouldMarkCompletionNotified(task Task) bool {

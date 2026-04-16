@@ -73,7 +73,8 @@ SESAME_MODEL_PROVIDER=fake SESAME_MODEL=fake-smoke SESAME_PERMISSION_PROFILE=tru
 
 - 启动时默认进入当前 workspace 的 canonical session
 - 当前 workspace 默认使用 `<workspace>/.sesame/sesame.db`
-- task / todo / task logs 默认写入 `<workspace>/.sesame/`
+- task / todo 默认写入 `<workspace>/.sesame/sesame.db`
+- task 输出日志默认写入 `<workspace>/.sesame/tasks/`
 - workspace 背景状态以 workspace 维度观察，不再依赖“选中哪个 session”
 - 自动化优先拉起 task，由 task 负责结果、mailbox 投递和后续收口
 - 不再按 `web_lookup`、`automation`、`scheduled_report` 之类模式裁剪模型工具箱
