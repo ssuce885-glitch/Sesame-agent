@@ -504,7 +504,7 @@ func (n taskTerminalNotifier) enqueueSyntheticChildReportTurn(ctx context.Contex
 		return nil
 	}
 	if state, ok := n.manager.GetRuntimeState(sessionID); ok {
-		if state.ActiveTurnKind == types.TurnKindChildReportBatch || state.QueuedChildReportBatches > 0 {
+		if state.QueuedChildReportBatches > 0 {
 			return nil
 		}
 	}
@@ -775,6 +775,11 @@ func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *sess
 		}
 		if turn.State == types.TurnStateAwaitingPermission {
 			continue
+		}
+		if turn.Kind == types.TurnKindChildReportBatch {
+			if err := store.RequeueClaimedChildReportsForTurn(ctx, turn.ID); err != nil {
+				return err
+			}
 		}
 		if err := store.MarkTurnInterrupted(ctx, turn.ID); err != nil {
 			return err

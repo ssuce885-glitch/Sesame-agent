@@ -194,7 +194,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			return err
 		}
 		nextPosition++
-	} else {
+	} else if in.Resume != nil {
 		toolResultItem, toolResult := resumeToolResultItem(in.Resume)
 		if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
 			if emitErr := emitFailed(err.Error()); emitErr != nil {
