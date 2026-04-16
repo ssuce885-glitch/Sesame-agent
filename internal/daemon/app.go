@@ -121,6 +121,12 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	if err != nil {
 		return err
 	}
+	if !hasDispatchAttempt {
+		dispatchAttempt, hasDispatchAttempt, err = a.dispatchAttemptForTask(ctx, taskIDFromResume(in.Resume))
+		if err != nil {
+			return err
+		}
+	}
 	if hasDispatchAttempt {
 		in.Session.PermissionProfile = firstNonEmptyTrimmed(in.Session.PermissionProfile, "read_only")
 	}
@@ -130,11 +136,13 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		taskObserver = resumeTaskObserver
 		observers = append(observers, taskObserver)
 	}
-	if currentDispatchObserver, ok, err := a.dispatchObserverForRun(ctx, dispatchAttempt, hasDispatchAttempt); err != nil {
-		return err
-	} else if ok {
-		dispatchObserver = currentDispatchObserver
-		observers = append(observers, dispatchObserver)
+	if taskObserver == nil {
+		if currentDispatchObserver, ok, err := a.dispatchObserverForRun(ctx, dispatchAttempt, hasDispatchAttempt); err != nil {
+			return err
+		} else if ok {
+			dispatchObserver = currentDispatchObserver
+			observers = append(observers, dispatchObserver)
+		}
 	}
 	if len(observers) > 0 {
 		observer := task.AgentTaskObserver(multiTaskObserver{observers: observers})
@@ -160,11 +168,13 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		ActivatedSkillNames: append([]string(nil), dispatchAttempt.ActivatedSkillNames...),
 	})
 	if observerSink != nil && len(observers) > 0 && err == nil {
-		if turn, ok, turnErr := a.store.GetTurn(ctx, in.TurnID); turnErr != nil {
+		finalDispatchText = strings.TrimSpace(observerSink.FinalText())
+		if in.Resume != nil && finalDispatchText != "" {
+			taskCompleted = true
+		} else if turn, ok, turnErr := a.store.GetTurn(ctx, in.TurnID); turnErr != nil {
 			return turnErr
 		} else if ok && turn.State != types.TurnStateAwaitingPermission {
 			taskCompleted = true
-			finalDispatchText = strings.TrimSpace(observerSink.FinalText())
 		}
 	}
 	if err != nil && taskObserver != nil {
@@ -356,15 +366,15 @@ func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus, workspaceRo
 	reportingService := reporting.NewService(store)
 	reportingService.SetWorkspaceRoot(workspaceRoot)
 	reportingService.SetReportReadySink(func(ctx context.Context, sessionID, turnID string, item types.ReportMailboxItem) error {
-		// Transport compatibility shim: report-ready notifications are still emitted to the currently
-		// selected session, but durable mailbox persistence is workspace-scoped.
-		selected, ok, err := store.GetSelectedSessionID(ctx)
-		if err != nil || !ok || strings.TrimSpace(selected) == "" {
+		if strings.TrimSpace(workspaceRoot) == "" {
 			return nil
 		}
-		sessionID = selected
+		current, _, _, err := store.EnsureCanonicalSession(ctx, workspaceRoot)
+		if err != nil || strings.TrimSpace(current.ID) == "" {
+			return nil
+		}
 		eventSink := storeAndBusSink{store: store, bus: bus}
-		event, err := types.NewEvent(sessionID, turnID, types.EventReportReady, item)
+		event, err := types.NewEvent(current.ID, turnID, types.EventReportReady, item)
 		if err != nil {
 			return err
 		}
@@ -403,6 +413,13 @@ func (a sessionRunnerAdapter) dispatchAttemptForRun(ctx context.Context, session
 		return types.DispatchAttempt{}, false, nil
 	}
 	return a.store.FindDispatchAttemptByBackgroundRun(ctx, sessionID, turnID)
+}
+
+func (a sessionRunnerAdapter) dispatchAttemptForTask(ctx context.Context, taskID string) (types.DispatchAttempt, bool, error) {
+	if a.store == nil || strings.TrimSpace(taskID) == "" {
+		return types.DispatchAttempt{}, false, nil
+	}
+	return a.store.FindDispatchAttemptByTaskID(ctx, taskID)
 }
 
 func (a sessionRunnerAdapter) dispatchObserverForRun(ctx context.Context, attempt types.DispatchAttempt, ok bool) (task.AgentTaskObserver, bool, error) {
@@ -1185,12 +1202,10 @@ func buildMaxToolSteps(cfg config.Config) int {
 
 func buildStatusPayload(cfg config.Config) httpapi.StatusPayload {
 	return httpapi.StatusPayload{
-		DaemonID:             cfg.DaemonID,
 		Provider:             cfg.ModelProvider,
 		Model:                cfg.Model,
 		PermissionProfile:    cfg.PermissionProfile,
 		ProviderCacheProfile: cfg.ProviderCacheProfile,
-		ConfigFingerprint:    cfg.ConfigFingerprint,
 		PID:                  os.Getpid(),
 	}
 }
@@ -1234,9 +1249,6 @@ func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *sess
 		for _, sessionRow := range sessions {
 			manager.RegisterSession(sessionRow)
 		}
-	}
-	if err := ensureSelectedSession(ctx, store, sessions); err != nil {
-		return err
 	}
 	resumedTurns, err := resumeResolvedContinuations(ctx, store, manager)
 	if err != nil {
@@ -1417,24 +1429,4 @@ func marshalRecoveredPermissionToolRunOutput(request types.PermissionRequest, ef
 		"reason":                       request.Reason,
 	})
 	return string(payload)
-}
-
-func ensureSelectedSession(ctx context.Context, store *sqlite.Store, sessions []types.Session) error {
-	if len(sessions) == 0 {
-		return nil
-	}
-
-	selected, ok, err := store.GetSelectedSessionID(ctx)
-	if err != nil {
-		return err
-	}
-	if ok {
-		for _, sessionRow := range sessions {
-			if sessionRow.ID == selected {
-				return nil
-			}
-		}
-	}
-
-	return store.SetSelectedSessionID(ctx, sessions[0].ID)
 }

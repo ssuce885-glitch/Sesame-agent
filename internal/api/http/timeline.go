@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +11,11 @@ import (
 	"go-agent/internal/model"
 	"go-agent/internal/types"
 )
+
+type reportMailboxStore interface {
+	ListReportMailboxItems(context.Context, string) ([]types.ReportMailboxItem, error)
+	CountPendingReportMailboxItems(context.Context, string) (int, error)
+}
 
 func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -64,24 +70,24 @@ func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 	}
 }
 
-type timelineConversationStore interface {
-	ListConversationTimelineItems(context.Context, string) ([]types.ConversationTimelineItem, error)
+type contextHeadTimelineStore interface {
+	GetCurrentContextHeadID(context.Context) (string, bool, error)
+	ListConversationTimelineItemsByContextHead(context.Context, string, string) ([]types.ConversationTimelineItem, error)
 }
 
 func listTimelineItems(ctx context.Context, store Store, sessionID string) ([]types.ConversationTimelineItem, error) {
-	if turnAware, ok := store.(timelineConversationStore); ok {
-		return turnAware.ListConversationTimelineItems(ctx, sessionID)
+	headStore, ok := store.(contextHeadTimelineStore)
+	if !ok {
+		return nil, fmt.Errorf("context head timeline store is required")
 	}
-
-	items, err := store.ListConversationItems(ctx, sessionID)
+	headID, hasHead, err := headStore.GetCurrentContextHeadID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]types.ConversationTimelineItem, 0, len(items))
-	for _, item := range items {
-		out = append(out, types.ConversationTimelineItem{Item: item})
+	if !hasHead {
+		return []types.ConversationTimelineItem{}, nil
 	}
-	return out, nil
+	return headStore.ListConversationTimelineItemsByContextHead(ctx, sessionID, headID)
 }
 
 func normalizeTimelineBlocks(items []types.ConversationTimelineItem, events []types.Event) []types.TimelineBlock {

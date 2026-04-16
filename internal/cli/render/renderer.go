@@ -43,9 +43,6 @@ func (r *Renderer) RenderWelcome(info WelcomeInfo) {
 	if label := shortID(info.SessionID); label != "" {
 		lines = append(lines, fmt.Sprintf("session      %s", label))
 	}
-	if strings.TrimSpace(info.Status.DaemonID) != "" {
-		lines = append(lines, fmt.Sprintf("daemon       %s", info.Status.DaemonID))
-	}
 	if strings.TrimSpace(info.Status.Model) != "" {
 		lines = append(lines, fmt.Sprintf("model        %s", info.Status.Model))
 	}
@@ -62,7 +59,7 @@ func (r *Renderer) RenderWelcome(info WelcomeInfo) {
 		}
 	}
 	lines = append(lines,
-		"commands     /help  /status  /session list  /cron list",
+		"commands     /help  /status  /cron list",
 		"hint         paste a prompt, a GitHub link, or a slash command",
 	)
 	r.renderPanel("Sesame", lines)
@@ -74,9 +71,6 @@ func (r *Renderer) PrintStatusLine(sessionID string, status client.StatusRespons
 		label = "no-session"
 	}
 	parts := []string{label}
-	if strings.TrimSpace(status.DaemonID) != "" {
-		parts = append(parts, status.DaemonID)
-	}
 	if strings.TrimSpace(status.Model) != "" {
 		parts = append(parts, status.Model)
 	}
@@ -84,23 +78,6 @@ func (r *Renderer) PrintStatusLine(sessionID string, status client.StatusRespons
 		parts = append(parts, status.PermissionProfile)
 	}
 	fmt.Fprintf(r.out, "◉ %s\n", strings.Join(parts, "  ·  "))
-}
-
-func (r *Renderer) RenderSessionList(resp types.ListSessionsResponse) {
-	if len(resp.Sessions) == 0 {
-		fmt.Fprintln(r.out, "No sessions.")
-		return
-	}
-	for _, session := range resp.Sessions {
-		marker := "○"
-		if session.ID == resp.SelectedSessionID || session.IsSelected {
-			marker = "●"
-		}
-		fmt.Fprintf(r.out, "%s %s  %s\n", marker, session.ID, session.State)
-		if strings.TrimSpace(session.WorkspaceRoot) != "" {
-			fmt.Fprintf(r.out, "  %s\n", session.WorkspaceRoot)
-		}
-	}
 }
 
 func (r *Renderer) RenderSkillList(skills []extensions.Skill) {

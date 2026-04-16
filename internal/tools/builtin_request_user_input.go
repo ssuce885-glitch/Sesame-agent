@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 	"strings"
 )
 
@@ -128,12 +129,19 @@ func (requestUserInputTool) Decode(call Call) (DecodedCall, error) {
 		if question.Header == "" {
 			return DecodedCall{}, fmt.Errorf("questions[%d].header is required", i)
 		}
+		if utf8.RuneCountInString(question.Header) > 12 {
+			return DecodedCall{}, fmt.Errorf("questions[%d].header must be 12 or fewer characters", i)
+		}
 		if question.Question == "" {
 			return DecodedCall{}, fmt.Errorf("questions[%d].question is required", i)
+		}
+		if !isSingleSentence(question.Question) {
+			return DecodedCall{}, fmt.Errorf("questions[%d].question must be a single sentence", i)
 		}
 		if len(question.Options) < requestUserInputMinOptions || len(question.Options) > requestUserInputMaxOptions {
 			return DecodedCall{}, fmt.Errorf("questions[%d].options must contain %d-%d choices", i, requestUserInputMinOptions, requestUserInputMaxOptions)
 		}
+		seenLabels := make(map[string]struct{}, len(question.Options))
 		for j := range question.Options {
 			option := &question.Options[j]
 			option.Label = strings.TrimSpace(option.Label)
@@ -141,8 +149,26 @@ func (requestUserInputTool) Decode(call Call) (DecodedCall, error) {
 			if option.Label == "" {
 				return DecodedCall{}, fmt.Errorf("questions[%d].options[%d].label is required", i, j)
 			}
+			if j == 0 {
+				if !strings.HasSuffix(option.Label, "(Recommended)") {
+					return DecodedCall{}, fmt.Errorf("questions[%d].options[0] must be the recommended choice and end with \"(Recommended)\"", i)
+				}
+			} else if strings.HasSuffix(option.Label, "(Recommended)") {
+				return DecodedCall{}, fmt.Errorf("questions[%d].options[0] must be the recommended choice and end with \"(Recommended)\"", i)
+			}
+			if count := labelWordCount(option.Label); count < 1 || count > 5 {
+				return DecodedCall{}, fmt.Errorf("questions[%d].options[%d].label must contain 1-5 words", i, j)
+			}
+			key := canonicalOptionLabel(option.Label)
+			if _, exists := seenLabels[key]; exists {
+				return DecodedCall{}, fmt.Errorf("questions[%d].options[%d].label duplicates another choice", i, j)
+			}
+			seenLabels[key] = struct{}{}
 			if option.Description == "" {
 				return DecodedCall{}, fmt.Errorf("questions[%d].options[%d].description is required", i, j)
+			}
+			if !isSingleSentence(option.Description) {
+				return DecodedCall{}, fmt.Errorf("questions[%d].options[%d].description must be a single sentence", i, j)
 			}
 		}
 	}
@@ -155,6 +181,36 @@ func (requestUserInputTool) Decode(call Call) (DecodedCall, error) {
 		Call:  normalized,
 		Input: input,
 	}, nil
+}
+
+func canonicalOptionLabel(label string) string {
+	return strings.ToLower(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(label), "(Recommended)")))
+}
+
+func labelWordCount(label string) int {
+	trimmed := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(label), "(Recommended)"))
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.Fields(trimmed))
+}
+
+func isSingleSentence(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || strings.Contains(text, "\n") {
+		return false
+	}
+	sentenceEndings := 0
+	for _, r := range text {
+		switch r {
+		case '.', '?', '!':
+			sentenceEndings++
+			if sentenceEndings > 1 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (t requestUserInputTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {

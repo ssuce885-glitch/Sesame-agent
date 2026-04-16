@@ -16,20 +16,16 @@ import (
 )
 
 type LaunchConfig struct {
-	DaemonID          string
-	Addr              string
-	DataDir           string
-	Model             string
-	PermissionMode    string
-	ConfigFingerprint string
+	Addr           string
+	DataDir        string
+	Model          string
+	PermissionMode string
 }
 
 type StatusInfo struct {
 	Status            string `json:"status,omitempty"`
-	DaemonID          string `json:"daemon_id,omitempty"`
 	Model             string `json:"model,omitempty"`
 	PermissionProfile string `json:"permission_profile,omitempty"`
-	ConfigFingerprint string `json:"config_fingerprint,omitempty"`
 	PID               int    `json:"pid,omitempty"`
 }
 
@@ -62,9 +58,7 @@ type launchTarget struct {
 }
 
 type pidRecord struct {
-	PID               int    `json:"pid"`
-	DaemonID          string `json:"daemon_id,omitempty"`
-	ConfigFingerprint string `json:"config_fingerprint,omitempty"`
+	PID int `json:"pid"`
 }
 
 func NewManager(opts Options) *Manager {
@@ -111,12 +105,12 @@ func (m *Manager) EnsureRunning(ctx context.Context) error {
 	if err == nil && m.matchesConfig(status) {
 		return nil
 	}
-	if err == nil && !m.matchesConfig(status) {
-		if err := m.stopper(status.PID); err != nil {
-			return err
+	if err == nil && status.PID > 0 {
+		if stopErr := m.stopper(status.PID); stopErr != nil {
+			return stopErr
 		}
-		if err := m.waitForUnavailable(ctx); err != nil {
-			return err
+		if waitErr := m.waitForUnavailable(ctx); waitErr != nil {
+			return waitErr
 		}
 	}
 
@@ -127,18 +121,23 @@ func (m *Manager) EnsureRunning(ctx context.Context) error {
 }
 
 func (m *Manager) matchesConfig(status StatusInfo) bool {
-	wantDaemonID := strings.TrimSpace(m.config.DaemonID)
-	gotDaemonID := strings.TrimSpace(status.DaemonID)
-	if wantDaemonID != "" && wantDaemonID != gotDaemonID {
+	if strings.TrimSpace(status.Status) != "ok" {
 		return false
 	}
 
-	want := strings.TrimSpace(m.config.ConfigFingerprint)
-	got := strings.TrimSpace(status.ConfigFingerprint)
-	if want == "" || got == "" {
+	wantModel := strings.TrimSpace(m.config.Model)
+	gotModel := strings.TrimSpace(status.Model)
+	if wantModel != "" && gotModel != wantModel {
 		return false
 	}
-	return want == got
+
+	wantPermission := strings.TrimSpace(m.config.PermissionMode)
+	gotPermission := strings.TrimSpace(status.PermissionProfile)
+	if wantPermission != "" && gotPermission != wantPermission {
+		return false
+	}
+
+	return true
 }
 
 func (m *Manager) waitForUnavailable(ctx context.Context) error {
@@ -171,7 +170,7 @@ func (m *Manager) waitForReady(ctx context.Context) error {
 		if err != nil {
 			lastErr = err
 		} else {
-			lastErr = fmt.Errorf("running sesame daemon config fingerprint mismatch")
+			lastErr = fmt.Errorf("running sesame daemon does not match requested runtime")
 		}
 
 		if time.Now().After(deadline) {
@@ -195,10 +194,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 
 	status, err := m.status(ctx, m.baseURL)
-	if err != nil {
-		return m.stopByPIDFile()
-	}
-	if !m.matchesConfig(status) || status.PID <= 0 {
+	if err != nil || status.PID <= 0 {
 		return m.stopByPIDFile()
 	}
 	if err := m.stopper(status.PID); err != nil {
@@ -217,7 +213,7 @@ func (m *Manager) stopByPIDFile() error {
 		return nil
 	}
 	record, ok := parsePIDRecord(raw)
-	if !ok || !m.pidRecordMatches(record) {
+	if !ok || record.PID <= 0 {
 		return nil
 	}
 	return m.stopper(record.PID)
@@ -234,32 +230,6 @@ func parsePIDRecord(raw []byte) (pidRecord, bool) {
 		return pidRecord{}, false
 	}
 	return pidRecord{PID: pid}, true
-}
-
-func (m *Manager) pidRecordMatches(record pidRecord) bool {
-	if record.PID <= 0 {
-		return false
-	}
-
-	wantDaemonID := strings.TrimSpace(m.config.DaemonID)
-	gotDaemonID := strings.TrimSpace(record.DaemonID)
-	if wantDaemonID != "" && gotDaemonID != "" && wantDaemonID != gotDaemonID {
-		return false
-	}
-	if wantDaemonID != "" && gotDaemonID == "" {
-		return false
-	}
-
-	wantFingerprint := strings.TrimSpace(m.config.ConfigFingerprint)
-	gotFingerprint := strings.TrimSpace(record.ConfigFingerprint)
-	if wantFingerprint != "" && gotFingerprint != "" && wantFingerprint != gotFingerprint {
-		return false
-	}
-	if wantFingerprint != "" && gotFingerprint == "" {
-		return false
-	}
-
-	return true
 }
 
 func (m *Manager) fetchStatus(ctx context.Context, baseURL string) (StatusInfo, error) {
@@ -320,7 +290,6 @@ func LaunchSesameDaemon(ctx context.Context, cfg LaunchConfig) error {
 		cmd.Dir = target.workdir
 	}
 	cmd.Env = append(os.Environ(),
-		"SESAME_DAEMON_ID="+cfg.DaemonID,
 		"SESAME_ADDR="+cfg.Addr,
 		"SESAME_DATA_DIR="+cfg.DataDir,
 	)

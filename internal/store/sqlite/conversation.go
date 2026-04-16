@@ -97,6 +97,48 @@ func (s *Store) ListConversationTimelineItems(ctx context.Context, sessionID str
 	return out, rows.Err()
 }
 
+func (s *Store) ListConversationTimelineItemsByContextHead(ctx context.Context, sessionID, headID string) ([]types.ConversationTimelineItem, error) {
+	lineage, err := s.ListContextHeadLineage(ctx, sessionID, headID)
+	if err != nil {
+		return nil, err
+	}
+
+	allowedTurns := make(map[string]struct{})
+	for _, head := range lineage {
+		turns, err := s.ListTurnsByContextHead(ctx, sessionID, head.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, turn := range turns {
+			allowedTurns[turn.ID] = struct{}{}
+		}
+	}
+
+	items, err := s.ListConversationTimelineItems(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]types.ConversationTimelineItem, 0, len(items))
+	for _, item := range items {
+		if _, ok := allowedTurns[item.TurnID]; ok {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) ListConversationItemsByContextHead(ctx context.Context, sessionID, headID string) ([]model.ConversationItem, error) {
+	timelineItems, err := s.ListConversationTimelineItemsByContextHead(ctx, sessionID, headID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.ConversationItem, 0, len(timelineItems))
+	for _, item := range timelineItems {
+		out = append(out, item.Item)
+	}
+	return out, nil
+}
+
 func (s *Store) ListConversationSummaries(ctx context.Context, sessionID string) ([]model.Summary, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		select payload

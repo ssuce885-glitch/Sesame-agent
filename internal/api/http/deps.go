@@ -11,13 +11,8 @@ import (
 )
 
 type Store interface {
-	InsertSession(context.Context, types.Session) error
-	ListSessions(context.Context) ([]types.Session, error)
 	GetSession(context.Context, string) (types.Session, bool, error)
-	UpdateSessionSystemPrompt(context.Context, string, string) (types.Session, bool, error)
-	GetSelectedSessionID(context.Context) (string, bool, error)
-	SetSelectedSessionID(context.Context, string) error
-	DeleteSession(context.Context, string) (string, bool, error)
+	EnsureCanonicalSession(context.Context, string) (types.Session, types.ContextHead, bool, error)
 	InsertTurn(context.Context, types.Turn) error
 	DeleteTurn(context.Context, string) error
 	ListTurnsBySession(context.Context, string) ([]types.Turn, error)

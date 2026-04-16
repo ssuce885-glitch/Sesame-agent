@@ -110,29 +110,6 @@ func (s *Store) GetSession(ctx context.Context, sessionID string) (types.Session
 	return session, true, nil
 }
 
-func (s *Store) UpdateSessionSystemPrompt(ctx context.Context, sessionID, systemPrompt string) (types.Session, bool, error) {
-	now := time.Now().UTC().Format(timeLayout)
-	result, err := s.db.ExecContext(ctx, `
-		update sessions
-		set system_prompt = ?, updated_at = ?
-		where id = ?`,
-		systemPrompt,
-		now,
-		sessionID,
-	)
-	if err != nil {
-		return types.Session{}, false, err
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return types.Session{}, false, err
-	}
-	if rowsAffected == 0 {
-		return types.Session{}, false, nil
-	}
-	return s.GetSession(ctx, sessionID)
-}
-
 func (s *Store) UpdateSessionPermissionProfile(ctx context.Context, sessionID, permissionProfile string) (types.Session, bool, error) {
 	now := time.Now().UTC().Format(timeLayout)
 	result, err := s.db.ExecContext(ctx, `
@@ -177,182 +154,6 @@ func updateSessionStateWithExec(ctx context.Context, execer execContexter, sessi
 		return nil
 	}
 	return requireSingleRow(result)
-}
-
-func (s *Store) DeleteSession(ctx context.Context, sessionID string) (string, bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", false, err
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	var exists int
-	if err := tx.QueryRowContext(ctx, `
-		select count(*)
-		from sessions
-		where id = ?
-	`, sessionID).Scan(&exists); err != nil {
-		return "", false, err
-	}
-	if exists == 0 {
-		return "", false, nil
-	}
-
-	selectedSessionID, hasSelected, err := getSelectedSessionIDWithQueryer(ctx, tx)
-	if err != nil {
-		return "", false, err
-	}
-
-	deleteStatements := []struct {
-		query string
-		args  []any
-	}{
-		{
-			query: `delete from tool_runs where run_id in (select id from runs where session_id = ?)`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from worktrees where run_id in (select id from runs where session_id = ?)`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from task_records where run_id in (select id from runs where session_id = ?)`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from plans where run_id in (select id from runs where session_id = ?)`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from report_deliveries where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from reports where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from report_mailbox_items where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from scheduled_jobs where owner_session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from digest_records where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from child_agent_results where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from report_groups where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from child_agent_specs where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from pending_task_completions where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from provider_cache_entries where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from provider_cache_heads where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from conversation_compactions where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from conversation_summaries where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from turn_usage where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from conversation_items where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from events where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from turns where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from runs where session_id = ?`,
-			args:  []any{sessionID},
-		},
-		{
-			query: `delete from sessions where id = ?`,
-			args:  []any{sessionID},
-		},
-	}
-	for _, stmt := range deleteStatements {
-		if _, err := tx.ExecContext(ctx, stmt.query, stmt.args...); err != nil {
-			return "", false, err
-		}
-	}
-
-	nextSelected := ""
-	if hasSelected && selectedSessionID != sessionID {
-		var remaining int
-		if err := tx.QueryRowContext(ctx, `
-			select count(*)
-			from sessions
-			where id = ?
-		`, selectedSessionID).Scan(&remaining); err != nil {
-			return "", false, err
-		}
-		if remaining > 0 {
-			nextSelected = selectedSessionID
-		}
-	}
-
-	if nextSelected == "" {
-		var candidate string
-		err := tx.QueryRowContext(ctx, `
-			select id
-			from sessions
-			order by updated_at desc, created_at desc
-			limit 1
-		`).Scan(&candidate)
-		if err != nil && err != sql.ErrNoRows {
-			return "", false, err
-		}
-		if err == nil {
-			nextSelected = candidate
-		}
-	}
-
-	if nextSelected != "" {
-		if err := setSelectedSessionIDWithExec(ctx, tx, nextSelected); err != nil {
-			return "", false, err
-		}
-	} else {
-		if err := clearSelectedSessionIDWithExec(ctx, tx); err != nil {
-			return "", false, err
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return "", false, err
-	}
-	return nextSelected, true, nil
 }
 
 func (s *Store) DeleteTurn(ctx context.Context, turnID string) error {
@@ -595,4 +396,120 @@ func requireSingleRow(result sql.Result) error {
 
 func isTerminalTurnState(state types.TurnState) bool {
 	return state == types.TurnStateCompleted || state == types.TurnStateFailed || state == types.TurnStateInterrupted
+}
+
+func (s *Store) EnsureCanonicalSession(ctx context.Context, workspaceRoot string) (types.Session, types.ContextHead, bool, error) {
+	if sessionID, ok, err := s.GetCanonicalSessionID(ctx); err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	} else if ok {
+		session, found, err := s.GetSession(ctx, sessionID)
+		if err != nil {
+			return types.Session{}, types.ContextHead{}, false, err
+		}
+		if found && session.WorkspaceRoot == workspaceRoot {
+			head, _, err := s.ensureCurrentContextHead(ctx, session)
+			return session, head, false, err
+		}
+		// The stored canonical session may be stale for a different workspace.
+		// Fall through and resolve/create the canonical session for workspaceRoot.
+	}
+
+	session, created, err := s.resolveOrCreateCanonicalSession(ctx, workspaceRoot)
+	if err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	}
+	if err := s.SetCanonicalSessionID(ctx, session.ID); err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	}
+	head, _, err := s.ensureCurrentContextHead(ctx, session)
+	if err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	}
+	return session, head, created, nil
+}
+
+func (s *Store) resolveOrCreateCanonicalSession(ctx context.Context, workspaceRoot string) (types.Session, bool, error) {
+	var session types.Session
+	var state string
+	var createdAt string
+	var updatedAt string
+	err := s.db.QueryRowContext(ctx, `
+		select id, workspace_root, system_prompt, permission_profile, state, active_turn_id, created_at, updated_at
+		from sessions
+		where workspace_root = ?
+		order by updated_at desc, created_at desc
+		limit 1
+	`, workspaceRoot).Scan(
+		&session.ID,
+		&session.WorkspaceRoot,
+		&session.SystemPrompt,
+		&session.PermissionProfile,
+		&state,
+		&session.ActiveTurnID,
+		&createdAt,
+		&updatedAt,
+	)
+	if err == nil {
+		session.State = types.SessionState(state)
+		session.CreatedAt, err = time.Parse(timeLayout, createdAt)
+		if err != nil {
+			return types.Session{}, false, err
+		}
+		session.UpdatedAt, err = time.Parse(timeLayout, updatedAt)
+		if err != nil {
+			return types.Session{}, false, err
+		}
+		return session, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return types.Session{}, false, err
+	}
+
+	now := time.Now().UTC()
+	session = types.Session{
+		ID:            types.NewID("sess"),
+		WorkspaceRoot: workspaceRoot,
+		State:         types.SessionStateIdle,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.InsertSession(ctx, session); err != nil {
+		return types.Session{}, false, err
+	}
+	return session, true, nil
+}
+
+func (s *Store) ensureCurrentContextHead(ctx context.Context, session types.Session) (types.ContextHead, bool, error) {
+	if headID, ok, err := s.GetCurrentContextHeadID(ctx); err != nil {
+		return types.ContextHead{}, false, err
+	} else if ok {
+		head, found, err := s.GetContextHead(ctx, headID)
+		if err != nil {
+			return types.ContextHead{}, false, err
+		}
+		if found && head.SessionID == session.ID {
+			return head, false, nil
+		}
+	}
+
+	now := time.Now().UTC()
+	head := types.ContextHead{
+		ID:         types.NewID("head"),
+		SessionID:  session.ID,
+		SourceKind: types.ContextHeadSourceBootstrap,
+		Title:      deriveSessionTitle(ctx, s, session.ID),
+		Preview:    deriveSessionPreview(ctx, s, session.ID),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := s.InsertContextHead(ctx, head); err != nil {
+		return types.ContextHead{}, false, err
+	}
+	if err := s.AssignTurnsWithoutHead(ctx, session.ID, head.ID); err != nil {
+		return types.ContextHead{}, false, err
+	}
+	if err := s.SetCurrentContextHeadID(ctx, head.ID); err != nil {
+		return types.ContextHead{}, false, err
+	}
+	return head, true, nil
 }
