@@ -95,7 +95,7 @@ func (o *DispatchTaskObserver) SetOutcome(outcome types.ChildAgentOutcome, summa
 	return o.store.UpsertDispatchAttempt(context.Background(), attempt)
 }
 
-func (o *DispatchTaskObserver) SetRunContext(sessionID, turnID string) error {
+func (o *DispatchTaskObserver) SetRunContext(_, _ string) error {
 	if o == nil || o.store == nil || strings.TrimSpace(o.dispatchID) == "" {
 		return nil
 	}
@@ -104,8 +104,6 @@ func (o *DispatchTaskObserver) SetRunContext(sessionID, turnID string) error {
 		return err
 	}
 	now := o.currentTime()
-	attempt.BackgroundSessionID = strings.TrimSpace(sessionID)
-	attempt.BackgroundTurnID = strings.TrimSpace(turnID)
 	if attempt.StartedAt.IsZero() {
 		attempt.StartedAt = now
 	}
