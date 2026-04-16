@@ -290,8 +290,6 @@ func normalizeDispatchAttemptForStore(attempt types.DispatchAttempt) types.Dispa
 	}
 	attempt.OutcomeSummary = strings.TrimSpace(attempt.OutcomeSummary)
 	attempt.TaskID = strings.TrimSpace(attempt.TaskID)
-	attempt.BackgroundSessionID = strings.TrimSpace(attempt.BackgroundSessionID)
-	attempt.BackgroundTurnID = strings.TrimSpace(attempt.BackgroundTurnID)
 	attempt.ChildAgentID = strings.TrimSpace(attempt.ChildAgentID)
 	attempt.PromptHash = strings.TrimSpace(attempt.PromptHash)
 	attempt.ActivatedSkillNames = normalizeAutomationStringList(attempt.ActivatedSkillNames)

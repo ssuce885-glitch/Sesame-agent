@@ -16,7 +16,6 @@ type watcherHoldStore interface {
 
 type dispatchApprovalResumeStore interface {
 	watcherHoldStore
-	FindDispatchAttemptByBackgroundRun(context.Context, string, string) (types.DispatchAttempt, bool, error)
 	FindDispatchAttemptByTaskID(context.Context, string) (types.DispatchAttempt, bool, error)
 	UpsertDispatchAttempt(context.Context, types.DispatchAttempt) error
 }
@@ -120,19 +119,13 @@ func ReplaceApprovalHoldWithDispatchHold(ctx context.Context, store watcherHoldS
 	return store.ReplaceAutomationWatcherHolds(ctx, automationID, watcherID, updated)
 }
 
-func RestoreDispatchAfterApprovalResume(ctx context.Context, store dispatchApprovalResumeStore, sessionID, turnID, taskID, requestID string, now time.Time) error {
+func RestoreDispatchAfterApprovalResume(ctx context.Context, store dispatchApprovalResumeStore, taskID, requestID string, now time.Time) error {
 	if store == nil {
 		return nil
 	}
-	attempt, ok, err := store.FindDispatchAttemptByBackgroundRun(ctx, sessionID, turnID)
-	if err != nil {
+	attempt, ok, err := store.FindDispatchAttemptByTaskID(ctx, taskID)
+	if err != nil || !ok {
 		return err
-	}
-	if !ok {
-		attempt, ok, err = store.FindDispatchAttemptByTaskID(ctx, taskID)
-		if err != nil || !ok {
-			return err
-		}
 	}
 	if attempt.Status != types.DispatchAttemptStatusAwaitingApproval {
 		return nil

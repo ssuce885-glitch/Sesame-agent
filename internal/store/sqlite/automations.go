@@ -745,9 +745,9 @@ func upsertDispatchAttemptWithExec(ctx context.Context, execer execContexter, at
 	_, err = execer.ExecContext(ctx, `
 		insert into automation_dispatch_attempts (
 			dispatch_id, workspace_root, automation_id, incident_id, phase, status,
-			task_id, background_session_id, background_turn_id, payload, created_at, updated_at
+			task_id, payload, created_at, updated_at
 		)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(dispatch_id) do update set
 			workspace_root = excluded.workspace_root,
 			automation_id = excluded.automation_id,
@@ -755,8 +755,6 @@ func upsertDispatchAttemptWithExec(ctx context.Context, execer execContexter, at
 			phase = excluded.phase,
 			status = excluded.status,
 			task_id = excluded.task_id,
-			background_session_id = excluded.background_session_id,
-			background_turn_id = excluded.background_turn_id,
 			payload = excluded.payload,
 			updated_at = excluded.updated_at
 	`,
@@ -767,8 +765,6 @@ func upsertDispatchAttemptWithExec(ctx context.Context, execer execContexter, at
 		attempt.Phase,
 		attempt.Status,
 		attempt.TaskID,
-		attempt.BackgroundSessionID,
-		attempt.BackgroundTurnID,
 		string(payload),
 		attempt.CreatedAt.UTC().Format(timeLayout),
 		attempt.UpdatedAt.UTC().Format(timeLayout),
@@ -794,34 +790,6 @@ func getDispatchAttemptWithQueryer(ctx context.Context, queryer queryContexter, 
 		from automation_dispatch_attempts
 		where dispatch_id = ?
 	`, dispatchID)
-	if err != nil {
-		return types.DispatchAttempt{}, false, err
-	}
-	defer rows.Close()
-
-	items, err := scanDispatchAttempts(rows)
-	if err != nil {
-		return types.DispatchAttempt{}, false, err
-	}
-	if len(items) == 0 {
-		return types.DispatchAttempt{}, false, nil
-	}
-	return items[0], true, nil
-}
-
-func (s *Store) FindDispatchAttemptByBackgroundRun(ctx context.Context, sessionID, turnID string) (types.DispatchAttempt, bool, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	turnID = strings.TrimSpace(turnID)
-	if sessionID == "" || turnID == "" {
-		return types.DispatchAttempt{}, false, nil
-	}
-	rows, err := s.db.QueryContext(ctx, `
-		select payload, created_at, updated_at
-		from automation_dispatch_attempts
-		where background_session_id = ? and background_turn_id = ?
-		order by updated_at desc, created_at desc, dispatch_id asc
-		limit 1
-	`, sessionID, turnID)
 	if err != nil {
 		return types.DispatchAttempt{}, false, err
 	}
@@ -941,14 +909,12 @@ func (s *Store) ListPendingAutomationPermissions(ctx context.Context, workspaceR
 			continue
 		}
 		items = append(items, types.PendingAutomationPermission{
-			RequestID:           requestID,
-			WorkspaceRoot:       attempt.WorkspaceRoot,
-			AutomationID:        attempt.AutomationID,
-			IncidentID:          attempt.IncidentID,
-			DispatchID:          attempt.DispatchID,
-			BackgroundSessionID: attempt.BackgroundSessionID,
-			BackgroundTurnID:    attempt.BackgroundTurnID,
-			PreferredSessionID:  attempt.PreferredSessionID,
+			RequestID:          requestID,
+			WorkspaceRoot:      attempt.WorkspaceRoot,
+			AutomationID:       attempt.AutomationID,
+			IncidentID:         attempt.IncidentID,
+			DispatchID:         attempt.DispatchID,
+			PreferredSessionID: attempt.PreferredSessionID,
 		})
 	}
 	return items, nil

@@ -10,12 +10,6 @@ import (
 )
 
 func registerCurrentSessionRoutes(mux *http.ServeMux, deps Dependencies) {
-	mux.HandleFunc("/v1/sessions", func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	})
-	mux.HandleFunc("/v1/sessions/", func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	})
 	mux.HandleFunc("/v1/session/ensure", handleEnsureSession(deps))
 	mux.HandleFunc("/v1/session/turns", handleCurrentSession(deps, handleSubmitTurn))
 	mux.HandleFunc("/v1/session/interrupt", handleCurrentSession(deps, handleInterruptTurn))
