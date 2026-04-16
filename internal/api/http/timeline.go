@@ -17,6 +17,14 @@ type reportMailboxStore interface {
 	CountPendingReportMailboxItems(context.Context, string) (int, error)
 }
 
+type childReportCountStore interface {
+	CountPendingChildReports(context.Context, string) (int, error)
+}
+
+type queueSummaryProvider interface {
+	QueuePayload(string) (types.SessionQueuePayload, bool)
+}
+
 func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -51,6 +59,23 @@ func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 				return
 			}
 		}
+		queueSummary := types.SessionQueueSummary{}
+		if childReportStore, ok := deps.Store.(childReportCountStore); ok {
+			queueSummary.PendingChildReports, err = childReportStore.CountPendingChildReports(r.Context(), sessionID)
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+		}
+		if manager, ok := deps.Manager.(queueSummaryProvider); ok {
+			if payload, ok := manager.QueuePayload(sessionID); ok {
+				queueSummary.ActiveTurnID = payload.ActiveTurnID
+				queueSummary.ActiveTurnKind = payload.ActiveTurnKind
+				queueSummary.QueueDepth = payload.QueueDepth
+				queueSummary.QueuedUserTurns = payload.QueuedUserTurns
+				queueSummary.QueuedChildReportBatches = payload.QueuedChildReportBatches
+			}
+		}
 
 		blocks := normalizeTimelineBlocks(items, events)
 		if graphStore, ok := deps.Store.(runtimeGraphStore); ok {
@@ -66,6 +91,7 @@ func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 			Blocks:             blocks,
 			LatestSeq:          latestSeq,
 			PendingReportCount: pendingReportCount,
+			Queue:              queueSummary,
 		})
 	}
 }

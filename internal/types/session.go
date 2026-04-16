@@ -5,6 +5,7 @@ import "time"
 type SessionState string
 type TurnState string
 type TurnExecutionMode string
+type TurnKind string
 
 const (
 	SessionStateIdle               SessionState = "idle"
@@ -31,6 +32,11 @@ const (
 	TurnExecutionModeDetached           TurnExecutionMode = "detached"
 )
 
+const (
+	TurnKindUserMessage      TurnKind = "user_message"
+	TurnKindChildReportBatch TurnKind = "child_report_batch"
+)
+
 type Session struct {
 	ID                string       `json:"id"`
 	WorkspaceRoot     string       `json:"workspace_root"`
@@ -47,6 +53,7 @@ type Turn struct {
 	SessionID                string            `json:"session_id"`
 	ContextHeadID            string            `json:"context_head_id,omitempty"`
 	ClientTurnID             string            `json:"client_turn_id,omitempty"`
+	Kind                     TurnKind          `json:"kind,omitempty"`
 	State                    TurnState         `json:"state"`
 	ExecutionMode            TurnExecutionMode `json:"execution_mode,omitempty"`
 	ForegroundLeaseID        string            `json:"foreground_lease_id,omitempty"`

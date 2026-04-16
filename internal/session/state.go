@@ -1,9 +1,19 @@
 package session
 
-import "context"
+import (
+	"context"
+
+	"go-agent/internal/types"
+)
 
 type RuntimeState struct {
-	ActiveTurnID      string
-	RunPermissions    map[string]string
-	cancel            context.CancelFunc
+	ActiveTurnID             string
+	ActiveTurnKind           types.TurnKind
+	QueueDepth               int
+	QueuedUserTurns          int
+	QueuedChildReportBatches int
+	RunPermissions           map[string]string
+
+	queue  []queuedTurn
+	cancel context.CancelFunc
 }

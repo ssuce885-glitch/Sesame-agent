@@ -56,6 +56,7 @@ type taskTerminalNotifier struct {
 	reporting *reporting.Service
 	delivery  *automation.DeliveryService
 	watcher   automation.DispatchWatcherSyncer
+	manager   *session.Manager
 	now       func() time.Time
 }
 
@@ -178,6 +179,7 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, taskID string, workspace
 		Turn: types.Turn{
 			ID:          turnID,
 			SessionID:   sessionID,
+			Kind:        types.TurnKindUserMessage,
 			UserMessage: prompt,
 		},
 		TaskID:              strings.TrimSpace(taskID),
@@ -219,6 +221,7 @@ func (a agentTaskExecutor) prepareTaskRun(ctx context.Context, sessionID, turnID
 	turnRow := types.Turn{
 		ID:          turnID,
 		SessionID:   sessionRow.ID,
+		Kind:        types.TurnKindUserMessage,
 		State:       types.TurnStateCreated,
 		UserMessage: prompt,
 		CreatedAt:   now,
@@ -316,23 +319,18 @@ func (n taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed 
 		return err
 	}
 
-	if strings.TrimSpace(completed.ParentSessionID) == "" {
-		return nil
-	}
-
 	updatedBlock := timelineBlockFromCompletedTask(completed, runtimeTask, ok)
 	eventSink := storeAndBusSink{store: n.store, bus: n.bus}
-	taskEvent, err := types.NewEvent(completed.ParentSessionID, completed.ParentTurnID, types.EventTaskUpdated, updatedBlock)
-	if err != nil {
-		return err
-	}
-	if err := eventSink.Emit(ctx, taskEvent); err != nil {
-		return err
+	if strings.TrimSpace(completed.ParentSessionID) != "" {
+		taskEvent, err := types.NewEvent(completed.ParentSessionID, completed.ParentTurnID, types.EventTaskUpdated, updatedBlock)
+		if err != nil {
+			return err
+		}
+		if err := eventSink.Emit(ctx, taskEvent); err != nil {
+			return err
+		}
 	}
 
-	if !shouldNotifyTaskResultReady(completed) {
-		return nil
-	}
 	if reporting.ShouldQueueTaskReport(completed) {
 		var (
 			reportItems []types.ReportMailboxItem
@@ -365,18 +363,37 @@ func (n taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed 
 		}
 		return nil
 	}
-	completion, readyBlock, ok := pendingCompletionFromTask(completed, updatedBlock, now)
+
+	if strings.TrimSpace(completed.ParentSessionID) == "" {
+		return nil
+	}
+
+	report, ok := childReportFromTask(completed, now)
 	if !ok {
 		return nil
 	}
-	if err := n.store.UpsertPendingTaskCompletion(ctx, completion); err != nil {
+	if err := n.store.UpsertPendingChildReport(ctx, report); err != nil {
 		return err
 	}
-	readyEvent, err := types.NewEvent(completed.ParentSessionID, completed.ParentTurnID, types.EventTaskResultReady, readyBlock)
+	if err := n.enqueueSyntheticChildReportTurn(ctx, completed.ParentSessionID); err != nil {
+		return err
+	}
+
+	pendingCount, err := n.store.CountPendingChildReports(ctx, completed.ParentSessionID)
 	if err != nil {
 		return err
 	}
-	if err := eventSink.Emit(ctx, readyEvent); err != nil {
+	noticeText := "child report queued"
+	if pendingCount > 1 {
+		noticeText = fmt.Sprintf("%d child reports queued", pendingCount)
+	}
+	noticeEvent, err := types.NewEvent(completed.ParentSessionID, completed.ParentTurnID, types.EventSystemNotice, types.NoticePayload{
+		Text: noticeText,
+	})
+	if err != nil {
+		return err
+	}
+	if err := eventSink.Emit(ctx, noticeEvent); err != nil {
 		return err
 	}
 	return nil
@@ -412,30 +429,32 @@ func timelineBlockFromCompletedTask(completed task.Task, runtimeTask types.Task,
 	}
 }
 
-func pendingCompletionFromTask(completed task.Task, block types.TimelineBlock, now time.Time) (types.PendingTaskCompletion, types.TimelineBlock, bool) {
+func childReportFromTask(completed task.Task, now time.Time) (types.ChildReport, bool) {
 	result, ready := completed.FinalResult()
-	if !ready {
-		return types.PendingTaskCompletion{}, types.TimelineBlock{}, false
+	if !ready && strings.TrimSpace(completed.OutcomeSummary) == "" && strings.TrimSpace(completed.Error) == "" && completed.Status == task.TaskStatusRunning {
+		return types.ChildReport{}, false
 	}
-	completion := types.PendingTaskCompletion{
+	report := types.ChildReport{
 		ID:            completed.ID,
 		SessionID:     completed.ParentSessionID,
 		ParentTurnID:  completed.ParentTurnID,
 		TaskID:        completed.ID,
 		TaskType:      string(completed.Type),
+		TaskKind:      completed.Kind,
+		Source:        childReportSourceFromTask(completed),
+		Status:        childReportStatusFromTask(completed),
+		Objective:     firstNonEmptyTrimmed(completed.Description, completed.Command),
+		ResultReady:   ready,
 		Command:       completed.Command,
 		Description:   completed.Description,
 		ResultKind:    string(result.Kind),
 		ResultText:    result.Text,
-		ResultPreview: clampTaskResultPreview(result.Text),
-		ObservedAt:    result.ObservedAt,
+		ResultPreview: clampTaskResultPreview(firstNonEmptyTrimmed(result.Text, completed.OutcomeSummary, completed.Error)),
+		ObservedAt:    firstNonZeroTime(result.ObservedAt, now),
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-	readyBlock := block
-	readyBlock.Status = string(runtimeTaskStateFromTaskStatus(completed.Status))
-	readyBlock.ResultPreview = completion.ResultPreview
-	return completion, readyBlock, true
+	return report, true
 }
 
 func runtimeTaskStateFromTaskStatus(status task.TaskStatus) types.TaskState {
@@ -453,11 +472,60 @@ func runtimeTaskStateFromTaskStatus(status task.TaskStatus) types.TaskState {
 	}
 }
 
-func shouldNotifyTaskResultReady(completed task.Task) bool {
-	return completed.Status == task.TaskStatusCompleted &&
-		completed.ResultReady() &&
-		strings.TrimSpace(completed.ParentSessionID) != "" &&
-		completed.CompletionNotifiedAt == nil
+func childReportSourceFromTask(completed task.Task) types.ChildReportSource {
+	if strings.TrimSpace(completed.ScheduledJobID) != "" || strings.EqualFold(strings.TrimSpace(completed.Kind), "scheduled_report") {
+		return types.ChildReportSourceCron
+	}
+	if strings.TrimSpace(completed.ParentSessionID) != "" {
+		return types.ChildReportSourceChat
+	}
+	return types.ChildReportSourceAutomation
+}
+
+func childReportStatusFromTask(completed task.Task) types.ChildReportStatus {
+	switch completed.Outcome {
+	case types.ChildAgentOutcomeBlocked:
+		return types.ChildReportStatusBlocked
+	case types.ChildAgentOutcomeFailure:
+		return types.ChildReportStatusFailure
+	case types.ChildAgentOutcomeSuccess:
+		return types.ChildReportStatusSuccess
+	}
+	switch completed.Status {
+	case task.TaskStatusFailed, task.TaskStatusStopped:
+		return types.ChildReportStatusFailure
+	default:
+		return types.ChildReportStatusSuccess
+	}
+}
+
+func (n taskTerminalNotifier) enqueueSyntheticChildReportTurn(ctx context.Context, sessionID string) error {
+	if n.store == nil || n.manager == nil || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	if state, ok := n.manager.GetRuntimeState(sessionID); ok {
+		if state.ActiveTurnKind == types.TurnKindChildReportBatch || state.QueuedChildReportBatches > 0 {
+			return nil
+		}
+	}
+
+	now := n.currentTime()
+	turn := types.Turn{
+		ID:        types.NewID("turn"),
+		SessionID: sessionID,
+		Kind:      types.TurnKindChildReportBatch,
+		State:     types.TurnStateCreated,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if headID, ok, err := n.store.GetCurrentContextHeadID(ctx); err == nil && ok {
+		turn.ContextHeadID = strings.TrimSpace(headID)
+	}
+	if err := n.store.InsertTurn(ctx, turn); err != nil {
+		return err
+	}
+	_, err := n.manager.SubmitTurn(ctx, sessionID, session.SubmitTurnInput{Turn: turn})
+	return err
 }
 
 func clampTaskResultPreview(text string) string {
@@ -471,6 +539,15 @@ func clampTaskResultPreview(text string) string {
 		return trimmed
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+func firstNonZeroTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value.UTC()
+		}
+	}
+	return time.Time{}
 }
 
 func firstNonEmptyTrimmed(values ...string) string {
@@ -740,6 +817,35 @@ func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *sess
 		}
 	}
 
+	if err := recoverQueuedCanonicalTurns(ctx, store, manager); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func recoverQueuedCanonicalTurns(ctx context.Context, store *sqlite.Store, manager *session.Manager) error {
+	if store == nil || manager == nil {
+		return nil
+	}
+
+	canonicalSessionID, ok, err := store.GetCanonicalSessionID(ctx)
+	if err != nil || !ok {
+		return err
+	}
+
+	turns, err := store.ListTurnsBySession(ctx, canonicalSessionID)
+	if err != nil {
+		return err
+	}
+	for _, turn := range turns {
+		if turn.State != types.TurnStateCreated {
+			continue
+		}
+		if _, err := manager.SubmitTurn(ctx, canonicalSessionID, session.SubmitTurnInput{Turn: turn}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -875,9 +981,8 @@ func resumeResolvedContinuations(ctx context.Context, store *sqlite.Store, manag
 			TaskID:                     continuation.TaskID,
 		}
 		if _, err := manager.ResumeTurn(ctx, sessionRow.ID, session.ResumeTurnInput{
-			TurnID:  turn.ID,
-			Message: turn.UserMessage,
-			Resume:  resume,
+			Turn:   turn,
+			Resume: resume,
 		}); err != nil {
 			return nil, err
 		}

@@ -42,10 +42,10 @@ const (
 	tuiEntryError     tuiEntryKind = "error"
 	tuiEntryActivity  tuiEntryKind = "activity"
 
-	tuiViewChat    tuiView = "chat"
-	tuiViewAgents  tuiView = "agents"
-	tuiViewMailbox tuiView = "mailbox"
-	tuiViewCron    tuiView = "cron"
+	tuiViewChat      tuiView = "chat"
+	tuiViewSubagents tuiView = "subagents"
+	tuiViewMailbox   tuiView = "mailbox"
+	tuiViewCron      tuiView = "cron"
 )
 
 type tuiEntry struct {
@@ -173,6 +173,7 @@ type tuiModel struct {
 	statusBarMessage   string
 	statusFlash        string
 	pendingReportCount int
+	queueSummary       types.SessionQueueSummary
 
 	mailbox       types.WorkspaceReportMailboxResponse
 	mailboxLoaded bool
@@ -369,7 +370,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tuiWorkspaceRefreshTickMsg:
 		cmds := []tea.Cmd{m.loadMailboxCmd()}
-		if m.activeView == tuiViewAgents || m.runtimeGraphStale || m.reportingStale {
+		if m.activeView == tuiViewSubagents || m.runtimeGraphStale || m.reportingStale {
 			cmds = append(cmds, m.loadAgentsCmd())
 		}
 		cmds = append(cmds, m.workspaceRefreshCmd())
@@ -422,11 +423,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input.Reset()
 				m.layout()
 				return m.handleCommand(value)
-			}
-			if m.busy {
-				m.appendNotice("turn still running; wait for it to finish before sending another prompt")
-				m.layout()
-				return m, nil
 			}
 			m.input.Reset()
 			m.layout()
@@ -619,7 +615,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tuiRuntimeGraphMsg:
 		if msg.err != nil {
 			m.runtimeGraphErr = msg.err.Error()
-			m.setStatusFlash("Agents refresh failed")
+			m.setStatusFlash("Subagents refresh failed")
 			m.layout()
 			return m, nil
 		}
@@ -664,13 +660,13 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 
 	switch fields[0] {
 	case "help":
-		m.appendActivity("commands", "/help\n/chat\n/agents\n/mailbox\n/history [list]\n/history load <head_id>\n/reopen\n/cron list [--all]\n/cron inspect <id>\n/cron pause <id>\n/cron resume <id>\n/cron remove <id>\n/status\n/skills\n/tools\n/approve [<request_id>] [once|run|session]\n/deny [<request_id>]\n/clear\n/exit")
+		m.appendActivity("commands", "/help\n/chat\n/subagents\n/mailbox\n/history [list]\n/history load <head_id>\n/reopen\n/cron list [--all]\n/cron inspect <id>\n/cron pause <id>\n/cron resume <id>\n/cron remove <id>\n/status\n/skills\n/tools\n/approve [<request_id>] [once|run|session]\n/deny [<request_id>]\n/clear\n/exit")
 		m.layout()
 		return m, nil
 	case "chat":
 		return m.switchView(tuiViewChat, nil)
-	case "agents":
-		return m.switchView(tuiViewAgents, m.loadAgentsCmd())
+	case "agents", "subagents":
+		return m.switchView(tuiViewSubagents, m.loadAgentsCmd())
 	case "exit":
 		return m, tea.Quit
 	case "clear":
@@ -853,7 +849,7 @@ func (m *tuiModel) defaultViewLoadCmd(view tuiView) tea.Cmd {
 			return nil
 		}
 		return m.listCronJobsCmd(false)
-	case tuiViewAgents:
+	case tuiViewSubagents:
 		if !m.runtimeGraphLoaded || m.runtimeGraphStale || !m.reportingLoaded || m.reportingStale {
 			return m.loadAgentsCmd()
 		}
@@ -870,8 +866,6 @@ func (m *tuiModel) submitPromptCmd(prompt string) tea.Cmd {
 		m.layout()
 		return nil
 	}
-	m.busy = true
-	m.closeAssistantStream()
 	m.appendEntry(tuiEntry{
 		Kind:  tuiEntryUser,
 		Title: "You",
@@ -1060,6 +1054,7 @@ func listenTUIStream(ch <-chan tea.Msg, sessionID string) tea.Cmd {
 
 func (m *tuiModel) applyTimeline(timeline types.SessionTimelineResponse) {
 	m.pendingReportCount = timeline.PendingReportCount
+	m.queueSummary = timeline.Queue
 	for _, block := range timeline.Blocks {
 		switch block.Kind {
 		case "user_message":
@@ -1122,6 +1117,7 @@ func (m *tuiModel) applyEvent(event types.Event) tea.Cmd {
 	refreshMailbox := false
 	switch event.Type {
 	case types.EventTurnStarted:
+		m.busy = true
 		refreshAgents = true
 	case types.EventAssistantDelta:
 		var payload types.AssistantDeltaPayload
@@ -1211,6 +1207,15 @@ func (m *tuiModel) applyEvent(event types.Event) tea.Cmd {
 		m.closeAssistantStream()
 		m.busy = false
 		refreshAgents = true
+	case types.EventSessionQueueUpdated:
+		var payload types.SessionQueuePayload
+		if err := decodeEventPayload(event.Payload, &payload); err == nil {
+			m.queueSummary.ActiveTurnID = payload.ActiveTurnID
+			m.queueSummary.ActiveTurnKind = payload.ActiveTurnKind
+			m.queueSummary.QueueDepth = payload.QueueDepth
+			m.queueSummary.QueuedUserTurns = payload.QueuedUserTurns
+			m.queueSummary.QueuedChildReportBatches = payload.QueuedChildReportBatches
+		}
 	}
 	if refreshAgents {
 		m.runtimeGraphStale = true
@@ -1221,7 +1226,7 @@ func (m *tuiModel) applyEvent(event types.Event) tea.Cmd {
 	if refreshMailbox {
 		cmds = append(cmds, m.loadMailboxCmd())
 	}
-	if refreshAgents && m.activeView == tuiViewAgents {
+	if refreshAgents && m.activeView == tuiViewSubagents {
 		cmds = append(cmds, m.loadAgentsCmd())
 	}
 	return tea.Batch(cmds...)
@@ -1389,8 +1394,11 @@ func (m tuiModel) renderHeader() string {
 	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("249"))
 
 	left := titleStyle.Render("Sesame")
-	if m.busy {
+	if m.busy || strings.TrimSpace(m.queueSummary.ActiveTurnID) != "" {
 		left += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render("● running")
+	}
+	if m.queueSummary.QueueDepth > 0 {
+		left += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("69")).Render(fmt.Sprintf("queue %d", m.queueSummary.QueueDepth))
 	}
 	top := lipgloss.JoinHorizontal(lipgloss.Left, left)
 
@@ -1468,8 +1476,8 @@ func (m tuiModel) renderViewportContent() string {
 		return m.renderMailboxContent(contentWidth)
 	case tuiViewCron:
 		return m.renderCronContent(contentWidth)
-	case tuiViewAgents:
-		return m.renderAgentsContent(contentWidth)
+	case tuiViewSubagents:
+		return m.renderSubagentsContent(contentWidth)
 	default:
 		return m.renderChatContent(contentWidth)
 	}
@@ -1499,10 +1507,14 @@ func (m tuiModel) renderViewTabs() string {
 }
 
 func (m tuiModel) renderChatContent(width int) string {
-	if len(m.entries) == 0 {
-		return renderMutedBlock("Start chatting below. Use /help for commands.", width)
+	parts := []string{}
+	if m.queueSummary.PendingChildReports > 0 {
+		parts = append(parts, renderMutedBlock(fmt.Sprintf("%d child reports queued. See Subagents for details.", m.queueSummary.PendingChildReports), width))
 	}
-	parts := make([]string, 0, len(m.entries))
+	if len(m.entries) == 0 {
+		parts = append(parts, renderMutedBlock("Start chatting below. Use /help for commands.", width))
+		return strings.Join(parts, "\n\n")
+	}
 	for _, entry := range m.entries {
 		parts = append(parts, renderTUIEntry(entry, width))
 	}
@@ -1583,11 +1595,11 @@ func (m tuiModel) renderCronContent(width int) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func (m tuiModel) renderAgentsContent(width int) string {
+func (m tuiModel) renderSubagentsContent(width int) string {
 	graph := m.runtimeGraph.Graph
 	parts := []string{
 		renderSectionHeading(
-			"Agents",
+			"Subagents",
 			fmt.Sprintf("%d runs · %d incidents · %d dispatches · %d tasks · %d workers · %d groups · %d agent results · %d digests · %d tool runs · %d worktrees · %d permissions", len(graph.Runs), len(graph.Incidents), len(graph.DispatchAttempts), len(graph.Tasks), len(m.reportingOverview.ChildAgents), len(m.reportingOverview.ReportGroups), len(m.reportingOverview.ChildResults), len(m.reportingOverview.Digests), len(graph.ToolRuns), len(graph.Worktrees), len(graph.PermissionRequests)),
 			width,
 		),
@@ -2046,13 +2058,13 @@ func formatPermissionLine(request types.PermissionRequest) string {
 }
 
 func orderedTUIViews() []tuiView {
-	return []tuiView{tuiViewChat, tuiViewAgents, tuiViewMailbox, tuiViewCron}
+	return []tuiView{tuiViewChat, tuiViewSubagents, tuiViewMailbox, tuiViewCron}
 }
 
 func (v tuiView) title() string {
 	switch v {
-	case tuiViewAgents:
-		return "Agents"
+	case tuiViewSubagents:
+		return "Subagents"
 	case tuiViewMailbox:
 		return "Mailbox"
 	case tuiViewCron:

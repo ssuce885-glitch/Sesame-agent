@@ -87,13 +87,8 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	}
 
 	err = a.engine.RunTurn(ctx, engine.Input{
-		Session: in.Session,
-		Turn: types.Turn{
-			ID:           in.TurnID,
-			SessionID:    in.Session.ID,
-			ClientTurnID: "",
-			UserMessage:  in.Message,
-		},
+		Session:             in.Session,
+		Turn:                in.Turn,
 		TaskID:              firstNonEmptyTrimmed(taskIDFromResume(in.Resume)),
 		Sink:                sink,
 		Resume:              in.Resume,
@@ -103,7 +98,7 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		finalDispatchText = strings.TrimSpace(observerSink.FinalText())
 		if in.Resume != nil && finalDispatchText != "" {
 			taskCompleted = true
-		} else if turn, ok, turnErr := a.store.GetTurn(ctx, in.TurnID); turnErr != nil {
+		} else if turn, ok, turnErr := a.store.GetTurn(ctx, in.Turn.ID); turnErr != nil {
 			return turnErr
 		} else if ok && turn.State != types.TurnStateAwaitingPermission {
 			taskCompleted = true

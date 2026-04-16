@@ -52,6 +52,16 @@ type SessionTimelineResponse struct {
 	Blocks             []TimelineBlock `json:"blocks"`
 	LatestSeq          int64           `json:"latest_seq"`
 	PendingReportCount int             `json:"pending_report_count"`
+	Queue              SessionQueueSummary `json:"queue"`
+}
+
+type SessionQueueSummary struct {
+	ActiveTurnID             string   `json:"active_turn_id,omitempty"`
+	ActiveTurnKind           TurnKind `json:"active_turn_kind,omitempty"`
+	QueueDepth               int      `json:"queue_depth"`
+	QueuedUserTurns          int      `json:"queued_user_turns"`
+	QueuedChildReportBatches int      `json:"queued_child_report_batches"`
+	PendingChildReports      int      `json:"pending_child_reports"`
 }
 
 type ConversationTimelineItem struct {

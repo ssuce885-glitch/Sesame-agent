@@ -64,6 +64,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	if sessionID == "" {
 		sessionID = in.Session.ID
 	}
+	turnMessage := effectiveTurnMessage(in.Turn)
 	turnCtx := &runtimegraph.TurnContext{
 		CurrentSessionID: sessionID,
 		CurrentTurnID:    in.Turn.ID,
@@ -89,21 +90,25 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	}
 	toolRuntime := tools.NewRuntime(e.registry, toolRunStoreFromConversationStore(e.store))
 
-	_, working, completionNotices, err := loadConversationState(ctx, e, in, sessionID)
+	_, working, err := loadConversationState(ctx, e, in, sessionID, turnMessage)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
 		}
 		return err
+	}
+	turnKind := normalizeTurnKind(in.Turn.Kind)
+	var childReports []types.ChildReport
+	if turnKind == types.TurnKindChildReportBatch {
+		childReports, err = loadPendingChildReports(ctx, e.store, sessionID, in.Turn.ID)
+		if err != nil {
+			if emitErr := emitFailed(err.Error()); emitErr != nil {
+				return errors.Join(err, emitErr)
+			}
+			return err
+		}
 	}
 	nextPosition, err := nextConversationPosition(ctx, e.store, sessionID)
-	if err != nil {
-		if emitErr := emitFailed(err.Error()); emitErr != nil {
-			return errors.Join(err, emitErr)
-		}
-		return err
-	}
-	reportMailboxItems, err := loadPendingReportMailboxItems(ctx, e.store, sessionID, in.Turn.ID)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
@@ -138,7 +143,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		return err
 	}
 	baseInstructionsText := runtimeInstructions.Text
-	resolution := skills.Resolve(in.Turn.UserMessage, catalog, in.ActivatedSkillNames)
+	resolution := skills.Resolve(turnMessage, catalog, in.ActivatedSkillNames)
 	visibleDefs := toolRuntime.VisibleDefinitions(toolExecCtx)
 	activeSkills := append([]skills.ActivatedSkill(nil), resolution.Activated...)
 	toolExecCtx.ActiveSkillNames = activatedSkillNames(activeSkills)
@@ -150,21 +155,18 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		return err
 	}
 	instructionBundle := instructions.Compile(instructions.CompileInput{
-		BaseText:               baseInstructionsText,
-		Catalog:                catalog,
-		Message:                in.Turn.UserMessage,
-		ActiveSkills:           activeSkills,
-		SuggestedSkills:        resolution.Suggested,
-		ActiveSkillTokenBudget: e.activeSkillTokenBudget,
+		BaseText:     baseInstructionsText,
+		Catalog:      catalog,
+		Message:      turnMessage,
+		ActiveSkills: activeSkills,
 	})
-	runtimeInstructions.Text = appendTurnSupplementalPrompts(instructionBundle.Render(), completionNotices, reportMailboxItems)
+	runtimeInstructions.Text = appendChildReportPromptSection(instructionBundle.Render(), childReports)
 	runtimeInstructions.Notices = append(runtimeInstructions.Notices, instructionBundle.Notices...)
-	runtimeInstructions.Notices = append(runtimeInstructions.Notices, completionNotices...)
 	req := e.runtime.PrepareRequest(
 		working,
 		cacheHead,
 		caps,
-		resumeAwareUserItem(in),
+		turnEntryUserItem(in),
 		runtimeInstructions.Text,
 	)
 	for _, notice := range runtimeInstructions.Notices {
@@ -183,7 +185,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	totalCachedTokens := 0
 	hasUsage := false
 
-	if in.Resume == nil {
+	if in.Resume == nil && turnKind == types.TurnKindUserMessage {
 		userItem := model.UserMessageItem(in.Turn.UserMessage)
 		if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, userItem); err != nil {
 			if emitErr := emitFailed(err.Error()); emitErr != nil {
@@ -507,18 +509,16 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 								return errors.Join(err, emitErr)
 							}
 							return err
-							}
-							resolution.Activated = activeSkills
-							visibleDefs = toolRuntime.VisibleDefinitions(toolExecCtx)
-							req.Tools = buildToolSchemas(visibleDefs)
-							req.Instructions = appendTurnSupplementalPrompts(instructions.Compile(instructions.CompileInput{
-								BaseText:               baseInstructionsText,
-								Catalog:                catalog,
-								Message:                in.Turn.UserMessage,
-								ActiveSkills:           activeSkills,
-								SuggestedSkills:        resolution.Suggested,
-								ActiveSkillTokenBudget: e.activeSkillTokenBudget,
-						}).Render(), completionNotices, reportMailboxItems)
+						}
+						resolution.Activated = activeSkills
+						visibleDefs = toolRuntime.VisibleDefinitions(toolExecCtx)
+						req.Tools = buildToolSchemas(visibleDefs)
+						req.Instructions = appendChildReportPromptSection(instructions.Compile(instructions.CompileInput{
+							BaseText:     baseInstructionsText,
+							Catalog:      catalog,
+							Message:      turnMessage,
+							ActiveSkills: activeSkills,
+						}).Render(), childReports)
 					}
 				}
 
@@ -603,11 +603,18 @@ func effectivePermissionEngine(base *permissions.Engine, in Input) *permissions.
 	return base
 }
 
-func resumeAwareUserItem(in Input) model.ConversationItem {
+func effectiveTurnMessage(turn types.Turn) string {
+	if normalizeTurnKind(turn.Kind) == types.TurnKindChildReportBatch {
+		return "Review the child reports and continue the main conversation."
+	}
+	return turn.UserMessage
+}
+
+func turnEntryUserItem(in Input) model.ConversationItem {
 	if in.Resume != nil {
 		return model.ConversationItem{}
 	}
-	return model.UserMessageItem(in.Turn.UserMessage)
+	return model.UserMessageItem(effectiveTurnMessage(in.Turn))
 }
 
 func resumeToolResultItem(resume *types.TurnResume) (model.ConversationItem, model.ToolResult) {
@@ -644,41 +651,41 @@ func resumeToolResultItem(resume *types.TurnResume) (model.ConversationItem, mod
 	return model.ToolResultItem(result), result
 }
 
-func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string) (int, contextstate.WorkingSet, []string, error) {
+func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string, turnMessage string) (int, contextstate.WorkingSet, error) {
 	if e.store == nil || e.ctxManager == nil {
-		return 0, contextstate.WorkingSet{}, nil, nil
+		return 0, contextstate.WorkingSet{}, nil
 	}
 
 	items, err := loadPromptItemsForCurrentHead(ctx, e.store, sessionID)
 	if err != nil {
-		return 0, contextstate.WorkingSet{}, nil, err
+		return 0, contextstate.WorkingSet{}, err
 	}
 	totalItems := len(items)
 
 	summaryBundle, compactions, err := loadSummaryBundle(ctx, e.store, sessionID)
 	if err != nil {
-		return 0, contextstate.WorkingSet{}, nil, err
+		return 0, contextstate.WorkingSet{}, err
 	}
 	hasSessionMemory := summaryBundle.SessionMemory != nil
 	sessionMemoryUpTo := loadSessionMemoryUpTo(ctx, e.store, sessionID)
 
 	entries, err := e.store.ListMemoryEntriesByWorkspace(ctx, in.Session.WorkspaceRoot)
 	if err != nil {
-		return 0, contextstate.WorkingSet{}, nil, err
+		return 0, contextstate.WorkingSet{}, err
 	}
 
-	memoryRefs := buildMemoryRefs(entries, hasSessionMemory, in.Session.WorkspaceRoot, in.Turn.UserMessage)
+	memoryRefs := buildMemoryRefs(entries, hasSessionMemory, in.Session.WorkspaceRoot, turnMessage)
 
 	persistedMicroItems := activeMicrocompactItems(compactions)
 	recentWindowItems, recentWindowOverride := recentRawItemsForCompactionWindow(items, compactions)
-	working := e.ctxManager.Build(in.Turn.UserMessage, items, summaryBundle, memoryRefs)
-	working = setPromptItems(working, persistedMicroItems, recentWindowItems, recentWindowOverride, in.Turn.UserMessage)
+	working := e.ctxManager.Build(turnMessage, items, summaryBundle, memoryRefs)
+	working = setPromptItems(working, persistedMicroItems, recentWindowItems, recentWindowOverride, turnMessage)
 	if e.compactor != nil {
 		working, summaryBundle, err = runCompactionPasses(
 			ctx,
 			e,
 			sessionID,
-			in.Turn.UserMessage,
+			turnMessage,
 			items,
 			summaryBundle,
 			memoryRefs,
@@ -688,16 +695,11 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 			working,
 		)
 		if err != nil {
-			return 0, contextstate.WorkingSet{}, nil, err
+			return 0, contextstate.WorkingSet{}, err
 		}
 	}
 
-	completionNotices, err := loadPendingTaskCompletionNotices(ctx, e.store, sessionID, in.Turn.ID)
-	if err != nil {
-		return 0, contextstate.WorkingSet{}, nil, err
-	}
-
-	return totalItems, working, completionNotices, nil
+	return totalItems, working, nil
 }
 
 func runCompactionPasses(
@@ -1046,122 +1048,73 @@ type pendingTaskCompletionStore interface {
 	ClaimPendingTaskCompletionsForTurn(context.Context, string, string) ([]types.PendingTaskCompletion, error)
 }
 
-type pendingReportMailboxStore interface {
-	ClaimPendingReportMailboxItemsForTurn(context.Context, string, string) ([]types.ReportMailboxItem, error)
+type pendingChildReportStore interface {
+	ClaimPendingChildReportsForTurn(context.Context, string, string) ([]types.ChildReport, error)
 }
 
-func loadPendingTaskCompletionNotices(ctx context.Context, store ConversationStore, sessionID, turnID string) ([]string, error) {
-	claimStore, ok := store.(pendingTaskCompletionStore)
+func normalizeTurnKind(kind types.TurnKind) types.TurnKind {
+	if kind == types.TurnKindChildReportBatch {
+		return types.TurnKindChildReportBatch
+	}
+	return types.TurnKindUserMessage
+}
+
+func loadPendingChildReports(ctx context.Context, store ConversationStore, sessionID, turnID string) ([]types.ChildReport, error) {
+	claimStore, ok := store.(pendingChildReportStore)
+	if ok && strings.TrimSpace(sessionID) != "" && strings.TrimSpace(turnID) != "" {
+		return claimStore.ClaimPendingChildReportsForTurn(ctx, sessionID, turnID)
+	}
+
+	legacyStore, ok := store.(pendingTaskCompletionStore)
 	if !ok || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(turnID) == "" {
 		return nil, nil
 	}
-	completions, err := claimStore.ClaimPendingTaskCompletionsForTurn(ctx, sessionID, turnID)
+	completions, err := legacyStore.ClaimPendingTaskCompletionsForTurn(ctx, sessionID, turnID)
 	if err != nil {
 		return nil, err
 	}
-	return buildPendingTaskCompletionNotices(completions), nil
+	reports := make([]types.ChildReport, len(completions))
+	for i := range completions {
+		reports[i] = types.ChildReport(completions[i])
+	}
+	return reports, nil
 }
 
-func loadPendingReportMailboxItems(ctx context.Context, store ConversationStore, sessionID, turnID string) ([]types.ReportMailboxItem, error) {
-	claimStore, ok := store.(pendingReportMailboxStore)
-	if !ok || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(turnID) == "" {
-		return nil, nil
+func buildChildReportPromptSection(reports []types.ChildReport) string {
+	if len(reports) == 0 {
+		return ""
 	}
-	return claimStore.ClaimPendingReportMailboxItemsForTurn(ctx, sessionID, turnID)
-}
-
-func buildPendingTaskCompletionNotices(completions []types.PendingTaskCompletion) []string {
-	if len(completions) == 0 {
-		return nil
-	}
-	notices := make([]string, 0, len(completions))
-	for _, completion := range completions {
-		taskID := firstNonEmpty(completion.TaskID, completion.ID)
+	lines := []string{"Child reports ready for parent review:"}
+	for _, report := range reports {
+		taskID := firstNonEmpty(report.TaskID, report.ID)
 		if taskID == "" {
 			continue
 		}
-		lines := []string{
-			"[Child task completion available]",
-			"Task ID: " + taskID,
+		lines = append(lines, fmt.Sprintf("- task_id=%s status=%s source=%s objective=%q result_ready=%t observed_at=%s",
+			taskID,
+			report.Status,
+			report.Source,
+			report.Objective,
+			report.ResultReady,
+			report.ObservedAt.UTC().Format(time.RFC3339),
+		))
+		if preview := strings.TrimSpace(firstNonEmpty(report.ResultPreview, report.ResultText)); preview != "" {
+			lines = append(lines, "  preview: "+preview)
 		}
-		if completion.TaskType != "" {
-			lines = append(lines, "Task type: "+completion.TaskType)
-		}
-		if completion.ParentTurnID != "" {
-			lines = append(lines, "Origin turn: "+completion.ParentTurnID)
-		}
-		if !completion.ObservedAt.IsZero() {
-			lines = append(lines, "Observed at: "+completion.ObservedAt.UTC().Format(time.RFC3339))
-		}
-		if preview := firstNonEmpty(completion.ResultPreview, completion.ResultText); preview != "" {
-			lines = append(lines, "Result preview:")
-			lines = append(lines, preview)
-		}
-		lines = append(lines, "Use task_result with this task_id if you need the full final result.")
-		notices = append(notices, strings.Join(lines, "\n"))
 	}
-	return notices
+	return strings.Join(lines, "\n")
 }
 
-func pendingTaskCompletionPromptSection(notices []string) string {
-	if len(notices) == 0 {
-		return ""
+func appendChildReportPromptSection(text string, reports []types.ChildReport) string {
+	text = strings.TrimSpace(text)
+	section := strings.TrimSpace(buildChildReportPromptSection(reports))
+	if section == "" {
+		return text
 	}
-	return "Pending child task completions:\n\n" + strings.Join(notices, "\n\n")
-}
-
-func pendingReportMailboxPromptSection(items []types.ReportMailboxItem) string {
-	if len(items) == 0 {
-		return ""
+	if text == "" {
+		return section
 	}
-
-	sections := make([]string, 0, len(items))
-	for _, item := range items {
-		lines := []string{"[Pending report delivered by runtime]"}
-		if item.ID != "" {
-			lines = append(lines, "Mailbox ID: "+item.ID)
-		}
-		if item.SourceKind != "" {
-			lines = append(lines, "Source kind: "+string(item.SourceKind))
-		}
-		if item.SourceID != "" {
-			lines = append(lines, "Source id: "+item.SourceID)
-		}
-		if !item.ObservedAt.IsZero() {
-			lines = append(lines, "Observed at: "+item.ObservedAt.UTC().Format(time.RFC3339))
-		}
-		if severity := strings.TrimSpace(item.Envelope.Severity); severity != "" {
-			lines = append(lines, "Severity: "+severity)
-		}
-		if title := strings.TrimSpace(item.Envelope.Title); title != "" {
-			lines = append(lines, "Title: "+title)
-		}
-		if summary := strings.TrimSpace(item.Envelope.Summary); summary != "" {
-			lines = append(lines, "Summary:")
-			lines = append(lines, summary)
-		}
-		for _, section := range item.Envelope.Sections {
-			if title := strings.TrimSpace(section.Title); title != "" {
-				lines = append(lines, "Section: "+title)
-			}
-			if text := strings.TrimSpace(section.Text); text != "" {
-				lines = append(lines, text)
-			}
-			if len(section.Items) > 0 {
-				for _, entry := range section.Items {
-					entry = strings.TrimSpace(entry)
-					if entry == "" {
-						continue
-					}
-					lines = append(lines, "- "+entry)
-				}
-			}
-		}
-		lines = append(lines, "This report arrived asynchronously. Use it as background context for the user's current turn when relevant.")
-		sections = append(sections, strings.Join(lines, "\n"))
-	}
-
-	return "Pending reports delivered for this turn:\n\n" + strings.Join(sections, "\n\n")
+	return text + "\n\n" + section
 }
 
 func lastPayloadPosition(payload persistedMicrocompactPayload) int {
@@ -1196,25 +1149,6 @@ func nextConversationPosition(ctx context.Context, store ConversationStore, sess
 		return 0, err
 	}
 	return len(items) + 1, nil
-}
-
-func appendTurnSupplementalPrompts(text string, completionNotices []string, reportMailboxItems []types.ReportMailboxItem) string {
-	text = strings.TrimSpace(text)
-	if completionPrompt := pendingTaskCompletionPromptSection(completionNotices); strings.TrimSpace(completionPrompt) != "" {
-		if text == "" {
-			text = completionPrompt
-		} else {
-			text += "\n\n" + completionPrompt
-		}
-	}
-	if reportPrompt := pendingReportMailboxPromptSection(reportMailboxItems); strings.TrimSpace(reportPrompt) != "" {
-		if text == "" {
-			text = reportPrompt
-		} else {
-			text += "\n\n" + reportPrompt
-		}
-	}
-	return text
 }
 
 func activatedSkillNamesFromMetadata(metadata map[string]any) []string {

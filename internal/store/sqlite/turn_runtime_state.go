@@ -4,9 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"time"
 
 	"go-agent/internal/types"
 )
+
+type queryExecContexter interface {
+	execContexter
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
 
 func (s *Store) AppendEventWithState(ctx context.Context, event types.Event) (types.Event, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -68,12 +75,20 @@ func applyEventStateTransition(ctx context.Context, execer execContexter, event 
 		if err := updateTurnStateWithExec(ctx, execer, event.TurnID, types.TurnStateFailed, true); err != nil {
 			return err
 		}
-		return updateSessionStateWithExec(ctx, execer, event.SessionID, types.SessionStateIdle, "", true)
+		queryer, ok := execer.(queryExecContexter)
+		if !ok {
+			return errors.New("query execer required for turn failure state transition")
+		}
+		return clearSessionActiveTurnIfMatchesWithExec(ctx, queryer, event.SessionID, event.TurnID, types.SessionStateIdle)
 	case types.EventTurnCompleted:
 		if err := updateTurnStateWithExec(ctx, execer, event.TurnID, types.TurnStateCompleted, true); err != nil {
 			return err
 		}
-		return updateSessionStateWithExec(ctx, execer, event.SessionID, types.SessionStateIdle, "", true)
+		queryer, ok := execer.(queryExecContexter)
+		if !ok {
+			return errors.New("query execer required for turn completion state transition")
+		}
+		return clearSessionActiveTurnIfMatchesWithExec(ctx, queryer, event.SessionID, event.TurnID, types.SessionStateIdle)
 	case types.EventTurnInterrupted:
 		var payload map[string]string
 		if len(event.Payload) > 0 {
@@ -87,10 +102,37 @@ func applyEventStateTransition(ctx context.Context, execer execContexter, event 
 		if err := updateTurnStateWithExec(ctx, execer, event.TurnID, types.TurnStateInterrupted, true); err != nil {
 			return err
 		}
-		return updateSessionStateWithExec(ctx, execer, event.SessionID, types.SessionStateIdle, "", true)
+		queryer, ok := execer.(queryExecContexter)
+		if !ok {
+			return errors.New("query execer required for turn interruption state transition")
+		}
+		return clearSessionActiveTurnIfMatchesWithExec(ctx, queryer, event.SessionID, event.TurnID, types.SessionStateIdle)
 	default:
 		return nil
 	}
+}
+
+func clearSessionActiveTurnIfMatchesWithExec(ctx context.Context, queryer queryExecContexter, sessionID, turnID string, state types.SessionState) error {
+	var exists int
+	if err := queryer.QueryRowContext(ctx, `
+		select 1
+		from sessions
+		where id = ?`,
+		sessionID,
+	).Scan(&exists); err != nil {
+		return err
+	}
+
+	_, err := queryer.ExecContext(ctx, `
+		update sessions
+		set state = ?, active_turn_id = '', updated_at = ?
+		where id = ? and active_turn_id = ?`,
+		state,
+		time.Now().UTC().Format(timeLayout),
+		sessionID,
+		turnID,
+	)
+	return err
 }
 
 var _ execContexter = (*sql.Tx)(nil)
