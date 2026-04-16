@@ -49,7 +49,7 @@ func runTUISessionStream(ctx context.Context, client RuntimeClient, sessionID st
 			return
 		}
 
-		events, err := client.StreamEvents(ctx, sessionID, lastSeq)
+		events, err := client.StreamEvents(ctx, lastSeq)
 		if err != nil {
 			if !waitForTUIReconnect(ctx) {
 				return

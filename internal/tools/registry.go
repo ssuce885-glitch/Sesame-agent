@@ -241,6 +241,9 @@ func decodeToolCall(tool Tool, call Call) (DecodedCall, error) {
 }
 
 func executePreparedTool(ctx context.Context, prepared PreparedCall, execCtx ExecContext) (ToolExecutionResult, error) {
+	if !toolEnabled(prepared.Tool, execCtx) {
+		return ToolExecutionResult{}, fmt.Errorf("tool %q is not enabled in the current context", prepared.ResolvedName)
+	}
 	if executor, ok := prepared.Tool.(decodedExecutor); ok {
 		return executor.ExecuteDecoded(ctx, prepared.Decoded, execCtx)
 	}

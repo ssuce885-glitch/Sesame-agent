@@ -56,8 +56,7 @@ func NewTestDependencies(t interface {
 func NewRouter(deps Dependencies) http.Handler {
 	mux := http.NewServeMux()
 	registerStatusRoutes(mux, deps.Status)
-	registerSessionRoutes(mux, deps)
-	registerSessionScopedRoutes(mux, deps)
+	registerCurrentSessionRoutes(mux, deps)
 	registerWorkspaceRoutes(mux, deps)
 	registerRuntimeGraphRoutes(mux, deps)
 	registerWorkspaceMailboxRoutes(mux, deps)

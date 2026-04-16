@@ -19,13 +19,11 @@ var errExitRequested = errors.New("exit requested")
 
 type RuntimeClient interface {
 	Status(context.Context) (client.StatusResponse, error)
-	ListSessions(context.Context) (types.ListSessionsResponse, error)
-	SelectSession(context.Context, string) error
-	SubmitTurn(context.Context, string, types.SubmitTurnRequest) (types.Turn, error)
-	InterruptTurn(context.Context, string) error
+	SubmitTurn(context.Context, types.SubmitTurnRequest) (types.Turn, error)
+	InterruptTurn(context.Context) error
 	DecidePermission(context.Context, types.PermissionDecisionRequest) (types.PermissionDecisionResponse, error)
-	StreamEvents(context.Context, string, int64) (<-chan types.Event, error)
-	GetTimeline(context.Context, string) (types.SessionTimelineResponse, error)
+	StreamEvents(context.Context, int64) (<-chan types.Event, error)
+	GetTimeline(context.Context) (types.SessionTimelineResponse, error)
 	GetWorkspaceMailbox(context.Context) (types.WorkspaceReportMailboxResponse, error)
 	GetRuntimeGraph(context.Context) (types.WorkspaceRuntimeGraphResponse, error)
 	GetReportingOverview(context.Context, string) (types.ReportingOverview, error)
@@ -136,10 +134,10 @@ func (r *REPL) HandleLine(ctx context.Context, line string) (bool, error) {
 		fmt.Fprintln(r.stdout, pendingPermissionNotice(pending))
 		return true, nil
 	}
-	if _, err := r.client.SubmitTurn(ctx, r.sessionID, types.SubmitTurnRequest{Message: line}); err != nil {
+	if _, err := r.client.SubmitTurn(ctx, types.SubmitTurnRequest{Message: line}); err != nil {
 		return false, err
 	}
-	events, err := r.client.StreamEvents(ctx, r.sessionID, r.lastSeq)
+	events, err := r.client.StreamEvents(ctx, r.lastSeq)
 	if err != nil {
 		return false, err
 	}
@@ -160,7 +158,7 @@ func (r *REPL) loadSession(ctx context.Context) error {
 	if strings.TrimSpace(r.sessionID) == "" {
 		return nil
 	}
-	timeline, err := r.client.GetTimeline(ctx, r.sessionID)
+	timeline, err := r.client.GetTimeline(ctx)
 	if err != nil {
 		return err
 	}
@@ -190,7 +188,7 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 
 	switch fields[0] {
 	case "help":
-		fmt.Fprintln(r.stdout, "/help /clear /exit /status /skills /tools /approve [<request_id>] [once|run|session] /deny [<request_id>] /mailbox /cron list [--all] /cron inspect <id> /cron pause <id> /cron resume <id> /cron remove <id> /session list /session use <id>")
+		fmt.Fprintln(r.stdout, "/help /clear /exit /status /skills /tools /approve [<request_id>] [once|run|session] /deny [<request_id>] /mailbox /cron list [--all] /cron inspect <id> /cron pause <id> /cron resume <id> /cron remove <id>")
 		return nil
 	case "exit":
 		return errExitRequested
@@ -233,8 +231,6 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 		return nil
 	case "cron":
 		return r.handleCronCommand(ctx, fields[1:])
-	case "session":
-		return r.handleSessionCommand(ctx, fields[1:])
 	default:
 		return fmt.Errorf("unknown command: /%s", fields[0])
 	}
@@ -267,7 +263,7 @@ func (r *REPL) handlePermissionDecisionCommand(ctx context.Context, command stri
 	if !resp.Resumed || strings.TrimSpace(r.sessionID) == "" {
 		return nil
 	}
-	events, err := r.client.StreamEvents(ctx, r.sessionID, r.lastSeq)
+	events, err := r.client.StreamEvents(ctx, r.lastSeq)
 	if err != nil {
 		return err
 	}
@@ -454,37 +450,5 @@ func (r *REPL) handleCronCommand(ctx context.Context, args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("unknown cron command: %s", args[0])
-	}
-}
-
-func (r *REPL) handleSessionCommand(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: /session list|use <id>")
-	}
-
-	switch args[0] {
-	case "list":
-		resp, err := r.client.ListSessions(ctx)
-		if err != nil {
-			return err
-		}
-		r.renderer.RenderSessionList(resp)
-		return nil
-	case "use":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: /session use <id>")
-		}
-		sessionID := strings.TrimSpace(args[1])
-		if sessionID == "" {
-			return fmt.Errorf("usage: /session use <id>")
-		}
-		if err := r.client.SelectSession(ctx, sessionID); err != nil {
-			return err
-		}
-		r.sessionID = sessionID
-		r.lastSeq = 0
-		return r.loadSession(ctx)
-	default:
-		return fmt.Errorf("unknown session command: %s", args[0])
 	}
 }

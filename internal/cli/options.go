@@ -53,9 +53,6 @@ type IncidentCommand struct {
 }
 
 type Options struct {
-	ResumeID       string
-	DaemonRef      string
-	ListDaemons    bool
 	ShowStatus     bool
 	PrintOnly      bool
 	ShowVersion    bool
@@ -92,9 +89,6 @@ func ParseOptions(args []string) (Options, error) {
 	fs.SetOutput(io.Discard)
 
 	var opts Options
-	fs.StringVar(&opts.ResumeID, "resume", "", "resume a specific session")
-	fs.StringVar(&opts.DaemonRef, "daemon", "", "use a historical daemon by id or 'latest'; default creates a new daemon")
-	fs.BoolVar(&opts.ListDaemons, "list-daemons", false, "list historical daemons and exit")
 	fs.BoolVar(&opts.ShowStatus, "status", false, "print daemon status and exit")
 	fs.BoolVar(&opts.PrintOnly, "print", false, "submit one prompt and exit")
 	fs.BoolVar(&opts.ShowVersion, "version", false, "print version and exit")

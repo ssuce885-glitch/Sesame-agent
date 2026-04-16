@@ -91,7 +91,14 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	}
 	toolRuntime := tools.NewRuntime(e.registry, toolRunStoreFromConversationStore(e.store))
 
-	totalItems, working, completionNotices, err := loadConversationState(ctx, e, in, sessionID)
+	_, working, completionNotices, err := loadConversationState(ctx, e, in, sessionID)
+	if err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
+	nextPosition, err := nextConversationPosition(ctx, e.store, sessionID)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
@@ -140,7 +147,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		return err
 	}
 	if plan.NeedsConfirm {
-		return emitPlanningConfirmationTurn(ctx, e, in, emit, totalItems, sessionID, plan)
+		return emitPlanningConfirmationTurn(ctx, e, in, emit, nextPosition, sessionID, plan)
 	}
 
 	baseInstructionsText := runtimeInstructions.Text
@@ -187,7 +194,6 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	req.ToolChoice = "auto"
 	nativeContinuation := req.Cache != nil && caps.Profile != model.CapabilityProfileNone
 	assistantStarted := false
-	nextPosition := totalItems + 1
 	toolSteps := 0
 	totalInputTokens := 0
 	totalOutputTokens := 0
@@ -665,7 +671,7 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 		return 0, contextstate.WorkingSet{}, nil, nil
 	}
 
-	items, err := e.store.ListConversationItems(ctx, sessionID)
+	items, err := loadPromptItemsForCurrentHead(ctx, e.store, sessionID)
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, nil, err
 	}
@@ -1335,7 +1341,7 @@ func emitPlanningConfirmationTurn(
 	e *Engine,
 	in Input,
 	emit func(string, any) error,
-	totalItems int,
+	nextPosition int,
 	sessionID string,
 	plan intent.Plan,
 ) error {
@@ -1353,7 +1359,6 @@ func emitPlanningConfirmationTurn(
 		}
 	}
 
-	nextPosition := totalItems + 1
 	if in.Resume == nil {
 		if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, model.UserMessageItem(in.Turn.UserMessage)); err != nil {
 			return err
@@ -1375,6 +1380,17 @@ func emitPlanningConfirmationTurn(
 		}
 	}
 	return finalizeTurn(ctx, e, in, nil)
+}
+
+func nextConversationPosition(ctx context.Context, store ConversationStore, sessionID string) (int, error) {
+	if store == nil {
+		return 1, nil
+	}
+	items, err := store.ListConversationItems(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	return len(items) + 1, nil
 }
 
 func fallbackConfirmationProfile(plan intent.Plan) string {

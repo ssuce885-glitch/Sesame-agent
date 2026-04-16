@@ -109,6 +109,7 @@ func (taskCreateTool) Definition() Definition {
 			"type": map[string]any{
 				"type":        "string",
 				"description": "Task type: shell, agent, or remote.",
+				"enum":        []string{"shell", "agent", "remote"},
 			},
 			"command": map[string]any{
 				"type":        "string",
@@ -378,6 +379,7 @@ func (taskListTool) Definition() Definition {
 		"status": map[string]any{
 			"type":        "string",
 			"description": "Optional status filter.",
+			"enum":        []string{"pending", "running", "completed", "failed", "stopped"},
 		},
 	})
 	schema["required"] = []string{}
@@ -850,6 +852,7 @@ func (taskUpdateTool) Definition() Definition {
 			"status": map[string]any{
 				"type":        "string",
 				"description": "Optional status override.",
+				"enum":        []string{"pending", "running", "completed", "failed", "stopped"},
 			},
 			"description": map[string]any{
 				"type":        "string",

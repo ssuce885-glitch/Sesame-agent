@@ -30,6 +30,16 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists context_heads (
+			id text primary key,
+			session_id text not null,
+			parent_head_id text not null default '',
+			source_kind text not null,
+			title text not null default '',
+			preview text not null default '',
+			created_at text not null,
+			updated_at text not null
+		);`,
 		`create table if not exists runs (
 			id text primary key,
 			session_id text not null,
@@ -464,6 +474,18 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "sessions", "permission_profile", `alter table sessions add column permission_profile text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "turns", "context_head_id", `alter table turns add column context_head_id text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "turns", "execution_mode", `alter table turns add column execution_mode text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "turns", "foreground_lease_id", `alter table turns add column foreground_lease_id text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "turns", "foreground_lease_expires_at", `alter table turns add column foreground_lease_expires_at text not null default ''`); err != nil {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "child_agent_specs", "session_id", `alter table child_agent_specs add column session_id text not null default ''`); err != nil {

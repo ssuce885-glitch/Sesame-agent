@@ -134,6 +134,9 @@ func RestoreDispatchAfterApprovalResume(ctx context.Context, store dispatchAppro
 			return err
 		}
 	}
+	if attempt.Status != types.DispatchAttemptStatusAwaitingApproval {
+		return nil
+	}
 	if strings.TrimSpace(attempt.PermissionRequestID) != strings.TrimSpace(requestID) {
 		return nil
 	}

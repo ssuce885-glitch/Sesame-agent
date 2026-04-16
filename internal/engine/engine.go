@@ -30,7 +30,9 @@ type RuntimeMetadata struct {
 }
 
 type ConversationStore interface {
+	GetCurrentContextHeadID(context.Context) (string, bool, error)
 	ListConversationItems(context.Context, string) ([]model.ConversationItem, error)
+	ListConversationItemsByContextHead(context.Context, string, string) ([]model.ConversationItem, error)
 	ListConversationSummaries(context.Context, string) ([]model.Summary, error)
 	ListConversationCompactions(context.Context, string) ([]types.ConversationCompaction, error)
 	GetSessionMemory(context.Context, string) (types.SessionMemory, bool, error)

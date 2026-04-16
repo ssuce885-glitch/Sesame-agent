@@ -23,12 +23,12 @@ import (
 )
 
 const (
-	defaultTUIWidth           = 100
-	defaultTUIHeight          = 32
+	defaultTUIWidth             = 100
+	defaultTUIHeight            = 32
 	tuiWorkspaceRefreshInterval = 5 * time.Second
-	enableAlternateScrollSeq  = "\x1b[?1007h"
-	disableAlternateScrollSeq = "\x1b[?1007l"
-	defaultStatusBarMessage   = "Tab/Shift+Tab views • Enter send • Alt+Enter newline • Esc interrupt • Drag to select/copy • Mouse wheel/PgUp/PgDn/Home/End scroll • Ctrl+C quit"
+	enableAlternateScrollSeq    = "\x1b[?1007h"
+	disableAlternateScrollSeq   = "\x1b[?1007l"
+	defaultStatusBarMessage     = "Tab/Shift+Tab views • Enter send • Alt+Enter newline • Esc interrupt • Drag to select/copy • Mouse wheel/PgUp/PgDn/Home/End scroll • Ctrl+C quit"
 )
 
 type tuiEntryKind string
@@ -89,11 +89,6 @@ type tuiStatusMsg struct {
 	announce bool
 }
 
-type tuiSessionsMsg struct {
-	resp types.ListSessionsResponse
-	err  error
-}
-
 type tuiMailboxMsg struct {
 	resp types.WorkspaceReportMailboxResponse
 	err  error
@@ -125,13 +120,6 @@ type tuiRuntimeGraphMsg struct {
 type tuiReportingOverviewMsg struct {
 	resp types.ReportingOverview
 	err  error
-}
-
-type tuiSwitchSessionMsg struct {
-	sessionID     string
-	workspaceRoot string
-	timeline      types.SessionTimelineResponse
-	err           error
 }
 
 type tuiInterruptMsg struct {
@@ -220,7 +208,7 @@ func (r *REPL) runTUI(ctx context.Context, initialPrompt string) error {
 	status, _ := r.client.Status(ctx)
 	timeline := types.SessionTimelineResponse{}
 	if strings.TrimSpace(r.sessionID) != "" {
-		if loaded, err := r.client.GetTimeline(ctx, r.sessionID); err == nil {
+		if loaded, err := r.client.GetTimeline(ctx); err == nil {
 			timeline = loaded
 			r.lastSeq = loaded.LatestSeq
 		}
@@ -511,30 +499,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.layout()
 		return m, nil
-	case tuiSessionsMsg:
-		if msg.err != nil {
-			m.appendError(msg.err.Error())
-			m.layout()
-			return m, nil
-		}
-		lines := make([]string, 0, len(msg.resp.Sessions))
-		for _, session := range msg.resp.Sessions {
-			marker := "○"
-			if session.ID == msg.resp.SelectedSessionID || session.IsSelected {
-				marker = "●"
-			}
-			line := fmt.Sprintf("%s %s", marker, session.ID)
-			if strings.TrimSpace(session.WorkspaceRoot) != "" {
-				line += " · " + session.WorkspaceRoot
-			}
-			lines = append(lines, line)
-		}
-		if len(lines) == 0 {
-			lines = append(lines, "No sessions.")
-		}
-		m.appendActivity("sessions", strings.Join(lines, "\n"))
-		m.layout()
-		return m, nil
 	case tuiMailboxMsg:
 		if msg.err != nil {
 			m.mailboxErr = msg.err.Error()
@@ -627,50 +591,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reportingStale = false
 		m.layout()
 		return m, nil
-	case tuiSwitchSessionMsg:
-		if msg.err != nil {
-			m.appendError(msg.err.Error())
-			m.layout()
-			return m, nil
-		}
-		m.sessionID = msg.sessionID
-		if strings.TrimSpace(msg.workspaceRoot) != "" {
-			m.workspaceRoot = msg.workspaceRoot
-		}
-		m.lastSeq = msg.timeline.LatestSeq
-		m.sessionReady = strings.TrimSpace(msg.sessionID) != ""
-		m.pendingReportCount = msg.timeline.PendingReportCount
-		m.entries = nil
-		m.toolIndexByCall = make(map[string]int)
-		m.toolIndexByKey = make(map[string]int)
-		m.mailbox = types.WorkspaceReportMailboxResponse{}
-		m.mailboxLoaded = false
-		m.mailboxErr = ""
-		m.mailboxPushes = nil
-		m.cronList = types.ListScheduledJobsResponse{}
-		m.cronLoaded = false
-		m.cronErr = ""
-		m.cronScopeAll = false
-		m.cronDetail = nil
-		m.runtimeGraph = types.WorkspaceRuntimeGraphResponse{}
-		m.runtimeGraphLoaded = false
-		m.runtimeGraphErr = ""
-		m.runtimeGraphStale = true
-		m.reportingOverview = types.ReportingOverview{}
-		m.reportingLoaded = false
-		m.reportingErr = ""
-		m.reportingStale = true
-		m.applyTimeline(msg.timeline)
-		m.setStatusFlash("Switched to " + msg.sessionID)
-		m.layout()
-		return m, tea.Batch(
-			m.refreshStatusCmd(false),
-			m.startSessionStreamCmd(msg.sessionID, msg.timeline.LatestSeq),
-			m.loadMailboxCmd(),
-			m.listCronJobsCmd(false),
-			m.loadRuntimeGraphCmd(),
-			m.loadReportingOverviewCmd(),
-		)
 	}
 
 	var cmd tea.Cmd
@@ -693,7 +613,7 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 
 	switch fields[0] {
 	case "help":
-		m.appendActivity("commands", "/help\n/chat\n/agents\n/mailbox\n/cron list [--all]\n/cron inspect <id>\n/cron pause <id>\n/cron resume <id>\n/cron remove <id>\n/status\n/skills\n/tools\n/approve [<request_id>] [once|run|session]\n/deny [<request_id>]\n/session list\n/session use <id>\n/clear\n/exit")
+		m.appendActivity("commands", "/help\n/chat\n/agents\n/mailbox\n/cron list [--all]\n/cron inspect <id>\n/cron pause <id>\n/cron resume <id>\n/cron remove <id>\n/status\n/skills\n/tools\n/approve [<request_id>] [once|run|session]\n/deny [<request_id>]\n/clear\n/exit")
 		m.layout()
 		return m, nil
 	case "chat":
@@ -803,32 +723,6 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 			m.layout()
 			return m, nil
 		}
-	case "session":
-		if len(fields) < 2 {
-			m.appendError("usage: /session list|use <id>")
-			m.layout()
-			return m, nil
-		}
-		switch fields[1] {
-		case "list":
-			return m, m.listSessionsCmd()
-		case "use":
-			if len(fields) < 3 {
-				m.appendError("usage: /session use <id>")
-				m.layout()
-				return m, nil
-			}
-			if m.busy {
-				m.appendNotice("cannot switch sessions while a turn is running")
-				m.layout()
-				return m, nil
-			}
-			return m, m.switchSessionCmd(fields[2])
-		default:
-			m.appendError("unknown session command: " + fields[1])
-			m.layout()
-			return m, nil
-		}
 	default:
 		m.appendError("unknown command: /" + fields[0])
 		m.layout()
@@ -925,7 +819,7 @@ func (m *tuiModel) submitPromptCmd(prompt string) tea.Cmd {
 		cmds = append(cmds, m.startSessionStreamCmd(sessionID, m.lastSeq))
 	}
 	cmds = append(cmds, func() tea.Msg {
-		_, err := client.SubmitTurn(ctx, sessionID, types.SubmitTurnRequest{Message: prompt})
+		_, err := client.SubmitTurn(ctx, types.SubmitTurnRequest{Message: prompt})
 		return tuiSubmitTurnMsg{err: err}
 	})
 	return tea.Batch(cmds...)
@@ -938,9 +832,8 @@ func (m tuiModel) interruptTurnCmd() tea.Cmd {
 
 	ctx := m.ctx
 	client := m.client
-	sessionID := m.sessionID
 	return func() tea.Msg {
-		return tuiInterruptMsg{err: client.InterruptTurn(ctx, sessionID)}
+		return tuiInterruptMsg{err: client.InterruptTurn(ctx)}
 	}
 }
 
@@ -1042,43 +935,6 @@ func (m tuiModel) refreshStatusCmd(announce bool) tea.Cmd {
 	return func() tea.Msg {
 		status, err := m.client.Status(m.ctx)
 		return tuiStatusMsg{status: status, err: err, announce: announce}
-	}
-}
-
-func (m tuiModel) listSessionsCmd() tea.Cmd {
-	return func() tea.Msg {
-		resp, err := m.client.ListSessions(m.ctx)
-		return tuiSessionsMsg{resp: resp, err: err}
-	}
-}
-
-func (m tuiModel) switchSessionCmd(sessionID string) tea.Cmd {
-	sessionID = strings.TrimSpace(sessionID)
-	return func() tea.Msg {
-		if sessionID == "" {
-			return tuiSwitchSessionMsg{err: fmt.Errorf("usage: /session use <id>")}
-		}
-		resp, err := m.client.ListSessions(m.ctx)
-		if err != nil {
-			return tuiSwitchSessionMsg{err: err}
-		}
-		workspaceRoot := ""
-		for _, session := range resp.Sessions {
-			if session.ID == sessionID {
-				workspaceRoot = session.WorkspaceRoot
-				break
-			}
-		}
-		if err := m.client.SelectSession(m.ctx, sessionID); err != nil {
-			return tuiSwitchSessionMsg{err: err}
-		}
-		timeline, err := m.client.GetTimeline(m.ctx, sessionID)
-		return tuiSwitchSessionMsg{
-			sessionID:     sessionID,
-			workspaceRoot: workspaceRoot,
-			timeline:      timeline,
-			err:           err,
-		}
 	}
 }
 

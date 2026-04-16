@@ -18,12 +18,10 @@ import (
 
 type StatusResponse struct {
 	Status               string `json:"status"`
-	DaemonID             string `json:"daemon_id,omitempty"`
 	Provider             string `json:"provider,omitempty"`
 	Model                string `json:"model,omitempty"`
 	PermissionProfile    string `json:"permission_profile,omitempty"`
 	ProviderCacheProfile string `json:"provider_cache_profile,omitempty"`
-	ConfigFingerprint    string `json:"config_fingerprint,omitempty"`
 	PID                  int    `json:"pid,omitempty"`
 }
 
@@ -50,36 +48,26 @@ func (c *Client) Status(ctx context.Context) (StatusResponse, error) {
 	return out, nil
 }
 
-func (c *Client) ListSessions(ctx context.Context) (types.ListSessionsResponse, error) {
-	var out types.ListSessionsResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/v1/sessions", nil, &out); err != nil {
-		return types.ListSessionsResponse{}, err
-	}
-	return out, nil
-}
-
-func (c *Client) CreateSession(ctx context.Context, req types.CreateSessionRequest) (types.Session, error) {
+func (c *Client) EnsureSession(ctx context.Context, workspaceRoot string) (types.Session, error) {
 	var out types.Session
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/sessions", req, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/session/ensure", types.EnsureSessionRequest{
+		WorkspaceRoot: workspaceRoot,
+	}, &out); err != nil {
 		return types.Session{}, err
 	}
 	return out, nil
 }
 
-func (c *Client) SelectSession(ctx context.Context, sessionID string) error {
-	return c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/sessions/%s/select", sessionID), map[string]any{}, nil)
-}
-
-func (c *Client) SubmitTurn(ctx context.Context, sessionID string, req types.SubmitTurnRequest) (types.Turn, error) {
+func (c *Client) SubmitTurn(ctx context.Context, req types.SubmitTurnRequest) (types.Turn, error) {
 	var out types.Turn
-	if err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/sessions/%s/turns", sessionID), req, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/session/turns", req, &out); err != nil {
 		return types.Turn{}, err
 	}
 	return out, nil
 }
 
-func (c *Client) InterruptTurn(ctx context.Context, sessionID string) error {
-	return c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/sessions/%s/interrupt", sessionID), nil, nil)
+func (c *Client) InterruptTurn(ctx context.Context) error {
+	return c.doJSON(ctx, http.MethodPost, "/v1/session/interrupt", nil, nil)
 }
 
 func (c *Client) DecidePermission(ctx context.Context, req types.PermissionDecisionRequest) (types.PermissionDecisionResponse, error) {
@@ -90,18 +78,10 @@ func (c *Client) DecidePermission(ctx context.Context, req types.PermissionDecis
 	return out, nil
 }
 
-func (c *Client) GetTimeline(ctx context.Context, sessionID string) (types.SessionTimelineResponse, error) {
+func (c *Client) GetTimeline(ctx context.Context) (types.SessionTimelineResponse, error) {
 	var out types.SessionTimelineResponse
-	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/sessions/%s/timeline", sessionID), nil, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/session/timeline", nil, &out); err != nil {
 		return types.SessionTimelineResponse{}, err
-	}
-	return out, nil
-}
-
-func (c *Client) GetReportMailbox(ctx context.Context, sessionID string) (types.SessionReportMailboxResponse, error) {
-	var out types.SessionReportMailboxResponse
-	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/sessions/%s/mailbox", sessionID), nil, &out); err != nil {
-		return types.SessionReportMailboxResponse{}, err
 	}
 	return out, nil
 }
@@ -323,36 +303,8 @@ func (c *Client) GetPendingAutomationPermission(ctx context.Context, requestID s
 	return out, nil
 }
 
-func (c *Client) FindOrCreateWorkspaceSession(ctx context.Context, workspaceRoot string) (string, bool, error) {
-	resp, err := c.ListSessions(ctx)
-	if err != nil {
-		return "", false, err
-	}
-	for _, item := range resp.Sessions {
-		if item.ID == resp.SelectedSessionID && item.WorkspaceRoot == workspaceRoot {
-			return item.ID, false, nil
-		}
-	}
-	for _, item := range resp.Sessions {
-		if item.WorkspaceRoot == workspaceRoot {
-			if err := c.SelectSession(ctx, item.ID); err != nil {
-				return "", false, err
-			}
-			return item.ID, false, nil
-		}
-	}
-	session, err := c.CreateSession(ctx, types.CreateSessionRequest{WorkspaceRoot: workspaceRoot})
-	if err != nil {
-		return "", false, err
-	}
-	if err := c.SelectSession(ctx, session.ID); err != nil {
-		return "", false, err
-	}
-	return session.ID, true, nil
-}
-
-func (c *Client) StreamEvents(ctx context.Context, sessionID string, afterSeq int64) (<-chan types.Event, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/v1/sessions/%s/events?after=%d", c.baseURL, sessionID, afterSeq), nil)
+func (c *Client) StreamEvents(ctx context.Context, afterSeq int64) (<-chan types.Event, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/v1/session/events?after=%d", c.baseURL, afterSeq), nil)
 	if err != nil {
 		return nil, err
 	}

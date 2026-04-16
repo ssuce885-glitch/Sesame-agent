@@ -4,6 +4,7 @@ import "time"
 
 type SessionState string
 type TurnState string
+type TurnExecutionMode string
 
 const (
 	SessionStateIdle               SessionState = "idle"
@@ -25,6 +26,11 @@ const (
 	TurnStateFailed             TurnState = "failed"
 )
 
+const (
+	TurnExecutionModeForegroundAttached TurnExecutionMode = "foreground_attached"
+	TurnExecutionModeDetached           TurnExecutionMode = "detached"
+)
+
 type Session struct {
 	ID                string       `json:"id"`
 	WorkspaceRoot     string       `json:"workspace_root"`
@@ -37,13 +43,17 @@ type Session struct {
 }
 
 type Turn struct {
-	ID           string    `json:"id"`
-	SessionID    string    `json:"session_id"`
-	ClientTurnID string    `json:"client_turn_id,omitempty"`
-	State        TurnState `json:"state"`
-	UserMessage  string    `json:"user_message"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                       string            `json:"id"`
+	SessionID                string            `json:"session_id"`
+	ContextHeadID            string            `json:"context_head_id,omitempty"`
+	ClientTurnID             string            `json:"client_turn_id,omitempty"`
+	State                    TurnState         `json:"state"`
+	ExecutionMode            TurnExecutionMode `json:"execution_mode,omitempty"`
+	ForegroundLeaseID        string            `json:"foreground_lease_id,omitempty"`
+	ForegroundLeaseExpiresAt time.Time         `json:"foreground_lease_expires_at,omitempty"`
+	UserMessage              string            `json:"user_message"`
+	CreatedAt                time.Time         `json:"created_at"`
+	UpdatedAt                time.Time         `json:"updated_at"`
 }
 
 type TurnContinuationState string
@@ -74,16 +84,16 @@ type TurnContinuation struct {
 }
 
 type TurnResume struct {
-	ContinuationID            string `json:"continuation_id"`
-	PermissionRequestID       string `json:"permission_request_id,omitempty"`
-	ToolRunID                 string `json:"tool_run_id,omitempty"`
-	ToolCallID                string `json:"tool_call_id,omitempty"`
-	ToolName                  string `json:"tool_name,omitempty"`
-	RequestedProfile          string `json:"requested_profile,omitempty"`
-	Reason                    string `json:"reason,omitempty"`
-	Decision                  string `json:"decision,omitempty"`
-	DecisionScope             string `json:"decision_scope,omitempty"`
+	ContinuationID             string `json:"continuation_id"`
+	PermissionRequestID        string `json:"permission_request_id,omitempty"`
+	ToolRunID                  string `json:"tool_run_id,omitempty"`
+	ToolCallID                 string `json:"tool_call_id,omitempty"`
+	ToolName                   string `json:"tool_name,omitempty"`
+	RequestedProfile           string `json:"requested_profile,omitempty"`
+	Reason                     string `json:"reason,omitempty"`
+	Decision                   string `json:"decision,omitempty"`
+	DecisionScope              string `json:"decision_scope,omitempty"`
 	EffectivePermissionProfile string `json:"effective_permission_profile,omitempty"`
-	RunID                     string `json:"run_id,omitempty"`
-	TaskID                    string `json:"task_id,omitempty"`
+	RunID                      string `json:"run_id,omitempty"`
+	TaskID                     string `json:"task_id,omitempty"`
 }

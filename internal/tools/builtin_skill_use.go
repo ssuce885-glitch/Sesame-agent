@@ -94,9 +94,9 @@ func (skillUseTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execC
 		return ToolExecutionResult{}, err
 	}
 
-	skill, ok := findSkillByName(catalog, input.Name)
-	if !ok {
-		return ToolExecutionResult{}, fmt.Errorf("installed skill %q not found", input.Name)
+	skill, err := findSkillByName(catalog, input.Name)
+	if err != nil {
+		return ToolExecutionResult{}, err
 	}
 
 	activated := skills.ActivatedSkill{
@@ -157,21 +157,33 @@ func (skillUseTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
 	return defaultStructuredModelResult(output)
 }
 
-func findSkillByName(catalog skills.Catalog, name string) (skills.SkillSpec, bool) {
+func findSkillByName(catalog skills.Catalog, name string) (skills.SkillSpec, error) {
 	wantExact := strings.ToLower(strings.TrimSpace(name))
 	for _, skill := range catalog.Skills {
 		if strings.ToLower(strings.TrimSpace(skill.Name)) == wantExact {
-			return skill, true
+			return skill, nil
 		}
 	}
 
 	wantCanonical := canonicalSkillLookupName(name)
+	var matches []skills.SkillSpec
 	for _, skill := range catalog.Skills {
 		if canonicalSkillLookupName(skill.Name) == wantCanonical {
-			return skill, true
+			matches = append(matches, skill)
 		}
 	}
-	return skills.SkillSpec{}, false
+	switch len(matches) {
+	case 0:
+		return skills.SkillSpec{}, fmt.Errorf("installed skill %q not found", name)
+	case 1:
+		return matches[0], nil
+	default:
+		names := make([]string, 0, len(matches))
+		for _, skill := range matches {
+			names = append(names, skill.Name)
+		}
+		return skills.SkillSpec{}, fmt.Errorf("installed skill %q is ambiguous: %s", name, strings.Join(names, ", "))
+	}
 }
 
 func canonicalSkillLookupName(name string) string {

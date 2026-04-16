@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"go-agent/internal/cli/repl"
 	"go-agent/internal/config"
 	"go-agent/internal/extensions"
+	"go-agent/internal/types"
 	"go-agent/internal/workspace"
 )
 
@@ -25,7 +25,7 @@ const Version = "dev"
 type RuntimeClient interface {
 	repl.RuntimeClient
 	automationClient
-	FindOrCreateWorkspaceSession(context.Context, string) (string, bool, error)
+	EnsureSession(context.Context, string) (types.Session, error)
 }
 
 type REPLRunner interface {
@@ -63,12 +63,10 @@ func New() App {
 			manager := daemoncli.NewManager(daemoncli.Options{
 				BaseURL: baseURLFromAddr(cfg.Addr),
 				Config: daemoncli.LaunchConfig{
-					DaemonID:          cfg.DaemonID,
-					Addr:              cfg.Addr,
-					DataDir:           cfg.DataDir,
-					Model:             cfg.Model,
-					PermissionMode:    cfg.PermissionProfile,
-					ConfigFingerprint: cfg.ConfigFingerprint,
+					Addr:           cfg.Addr,
+					DataDir:        cfg.DataDir,
+					Model:          cfg.Model,
+					PermissionMode: cfg.PermissionProfile,
 				},
 				HTTPClient: &http.Client{},
 			})
@@ -78,12 +76,10 @@ func New() App {
 			manager := daemoncli.NewManager(daemoncli.Options{
 				BaseURL: baseURLFromAddr(cfg.Addr),
 				Config: daemoncli.LaunchConfig{
-					DaemonID:          cfg.DaemonID,
-					Addr:              cfg.Addr,
-					DataDir:           cfg.DataDir,
-					Model:             cfg.Model,
-					PermissionMode:    cfg.PermissionProfile,
-					ConfigFingerprint: cfg.ConfigFingerprint,
+					Addr:           cfg.Addr,
+					DataDir:        cfg.DataDir,
+					Model:          cfg.Model,
+					PermissionMode: cfg.PermissionProfile,
 				},
 				HTTPClient: &http.Client{},
 			})
@@ -134,7 +130,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 	opts.WorkspaceRoot = workspaceRoot
-	if !opts.ListDaemons && !opts.ShowStatus && !scriptCommand && strings.TrimSpace(opts.ResumeID) == "" {
+	if !opts.ShowStatus && !scriptCommand {
 		if _, err := workspace.Ensure(workspaceRoot, ""); err != nil {
 			return err
 		}
@@ -147,11 +143,8 @@ func (a App) Run(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	if opts.ListDaemons {
-		return renderDaemonHistory(a.Stdout, daemonGlobalRoot(cfg))
-	}
 	if opts.ShowStatus {
-		return a.runStatus(ctx, opts, cfg)
+		return a.runStatus(ctx, cfg)
 	}
 	if opts.Automation != nil || opts.Trigger != nil || opts.Incident != nil {
 		return a.runScriptCommand(ctx, opts, cfg)
@@ -168,13 +161,16 @@ func (a App) Run(ctx context.Context, args []string) error {
 	}
 
 	runtimeClient := a.newClient(cfg)
-	sessionID, sessionWorkspaceRoot, err := resolveSessionBinding(ctx, runtimeClient, opts.ResumeID, workspaceRoot)
+	sessionRow, err := runtimeClient.EnsureSession(ctx, workspaceRoot)
 	if err != nil {
 		return err
 	}
-	workspaceRoot = sessionWorkspaceRoot
+	sessionID := sessionRow.ID
+	if strings.TrimSpace(sessionRow.WorkspaceRoot) != "" {
+		workspaceRoot = sessionRow.WorkspaceRoot
+	}
 	opts.WorkspaceRoot = workspaceRoot
-	if !opts.ListDaemons && !opts.ShowStatus && !scriptCommand {
+	if !opts.ShowStatus && !scriptCommand {
 		if _, err := workspace.Ensure(workspaceRoot, ""); err != nil {
 			return err
 		}
@@ -210,6 +206,10 @@ func (a App) Run(ctx context.Context, args []string) error {
 		CatalogLoader:         catalogLoader,
 	})
 	runErr := runner.Run(ctx, opts.InitialPrompt)
+	if !a.shouldStopDaemonAfterRun(opts) {
+		return runErr
+	}
+
 	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	stopErr := a.stopDaemon(stopCtx, cfg)
@@ -247,8 +247,11 @@ func (a App) runScriptCommand(ctx context.Context, opts Options, cfg config.Conf
 		runErr = runIncidentCommand(ctx, a.Stdout, runtimeClient, *opts.Incident)
 	}
 
-	if opts.Trigger != nil && strings.EqualFold(strings.TrimSpace(opts.Trigger.Action), "watch") {
-		return runErr
+	if !a.shouldStopDaemonAfterRun(opts) {
+		if runErr != nil {
+			return newScriptCommandError(runErr, nil)
+		}
+		return nil
 	}
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -272,11 +275,7 @@ func isScriptCommandArgs(args []string) bool {
 	}
 }
 
-func (a App) runStatus(ctx context.Context, opts Options, base config.Config) error {
-	cfg, err := a.prepareStatusConfig(opts, base)
-	if err != nil {
-		return err
-	}
+func (a App) runStatus(ctx context.Context, cfg config.Config) error {
 	runtimeClient := a.newClient(cfg)
 	status, err := runtimeClient.Status(ctx)
 	if err != nil {
@@ -284,9 +283,8 @@ func (a App) runStatus(ctx context.Context, opts Options, base config.Config) er
 	}
 	_, err = fmt.Fprintf(
 		a.Stdout,
-		"status=%s daemon=%s model=%s permission=%s\n",
+		"status=%s model=%s permission=%s\n",
 		status.Status,
-		firstNonEmpty(status.DaemonID, cfg.DaemonID, "unknown"),
 		status.Model,
 		status.PermissionProfile,
 	)
@@ -302,35 +300,6 @@ func resolveWorkspaceRoot(explicitRoot string) (string, error) {
 		return "", err
 	}
 	return filepath.Abs(cwd)
-}
-
-func resolveSessionBinding(ctx context.Context, runtimeClient RuntimeClient, resumeID string, workspaceRoot string) (string, string, error) {
-	if strings.TrimSpace(resumeID) != "" {
-		resp, err := runtimeClient.ListSessions(ctx)
-		if err != nil {
-			return "", "", err
-		}
-		for _, item := range resp.Sessions {
-			if item.ID != strings.TrimSpace(resumeID) {
-				continue
-			}
-			if err := runtimeClient.SelectSession(ctx, resumeID); err != nil {
-				return "", "", err
-			}
-			boundWorkspaceRoot := strings.TrimSpace(item.WorkspaceRoot)
-			if boundWorkspaceRoot == "" {
-				boundWorkspaceRoot = workspaceRoot
-			}
-			return strings.TrimSpace(resumeID), boundWorkspaceRoot, nil
-		}
-		return "", "", fmt.Errorf("session %q not found", strings.TrimSpace(resumeID))
-	}
-
-	sessionID, _, err := runtimeClient.FindOrCreateWorkspaceSession(ctx, workspaceRoot)
-	if err != nil {
-		return "", "", err
-	}
-	return sessionID, workspaceRoot, nil
 }
 
 func (a App) loadOptions(args []string) (Options, error) {
@@ -367,6 +336,13 @@ func (a App) stopDaemon(ctx context.Context, cfg config.Config) error {
 	return a.StopDaemon(ctx, cfg)
 }
 
+func (a App) shouldStopDaemonAfterRun(_ Options) bool {
+	// Phase 3 default lifecycle: attach to the workspace daemon and leave it
+	// running after CLI/TUI/script completion. Startup-failure cleanup stays
+	// handled at the ensureDaemon call sites.
+	return false
+}
+
 func (a App) newClient(cfg config.Config) RuntimeClient {
 	if a.NewClient == nil {
 		return client.New(baseURLFromAddr(cfg.Addr), &http.Client{})
@@ -382,154 +358,12 @@ func (a App) newREPL(opts repl.Options) REPLRunner {
 }
 
 func (a App) prepareDaemonConfig(opts Options, base config.Config) (config.Config, error) {
-	daemonOpts := opts
-	globalRoot := daemonGlobalRoot(base)
-
-	ref := strings.TrimSpace(opts.DaemonRef)
-
-	var (
-		record daemoncli.Record
-		err    error
-	)
-	if ref == "" || strings.EqualFold(ref, "new") {
-		record, err = daemoncli.CreateRecord(globalRoot, daemoncli.LaunchConfig{
-			Addr:           base.Addr,
-			Model:          base.Model,
-			PermissionMode: base.PermissionProfile,
-		})
-	} else {
-		record, err = daemoncli.ResolveRecord(globalRoot, ref)
-	}
-	if err != nil {
-		return config.Config{}, err
-	}
-
-	if strings.TrimSpace(daemonOpts.Model) == "" && strings.TrimSpace(record.Model) != "" {
-		daemonOpts.Model = record.Model
-	}
-	if strings.TrimSpace(daemonOpts.PermissionMode) == "" && strings.TrimSpace(record.PermissionMode) != "" {
-		daemonOpts.PermissionMode = record.PermissionMode
-	}
-	daemonOpts.Addr = record.Addr
-	daemonOpts.DataDir = record.DataDir
-
-	cfg, err := a.loadConfig(daemonOpts)
-	if err != nil {
-		return config.Config{}, err
-	}
-	cfg.DaemonID = record.ID
-	cfg.ConfigFingerprint = cfg.Fingerprint()
-
-	record.Model = cfg.Model
-	record.PermissionMode = cfg.PermissionProfile
-	if _, err := daemoncli.TouchRecord(globalRoot, record); err != nil {
-		return config.Config{}, err
-	}
-	return cfg, nil
-}
-
-func (a App) prepareStatusConfig(opts Options, base config.Config) (config.Config, error) {
-	daemonOpts := opts
-	globalRoot := daemonGlobalRoot(base)
-
-	ref := strings.TrimSpace(opts.DaemonRef)
-	if ref == "" {
-		if latest, err := daemoncli.ResolveRecord(globalRoot, "latest"); err == nil {
-			ref = latest.ID
-		}
-	}
-	if ref == "" || strings.EqualFold(ref, "new") {
-		return base, nil
-	}
-
-	record, err := daemoncli.ResolveRecord(globalRoot, ref)
-	if err != nil {
-		return config.Config{}, err
-	}
-	if strings.TrimSpace(daemonOpts.Model) == "" && strings.TrimSpace(record.Model) != "" {
-		daemonOpts.Model = record.Model
-	}
-	if strings.TrimSpace(daemonOpts.PermissionMode) == "" && strings.TrimSpace(record.PermissionMode) != "" {
-		daemonOpts.PermissionMode = record.PermissionMode
-	}
-	daemonOpts.Addr = record.Addr
-	daemonOpts.DataDir = record.DataDir
-
-	cfg, err := a.loadConfig(daemonOpts)
-	if err != nil {
-		return config.Config{}, err
-	}
-	cfg.DaemonID = record.ID
-	return cfg, nil
-}
-
-func renderDaemonHistory(out io.Writer, globalRoot string) error {
-	if out == nil {
-		out = io.Discard
-	}
-	records, err := daemoncli.ListRecords(globalRoot)
-	if err != nil {
-		return err
-	}
-	if len(records) == 0 {
-		_, err := fmt.Fprintln(out, "No historical daemons.")
-		return err
-	}
-
-	clientHTTP := &http.Client{Timeout: 300 * time.Millisecond}
-	type rendered struct {
-		record  daemoncli.Record
-		running bool
-		pid     int
-	}
-	items := make([]rendered, 0, len(records))
-	for _, record := range records {
-		status, statusErr := daemoncli.FetchStatus(context.Background(), baseURLFromAddr(record.Addr), clientHTTP)
-		items = append(items, rendered{
-			record:  record,
-			running: statusErr == nil && status.Status == "ok",
-			pid:     status.PID,
-		})
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		return items[i].record.LastUsedAt.After(items[j].record.LastUsedAt)
-	})
-	for _, item := range items {
-		state := "stopped"
-		if item.running {
-			state = "running"
-		}
-		line := fmt.Sprintf("%s  %s  %s", item.record.ID, item.record.Addr, state)
-		if item.pid > 0 {
-			line += fmt.Sprintf(" pid=%d", item.pid)
-		}
-		if strings.TrimSpace(item.record.Model) != "" {
-			line += " model=" + item.record.Model
-		}
-		if strings.TrimSpace(item.record.PermissionMode) != "" {
-			line += " permission=" + item.record.PermissionMode
-		}
-		if !item.record.LastUsedAt.IsZero() {
-			line += " last_used=" + item.record.LastUsedAt.Format("2006-01-02 15:04:05")
-		}
-		_, _ = fmt.Fprintln(out, line)
-	}
-	return nil
+	_ = opts
+	return base, nil
 }
 
 func baseURLFromAddr(addr string) string {
 	return "http://" + strings.TrimSpace(addr)
-}
-
-func daemonGlobalRoot(cfg config.Config) string {
-	if strings.TrimSpace(cfg.Paths.GlobalRoot) != "" {
-		return strings.TrimSpace(cfg.Paths.GlobalRoot)
-	}
-	paths, err := config.ResolvePaths("", "")
-	if err != nil {
-		return ""
-	}
-	return paths.GlobalRoot
 }
 
 func firstNonEmpty(values ...string) string {
