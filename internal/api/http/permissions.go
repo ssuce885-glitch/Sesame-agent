@@ -132,14 +132,12 @@ func findPendingAutomationPermission(ctx context.Context, store permissionStore,
 			continue
 		}
 		return types.PendingAutomationPermission{
-			RequestID:           requestID,
-			WorkspaceRoot:       attempt.WorkspaceRoot,
-			AutomationID:        attempt.AutomationID,
-			IncidentID:          attempt.IncidentID,
-			DispatchID:          attempt.DispatchID,
-			BackgroundSessionID: attempt.BackgroundSessionID,
-			BackgroundTurnID:    attempt.BackgroundTurnID,
-			PreferredSessionID:  attempt.PreferredSessionID,
+			RequestID:          requestID,
+			WorkspaceRoot:      attempt.WorkspaceRoot,
+			AutomationID:       attempt.AutomationID,
+			IncidentID:         attempt.IncidentID,
+			DispatchID:         attempt.DispatchID,
+			PreferredSessionID: attempt.PreferredSessionID,
 		}, true, nil
 	}
 	return types.PendingAutomationPermission{}, false, nil

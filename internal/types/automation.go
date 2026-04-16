@@ -442,8 +442,8 @@ type PendingAutomationPermission struct {
 	AutomationID        string `json:"automation_id"`
 	IncidentID          string `json:"incident_id"`
 	DispatchID          string `json:"dispatch_id"`
-	BackgroundSessionID string `json:"background_session_id"`
-	BackgroundTurnID    string `json:"background_turn_id"`
+	BackgroundSessionID string `json:"-"`
+	BackgroundTurnID    string `json:"-"`
 	PreferredSessionID  string `json:"preferred_session_id,omitempty"`
 }
 
