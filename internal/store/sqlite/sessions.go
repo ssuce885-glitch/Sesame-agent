@@ -30,10 +30,11 @@ func (s *Store) InsertSession(ctx context.Context, session types.Session) error 
 
 func (s *Store) InsertTurn(ctx context.Context, turn types.Turn) error {
 	_, err := s.db.ExecContext(ctx, `
-		insert into turns (id, session_id, client_turn_id, state, user_message, created_at, updated_at)
-		values (?, ?, ?, ?, ?, ?, ?)`,
+		insert into turns (id, session_id, context_head_id, client_turn_id, state, user_message, created_at, updated_at)
+		values (?, ?, ?, ?, ?, ?, ?, ?)`,
 		turn.ID,
 		turn.SessionID,
+		turn.ContextHeadID,
 		turn.ClientTurnID,
 		turn.State,
 		turn.UserMessage,
@@ -488,6 +489,9 @@ func (s *Store) ensureCurrentContextHead(ctx context.Context, session types.Sess
 			return types.ContextHead{}, false, err
 		}
 		if found && head.SessionID == session.ID {
+			if err := s.AssignTurnsWithoutHead(ctx, session.ID, head.ID); err != nil {
+				return types.ContextHead{}, false, err
+			}
 			return head, false, nil
 		}
 	}

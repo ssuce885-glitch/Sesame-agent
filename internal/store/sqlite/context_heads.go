@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -114,6 +115,134 @@ func (s *Store) ListContextHeadLineage(ctx context.Context, sessionID, headID st
 		currentID = strings.TrimSpace(head.ParentHeadID)
 	}
 	return ordered, nil
+}
+
+func (s *Store) ListContextHistory(ctx context.Context, sessionID string) ([]types.HistoryEntry, string, error) {
+	currentHeadID, ok, err := s.GetCurrentContextHeadID(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if !ok {
+		currentHeadID = ""
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		select id, title, preview, source_kind, created_at, updated_at
+		from context_heads
+		where session_id = ?
+		order by updated_at desc, created_at desc, id desc
+	`, sessionID)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	entries := []types.HistoryEntry{}
+	for rows.Next() {
+		var entry types.HistoryEntry
+		var createdAt string
+		var updatedAt string
+		if err := rows.Scan(
+			&entry.ID,
+			&entry.Title,
+			&entry.Preview,
+			&entry.SourceKind,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, "", err
+		}
+		entry.IsCurrent = entry.ID == currentHeadID
+		entry.CreatedAt, err = time.Parse(timeLayout, createdAt)
+		if err != nil {
+			return nil, "", err
+		}
+		entry.UpdatedAt, err = time.Parse(timeLayout, updatedAt)
+		if err != nil {
+			return nil, "", err
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	if currentHeadID != "" {
+		for idx, entry := range entries {
+			if entry.ID != currentHeadID {
+				continue
+			}
+			if idx == 0 {
+				break
+			}
+			current := entry
+			copy(entries[1:idx+1], entries[0:idx])
+			entries[0] = current
+			break
+		}
+	}
+	return entries, currentHeadID, nil
+}
+
+func (s *Store) CreateReopenContextHead(ctx context.Context, sessionID string) (types.ContextHead, error) {
+	head := types.ContextHead{
+		ID:         types.NewID("head"),
+		SessionID:  strings.TrimSpace(sessionID),
+		SourceKind: types.ContextHeadSourceReopen,
+		CreatedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+	}
+	if strings.TrimSpace(head.SessionID) == "" {
+		return types.ContextHead{}, fmt.Errorf("session_id is required")
+	}
+	if _, found, err := s.GetSession(ctx, head.SessionID); err != nil {
+		return types.ContextHead{}, err
+	} else if !found {
+		return types.ContextHead{}, sql.ErrNoRows
+	}
+	if err := s.InsertContextHead(ctx, head); err != nil {
+		return types.ContextHead{}, err
+	}
+	if err := s.SetCurrentContextHeadID(ctx, head.ID); err != nil {
+		return types.ContextHead{}, err
+	}
+	return head, nil
+}
+
+func (s *Store) LoadContextHead(ctx context.Context, sessionID, headID string) (types.ContextHead, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	headID = strings.TrimSpace(headID)
+	if sessionID == "" {
+		return types.ContextHead{}, fmt.Errorf("session_id is required")
+	}
+	if headID == "" {
+		return types.ContextHead{}, fmt.Errorf("head_id is required")
+	}
+
+	parent, found, err := s.GetContextHead(ctx, headID)
+	if err != nil {
+		return types.ContextHead{}, err
+	}
+	if !found || parent.SessionID != sessionID {
+		return types.ContextHead{}, sql.ErrNoRows
+	}
+
+	head := types.ContextHead{
+		ID:           types.NewID("head"),
+		SessionID:    sessionID,
+		ParentHeadID: parent.ID,
+		SourceKind:   types.ContextHeadSourceHistoryLoad,
+		Title:        parent.Title,
+		Preview:      parent.Preview,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	if err := s.InsertContextHead(ctx, head); err != nil {
+		return types.ContextHead{}, err
+	}
+	if err := s.SetCurrentContextHeadID(ctx, head.ID); err != nil {
+		return types.ContextHead{}, err
+	}
+	return head, nil
 }
 
 func deriveSessionTitle(ctx context.Context, s *Store, sessionID string) string {

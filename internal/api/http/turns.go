@@ -16,6 +16,10 @@ type turnInterruptStore interface {
 	TryMarkTurnInterrupted(context.Context, string, string) (bool, error)
 }
 
+type currentContextHeadStore interface {
+	GetCurrentContextHeadID(context.Context) (string, bool, error)
+}
+
 func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -59,6 +63,16 @@ func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 			UserMessage:  req.Message,
 			CreatedAt:    now,
 			UpdatedAt:    now,
+		}
+		if headStore, ok := deps.Store.(currentContextHeadStore); ok {
+			headID, hasHead, err := headStore.GetCurrentContextHeadID(r.Context())
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+			if hasHead {
+				turn.ContextHeadID = strings.TrimSpace(headID)
+			}
 		}
 
 		if err := deps.Store.InsertTurn(r.Context(), turn); err != nil {

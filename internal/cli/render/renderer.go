@@ -170,6 +170,28 @@ func (r *Renderer) RenderReportMailbox(resp types.SessionReportMailboxResponse) 
 	}
 }
 
+func (r *Renderer) RenderContextHistory(resp types.ListContextHistoryResponse) {
+	if len(resp.Entries) == 0 {
+		r.renderDetail("History", "", "No context history.")
+		return
+	}
+	for _, entry := range resp.Entries {
+		title := firstNonEmpty(entry.Title, entry.Preview, entry.ID)
+		prefix := " "
+		if entry.IsCurrent {
+			prefix = "*"
+		}
+		bodyParts := []string{entry.ID}
+		if strings.TrimSpace(entry.SourceKind) != "" {
+			bodyParts = append(bodyParts, entry.SourceKind)
+		}
+		if strings.TrimSpace(entry.Preview) != "" && entry.Preview != title {
+			bodyParts = append(bodyParts, entry.Preview)
+		}
+		r.renderDetail("History", prefix+" "+title, strings.Join(bodyParts, "\n"))
+	}
+}
+
 func (r *Renderer) RenderEvent(event types.Event) {
 	switch event.Type {
 	case types.EventAssistantDelta:

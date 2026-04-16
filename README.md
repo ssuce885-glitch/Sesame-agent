@@ -2,24 +2,39 @@
 
 Sesame 是一个本地终端 agent runtime。
 
-当前主线只有一个产品模型：
+## 当前主线
 
 - 一个 workspace
 - 一个总助手
 - 一个 canonical session
-- 一个当前 context head
+- 一个 canonical session 下的多 context head，按入口 binding 选择当前 head
+- 后台自动化统一走 task，不再把 turn 当成后台主语义
 
-不再提供多 session 切换，也不再暴露 daemon 历史选择。
+不再提供多 session 切换，也不暴露 daemon 历史选择。
 
 ## 当前能力
 
-- 终端 TUI / REPL 对话
+- TUI / REPL 对话
 - 自动连接或拉起本地 runtime
-- 工作区绑定的 canonical session
+- workspace 绑定的 canonical session
 - shell、文件、搜索、补丁、任务、权限、skills 等工具
-- task-backed 自动化派发
 - workspace mailbox / cron / incident / automation runtime
-- 权限中断后的恢复执行
+- task-backed 自动化派发
+- 单 session 下的 context history 查看、history load、reopen
+
+当前命令面里和 context head 相关的入口：
+
+- `/history`
+- `/history load <head_id>`
+- `/reopen`
+
+语义：
+
+- `reopen` 会新建一个空 lineage 的 context head
+- `history load` 会新建一个 parent 指向历史 head 的 context head
+- 后续 timeline 和模型上下文只读取当前 binding 的 current head lineage
+- 终端默认 binding 是 `terminal:default`
+- 后续外部入口（例如 Discord channel/thread）应使用各自 binding，共享 daemon，但默认不共享聊天上下文
 
 ## 启动
 
@@ -46,29 +61,25 @@ go run ./cmd/sesame --status
 SESAME_MODEL_PROVIDER=fake SESAME_MODEL=fake-smoke SESAME_PERMISSION_PROFILE=trusted_local go run ./cmd/sesame
 ```
 
-## 运行语义
+## 当前行为
 
 - 启动时默认进入当前 workspace 的 canonical session
-- TUI 关闭时会停掉当前前台 turn，不让 session 在后台偷偷继续跑
+- workspace 背景状态以 workspace 维度观察，不再依赖“选中哪个 session”
 - 自动化优先拉起 task，由 task 负责结果、mailbox 投递和后续收口
+- CLI / TUI 退出后，daemon 目前默认仍然保持运行
 
-## 目录
+## 代码目录
 
 - `cmd/sesame`: CLI 入口
 - `internal/`: runtime、daemon、engine、tools、storage
-- `docs/superpowers/specs`: 当前保留的设计文档
-- `docs/superpowers/plans`: 当前保留的实施计划
+- `docs/superpowers/specs`: 保留的主线设计文档
 
-## 当前保留文档
+## 保留文档
 
-- `docs/superpowers/specs/2026-04-16-runtime-subtraction-cleanup-design.md`
-- `docs/superpowers/specs/2026-04-16-single-session-reopen-and-context-head-design.md`
-- `docs/superpowers/plans/2026-04-16-runtime-subtraction-cleanup-implementation.md`
-- `docs/superpowers/plans/2026-04-16-single-session-reopen-and-history-implementation.md`
+- `docs/superpowers/specs/2026-04-15-runtime-spine-refactor-design.md`
 
-## 后续规划
+## 后续重点
 
-- 完成单 session 下的“重开上下文”和“加载以前的聊天历史”
-- 继续把自动化链路收敛到 task-first runtime
+- 继续删除和现状不一致的旧表面、旧兼容逻辑、旧文档
+- 把 daemon / session 生命周期再收紧，减少“退出界面但后台还活着”的不透明感
 - 增加外部接入面，例如 Discord，但不改变单总助手模型
-- 继续删除和现状不一致的旧表面、旧文档、旧兼容逻辑

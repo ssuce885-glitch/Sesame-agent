@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"go-agent/internal/sessionbinding"
 	"go-agent/internal/types"
 )
 
@@ -20,6 +21,9 @@ func registerCurrentSessionRoutes(mux *http.ServeMux, deps Dependencies) {
 	mux.HandleFunc("/v1/session/interrupt", handleCurrentSession(deps, handleInterruptTurn))
 	mux.HandleFunc("/v1/session/events", handleCurrentSession(deps, handleStreamEvents))
 	mux.HandleFunc("/v1/session/timeline", handleCurrentSession(deps, handleGetTimeline))
+	mux.HandleFunc("/v1/session/history", handleCurrentSession(deps, handleListContextHistory))
+	mux.HandleFunc("/v1/session/history/load", handleCurrentSession(deps, handleLoadContextHistory))
+	mux.HandleFunc("/v1/session/reopen", handleCurrentSession(deps, handleReopenContext))
 }
 
 func handleEnsureSession(deps Dependencies) http.HandlerFunc {
@@ -28,6 +32,7 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), r.Header.Get(sessionbinding.HeaderName)))
 
 		var req types.EnsureSessionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -61,6 +66,7 @@ type sessionScopedHandlerFactory func(Dependencies, string) http.HandlerFunc
 
 func handleCurrentSession(deps Dependencies, next sessionScopedHandlerFactory) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), r.Header.Get(sessionbinding.HeaderName)))
 		sessionID, ok := resolveCurrentSessionID(w, r, deps)
 		if !ok {
 			return

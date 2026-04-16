@@ -24,6 +24,9 @@ type RuntimeClient interface {
 	DecidePermission(context.Context, types.PermissionDecisionRequest) (types.PermissionDecisionResponse, error)
 	StreamEvents(context.Context, int64) (<-chan types.Event, error)
 	GetTimeline(context.Context) (types.SessionTimelineResponse, error)
+	ListContextHistory(context.Context) (types.ListContextHistoryResponse, error)
+	ReopenContext(context.Context) (types.ContextHead, error)
+	LoadContextHistory(context.Context, string) (types.ContextHead, error)
 	GetWorkspaceMailbox(context.Context) (types.WorkspaceReportMailboxResponse, error)
 	GetRuntimeGraph(context.Context) (types.WorkspaceRuntimeGraphResponse, error)
 	GetReportingOverview(context.Context, string) (types.ReportingOverview, error)
@@ -188,7 +191,7 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 
 	switch fields[0] {
 	case "help":
-		fmt.Fprintln(r.stdout, "/help /clear /exit /status /skills /tools /approve [<request_id>] [once|run|session] /deny [<request_id>] /mailbox /cron list [--all] /cron inspect <id> /cron pause <id> /cron resume <id> /cron remove <id>")
+		fmt.Fprintln(r.stdout, "/help /clear /exit /status /skills /tools /history [/load <head_id>] /reopen /approve [<request_id>] [once|run|session] /deny [<request_id>] /mailbox /cron list [--all] /cron inspect <id> /cron pause <id> /cron resume <id> /cron remove <id>")
 		return nil
 	case "exit":
 		return errExitRequested
@@ -215,6 +218,15 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 		}
 		r.renderer.RenderToolList(r.catalog.Tools)
 		return nil
+	case "history":
+		return r.handleHistoryCommand(ctx, fields[1:])
+	case "reopen":
+		head, err := r.client.ReopenContext(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(r.stdout, "Reopened context: %s\n", head.ID)
+		return r.reloadTimeline(ctx)
 	case "approve", "allow", "deny":
 		return r.handlePermissionDecisionCommand(ctx, fields[0], fields[1:])
 	case "mailbox", "inbox":
@@ -234,6 +246,40 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 	default:
 		return fmt.Errorf("unknown command: /%s", fields[0])
 	}
+}
+
+func (r *REPL) handleHistoryCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 || strings.EqualFold(strings.TrimSpace(args[0]), "list") {
+		resp, err := r.client.ListContextHistory(ctx)
+		if err != nil {
+			return err
+		}
+		r.renderer.RenderContextHistory(resp)
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(args[0]), "load") {
+		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+			return fmt.Errorf("usage: /history [list] | load <head_id>")
+		}
+		head, err := r.client.LoadContextHistory(ctx, strings.TrimSpace(args[1]))
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(r.stdout, "Loaded history: %s\n", head.ID)
+		return r.reloadTimeline(ctx)
+	}
+	return fmt.Errorf("usage: /history [list] | load <head_id>")
+}
+
+func (r *REPL) reloadTimeline(ctx context.Context) error {
+	timeline, err := r.client.GetTimeline(ctx)
+	if err != nil {
+		return err
+	}
+	r.lastSeq = timeline.LatestSeq
+	r.lastPermissionRequestID = pendingPermissionRequestIDFromTimeline(timeline)
+	r.renderer.RenderTimeline(timeline)
+	return nil
 }
 
 func (r *REPL) refreshCatalog() error {

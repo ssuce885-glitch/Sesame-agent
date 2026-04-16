@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"go-agent/internal/sessionbinding"
 	"go-agent/internal/types"
 )
 
@@ -26,17 +27,23 @@ type StatusResponse struct {
 }
 
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL        string
+	httpClient     *http.Client
+	contextBinding string
 }
 
 func New(baseURL string, httpClient *http.Client) *Client {
+	return NewWithContextBinding(baseURL, httpClient, sessionbinding.DefaultContextBinding)
+}
+
+func NewWithContextBinding(baseURL string, httpClient *http.Client, binding string) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 	return &Client{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		httpClient: httpClient,
+		baseURL:        strings.TrimRight(baseURL, "/"),
+		httpClient:     httpClient,
+		contextBinding: sessionbinding.Normalize(binding),
 	}
 }
 
@@ -82,6 +89,32 @@ func (c *Client) GetTimeline(ctx context.Context) (types.SessionTimelineResponse
 	var out types.SessionTimelineResponse
 	if err := c.doJSON(ctx, http.MethodGet, "/v1/session/timeline", nil, &out); err != nil {
 		return types.SessionTimelineResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ListContextHistory(ctx context.Context) (types.ListContextHistoryResponse, error) {
+	var out types.ListContextHistoryResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/session/history", nil, &out); err != nil {
+		return types.ListContextHistoryResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ReopenContext(ctx context.Context) (types.ContextHead, error) {
+	var out types.ContextHead
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/session/reopen", map[string]any{}, &out); err != nil {
+		return types.ContextHead{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) LoadContextHistory(ctx context.Context, headID string) (types.ContextHead, error) {
+	var out types.ContextHead
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/session/history/load", types.LoadContextHistoryRequest{
+		HeadID: strings.TrimSpace(headID),
+	}, &out); err != nil {
+		return types.ContextHead{}, err
 	}
 	return out, nil
 }
@@ -308,6 +341,7 @@ func (c *Client) StreamEvents(ctx context.Context, afterSeq int64) (<-chan types
 	if err != nil {
 		return nil, err
 	}
+	c.applyContextBinding(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -367,6 +401,7 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 	if err != nil {
 		return err
 	}
+	c.applyContextBinding(req)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -383,6 +418,13 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (c *Client) applyContextBinding(req *http.Request) {
+	if c == nil || req == nil {
+		return
+	}
+	req.Header.Set(sessionbinding.HeaderName, sessionbinding.Normalize(c.contextBinding))
 }
 
 func decodeAPIError(resp *http.Response, method string, path string) error {

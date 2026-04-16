@@ -4,6 +4,10 @@ type EnsureSessionRequest struct {
 	WorkspaceRoot string `json:"workspace_root"`
 }
 
+type LoadContextHistoryRequest struct {
+	HeadID string `json:"head_id"`
+}
+
 type PatchSessionRequest struct {
 	SystemPrompt *string `json:"system_prompt"`
 }

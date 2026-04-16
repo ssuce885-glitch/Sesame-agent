@@ -131,6 +131,18 @@ type tuiPermissionDecisionMsg struct {
 	err       error
 }
 
+type tuiHistoryMsg struct {
+	resp types.ListContextHistoryResponse
+	err  error
+}
+
+type tuiContextSwitchMsg struct {
+	head     types.ContextHead
+	timeline types.SessionTimelineResponse
+	err      error
+	notice   string
+}
+
 type tuiModel struct {
 	ctx                     context.Context
 	client                  RuntimeClient
@@ -480,6 +492,45 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStatusFlash("permission decision sent")
 		m.layout()
 		return m, nil
+	case tuiHistoryMsg:
+		if msg.err != nil {
+			m.appendError(msg.err.Error())
+			m.layout()
+			return m, nil
+		}
+		lines := make([]string, 0, len(msg.resp.Entries))
+		for _, entry := range msg.resp.Entries {
+			label := entry.ID
+			if strings.TrimSpace(entry.Title) != "" {
+				label += " · " + entry.Title
+			}
+			if strings.TrimSpace(entry.SourceKind) != "" {
+				label += " · " + entry.SourceKind
+			}
+			if entry.IsCurrent {
+				label = "* " + label
+			}
+			lines = append(lines, label)
+		}
+		if len(lines) == 0 {
+			lines = append(lines, "No context history.")
+		}
+		m.appendActivity("history", strings.Join(lines, "\n"))
+		m.layout()
+		return m, nil
+	case tuiContextSwitchMsg:
+		if msg.err != nil {
+			m.appendError(msg.err.Error())
+			m.layout()
+			return m, nil
+		}
+		m.replaceTimeline(msg.timeline)
+		if strings.TrimSpace(msg.notice) != "" {
+			m.appendNotice(msg.notice)
+		}
+		m.setStatusFlash(msg.notice)
+		m.layout()
+		return m, nil
 	case tuiStatusMsg:
 		if msg.err != nil {
 			m.appendError(msg.err.Error())
@@ -613,7 +664,7 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 
 	switch fields[0] {
 	case "help":
-		m.appendActivity("commands", "/help\n/chat\n/agents\n/mailbox\n/cron list [--all]\n/cron inspect <id>\n/cron pause <id>\n/cron resume <id>\n/cron remove <id>\n/status\n/skills\n/tools\n/approve [<request_id>] [once|run|session]\n/deny [<request_id>]\n/clear\n/exit")
+		m.appendActivity("commands", "/help\n/chat\n/agents\n/mailbox\n/history [list]\n/history load <head_id>\n/reopen\n/cron list [--all]\n/cron inspect <id>\n/cron pause <id>\n/cron resume <id>\n/cron remove <id>\n/status\n/skills\n/tools\n/approve [<request_id>] [once|run|session]\n/deny [<request_id>]\n/clear\n/exit")
 		m.layout()
 		return m, nil
 	case "chat":
@@ -670,6 +721,23 @@ func (m *tuiModel) handleCommand(line string) (tea.Model, tea.Cmd) {
 		m.appendActivity("tools", strings.Join(lines, "\n"))
 		m.layout()
 		return m, nil
+	case "history":
+		if len(fields) == 1 || strings.EqualFold(strings.TrimSpace(fields[1]), "list") {
+			return m, m.listContextHistoryCmd()
+		}
+		if strings.EqualFold(strings.TrimSpace(fields[1]), "load") {
+			if len(fields) < 3 || strings.TrimSpace(fields[2]) == "" {
+				m.appendError("usage: /history [list] | load <head_id>")
+				m.layout()
+				return m, nil
+			}
+			return m, m.loadContextHistoryCmd(strings.TrimSpace(fields[2]))
+		}
+		m.appendError("usage: /history [list] | load <head_id>")
+		m.layout()
+		return m, nil
+	case "reopen":
+		return m, m.reopenContextCmd()
 	case "approve", "allow", "deny":
 		cmd, err := m.permissionDecisionCmd(fields[0], fields[1:])
 		if err != nil {
@@ -938,6 +1006,45 @@ func (m tuiModel) refreshStatusCmd(announce bool) tea.Cmd {
 	}
 }
 
+func (m tuiModel) listContextHistoryCmd() tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.client.ListContextHistory(m.ctx)
+		return tuiHistoryMsg{resp: resp, err: err}
+	}
+}
+
+func (m tuiModel) reopenContextCmd() tea.Cmd {
+	return func() tea.Msg {
+		head, err := m.client.ReopenContext(m.ctx)
+		if err != nil {
+			return tuiContextSwitchMsg{err: err}
+		}
+		timeline, err := m.client.GetTimeline(m.ctx)
+		return tuiContextSwitchMsg{
+			head:     head,
+			timeline: timeline,
+			err:      err,
+			notice:   "reopened context: " + head.ID,
+		}
+	}
+}
+
+func (m tuiModel) loadContextHistoryCmd(headID string) tea.Cmd {
+	return func() tea.Msg {
+		head, err := m.client.LoadContextHistory(m.ctx, headID)
+		if err != nil {
+			return tuiContextSwitchMsg{err: err}
+		}
+		timeline, err := m.client.GetTimeline(m.ctx)
+		return tuiContextSwitchMsg{
+			head:     head,
+			timeline: timeline,
+			err:      err,
+			notice:   "loaded history: " + head.ID,
+		}
+	}
+}
+
 func listenTUIStream(ch <-chan tea.Msg, sessionID string) tea.Cmd {
 	if ch == nil {
 		return nil
@@ -996,6 +1103,15 @@ func (m *tuiModel) applyTimeline(timeline types.SessionTimelineResponse) {
 			m.appendActivity(title, body)
 		}
 	}
+}
+
+func (m *tuiModel) replaceTimeline(timeline types.SessionTimelineResponse) {
+	m.entries = nil
+	m.toolIndexByCall = make(map[string]int)
+	m.toolIndexByKey = make(map[string]int)
+	m.lastSeq = timeline.LatestSeq
+	m.lastPermissionRequestID = pendingPermissionRequestIDFromTimeline(timeline)
+	m.applyTimeline(timeline)
 }
 
 func (m *tuiModel) applyEvent(event types.Event) tea.Cmd {

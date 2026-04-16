@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	"go-agent/internal/sessionbinding"
 )
 
 type queryRowContexter interface {
@@ -12,7 +14,6 @@ type queryRowContexter interface {
 }
 
 const canonicalSessionMetadataKey = "canonical_session_id"
-const currentContextHeadMetadataKey = "current_context_head_id"
 
 func (s *Store) GetCanonicalSessionID(ctx context.Context) (string, bool, error) {
 	return getRuntimeMetadataValue(ctx, s.db, canonicalSessionMetadataKey)
@@ -23,11 +24,11 @@ func (s *Store) SetCanonicalSessionID(ctx context.Context, sessionID string) err
 }
 
 func (s *Store) GetCurrentContextHeadID(ctx context.Context) (string, bool, error) {
-	return getRuntimeMetadataValue(ctx, s.db, currentContextHeadMetadataKey)
+	return getRuntimeMetadataValue(ctx, s.db, sessionbinding.CurrentHeadMetadataKey(sessionbinding.FromContext(ctx)))
 }
 
 func (s *Store) SetCurrentContextHeadID(ctx context.Context, headID string) error {
-	return setRuntimeMetadataValue(ctx, s.db, currentContextHeadMetadataKey, headID)
+	return setRuntimeMetadataValue(ctx, s.db, sessionbinding.CurrentHeadMetadataKey(sessionbinding.FromContext(ctx)), headID)
 }
 
 func getRuntimeMetadataValue(ctx context.Context, queryer queryRowContexter, key string) (string, bool, error) {
