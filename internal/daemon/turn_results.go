@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 
 	"go-agent/internal/session"
 	"go-agent/internal/store/sqlite"
@@ -41,7 +42,17 @@ func (s turnResultFallbackSink) HandleTurnResult(ctx context.Context, sess types
 		return
 	}
 
-	event, eventErr := types.NewEvent(sess.ID, turnID, types.EventTurnFailed, types.TurnFailedPayload{Message: err.Error()})
+	eventType := types.EventTurnFailed
+	payload := any(types.TurnFailedPayload{Message: err.Error()})
+	if errors.Is(err, context.Canceled) {
+		if turn.Kind == types.TurnKindChildReportBatch {
+			_ = s.store.RequeueClaimedChildReportsForTurn(ctx, turnID)
+		}
+		eventType = types.EventTurnInterrupted
+		payload = map[string]string{"reason": "run_context_canceled"}
+	}
+
+	event, eventErr := types.NewEvent(sess.ID, turnID, eventType, payload)
 	if eventErr != nil {
 		return
 	}

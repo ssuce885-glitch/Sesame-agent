@@ -30,11 +30,12 @@ func (s *Store) InsertSession(ctx context.Context, session types.Session) error 
 
 func (s *Store) InsertTurn(ctx context.Context, turn types.Turn) error {
 	_, err := s.db.ExecContext(ctx, `
-		insert into turns (id, session_id, context_head_id, client_turn_id, state, user_message, created_at, updated_at)
-		values (?, ?, ?, ?, ?, ?, ?, ?)`,
+		insert into turns (id, session_id, context_head_id, turn_kind, client_turn_id, state, user_message, created_at, updated_at)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		turn.ID,
 		turn.SessionID,
 		turn.ContextHeadID,
+		turn.Kind,
 		turn.ClientTurnID,
 		turn.State,
 		turn.UserMessage,
@@ -187,21 +188,23 @@ func (s *Store) DeleteTurn(ctx context.Context, turnID string) error {
 
 func (s *Store) GetTurn(ctx context.Context, turnID string) (types.Turn, bool, error) {
 	var turn types.Turn
+	var kind string
 	var state string
 	var createdAt string
 	var updatedAt string
 	err := s.db.QueryRowContext(ctx, `
-		select id, session_id, client_turn_id, state, user_message, created_at, updated_at
+		select id, session_id, turn_kind, client_turn_id, state, user_message, created_at, updated_at
 		from turns
 		where id = ?`,
 		turnID,
-	).Scan(&turn.ID, &turn.SessionID, &turn.ClientTurnID, &state, &turn.UserMessage, &createdAt, &updatedAt)
+	).Scan(&turn.ID, &turn.SessionID, &kind, &turn.ClientTurnID, &state, &turn.UserMessage, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return types.Turn{}, false, nil
 		}
 		return types.Turn{}, false, err
 	}
+	turn.Kind = types.TurnKind(kind)
 	turn.State = types.TurnState(state)
 	turn.CreatedAt, err = time.Parse(timeLayout, createdAt)
 	if err != nil {
@@ -238,7 +241,7 @@ func updateTurnStateWithExec(ctx context.Context, execer execContexter, turnID s
 
 func (s *Store) ListRunningTurns(ctx context.Context) ([]types.Turn, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select id, session_id, client_turn_id, state, user_message, created_at, updated_at
+		select id, session_id, turn_kind, client_turn_id, state, user_message, created_at, updated_at
 		from turns
 		where state in (?, ?, ?, ?, ?, ?)
 		order by created_at asc
@@ -258,12 +261,14 @@ func (s *Store) ListRunningTurns(ctx context.Context) ([]types.Turn, error) {
 	var out []types.Turn
 	for rows.Next() {
 		var turn types.Turn
+		var kind string
 		var state string
 		var createdAt string
 		var updatedAt string
-		if err := rows.Scan(&turn.ID, &turn.SessionID, &turn.ClientTurnID, &state, &turn.UserMessage, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&turn.ID, &turn.SessionID, &kind, &turn.ClientTurnID, &state, &turn.UserMessage, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
+		turn.Kind = types.TurnKind(kind)
 		turn.State = types.TurnState(state)
 		turn.CreatedAt, err = time.Parse(timeLayout, createdAt)
 		if err != nil {

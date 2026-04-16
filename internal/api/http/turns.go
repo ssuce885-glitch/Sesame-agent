@@ -59,6 +59,7 @@ func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 			ID:           types.NewID("turn"),
 			SessionID:    sessionID,
 			ClientTurnID: req.ClientTurnID,
+			Kind:         types.TurnKindUserMessage,
 			State:        types.TurnStateCreated,
 			UserMessage:  req.Message,
 			CreatedAt:    now,
@@ -81,9 +82,7 @@ func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 		}
 
 		if _, err := deps.Manager.SubmitTurn(r.Context(), sessionID, session.SubmitTurnInput{
-			TurnID:       turn.ID,
-			ClientTurnID: turn.ClientTurnID,
-			Message:      turn.UserMessage,
+			Turn: turn,
 		}); err != nil {
 			if delErr := deps.Store.DeleteTurn(context.WithoutCancel(r.Context()), turn.ID); delErr != nil {
 				http.Error(w, "internal server error", http.StatusInternalServerError)

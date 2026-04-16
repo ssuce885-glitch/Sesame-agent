@@ -15,16 +15,9 @@ type TaskUnderstanding struct {
 	WantsCodeEdit          bool
 }
 
-type RetrievalCandidate struct {
-	Skill   SkillSpec
-	Score   int
-	Reasons []string
-}
-
 type RetrievalResult struct {
-	Task      TaskUnderstanding
-	Selected  []ActivatedSkill
-	Suggested []RetrievalCandidate
+	Task     TaskUnderstanding
+	Selected []ActivatedSkill
 }
 
 type skillTraits struct {
@@ -35,6 +28,8 @@ type skillTraits struct {
 	WebLookup         bool
 	GrantsShell       bool
 }
+
+const retrievalActivationThreshold = 80
 
 func Retrieve(catalog Catalog, userMessage string, already []ActivatedSkill) RetrievalResult {
 	task := UnderstandTask(userMessage)
@@ -57,17 +52,28 @@ func retrieveForTask(catalog Catalog, task TaskUnderstanding, already []Activate
 		return RetrievalResult{Task: task}
 	}
 
-	suggested := make([]RetrievalCandidate, 0, 3)
+	selected := make([]ActivatedSkill, 0, len(candidates))
 	for _, candidate := range candidates {
-		if len(suggested) < 3 {
-			suggested = append(suggested, candidate)
+		if candidate.Score < retrievalActivationThreshold {
+			break
 		}
+		selected = append(selected, ActivatedSkill{
+			Skill:       candidate.Skill,
+			Reason:      ActivationReasonRetrieved,
+			MatchedText: strings.Join(candidate.Reasons, ", "),
+		})
 	}
 
 	return RetrievalResult{
-		Task:      task,
-		Suggested: suggested,
+		Task:     task,
+		Selected: selected,
 	}
+}
+
+type retrievalCandidate struct {
+	Skill   SkillSpec
+	Score   int
+	Reasons []string
 }
 
 func UnderstandTask(userMessage string) TaskUnderstanding {
@@ -125,7 +131,7 @@ func UnderstandTask(userMessage string) TaskUnderstanding {
 	}
 }
 
-func rankRetrievalCandidates(catalog Catalog, task TaskUnderstanding, already []ActivatedSkill) []RetrievalCandidate {
+func rankRetrievalCandidates(catalog Catalog, task TaskUnderstanding, already []ActivatedSkill) []retrievalCandidate {
 	if len(catalog.Skills) == 0 || strings.TrimSpace(task.NormalizedMessage) == "" {
 		return nil
 	}
@@ -139,7 +145,7 @@ func rankRetrievalCandidates(catalog Catalog, task TaskUnderstanding, already []
 		activeNames[key] = struct{}{}
 	}
 
-	out := make([]RetrievalCandidate, 0, len(catalog.Skills))
+	out := make([]retrievalCandidate, 0, len(catalog.Skills))
 	for _, skill := range catalog.Skills {
 		key := strings.ToLower(strings.TrimSpace(skill.Name))
 		if key == "" {
@@ -152,7 +158,7 @@ func rankRetrievalCandidates(catalog Catalog, task TaskUnderstanding, already []
 		if score <= 0 {
 			continue
 		}
-		candidate := RetrievalCandidate{
+		candidate := retrievalCandidate{
 			Skill:   skill,
 			Score:   score,
 			Reasons: reasons,

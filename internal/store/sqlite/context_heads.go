@@ -79,7 +79,7 @@ func (s *Store) AssignTurnsWithoutHead(ctx context.Context, sessionID, headID st
 
 func (s *Store) ListTurnsByContextHead(ctx context.Context, sessionID, headID string) ([]types.Turn, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select id, session_id, context_head_id, client_turn_id, state, execution_mode, foreground_lease_id, foreground_lease_expires_at, user_message, created_at, updated_at
+		select id, session_id, context_head_id, turn_kind, client_turn_id, state, execution_mode, foreground_lease_id, foreground_lease_expires_at, user_message, created_at, updated_at
 		from turns
 		where session_id = ? and context_head_id = ?
 		order by created_at asc, id asc
@@ -289,6 +289,7 @@ func scanTurnRowWithContextHead(scanner interface {
 	Scan(dest ...any) error
 }) (types.Turn, error) {
 	var turn types.Turn
+	var kind string
 	var state string
 	var executionMode string
 	var foregroundLeaseExpiresAt string
@@ -298,6 +299,7 @@ func scanTurnRowWithContextHead(scanner interface {
 		&turn.ID,
 		&turn.SessionID,
 		&turn.ContextHeadID,
+		&kind,
 		&turn.ClientTurnID,
 		&state,
 		&executionMode,
@@ -310,6 +312,7 @@ func scanTurnRowWithContextHead(scanner interface {
 		return types.Turn{}, err
 	}
 
+	turn.Kind = types.TurnKind(kind)
 	turn.State = types.TurnState(state)
 	turn.ExecutionMode = types.TurnExecutionMode(executionMode)
 	var err error

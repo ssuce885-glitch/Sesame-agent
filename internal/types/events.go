@@ -29,6 +29,7 @@ const (
 	EventSessionMemoryStarted   = "session_memory.started"
 	EventSessionMemoryCompleted = "session_memory.completed"
 	EventSessionMemoryFailed    = "session_memory.failed"
+	EventSessionQueueUpdated    = "session.queue_updated"
 	EventSystemNotice           = "system.notice"
 )
 
@@ -96,6 +97,14 @@ type SessionMemoryEventPayload struct {
 	GlobalEntriesUpserted    int    `json:"global_entries_upserted,omitempty"`
 	WorkspaceEntriesPruned   int    `json:"workspace_entries_pruned,omitempty"`
 	Message                  string `json:"message,omitempty"`
+}
+
+type SessionQueuePayload struct {
+	ActiveTurnID             string   `json:"active_turn_id,omitempty"`
+	ActiveTurnKind           TurnKind `json:"active_turn_kind,omitempty"`
+	QueueDepth               int      `json:"queue_depth"`
+	QueuedUserTurns          int      `json:"queued_user_turns"`
+	QueuedChildReportBatches int      `json:"queued_child_report_batches"`
 }
 
 func NewEvent(sessionID, turnID, eventType string, payload any) (Event, error) {

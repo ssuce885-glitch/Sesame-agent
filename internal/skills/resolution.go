@@ -1,15 +1,7 @@
 package skills
 
-type SuggestedSkill struct {
-	Name        string
-	Description string
-	Grants      []string
-	Reasons     []string
-}
-
 type Resolution struct {
 	Activated []ActivatedSkill
-	Suggested []SuggestedSkill
 }
 
 func Resolve(message string, catalog Catalog, inherited []string) Resolution {
@@ -17,5 +9,7 @@ func Resolve(message string, catalog Catalog, inherited []string) Resolution {
 		Activate(catalog, message),
 		SelectByNames(catalog, inherited, ActivationReasonInherited),
 	)
+	retrieval := Retrieve(catalog, message, activated)
+	activated = MergeActivatedSkills(activated, retrieval.Selected)
 	return Resolution{Activated: activated}
 }

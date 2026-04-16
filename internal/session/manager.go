@@ -19,21 +19,17 @@ type TurnResultSink interface {
 }
 
 type SubmitTurnInput struct {
-	TurnID       string
-	ClientTurnID string
-	Message      string
+	Turn types.Turn
 }
 
 type ResumeTurnInput struct {
-	TurnID  string
-	Message string
-	Resume  *types.TurnResume
+	Turn   types.Turn
+	Resume *types.TurnResume
 }
 
 type RunInput struct {
 	Session types.Session
-	TurnID  string
-	Message string
+	Turn    types.Turn
 	Resume  *types.TurnResume
 }
 
@@ -89,39 +85,56 @@ func (m *Manager) GetRuntimeState(sessionID string) (RuntimeState, bool) {
 	return *state, true
 }
 
+func (m *Manager) QueuePayload(sessionID string) (types.SessionQueuePayload, bool) {
+	state, ok := m.GetRuntimeState(sessionID)
+	if !ok {
+		return types.SessionQueuePayload{}, false
+	}
+	return types.SessionQueuePayload{
+		ActiveTurnID:             state.ActiveTurnID,
+		ActiveTurnKind:           state.ActiveTurnKind,
+		QueueDepth:               state.QueueDepth,
+		QueuedUserTurns:          state.QueuedUserTurns,
+		QueuedChildReportBatches: state.QueuedChildReportBatches,
+	}, true
+}
+
 func (m *Manager) SubmitTurn(ctx context.Context, sessionID string, in SubmitTurnInput) (string, error) {
 	return m.startTurn(ctx, sessionID, RunInput{
-		TurnID:  in.TurnID,
-		Message: in.Message,
+		Turn: in.Turn,
 	})
 }
 
 func (m *Manager) ResumeTurn(ctx context.Context, sessionID string, in ResumeTurnInput) (string, error) {
 	return m.startTurn(ctx, sessionID, RunInput{
-		TurnID:  in.TurnID,
-		Message: in.Message,
-		Resume:  in.Resume,
+		Turn:   in.Turn,
+		Resume: in.Resume,
 	})
 }
 
 func (m *Manager) InterruptTurn(sessionID, turnID string) bool {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	state, ok := m.runtime[sessionID]
 	if !ok || turnID == "" {
+		m.mu.Unlock()
 		return false
 	}
 	if state.ActiveTurnID != turnID {
+		m.mu.Unlock()
 		return false
 	}
 
 	if state.cancel != nil {
 		state.cancel()
-		state.cancel = nil
 	}
-	state.ActiveTurnID = ""
-	state.RunPermissions = nil
+	m.clearActiveTurnLocked(state)
+
+	next, runCtx, ok := m.dequeueAndActivateNextLocked(state)
+	m.mu.Unlock()
+
+	if ok {
+		m.runTurn(sessionID, runCtx, next)
+	}
 	return true
 }
 
@@ -139,59 +152,116 @@ func (m *Manager) startTurn(ctx context.Context, sessionID string, in RunInput) 
 		return "", errSessionNotFound
 	}
 
+	in.Session = session
+	in.Turn.Kind = normalizeTurnKind(in.Turn.Kind)
+
 	if in.Resume != nil && in.Resume.DecisionScope == types.PermissionDecisionAllowSession && in.Resume.EffectivePermissionProfile != "" {
 		session.PermissionProfile = in.Resume.EffectivePermissionProfile
 		m.sessions[sessionID] = session
+		in.Session = session
 	}
 
-	if state.cancel != nil {
-		state.cancel()
-	}
-	if state.RunPermissions == nil {
-		state.RunPermissions = make(map[string]string)
-	}
-	if in.Resume != nil && in.Resume.RunID != "" && in.Resume.EffectivePermissionProfile != "" {
-		if in.Resume.DecisionScope == types.PermissionDecisionAllowRun || in.Resume.DecisionScope == types.PermissionDecisionAllowOnce {
-			state.RunPermissions[in.Resume.RunID] = in.Resume.EffectivePermissionProfile
+	if state.ActiveTurnID != "" {
+		if state.ActiveTurnKind == types.TurnKindChildReportBatch && in.Turn.Kind == types.TurnKindUserMessage {
+			if state.cancel != nil {
+				state.cancel()
+			}
+			m.clearActiveTurnLocked(state)
+
+			runCtx := m.activateTurnLocked(state, in, ctx)
+			m.mu.Unlock()
+			m.runTurn(sessionID, runCtx, in)
+			return in.Turn.ID, nil
 		}
+
+		item := queuedTurn{
+			ctx:  ctx,
+			in:   in,
+			kind: queueItemKindForTurn(in.Turn),
+		}
+		var turnID string
+		state.queue, turnID, _ = enqueueQueuedTurn(state.queue, item)
+		m.refreshQueueCountersLocked(state)
+		m.mu.Unlock()
+		return turnID, nil
 	}
 
-	// Background turn execution should not be tied to the lifetime of the
-	// submitting HTTP request, but it should still have its own cancel handle.
-	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	state.cancel = cancel
-	state.ActiveTurnID = in.TurnID
+	runCtx := m.activateTurnLocked(state, in, ctx)
 	m.mu.Unlock()
+	m.runTurn(sessionID, runCtx, in)
 
-	go func() {
-		runErr := m.runner.RunTurn(runCtx, RunInput{
-			Session: session,
-			TurnID:  in.TurnID,
-			Message: in.Message,
-			Resume:  in.Resume,
-		})
-		if m.turnResultSink != nil {
-			m.turnResultSink.HandleTurnResult(context.WithoutCancel(runCtx), session, in.TurnID, runErr)
-		}
-		m.finishTurn(sessionID, in.TurnID)
-	}()
-
-	return in.TurnID, nil
+	return in.Turn.ID, nil
 }
 
 func (m *Manager) finishTurn(sessionID, turnID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	state, ok := m.runtime[sessionID]
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
 	if state.ActiveTurnID != turnID {
+		m.mu.Unlock()
 		return
 	}
 
+	m.clearActiveTurnLocked(state)
+	next, runCtx, ok := m.dequeueAndActivateNextLocked(state)
+	m.mu.Unlock()
+
+	if ok {
+		m.runTurn(sessionID, runCtx, next)
+	}
+}
+
+func (m *Manager) runTurn(sessionID string, runCtx context.Context, in RunInput) {
+	go func() {
+		runErr := m.runner.RunTurn(runCtx, in)
+		if m.turnResultSink != nil {
+			m.turnResultSink.HandleTurnResult(context.WithoutCancel(runCtx), in.Session, in.Turn.ID, runErr)
+		}
+		m.finishTurn(sessionID, in.Turn.ID)
+	}()
+}
+
+func (m *Manager) activateTurnLocked(state *RuntimeState, in RunInput, submitCtx context.Context) context.Context {
+	in.Turn.Kind = normalizeTurnKind(in.Turn.Kind)
+
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(submitCtx))
+	state.cancel = cancel
+	state.ActiveTurnID = in.Turn.ID
+	state.ActiveTurnKind = in.Turn.Kind
+	state.RunPermissions = nil
+	if in.Resume != nil && in.Resume.RunID != "" && in.Resume.EffectivePermissionProfile != "" {
+		if in.Resume.DecisionScope == types.PermissionDecisionAllowRun || in.Resume.DecisionScope == types.PermissionDecisionAllowOnce {
+			state.RunPermissions = map[string]string{in.Resume.RunID: in.Resume.EffectivePermissionProfile}
+		}
+	}
+	m.refreshQueueCountersLocked(state)
+	return runCtx
+}
+
+func (m *Manager) dequeueAndActivateNextLocked(state *RuntimeState) (RunInput, context.Context, bool) {
+	next, remaining, ok := dequeueQueuedTurn(state.queue)
+	if !ok {
+		m.refreshQueueCountersLocked(state)
+		return RunInput{}, nil, false
+	}
+	state.queue = remaining
+	if refreshed, exists := m.sessions[next.in.Session.ID]; exists {
+		next.in.Session = refreshed
+	}
+	runCtx := m.activateTurnLocked(state, next.in, next.ctx)
+	return next.in, runCtx, true
+}
+
+func (m *Manager) clearActiveTurnLocked(state *RuntimeState) {
 	state.ActiveTurnID = ""
+	state.ActiveTurnKind = ""
 	state.cancel = nil
 	state.RunPermissions = nil
+}
+
+func (m *Manager) refreshQueueCountersLocked(state *RuntimeState) {
+	state.QueueDepth, state.QueuedUserTurns, state.QueuedChildReportBatches = queueCounters(state.queue)
 }

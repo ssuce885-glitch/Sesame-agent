@@ -24,6 +24,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		`create table if not exists turns (
 			id text primary key,
 			session_id text not null,
+			turn_kind text not null default '',
 			client_turn_id text not null default '',
 			state text not null,
 			user_message text not null,
@@ -492,6 +493,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "turns", "context_head_id", `alter table turns add column context_head_id text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "turns", "turn_kind", `alter table turns add column turn_kind text not null default ''`); err != nil {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "turns", "execution_mode", `alter table turns add column execution_mode text not null default ''`); err != nil {

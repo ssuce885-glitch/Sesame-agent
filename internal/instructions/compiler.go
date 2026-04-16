@@ -13,30 +13,24 @@ type Section struct {
 }
 
 type Bundle struct {
-	BaseText       string
-	Sections       []Section
-	Notices        []string
-	ActiveSkills   []skills.ActivatedSkill
+	BaseText     string
+	Sections     []Section
+	Notices      []string
+	ActiveSkills []skills.ActivatedSkill
 }
 
 type CompileInput struct {
-	BaseText               string
-	Catalog                skills.Catalog
-	Message                string
-	ActiveSkills           []skills.ActivatedSkill
-	SuggestedSkills        []skills.SuggestedSkill
-	ActiveSkillTokenBudget int
+	BaseText     string
+	Catalog      skills.Catalog
+	Message      string
+	ActiveSkills []skills.ActivatedSkill
 }
 
 func Compile(input CompileInput) Bundle {
 	activated := append([]skills.ActivatedSkill(nil), input.ActiveSkills...)
 	notices := skills.ActivationNotices(activated)
 	sections := make([]Section, 0, 3)
-	injection := skills.BuildPromptInjection(
-		activated,
-		append([]skills.SuggestedSkill(nil), input.SuggestedSkills...),
-		input.ActiveSkillTokenBudget,
-	)
+	injection := skills.BuildPromptInjection(activated)
 
 	if activeContext := strings.TrimSpace(injection.ActiveContext); activeContext != "" {
 		sections = append(sections, Section{

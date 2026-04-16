@@ -97,6 +97,9 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	if agentExecutor != nil {
 		agentExecutor.manager = sessionManager
 	}
+	if taskNotifier != nil {
+		taskNotifier.manager = sessionManager
+	}
 
 	reportingService := reporting.NewService(store)
 	if taskNotifier != nil && taskNotifier.reporting != nil {

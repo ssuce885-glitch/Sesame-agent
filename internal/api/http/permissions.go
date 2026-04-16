@@ -267,9 +267,8 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 			TaskID:                     continuation.TaskID,
 		}
 		if _, err := deps.Manager.ResumeTurn(r.Context(), sessionRow.ID, session.ResumeTurnInput{
-			TurnID:  turn.ID,
-			Message: turn.UserMessage,
-			Resume:  resume,
+			Turn:   turn,
+			Resume: resume,
 		}); err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
