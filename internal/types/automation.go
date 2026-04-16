@@ -347,8 +347,6 @@ type DispatchAttempt struct {
 	Outcome             ChildAgentOutcome     `json:"outcome,omitempty"`
 	OutcomeSummary      string                `json:"outcome_summary,omitempty"`
 	TaskID              string                `json:"task_id,omitempty"`
-	BackgroundSessionID string                `json:"background_session_id,omitempty"`
-	BackgroundTurnID    string                `json:"background_turn_id,omitempty"`
 	ChildAgentID        string                `json:"child_agent_id,omitempty"`
 	PromptHash          string                `json:"prompt_hash,omitempty"`
 	ActivatedSkillNames []string              `json:"activated_skill_names,omitempty"`
@@ -437,14 +435,12 @@ type DeliveryRecordFilter struct {
 }
 
 type PendingAutomationPermission struct {
-	RequestID           string `json:"request_id"`
-	WorkspaceRoot       string `json:"workspace_root"`
-	AutomationID        string `json:"automation_id"`
-	IncidentID          string `json:"incident_id"`
-	DispatchID          string `json:"dispatch_id"`
-	BackgroundSessionID string `json:"-"`
-	BackgroundTurnID    string `json:"-"`
-	PreferredSessionID  string `json:"preferred_session_id,omitempty"`
+	RequestID          string `json:"request_id"`
+	WorkspaceRoot      string `json:"workspace_root"`
+	AutomationID       string `json:"automation_id"`
+	IncidentID         string `json:"incident_id"`
+	DispatchID         string `json:"dispatch_id"`
+	PreferredSessionID string `json:"preferred_session_id,omitempty"`
 }
 
 type IncidentListFilter = AutomationIncidentFilter
