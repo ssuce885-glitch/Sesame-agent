@@ -61,11 +61,12 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	} else {
 		deliveryService = automation.NewDeliveryService(store, nil, nil)
 	}
+	agentExecutor := buildAgentTaskExecutor(runner, store)
 	taskManager := task.NewManager(task.Config{
 		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
 		TaskOutputMaxBytes: cfg.TaskOutputMaxBytes,
 		TerminalNotifier:   taskNotifier,
-	}, nil, buildAgentTaskExecutor(runner))
+	}, nil, agentExecutor)
 	executablePath, _ := os.Executable()
 	watcherService := automation.NewWatcherService(store, taskManager, automation.WatcherConfig{
 		DataRoot:       filepath.Join(cfg.DataDir, "automation"),
@@ -82,6 +83,8 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	})
 	if taskNotifier != nil {
 		taskNotifier.scheduler = schedulerService
+		taskNotifier.delivery = deliveryService
+		taskNotifier.watcher = watcherService
 	}
 	runner.SetTaskManager(taskManager)
 	runner.SetSchedulerService(schedulerService)
@@ -91,11 +94,16 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 		store:    store,
 		delivery: deliveryService,
 		watcher:  watcherService,
+		tasker:   taskManager,
+		notifier: taskNotifier,
 		sink: storeAndBusSink{
 			store: store,
 			bus:   bus,
 		},
 	}, newTurnResultFallbackSink(store, bus))
+	if agentExecutor != nil {
+		agentExecutor.manager = sessionManager
+	}
 
 	reportingService := reporting.NewService(store)
 	if taskNotifier != nil && taskNotifier.reporting != nil {

@@ -114,10 +114,10 @@ func (c *Client) GetWorkspaceMailbox(ctx context.Context) (types.WorkspaceReport
 	return out, nil
 }
 
-func (c *Client) GetRuntimeGraph(ctx context.Context, sessionID string) (types.SessionRuntimeGraphResponse, error) {
-	var out types.SessionRuntimeGraphResponse
-	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/sessions/%s/runtime_graph", sessionID), nil, &out); err != nil {
-		return types.SessionRuntimeGraphResponse{}, err
+func (c *Client) GetRuntimeGraph(ctx context.Context) (types.WorkspaceRuntimeGraphResponse, error) {
+	var out types.WorkspaceRuntimeGraphResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/runtime_graph", nil, &out); err != nil {
+		return types.WorkspaceRuntimeGraphResponse{}, err
 	}
 	return out, nil
 }

@@ -34,12 +34,12 @@ const (
 )
 
 const (
-	ToolRunStatePending   ToolRunState = "pending"
-	ToolRunStateRunning   ToolRunState = "running"
+	ToolRunStatePending           ToolRunState = "pending"
+	ToolRunStateRunning           ToolRunState = "running"
 	ToolRunStateWaitingPermission ToolRunState = "waiting_permission"
-	ToolRunStateCompleted ToolRunState = "completed"
-	ToolRunStateFailed    ToolRunState = "failed"
-	ToolRunStateCancelled ToolRunState = "cancelled"
+	ToolRunStateCompleted         ToolRunState = "completed"
+	ToolRunStateFailed            ToolRunState = "failed"
+	ToolRunStateCancelled         ToolRunState = "cancelled"
 )
 
 const (
@@ -147,10 +147,12 @@ type PermissionRequest struct {
 }
 
 type RuntimeGraph struct {
-	Runs               []Run               `json:"runs"`
-	Plans              []Plan              `json:"plans"`
-	Tasks              []Task              `json:"tasks"`
-	ToolRuns           []ToolRun           `json:"tool_runs"`
-	Worktrees          []Worktree          `json:"worktrees"`
-	PermissionRequests []PermissionRequest `json:"permission_requests"`
+	Runs               []Run                `json:"runs"`
+	Plans              []Plan               `json:"plans"`
+	Tasks              []Task               `json:"tasks"`
+	ToolRuns           []ToolRun            `json:"tool_runs"`
+	Worktrees          []Worktree           `json:"worktrees"`
+	Incidents          []AutomationIncident `json:"incidents"`
+	DispatchAttempts   []DispatchAttempt    `json:"dispatch_attempts"`
+	PermissionRequests []PermissionRequest  `json:"permission_requests"`
 }

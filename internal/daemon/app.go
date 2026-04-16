@@ -36,6 +36,8 @@ type sessionRunnerAdapter struct {
 	store    *sqlite.Store
 	delivery *automation.DeliveryService
 	watcher  automation.DispatchWatcherSyncer
+	tasker   *task.Manager
+	notifier *taskTerminalNotifier
 	now      func() time.Time
 }
 
@@ -56,7 +58,10 @@ type taskEventSink struct {
 }
 
 type agentTaskExecutor struct {
-	runner *engine.Engine
+	runner  *engine.Engine
+	store   *sqlite.Store
+	manager *session.Manager
+	now     func() time.Time
 }
 
 type taskTerminalNotifier struct {
@@ -64,6 +69,9 @@ type taskTerminalNotifier struct {
 	bus       *stream.Bus
 	scheduler *scheduler.Service
 	reporting *reporting.Service
+	delivery  *automation.DeliveryService
+	watcher   automation.DispatchWatcherSyncer
+	now       func() time.Time
 }
 
 type combinedEventSink struct {
@@ -72,10 +80,13 @@ type combinedEventSink struct {
 	observer  engine.EventSink
 }
 
-type automationDispatchManager struct {
-	store   *sqlite.Store
-	manager *session.Manager
-	now     func() time.Time
+type managerTaskObserver struct {
+	manager *task.Manager
+	taskID  string
+}
+
+type multiTaskObserver struct {
+	observers []task.AgentTaskObserver
 }
 
 func (s storeAndBusSink) Emit(ctx context.Context, event types.Event) error {
@@ -101,8 +112,11 @@ func (s storeAndBusSink) FinalizeTurn(ctx context.Context, usage *types.TurnUsag
 func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) error {
 	sink := engine.EventSink(a.sink)
 	var observerSink *taskEventSink
-	var observer task.AgentTaskObserver
+	var dispatchObserver task.AgentTaskObserver
+	var taskObserver task.AgentTaskObserver
+	var observers []task.AgentTaskObserver
 	var finalDispatchText string
+	var taskCompleted bool
 	dispatchAttempt, hasDispatchAttempt, err := a.dispatchAttemptForRun(ctx, in.Session.ID, in.TurnID)
 	if err != nil {
 		return err
@@ -110,10 +124,20 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	if hasDispatchAttempt {
 		in.Session.PermissionProfile = firstNonEmptyTrimmed(in.Session.PermissionProfile, "read_only")
 	}
-	if dispatchObserver, ok, err := a.dispatchObserverForRun(ctx, dispatchAttempt, hasDispatchAttempt); err != nil {
+	if resumeTaskObserver, ok, err := a.taskObserverForResume(in.Resume); err != nil {
 		return err
 	} else if ok {
-		observer = dispatchObserver
+		taskObserver = resumeTaskObserver
+		observers = append(observers, taskObserver)
+	}
+	if currentDispatchObserver, ok, err := a.dispatchObserverForRun(ctx, dispatchAttempt, hasDispatchAttempt); err != nil {
+		return err
+	} else if ok {
+		dispatchObserver = currentDispatchObserver
+		observers = append(observers, dispatchObserver)
+	}
+	if len(observers) > 0 {
+		observer := task.AgentTaskObserver(multiTaskObserver{observers: observers})
 		observerSink = &taskEventSink{observer: observer}
 		sink = combinedEventSink{
 			primary:   a.sink,
@@ -130,15 +154,32 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 			ClientTurnID: "",
 			UserMessage:  in.Message,
 		},
+		TaskID:              firstNonEmptyTrimmed(taskIDFromResume(in.Resume)),
 		Sink:                sink,
 		Resume:              in.Resume,
 		ActivatedSkillNames: append([]string(nil), dispatchAttempt.ActivatedSkillNames...),
 	})
-	if observerSink != nil && observer != nil && err == nil {
+	if observerSink != nil && len(observers) > 0 && err == nil {
 		if turn, ok, turnErr := a.store.GetTurn(ctx, in.TurnID); turnErr != nil {
 			return turnErr
 		} else if ok && turn.State != types.TurnStateAwaitingPermission {
+			taskCompleted = true
 			finalDispatchText = strings.TrimSpace(observerSink.FinalText())
+		}
+	}
+	if err != nil && taskObserver != nil {
+		if setErr := taskObserver.SetOutcome(types.ChildAgentOutcomeFailure, err.Error()); setErr != nil {
+			return errors.Join(err, setErr)
+		}
+	}
+	if taskObserver != nil && taskCompleted {
+		if err := taskObserver.SetOutcome(types.ChildAgentOutcomeSuccess, ""); err != nil {
+			return err
+		}
+	}
+	if taskObserver != nil && finalDispatchText != "" {
+		if err := taskObserver.SetFinalText(finalDispatchText); err != nil {
+			return err
 		}
 	}
 	if reconcileErr := a.reconcileDispatchRun(ctx, in.Session.ID, in.TurnID, err); reconcileErr != nil {
@@ -147,9 +188,17 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		}
 		return reconcileErr
 	}
-	if observer != nil && finalDispatchText != "" {
-		if err := observer.SetFinalText(finalDispatchText); err != nil {
+	if dispatchObserver != nil && finalDispatchText != "" {
+		if err := dispatchObserver.SetFinalText(finalDispatchText); err != nil {
 			return err
+		}
+	}
+	if taskObserver != nil {
+		if notifyErr := a.notifyResumedTaskTerminal(ctx, in.Resume, in.Session.WorkspaceRoot); notifyErr != nil {
+			if err != nil {
+				return errors.Join(err, notifyErr)
+			}
+			return notifyErr
 		}
 	}
 	return err
@@ -169,6 +218,21 @@ func (s *taskEventSink) Emit(_ context.Context, event types.Event) error {
 		}
 		s.currentText.WriteString(payload.Text)
 		return nil
+	case types.EventPermissionRequested:
+		var payload types.PermissionRequestedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		if s.observer != nil {
+			summary := strings.TrimSpace(payload.Reason)
+			if summary == "" {
+				summary = "approval required"
+			}
+			if err := s.observer.SetOutcome(types.ChildAgentOutcomeBlocked, summary); err != nil {
+				return err
+			}
+		}
+		return nil
 	case types.EventToolStarted:
 		s.currentText.Reset()
 		return nil
@@ -176,6 +240,11 @@ func (s *taskEventSink) Emit(_ context.Context, event types.Event) error {
 		var payload types.TurnFailedPayload
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
+		}
+		if s.observer != nil {
+			if err := s.observer.SetOutcome(types.ChildAgentOutcomeFailure, payload.Message); err != nil {
+				return err
+			}
 		}
 		if payload.Message == "" {
 			return errors.New("turn failed")
@@ -193,11 +262,91 @@ func (s *taskEventSink) FinalText() string {
 	return s.currentText.String()
 }
 
-func buildAgentTaskExecutor(runner *engine.Engine) task.AgentExecutor {
+func (o managerTaskObserver) AppendLog(chunk []byte) error {
+	if o.manager == nil || strings.TrimSpace(o.taskID) == "" {
+		return nil
+	}
+	return o.manager.Append(o.taskID, chunk)
+}
+
+func (o managerTaskObserver) SetFinalText(text string) error {
+	if o.manager == nil || strings.TrimSpace(o.taskID) == "" {
+		return nil
+	}
+	return o.manager.SetFinalText(o.taskID, text)
+}
+
+func (o managerTaskObserver) SetOutcome(outcome types.ChildAgentOutcome, summary string) error {
+	if o.manager == nil || strings.TrimSpace(o.taskID) == "" {
+		return nil
+	}
+	return o.manager.SetOutcome(o.taskID, outcome, summary)
+}
+
+func (managerTaskObserver) SetRunContext(_, _ string) error {
+	return nil
+}
+
+func (o multiTaskObserver) AppendLog(chunk []byte) error {
+	for _, observer := range o.observers {
+		if observer == nil {
+			continue
+		}
+		if err := observer.AppendLog(chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (o multiTaskObserver) SetFinalText(text string) error {
+	for _, observer := range o.observers {
+		if observer == nil {
+			continue
+		}
+		if err := observer.SetFinalText(text); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (o multiTaskObserver) SetOutcome(outcome types.ChildAgentOutcome, summary string) error {
+	for _, observer := range o.observers {
+		if observer == nil {
+			continue
+		}
+		if err := observer.SetOutcome(outcome, summary); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (o multiTaskObserver) SetRunContext(sessionID, turnID string) error {
+	for _, observer := range o.observers {
+		if observer == nil {
+			continue
+		}
+		if err := observer.SetRunContext(sessionID, turnID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func buildAgentTaskExecutor(runner *engine.Engine, stores ...*sqlite.Store) *agentTaskExecutor {
 	if runner == nil {
 		return nil
 	}
-	return agentTaskExecutor{runner: runner}
+	var store *sqlite.Store
+	if len(stores) > 0 {
+		store = stores[0]
+	}
+	return &agentTaskExecutor{
+		runner: runner,
+		store:  store,
+	}
 }
 
 func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus, workspaceRoot string) *taskTerminalNotifier {
@@ -264,6 +413,36 @@ func (a sessionRunnerAdapter) dispatchObserverForRun(ctx context.Context, attemp
 		return nil, false, nil
 	}
 	return automation.NewDispatchTaskObserverWithDelivery(a.store, a.delivery, attempt.DispatchID, a.currentTime), true, nil
+}
+
+func (a sessionRunnerAdapter) taskObserverForResume(resume *types.TurnResume) (task.AgentTaskObserver, bool, error) {
+	taskID := taskIDFromResume(resume)
+	if a.tasker == nil || taskID == "" {
+		return nil, false, nil
+	}
+	return managerTaskObserver{
+		manager: a.tasker,
+		taskID:  taskID,
+	}, true, nil
+}
+
+func (a sessionRunnerAdapter) notifyResumedTaskTerminal(ctx context.Context, resume *types.TurnResume, workspaceRoot string) error {
+	taskID := taskIDFromResume(resume)
+	if a.tasker == nil || a.notifier == nil || taskID == "" {
+		return nil
+	}
+	completed, ok, err := a.tasker.Get(taskID, workspaceRoot)
+	if err != nil || !ok {
+		return err
+	}
+	return a.notifier.NotifyTaskTerminal(ctx, completed)
+}
+
+func taskIDFromResume(resume *types.TurnResume) string {
+	if resume == nil {
+		return ""
+	}
+	return strings.TrimSpace(resume.TaskID)
 }
 
 func (a sessionRunnerAdapter) reconcileDispatchRun(ctx context.Context, sessionID, turnID string, runErr error) error {
@@ -560,72 +739,6 @@ func (a sessionRunnerAdapter) currentTime() time.Time {
 	return time.Now().UTC()
 }
 
-func (m automationDispatchManager) StartAutomationDispatch(ctx context.Context, attempt types.DispatchAttempt, template types.ChildAgentTemplate, incident types.AutomationIncident, bundle automation.ChildAgentRuntimeBundle) error {
-	if m.store == nil || m.manager == nil {
-		return errors.New("automation dispatch manager is not configured")
-	}
-	now := m.currentTime()
-	sessionRow := types.Session{
-		ID:                firstNonEmptyTrimmed(attempt.BackgroundSessionID, types.NewID("auto_session")),
-		WorkspaceRoot:     strings.TrimSpace(attempt.WorkspaceRoot),
-		PermissionProfile: "read_only",
-		State:             types.SessionStateIdle,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-	}
-	if existing, ok, err := m.store.GetSession(ctx, sessionRow.ID); err != nil {
-		return err
-	} else if ok {
-		sessionRow = existing
-	} else if err := m.store.InsertSession(ctx, sessionRow); err != nil {
-		return err
-	}
-
-	turnRow := types.Turn{
-		ID:        firstNonEmptyTrimmed(attempt.BackgroundTurnID, types.NewID("auto_turn")),
-		SessionID: sessionRow.ID,
-		State:     types.TurnStateCreated,
-		UserMessage: automation.BuildAutomationChildAgentPrompt(automation.AutomationChildAgentPromptInput{
-			Attempt:          attempt,
-			Template:         template,
-			Strategy:         bundle.Strategy,
-			PromptSupplement: bundle.PromptSupplement,
-			DetectorSignal:   mustParseDetectorSignalForPrompt(incident),
-			SelectedSkills:   bundle.Skills.Required,
-		}),
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	if _, ok, err := m.store.GetTurn(ctx, turnRow.ID); err != nil {
-		return err
-	} else if !ok {
-		if err := m.store.InsertTurn(ctx, turnRow); err != nil {
-			return err
-		}
-	}
-
-	attempt.BackgroundSessionID = sessionRow.ID
-	attempt.BackgroundTurnID = turnRow.ID
-	attempt.UpdatedAt = now
-	if err := m.store.UpsertDispatchAttempt(ctx, attempt); err != nil {
-		return err
-	}
-
-	m.manager.RegisterSession(sessionRow)
-	_, err := m.manager.SubmitTurn(ctx, sessionRow.ID, session.SubmitTurnInput{
-		TurnID:  turnRow.ID,
-		Message: turnRow.UserMessage,
-	})
-	return err
-}
-
-func (m automationDispatchManager) currentTime() time.Time {
-	if m.now != nil {
-		return m.now().UTC()
-	}
-	return time.Now().UTC()
-}
-
 func mustParseDetectorSignalForPrompt(incident types.AutomationIncident) types.AutomationDetectorSignal {
 	detectorSignal, err := automation.ParseAutomationDetectorSignalPayload(incident.Payload)
 	if err != nil {
@@ -637,13 +750,16 @@ func mustParseDetectorSignalForPrompt(incident types.AutomationIncident) types.A
 	return detectorSignal
 }
 
-func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, observer task.AgentTaskObserver) error {
+func (a agentTaskExecutor) RunTask(ctx context.Context, taskID string, workspaceRoot string, prompt string, activatedSkillNames []string, observer task.AgentTaskObserver) error {
 	if a.runner == nil {
 		return errors.New("engine runner is not configured")
 	}
 
 	sessionID := types.NewID("task_session")
 	turnID := types.NewID("task_turn")
+	if err := a.prepareTaskRun(ctx, sessionID, turnID, workspaceRoot, prompt); err != nil {
+		return err
+	}
 	sink := &taskEventSink{observer: observer}
 	if observer != nil {
 		if err := observer.SetRunContext(sessionID, turnID); err != nil {
@@ -660,6 +776,7 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, pr
 			SessionID:   sessionID,
 			UserMessage: prompt,
 		},
+		TaskID:              strings.TrimSpace(taskID),
 		Sink:                sink,
 		ActivatedSkillNames: append([]string(nil), activatedSkillNames...),
 	}); err != nil {
@@ -675,12 +792,60 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, workspaceRoot string, pr
 	return observer.SetFinalText(finalText)
 }
 
+func (a agentTaskExecutor) prepareTaskRun(ctx context.Context, sessionID, turnID, workspaceRoot, prompt string) error {
+	if a.store == nil {
+		return nil
+	}
+	now := a.currentTime()
+	sessionRow := types.Session{
+		ID:                sessionID,
+		WorkspaceRoot:     strings.TrimSpace(workspaceRoot),
+		PermissionProfile: "read_only",
+		State:             types.SessionStateIdle,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if existing, ok, err := a.store.GetSession(ctx, sessionRow.ID); err != nil {
+		return err
+	} else if ok {
+		sessionRow = existing
+	} else if err := a.store.InsertSession(ctx, sessionRow); err != nil {
+		return err
+	}
+	turnRow := types.Turn{
+		ID:          turnID,
+		SessionID:   sessionRow.ID,
+		State:       types.TurnStateCreated,
+		UserMessage: prompt,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if _, ok, err := a.store.GetTurn(ctx, turnRow.ID); err != nil {
+		return err
+	} else if !ok {
+		if err := a.store.InsertTurn(ctx, turnRow); err != nil {
+			return err
+		}
+	}
+	if a.manager != nil {
+		a.manager.RegisterSession(sessionRow)
+	}
+	return nil
+}
+
+func (a agentTaskExecutor) currentTime() time.Time {
+	if a.now != nil {
+		return a.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
 func (n taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed task.Task) error {
 	if n.store == nil || strings.TrimSpace(completed.ID) == "" {
 		return nil
 	}
 
-	now := time.Now().UTC()
+	now := n.currentTime()
 	runtimeTask, ok, err := n.store.GetTaskRecord(ctx, completed.ID)
 	if err != nil {
 		return err
@@ -702,6 +867,9 @@ func (n taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed 
 		if err := n.scheduler.RecordTaskTerminal(ctx, completed); err != nil {
 			return err
 		}
+	}
+	if err := n.reconcileAutomationDispatchTask(ctx, completed); err != nil {
+		return err
 	}
 
 	if strings.TrimSpace(completed.ParentSessionID) == "" {
@@ -768,6 +936,13 @@ func (n taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed 
 		return err
 	}
 	return nil
+}
+
+func (n taskTerminalNotifier) currentTime() time.Time {
+	if n.now != nil {
+		return n.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func timelineBlockFromCompletedTask(completed task.Task, runtimeTask types.Task, hasRuntimeTask bool) types.TimelineBlock {
@@ -935,9 +1110,9 @@ func Run(ctx context.Context) error {
 	if err := recoverRuntimeState(ctx, runtime.Store, runtime.SessionManager); err != nil {
 		return err
 	}
-	dispatcher := automation.NewDispatcher(runtime.Store, automationDispatchManager{
+	dispatcher := automation.NewDispatcher(runtime.Store, automationTaskLauncher{
 		store:   runtime.Store,
-		manager: runtime.SessionManager,
+		manager: runtime.TaskManager,
 	}, automation.DispatcherConfig{Watcher: runtime.WatcherService})
 	go func() {
 		if err := runtime.SchedulerService.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -1222,7 +1397,7 @@ func resumeResolvedContinuations(ctx context.Context, store *sqlite.Store, manag
 			manager.InterruptTurn(sessionRow.ID, turn.ID)
 			return nil, err
 		}
-		if err := automation.RestoreDispatchAfterApprovalResume(ctx, store, sessionRow.ID, turn.ID, request.ID, now); err != nil {
+		if err := automation.RestoreDispatchAfterApprovalResume(ctx, store, sessionRow.ID, turn.ID, continuation.TaskID, request.ID, now); err != nil {
 			return nil, err
 		}
 

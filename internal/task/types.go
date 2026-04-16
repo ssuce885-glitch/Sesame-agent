@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"fmt"
+	"go-agent/internal/types"
 	"time"
 )
 
@@ -37,31 +38,33 @@ type FinalResult struct {
 }
 
 type Task struct {
-	ID                   string          `json:"id"`
-	Type                 TaskType        `json:"type"`
-	Status               TaskStatus      `json:"status"`
-	Command              string          `json:"command"`
-	Description          string          `json:"description,omitempty"`
-	ParentTaskID         string          `json:"parent_task_id,omitempty"`
-	Owner                string          `json:"owner,omitempty"`
-	Kind                 string          `json:"kind,omitempty"`
-	ExecutionTaskID      string          `json:"execution_task_id,omitempty"`
-	WorktreeID           string          `json:"worktree_id,omitempty"`
-	ScheduledJobID       string          `json:"scheduled_job_id,omitempty"`
-	ActivatedSkillNames  []string        `json:"activated_skill_names,omitempty"`
-	WorkspaceRoot        string          `json:"workspace_root"`
-	Output               string          `json:"output,omitempty"`
-	OutputPath           string          `json:"output_path,omitempty"`
-	Error                string          `json:"error,omitempty"`
-	TimeoutSeconds       int             `json:"timeout_seconds,omitempty"`
-	StartTime            time.Time       `json:"start_time"`
-	EndTime              *time.Time      `json:"end_time,omitempty"`
-	ParentSessionID      string          `json:"-"`
-	ParentTurnID         string          `json:"-"`
-	FinalResultKind      FinalResultKind `json:"-"`
-	FinalResultText      string          `json:"-"`
-	FinalResultReadyAt   *time.Time      `json:"-"`
-	CompletionNotifiedAt *time.Time      `json:"-"`
+	ID                   string                  `json:"id"`
+	Type                 TaskType                `json:"type"`
+	Status               TaskStatus              `json:"status"`
+	Command              string                  `json:"command"`
+	Description          string                  `json:"description,omitempty"`
+	ParentTaskID         string                  `json:"parent_task_id,omitempty"`
+	Owner                string                  `json:"owner,omitempty"`
+	Kind                 string                  `json:"kind,omitempty"`
+	ExecutionTaskID      string                  `json:"execution_task_id,omitempty"`
+	WorktreeID           string                  `json:"worktree_id,omitempty"`
+	ScheduledJobID       string                  `json:"scheduled_job_id,omitempty"`
+	ActivatedSkillNames  []string                `json:"activated_skill_names,omitempty"`
+	WorkspaceRoot        string                  `json:"workspace_root"`
+	Output               string                  `json:"output,omitempty"`
+	OutputPath           string                  `json:"output_path,omitempty"`
+	Error                string                  `json:"error,omitempty"`
+	TimeoutSeconds       int                     `json:"timeout_seconds,omitempty"`
+	StartTime            time.Time               `json:"start_time"`
+	EndTime              *time.Time              `json:"end_time,omitempty"`
+	ParentSessionID      string                  `json:"-"`
+	ParentTurnID         string                  `json:"-"`
+	Outcome              types.ChildAgentOutcome `json:"outcome,omitempty"`
+	OutcomeSummary       string                  `json:"outcome_summary,omitempty"`
+	FinalResultKind      FinalResultKind         `json:"-"`
+	FinalResultText      string                  `json:"-"`
+	FinalResultReadyAt   *time.Time              `json:"-"`
+	CompletionNotifiedAt *time.Time              `json:"-"`
 }
 
 type TodoItem struct {
@@ -136,11 +139,12 @@ type Runner interface {
 type AgentTaskObserver interface {
 	AppendLog(chunk []byte) error
 	SetFinalText(text string) error
+	SetOutcome(outcome types.ChildAgentOutcome, summary string) error
 	SetRunContext(sessionID, turnID string) error
 }
 
 type AgentExecutor interface {
-	RunTask(ctx context.Context, workspaceRoot string, prompt string, activatedSkillNames []string, observer AgentTaskObserver) error
+	RunTask(ctx context.Context, taskID string, workspaceRoot string, prompt string, activatedSkillNames []string, observer AgentTaskObserver) error
 }
 
 type TerminalNotifier interface {
