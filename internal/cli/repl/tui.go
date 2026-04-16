@@ -25,6 +25,7 @@ import (
 const (
 	defaultTUIWidth           = 100
 	defaultTUIHeight          = 32
+	tuiWorkspaceRefreshInterval = 5 * time.Second
 	enableAlternateScrollSeq  = "\x1b[?1007h"
 	disableAlternateScrollSeq = "\x1b[?1007l"
 	defaultStatusBarMessage   = "Tab/Shift+Tab views • Enter send • Alt+Enter newline • Esc interrupt • Drag to select/copy • Mouse wheel/PgUp/PgDn/Home/End scroll • Ctrl+C quit"
@@ -76,6 +77,8 @@ type tuiStreamClosedMsg struct {
 	sessionID string
 }
 
+type tuiWorkspaceRefreshTickMsg struct{}
+
 type tuiSubmitTurnMsg struct {
 	err error
 }
@@ -115,7 +118,7 @@ type tuiCronDeleteMsg struct {
 }
 
 type tuiRuntimeGraphMsg struct {
-	resp types.SessionRuntimeGraphResponse
+	resp types.WorkspaceRuntimeGraphResponse
 	err  error
 }
 
@@ -182,7 +185,7 @@ type tuiModel struct {
 	cronScopeAll bool
 	cronDetail   *types.ScheduledJob
 
-	runtimeGraph       types.SessionRuntimeGraphResponse
+	runtimeGraph       types.WorkspaceRuntimeGraphResponse
 	runtimeGraphLoaded bool
 	runtimeGraphErr    string
 	runtimeGraphStale  bool
@@ -342,13 +345,19 @@ func (m tuiModel) Init() tea.Cmd {
 	}
 	if strings.TrimSpace(m.sessionID) != "" {
 		cmds = append(cmds, m.startSessionStreamCmd(m.sessionID, m.lastSeq))
-		cmds = append(cmds, m.loadMailboxCmd(), m.listCronJobsCmd(false), m.loadRuntimeGraphCmd(), m.loadReportingOverviewCmd())
 	}
+	cmds = append(cmds, m.loadMailboxCmd(), m.listCronJobsCmd(false), m.loadRuntimeGraphCmd(), m.loadReportingOverviewCmd(), m.workspaceRefreshCmd())
 	if strings.TrimSpace(m.initialPrompt) != "" && strings.TrimSpace(m.sessionID) != "" {
 		prompt := m.initialPrompt
 		cmds = append(cmds, func() tea.Msg { return tuiQueuePromptMsg{prompt: prompt} })
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m tuiModel) workspaceRefreshCmd() tea.Cmd {
+	return tea.Tick(tuiWorkspaceRefreshInterval, func(time.Time) tea.Msg {
+		return tuiWorkspaceRefreshTickMsg{}
+	})
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -358,6 +367,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = max(18, msg.Height)
 		m.layout()
 		return m, nil
+	case tuiWorkspaceRefreshTickMsg:
+		cmds := []tea.Cmd{m.loadMailboxCmd()}
+		if m.activeView == tuiViewAgents || m.runtimeGraphStale || m.reportingStale {
+			cmds = append(cmds, m.loadAgentsCmd())
+		}
+		cmds = append(cmds, m.workspaceRefreshCmd())
+		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
@@ -636,7 +652,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cronErr = ""
 		m.cronScopeAll = false
 		m.cronDetail = nil
-		m.runtimeGraph = types.SessionRuntimeGraphResponse{}
+		m.runtimeGraph = types.WorkspaceRuntimeGraphResponse{}
 		m.runtimeGraphLoaded = false
 		m.runtimeGraphErr = ""
 		m.runtimeGraphStale = true
@@ -866,7 +882,7 @@ func (m *tuiModel) switchView(view tuiView, override tea.Cmd) (tea.Model, tea.Cm
 func (m *tuiModel) defaultViewLoadCmd(view tuiView) tea.Cmd {
 	switch view {
 	case tuiViewMailbox:
-		if strings.TrimSpace(m.sessionID) == "" || m.mailboxLoaded {
+		if m.mailboxLoaded {
 			return nil
 		}
 		return m.loadMailboxCmd()
@@ -876,9 +892,6 @@ func (m *tuiModel) defaultViewLoadCmd(view tuiView) tea.Cmd {
 		}
 		return m.listCronJobsCmd(false)
 	case tuiViewAgents:
-		if strings.TrimSpace(m.sessionID) == "" {
-			return nil
-		}
 		if !m.runtimeGraphLoaded || m.runtimeGraphStale || !m.reportingLoaded || m.reportingStale {
 			return m.loadAgentsCmd()
 		}
@@ -970,14 +983,10 @@ func (m tuiModel) listCronJobsCmd(allWorkspaces bool) tea.Cmd {
 }
 
 func (m tuiModel) loadRuntimeGraphCmd() tea.Cmd {
-	if strings.TrimSpace(m.sessionID) == "" {
-		return nil
-	}
 	ctx := m.ctx
 	client := m.client
-	sessionID := m.sessionID
 	return func() tea.Msg {
-		resp, err := client.GetRuntimeGraph(ctx, sessionID)
+		resp, err := client.GetRuntimeGraph(ctx)
 		return tuiRuntimeGraphMsg{resp: resp, err: err}
 	}
 }
@@ -985,9 +994,8 @@ func (m tuiModel) loadRuntimeGraphCmd() tea.Cmd {
 func (m tuiModel) loadReportingOverviewCmd() tea.Cmd {
 	ctx := m.ctx
 	client := m.client
-	sessionID := m.sessionID
 	return func() tea.Msg {
-		resp, err := client.GetReportingOverview(ctx, sessionID)
+		resp, err := client.GetReportingOverview(ctx, "")
 		return tuiReportingOverviewMsg{resp: resp, err: err}
 	}
 }
@@ -1608,13 +1616,9 @@ func (m tuiModel) renderAgentsContent(width int) string {
 	parts := []string{
 		renderSectionHeading(
 			"Agents",
-			fmt.Sprintf("%d runs · %d tasks · %d workers · %d groups · %d agent results · %d digests · %d tool runs · %d worktrees · %d permissions", len(graph.Runs), len(graph.Tasks), len(m.reportingOverview.ChildAgents), len(m.reportingOverview.ReportGroups), len(m.reportingOverview.ChildResults), len(m.reportingOverview.Digests), len(graph.ToolRuns), len(graph.Worktrees), len(graph.PermissionRequests)),
+			fmt.Sprintf("%d runs · %d incidents · %d dispatches · %d tasks · %d workers · %d groups · %d agent results · %d digests · %d tool runs · %d worktrees · %d permissions", len(graph.Runs), len(graph.Incidents), len(graph.DispatchAttempts), len(graph.Tasks), len(m.reportingOverview.ChildAgents), len(m.reportingOverview.ReportGroups), len(m.reportingOverview.ChildResults), len(m.reportingOverview.Digests), len(graph.ToolRuns), len(graph.Worktrees), len(graph.PermissionRequests)),
 			width,
 		),
-	}
-	if strings.TrimSpace(m.sessionID) == "" {
-		parts = append(parts, renderMutedBlock("Select a session to inspect multi-agent runtime state.", width))
-		return strings.Join(parts, "\n\n")
 	}
 	if strings.TrimSpace(m.runtimeGraphErr) != "" {
 		parts = append(parts, renderErrorBlock(m.runtimeGraphErr, width))
@@ -1635,6 +1639,14 @@ func (m tuiModel) renderAgentsContent(width int) string {
 	runLines := make([]string, 0, len(graph.Runs))
 	for _, run := range graph.Runs {
 		runLines = append(runLines, formatRunLine(run))
+	}
+	incidentLines := make([]string, 0, len(graph.Incidents))
+	for _, incident := range graph.Incidents {
+		incidentLines = append(incidentLines, formatIncidentLine(incident))
+	}
+	dispatchLines := make([]string, 0, len(graph.DispatchAttempts))
+	for _, attempt := range graph.DispatchAttempts {
+		dispatchLines = append(dispatchLines, formatDispatchAttemptLine(attempt))
 	}
 	taskLines := make([]string, 0, len(graph.Tasks))
 	for _, task := range graph.Tasks {
@@ -1670,7 +1682,9 @@ func (m tuiModel) renderAgentsContent(width int) string {
 	}
 
 	parts = append(parts,
-		renderLineSection("Runs", runLines, "No runs recorded for this session.", width),
+		renderLineSection("Runs", runLines, "No runs recorded for this workspace.", width),
+		renderLineSection("Incidents", incidentLines, "No automation incidents.", width),
+		renderLineSection("Dispatch Attempts", dispatchLines, "No dispatch attempts.", width),
 		renderLineSection("Tasks", taskLines, "No runtime tasks.", width),
 		renderLineSection("Background Workers", workerLines, "No background workers registered.", width),
 		renderLineSection("Report Groups", groupLines, "No report groups configured.", width),
@@ -2025,6 +2039,25 @@ func formatWorktreeLine(worktree types.Worktree) string {
 	parts := []string{string(worktree.State), firstNonEmpty(worktree.WorktreeBranch, shortID(worktree.ID))}
 	if path := strings.TrimSpace(worktree.WorktreePath); path != "" {
 		parts = append(parts, path)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatIncidentLine(incident types.AutomationIncident) string {
+	parts := []string{string(incident.Status), firstNonEmpty(incident.Summary, incident.AutomationID, incident.ID)}
+	if incidentID := strings.TrimSpace(incident.ID); incidentID != "" {
+		parts = append(parts, shortID(incidentID))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatDispatchAttemptLine(attempt types.DispatchAttempt) string {
+	parts := []string{string(attempt.Status), firstNonEmpty(attempt.OutcomeSummary, attempt.AutomationID, attempt.DispatchID)}
+	if dispatchID := strings.TrimSpace(attempt.DispatchID); dispatchID != "" {
+		parts = append(parts, shortID(dispatchID))
+	}
+	if taskID := strings.TrimSpace(attempt.TaskID); taskID != "" {
+		parts = append(parts, shortID(taskID))
 	}
 	return strings.Join(parts, " · ")
 }

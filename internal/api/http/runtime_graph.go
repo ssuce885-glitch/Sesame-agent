@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"go-agent/internal/runtime"
 	"go-agent/internal/types"
@@ -12,12 +13,22 @@ import (
 
 type runtimeGraphStore interface {
 	ListRuntimeGraph(context.Context) (types.RuntimeGraph, error)
+	ListRuntimeGraphForWorkspace(context.Context, string) (types.RuntimeGraph, error)
 }
 
-func handleGetRuntimeGraph(deps Dependencies, sessionID string) http.HandlerFunc {
+func registerRuntimeGraphRoutes(mux *http.ServeMux, deps Dependencies) {
+	mux.HandleFunc("/v1/runtime_graph", handleGetRuntimeGraph(deps))
+}
+
+func handleGetRuntimeGraph(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		workspaceRoot := strings.TrimSpace(deps.WorkspaceRoot)
+		if workspaceRoot == "" {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		store, ok := deps.Store.(runtimeGraphStore)
@@ -25,14 +36,15 @@ func handleGetRuntimeGraph(deps Dependencies, sessionID string) http.HandlerFunc
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		graph, err := store.ListRuntimeGraph(r.Context())
+		graph, err := store.ListRuntimeGraphForWorkspace(r.Context(), workspaceRoot)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"graph": filterRuntimeGraphForSession(graph, sessionID),
+		_ = json.NewEncoder(w).Encode(types.WorkspaceRuntimeGraphResponse{
+			WorkspaceRoot: workspaceRoot,
+			Graph:         graph,
 		})
 	}
 }

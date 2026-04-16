@@ -27,7 +27,7 @@ type RuntimeClient interface {
 	StreamEvents(context.Context, string, int64) (<-chan types.Event, error)
 	GetTimeline(context.Context, string) (types.SessionTimelineResponse, error)
 	GetWorkspaceMailbox(context.Context) (types.WorkspaceReportMailboxResponse, error)
-	GetRuntimeGraph(context.Context, string) (types.SessionRuntimeGraphResponse, error)
+	GetRuntimeGraph(context.Context) (types.WorkspaceRuntimeGraphResponse, error)
 	GetReportingOverview(context.Context, string) (types.ReportingOverview, error)
 	ListCronJobs(context.Context, string) (types.ListScheduledJobsResponse, error)
 	GetCronJob(context.Context, string) (types.ScheduledJob, error)

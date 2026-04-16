@@ -282,6 +282,13 @@ func normalizeDispatchAttemptForStore(attempt types.DispatchAttempt) types.Dispa
 	if attempt.Attempt <= 0 {
 		attempt.Attempt = 1
 	}
+	switch normalized := types.ChildAgentOutcome(strings.ToLower(strings.TrimSpace(string(attempt.Outcome)))); normalized {
+	case types.ChildAgentOutcomeSuccess, types.ChildAgentOutcomeFailure, types.ChildAgentOutcomeBlocked:
+		attempt.Outcome = normalized
+	default:
+		attempt.Outcome = ""
+	}
+	attempt.OutcomeSummary = strings.TrimSpace(attempt.OutcomeSummary)
 	attempt.TaskID = strings.TrimSpace(attempt.TaskID)
 	attempt.BackgroundSessionID = strings.TrimSpace(attempt.BackgroundSessionID)
 	attempt.BackgroundTurnID = strings.TrimSpace(attempt.BackgroundTurnID)

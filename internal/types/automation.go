@@ -18,6 +18,7 @@ type IncidentPhaseReduction string
 type IncidentPhaseStatus string
 type AutomationAssumptionSource string
 type DispatchAttemptStatus string
+type ChildAgentOutcome string
 type DeliveryChannelStatus string
 type AutomationDetectorStatus string
 
@@ -116,6 +117,12 @@ const (
 	DispatchAttemptStatusFailed           DispatchAttemptStatus = "failed"
 	DispatchAttemptStatusTimedOut         DispatchAttemptStatus = "timed_out"
 	DispatchAttemptStatusCanceled         DispatchAttemptStatus = "canceled"
+)
+
+const (
+	ChildAgentOutcomeSuccess ChildAgentOutcome = "success"
+	ChildAgentOutcomeFailure ChildAgentOutcome = "failure"
+	ChildAgentOutcomeBlocked ChildAgentOutcome = "blocked"
 )
 
 const (
@@ -337,6 +344,8 @@ type DispatchAttempt struct {
 	Phase               AutomationPhaseName   `json:"phase"`
 	Attempt             int                   `json:"attempt"`
 	Status              DispatchAttemptStatus `json:"status"`
+	Outcome             ChildAgentOutcome     `json:"outcome,omitempty"`
+	OutcomeSummary      string                `json:"outcome_summary,omitempty"`
 	TaskID              string                `json:"task_id,omitempty"`
 	BackgroundSessionID string                `json:"background_session_id,omitempty"`
 	BackgroundTurnID    string                `json:"background_turn_id,omitempty"`

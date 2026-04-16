@@ -69,9 +69,12 @@ type WorkspaceResponse struct {
 	ProviderCacheProfile string `json:"provider_cache_profile,omitempty"`
 }
 
-type SessionRuntimeGraphResponse struct {
-	Graph typesRuntimeGraphAlias `json:"graph"`
+type WorkspaceRuntimeGraphResponse struct {
+	WorkspaceRoot string                 `json:"workspace_root"`
+	Graph         typesRuntimeGraphAlias `json:"graph"`
 }
+
+type SessionRuntimeGraphResponse = WorkspaceRuntimeGraphResponse
 
 type typesRuntimeGraphAlias = RuntimeGraph
 

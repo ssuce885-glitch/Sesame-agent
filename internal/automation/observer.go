@@ -80,6 +80,21 @@ func (o *DispatchTaskObserver) SetFinalText(text string) error {
 	return err
 }
 
+func (o *DispatchTaskObserver) SetOutcome(outcome types.ChildAgentOutcome, summary string) error {
+	if o == nil || o.store == nil || strings.TrimSpace(o.dispatchID) == "" {
+		return nil
+	}
+	attempt, ok, err := o.store.GetDispatchAttempt(context.Background(), o.dispatchID)
+	if err != nil || !ok {
+		return err
+	}
+	now := o.currentTime()
+	attempt.Outcome = normalizeObserverOutcome(outcome)
+	attempt.OutcomeSummary = strings.TrimSpace(summary)
+	attempt.UpdatedAt = now
+	return o.store.UpsertDispatchAttempt(context.Background(), attempt)
+}
+
 func (o *DispatchTaskObserver) SetRunContext(sessionID, turnID string) error {
 	if o == nil || o.store == nil || strings.TrimSpace(o.dispatchID) == "" {
 		return nil
@@ -121,4 +136,14 @@ func summarizeObserverText(text string) string {
 		return text
 	}
 	return strings.TrimSpace(text[:157]) + "..."
+}
+
+func normalizeObserverOutcome(outcome types.ChildAgentOutcome) types.ChildAgentOutcome {
+	normalized := types.ChildAgentOutcome(strings.ToLower(strings.TrimSpace(string(outcome))))
+	switch normalized {
+	case types.ChildAgentOutcomeSuccess, types.ChildAgentOutcomeFailure, types.ChildAgentOutcomeBlocked:
+		return normalized
+	default:
+		return ""
+	}
 }

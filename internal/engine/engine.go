@@ -18,6 +18,7 @@ import (
 type Input struct {
 	Session             types.Session
 	Turn                types.Turn
+	TaskID              string
 	Sink                EventSink
 	Resume              *types.TurnResume
 	ActivatedSkillNames []string

@@ -69,10 +69,13 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	turnCtx := &runtimegraph.TurnContext{
 		CurrentSessionID: sessionID,
 		CurrentTurnID:    in.Turn.ID,
+		CurrentTaskID:    strings.TrimSpace(in.TaskID),
 	}
 	if in.Resume != nil {
 		turnCtx.CurrentRunID = strings.TrimSpace(in.Resume.RunID)
-		turnCtx.CurrentTaskID = strings.TrimSpace(in.Resume.TaskID)
+		if turnCtx.CurrentTaskID == "" {
+			turnCtx.CurrentTaskID = strings.TrimSpace(in.Resume.TaskID)
+		}
 	}
 	permissionEngine := effectivePermissionEngine(e.permission, in)
 	toolExecCtx := tools.ExecContext{

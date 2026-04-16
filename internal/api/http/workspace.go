@@ -10,51 +10,42 @@ import (
 	"go-agent/internal/workspace"
 )
 
-func handleGetWorkspace(deps Dependencies, sessionID string) http.HandlerFunc {
+func registerWorkspaceRoutes(mux *http.ServeMux, deps Dependencies) {
+	mux.HandleFunc("/v1/workspace", handleGetWorkspace(deps))
+}
+
+func handleGetWorkspace(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if deps.Store == nil {
+		root := strings.TrimSpace(deps.WorkspaceRoot)
+		if root == "" {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		sessionRow, ok, err := deps.Store.GetSession(r.Context(), sessionID)
+		meta, ok, err := workspace.Load(root)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-
-		meta, ok, err := workspace.Load(sessionRow.WorkspaceRoot)
-		if err != nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		if !ok {
-			meta.Name = strings.TrimSpace(filepath.Base(sessionRow.WorkspaceRoot))
+			meta.Name = strings.TrimSpace(filepath.Base(root))
 			if meta.Name == "" || meta.Name == "." || meta.Name == string(filepath.Separator) {
 				meta.Name = "workspace"
 			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		permissionProfile := deps.Status.PermissionProfile
-		if sessionRow.PermissionProfile != "" {
-			permissionProfile = sessionRow.PermissionProfile
-		}
 		_ = json.NewEncoder(w).Encode(types.WorkspaceResponse{
 			ID:                   meta.ID,
 			Name:                 meta.Name,
-			WorkspaceRoot:        sessionRow.WorkspaceRoot,
+			WorkspaceRoot:        root,
 			Provider:             deps.Status.Provider,
 			Model:                deps.Status.Model,
-			PermissionProfile:    permissionProfile,
+			PermissionProfile:    deps.Status.PermissionProfile,
 			ProviderCacheProfile: deps.Status.ProviderCacheProfile,
 		})
 	}

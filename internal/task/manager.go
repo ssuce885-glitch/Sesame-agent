@@ -358,6 +358,29 @@ func (m *Manager) SetFinalText(taskID, text string) error {
 	return m.saveWorkspaceLocked(task.WorkspaceRoot)
 }
 
+func (m *Manager) SetOutcome(taskID string, outcome types.ChildAgentOutcome, summary string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	task, ok := m.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task %q not found", taskID)
+	}
+	task.Outcome = normalizeChildAgentOutcome(outcome)
+	task.OutcomeSummary = strings.TrimSpace(summary)
+	return m.saveWorkspaceLocked(task.WorkspaceRoot)
+}
+
+func normalizeChildAgentOutcome(outcome types.ChildAgentOutcome) types.ChildAgentOutcome {
+	normalized := types.ChildAgentOutcome(strings.ToLower(strings.TrimSpace(string(outcome))))
+	switch normalized {
+	case types.ChildAgentOutcomeSuccess, types.ChildAgentOutcomeFailure, types.ChildAgentOutcomeBlocked:
+		return normalized
+	default:
+		return ""
+	}
+}
+
 func (m *Manager) Append(taskID string, chunk []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
