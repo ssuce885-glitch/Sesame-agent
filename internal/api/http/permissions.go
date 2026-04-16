@@ -20,7 +20,6 @@ type permissionStore interface {
 	GetToolRun(context.Context, string) (types.ToolRun, bool, error)
 	ListDispatchAttempts(context.Context, types.DispatchAttemptFilter) ([]types.DispatchAttempt, error)
 	ListPendingAutomationPermissions(context.Context, string) ([]types.PendingAutomationPermission, error)
-	FindDispatchAttemptByBackgroundRun(context.Context, string, string) (types.DispatchAttempt, bool, error)
 	FindDispatchAttemptByTaskID(context.Context, string) (types.DispatchAttempt, bool, error)
 	GetAutomationWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
 	ListAutomationWatcherHolds(context.Context, string) ([]types.AutomationWatcherHold, error)
@@ -301,7 +300,7 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		if err := automation.RestoreDispatchAfterApprovalResume(r.Context(), store, sessionRow.ID, turn.ID, continuation.TaskID, permissionRequest.ID, now); err != nil {
+		if err := automation.RestoreDispatchAfterApprovalResume(r.Context(), store, continuation.TaskID, permissionRequest.ID, now); err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}

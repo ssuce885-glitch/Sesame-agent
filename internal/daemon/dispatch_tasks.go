@@ -58,8 +58,6 @@ func (l automationTaskLauncher) StartAutomationDispatch(ctx context.Context, att
 	}
 	now := l.currentTime()
 	attempt.TaskID = strings.TrimSpace(createdTask.ID)
-	attempt.BackgroundSessionID = ""
-	attempt.BackgroundTurnID = ""
 	attempt.UpdatedAt = now
 	return l.store.UpsertDispatchAttempt(ctx, attempt)
 }

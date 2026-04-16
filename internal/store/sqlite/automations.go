@@ -805,15 +805,6 @@ func getDispatchAttemptWithQueryer(ctx context.Context, queryer queryContexter, 
 	return items[0], true, nil
 }
 
-func (s *Store) FindDispatchAttemptByBackgroundRun(ctx context.Context, sessionID, turnID string) (types.DispatchAttempt, bool, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	turnID = strings.TrimSpace(turnID)
-	if sessionID == "" || turnID == "" {
-		return types.DispatchAttempt{}, false, nil
-	}
-	return types.DispatchAttempt{}, false, nil
-}
-
 func (s *Store) FindDispatchAttemptByTaskID(ctx context.Context, taskID string) (types.DispatchAttempt, bool, error) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
@@ -918,12 +909,12 @@ func (s *Store) ListPendingAutomationPermissions(ctx context.Context, workspaceR
 			continue
 		}
 		items = append(items, types.PendingAutomationPermission{
-			RequestID:           requestID,
-			WorkspaceRoot:       attempt.WorkspaceRoot,
-			AutomationID:        attempt.AutomationID,
-			IncidentID:          attempt.IncidentID,
-			DispatchID:          attempt.DispatchID,
-			PreferredSessionID:  attempt.PreferredSessionID,
+			RequestID:          requestID,
+			WorkspaceRoot:      attempt.WorkspaceRoot,
+			AutomationID:       attempt.AutomationID,
+			IncidentID:         attempt.IncidentID,
+			DispatchID:         attempt.DispatchID,
+			PreferredSessionID: attempt.PreferredSessionID,
 		})
 	}
 	return items, nil
