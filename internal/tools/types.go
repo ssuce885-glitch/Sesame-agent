@@ -8,6 +8,7 @@ import (
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
 	"go-agent/internal/scheduler"
+	"go-agent/internal/session"
 	"go-agent/internal/task"
 	"go-agent/internal/types"
 )
@@ -60,18 +61,19 @@ type ToolInterrupt struct {
 }
 
 type ExecContext struct {
-	WorkspaceRoot     string
-	GlobalConfigRoot  string
-	ActiveSkillNames  []string
-	InjectedEnv       map[string]string
-	PermissionEngine  *permissions.Engine
-	AutomationService AutomationService
-	TaskManager       *task.Manager
-	RuntimeService    *runtimegraph.Service
-	SchedulerService  *scheduler.Service
-	TurnContext       *runtimegraph.TurnContext
-	ToolRunID         string
-	EventSink         EventSink
+	WorkspaceRoot            string
+	GlobalConfigRoot         string
+	ActiveSkillNames         []string
+	InjectedEnv              map[string]string
+	PermissionEngine         *permissions.Engine
+	AutomationService        AutomationService
+	SessionDelegationService session.RoleDelegationService
+	TaskManager              *task.Manager
+	RuntimeService           *runtimegraph.Service
+	SchedulerService         *scheduler.Service
+	TurnContext              *runtimegraph.TurnContext
+	ToolRunID                string
+	EventSink                EventSink
 }
 
 type EventSink interface {

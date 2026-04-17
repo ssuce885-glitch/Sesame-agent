@@ -211,7 +211,7 @@ func resourceClaimsForPrepared(prepared PreparedCall, execCtx ExecContext) []Res
 			}
 		}
 		return normalizeResourceClaims(claims)
-	case "shell_command", "task_create", "task_update", "task_stop", "enter_worktree", "exit_worktree":
+	case "shell_command", "task_create", "task_update", "task_stop", "enter_worktree", "exit_worktree", "delegate_to_role":
 		return []ResourceClaim{{Key: workspaceKey, Mode: ResourceClaimExclusive}}
 	default:
 		return nil

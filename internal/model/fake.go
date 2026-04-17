@@ -126,10 +126,12 @@ func cloneConversationItems(items []ConversationItem) []ConversationItem {
 			Parts:   cloneContentParts(item.Parts),
 			Summary: cloneSummary(item.Summary),
 			ToolCall: ToolCallChunk{
-				ID:         item.ToolCall.ID,
-				Name:       item.ToolCall.Name,
-				InputChunk: item.ToolCall.InputChunk,
-				Input:      cloneStringAnyMap(item.ToolCall.Input),
+				ID:            item.ToolCall.ID,
+				Name:          item.ToolCall.Name,
+				InputChunk:    item.ToolCall.InputChunk,
+				Input:         cloneStringAnyMap(item.ToolCall.Input),
+				InputRaw:      item.ToolCall.InputRaw,
+				InputRecovery: item.ToolCall.InputRecovery,
 			},
 		}
 		if item.Result != nil {

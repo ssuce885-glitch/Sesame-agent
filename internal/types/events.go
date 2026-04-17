@@ -60,10 +60,13 @@ type NoticePayload struct {
 }
 
 type ToolEventPayload struct {
-	ToolCallID    string `json:"tool_call_id"`
-	ToolName      string `json:"tool_name"`
-	Arguments     string `json:"arguments,omitempty"`
-	ResultPreview string `json:"result_preview,omitempty"`
+	ToolCallID        string `json:"tool_call_id"`
+	ToolName          string `json:"tool_name"`
+	Arguments         string `json:"arguments,omitempty"`
+	ArgumentsRaw      string `json:"arguments_raw,omitempty"`
+	ArgumentsRecovery string `json:"arguments_recovery,omitempty"`
+	ResultPreview     string `json:"result_preview,omitempty"`
+	IsError           bool   `json:"is_error,omitempty"`
 }
 
 type PermissionRequestedPayload struct {

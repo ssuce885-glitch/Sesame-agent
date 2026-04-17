@@ -277,6 +277,12 @@ func (taskCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 	}
 
 	modelText := fmt.Sprintf("Task created successfully with id: %s", created.ID)
+	if created.Type == task.TaskTypeAgent {
+		modelText = fmt.Sprintf(
+			"Task created successfully with id: %s. Agent tasks run in the background; do not call task_wait. Continue the turn and wait for child reports unless you need to inspect state with task_get/task_output/task_result.",
+			created.ID,
+		)
+	}
 	return ToolExecutionResult{
 		Result: Result{
 			Text:      created.ID,
@@ -305,7 +311,7 @@ func (taskGetTool) IsEnabled(execCtx ExecContext) bool {
 func (taskGetTool) Definition() Definition {
 	return Definition{
 		Name:        "task_get",
-		Description: "Read one task's details.",
+		Description: "Read one task's current state and details. Use this to inspect status directly instead of inferring from a task_wait timeout.",
 		InputSchema: objectSchema(map[string]any{
 			"task_id": map[string]any{
 				"type":        "string",
@@ -354,10 +360,14 @@ func (taskGetTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execCt
 	}
 
 	text := mustJSON(got)
+	modelText := text
+	if got.Type == task.TaskTypeAgent {
+		modelText = text + "\n\nThis is an agent task. Do not call task_wait. Continue the turn and wait for child reports unless you need to inspect logs or the final result with task_output/task_result."
+	}
 	return ToolExecutionResult{
 		Result: Result{
 			Text:      text,
-			ModelText: text,
+			ModelText: modelText,
 		},
 		Data:        TaskGetOutput{Task: got},
 		PreviewText: fmt.Sprintf("Task %s (%s)", got.ID, got.Status),
@@ -476,7 +486,7 @@ func (taskOutputTool) IsEnabled(execCtx ExecContext) bool {
 func (taskOutputTool) Definition() Definition {
 	return Definition{
 		Name:        "task_output",
-		Description: "Read raw task output logs. This is not a final-result channel.",
+		Description: "Read raw task output logs to inspect what a running task is doing. This is not a final-result channel.",
 		InputSchema: objectSchema(map[string]any{
 			"task_id": map[string]any{
 				"type":        "string",
@@ -548,7 +558,7 @@ func (taskWaitTool) IsEnabled(execCtx ExecContext) bool {
 func (taskWaitTool) Definition() Definition {
 	return Definition{
 		Name:        "task_wait",
-		Description: "Wait for a task to reach a terminal status. Use this instead of guessing completion from task_output logs.",
+		Description: "Wait for a non-agent task as a transport-level poll. `timed_out=true` only means this wait call stopped waiting; it does not mean the task failed. `task_wait` is not supported for agent tasks; inspect them with task_get/task_output/task_result or continue and wait for child reports.",
 		InputSchema: objectSchema(map[string]any{
 			"task_id": map[string]any{
 				"type":        "string",
@@ -613,6 +623,15 @@ func (taskWaitTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, exe
 	}
 
 	input, _ := decoded.Input.(TaskWaitInput)
+	current, err := getTaskForWorkspace(manager, input.TaskID, execCtx.WorkspaceRoot)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+	if current.Type == task.TaskTypeAgent {
+		return ToolExecutionResult{}, fmt.Errorf(
+			"task_wait is not supported for agent tasks; use task_get/task_output/task_result or continue and wait for child reports",
+		)
+	}
 	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(input.TimeoutMS)*time.Millisecond)
 	defer cancel()
 
@@ -628,8 +647,22 @@ func (taskWaitTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, exe
 	}
 	text := mustJSON(output)
 	modelText := fmt.Sprintf("Task %s reached %s", got.ID, got.Status)
+	previewText := modelText
 	if timedOut {
-		modelText = fmt.Sprintf("Task %s still %s (timed out)", got.ID, got.Status)
+		if got.Type == task.TaskTypeAgent {
+			modelText = fmt.Sprintf(
+				"Task %s is still %s. This wait call timed out; do not assume failure or take over. Inspect with task_get/task_output/task_result, or continue and wait for child reports.",
+				got.ID,
+				got.Status,
+			)
+		} else {
+			modelText = fmt.Sprintf(
+				"Task %s is still %s. This wait call timed out; do not assume failure. Inspect with task_get/task_output and wait again only if needed.",
+				got.ID,
+				got.Status,
+			)
+		}
+		previewText = fmt.Sprintf("Task %s still %s (wait expired)", got.ID, got.Status)
 	}
 	return ToolExecutionResult{
 		Result: Result{
@@ -637,7 +670,7 @@ func (taskWaitTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, exe
 			ModelText: modelText,
 		},
 		Data:        output,
-		PreviewText: modelText,
+		PreviewText: previewText,
 	}, nil
 }
 
@@ -654,7 +687,7 @@ func (taskResultTool) IsEnabled(execCtx ExecContext) bool {
 func (taskResultTool) Definition() Definition {
 	return Definition{
 		Name:        "task_result",
-		Description: "Read the final result of an agent task. Unlike task_output, this is the final-result channel.",
+		Description: "Read the final result of an agent task once it is ready. Unlike task_output, this is the final-result channel.",
 		InputSchema: objectSchema(map[string]any{
 			"task_id": map[string]any{
 				"type":        "string",

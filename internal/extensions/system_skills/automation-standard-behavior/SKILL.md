@@ -38,4 +38,4 @@ Treat this turn as automation compilation or automation management, not as a one
 - Manual testing must emit a synthetic trigger through the normal ingest path; never propose or rely on `automation run`.
 - Approval-capable child-agent templates require `runtime_policy.approval_binding.workspace_binding` and `owner_key`.
 - Notification is never a built-in runtime channel here; if the user asks for email or Feishu, choose the matching external skill and persist it in `skills.json`.
-- Final results return through notice plus mailbox/reporting; next-turn injection is opt-in and should stay summary-only.
+- Final results return through mailbox/reporting. Runtime may emit auxiliary notice events for queue or state signaling, but those notices are not the canonical result-delivery channel. Next-turn injection is currently disabled.

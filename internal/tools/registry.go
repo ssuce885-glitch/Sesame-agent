@@ -31,6 +31,7 @@ func NewRegistry() *Registry {
 	r.Register(automationControlTool{})
 	r.Register(automationGetTool{})
 	r.Register(automationListTool{})
+	r.Register(delegateToRoleTool{})
 	r.Register(globTool{})
 	r.Register(grepTool{})
 	r.Register(incidentAckTool{})

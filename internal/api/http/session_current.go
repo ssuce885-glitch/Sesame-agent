@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"go-agent/internal/sessionbinding"
+	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
 )
 
@@ -42,7 +43,10 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 			return
 		}
 
-		session, _, _, err := deps.Store.EnsureCanonicalSession(r.Context(), req.WorkspaceRoot)
+		role := sessionrole.RequestRole(r, req.SessionRole)
+		r = r.WithContext(sessionrole.WithSessionRole(r.Context(), role))
+
+		session, _, _, err := deps.Store.EnsureRoleSession(r.Context(), req.WorkspaceRoot, role)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
@@ -61,6 +65,7 @@ type sessionScopedHandlerFactory func(Dependencies, string) http.HandlerFunc
 func handleCurrentSession(deps Dependencies, next sessionScopedHandlerFactory) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), r.Header.Get(sessionbinding.HeaderName)))
+		r = r.WithContext(sessionrole.WithSessionRole(r.Context(), sessionrole.RequestRole(r, "")))
 		sessionID, ok := resolveCurrentSessionID(w, r, deps)
 		if !ok {
 			return
@@ -79,7 +84,8 @@ func resolveCurrentSessionID(w http.ResponseWriter, r *http.Request, deps Depend
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return "", false
 	}
-	session, _, _, err := deps.Store.EnsureCanonicalSession(r.Context(), workspaceRoot)
+	role := sessionrole.FromContext(r.Context())
+	session, _, _, err := deps.Store.EnsureRoleSession(r.Context(), workspaceRoot, role)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return "", false

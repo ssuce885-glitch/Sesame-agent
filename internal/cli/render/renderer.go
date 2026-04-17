@@ -204,14 +204,14 @@ func (r *Renderer) RenderEvent(event types.Event) {
 		var payload types.ToolEventPayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil {
 			display := SummarizeToolDisplay(payload.ToolName, payload.Arguments, "")
-			r.renderDetail(display.Action, display.Target, "")
+			r.renderDetail(display.Action, display.Target, ToolArgumentRecoveryDetail(payload.ArgumentsRecovery, payload.ArgumentsRaw))
 		}
 	case types.EventToolCompleted:
 		r.closeAssistantStream()
 		var payload types.ToolEventPayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil {
 			display := SummarizeToolDisplay(payload.ToolName, payload.Arguments, payload.ResultPreview)
-			r.renderDetail(display.Action, display.Target, display.Detail)
+			r.renderDetail(display.Action, display.Target, joinDetailLines(display.Detail, ToolArgumentRecoveryDetail(payload.ArgumentsRecovery, payload.ArgumentsRaw)))
 		}
 	case types.EventPermissionRequested:
 		r.closeAssistantStream()
@@ -298,6 +298,18 @@ func (r *Renderer) renderDetail(label, title, body string) {
 			fmt.Fprintf(r.out, "  %s\n", rendered)
 		}
 	}
+}
+
+func joinDetailLines(parts ...string) string {
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		lines = append(lines, trimmed)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (r *Renderer) writeAssistantDelta(text string) {

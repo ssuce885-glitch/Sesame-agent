@@ -196,7 +196,11 @@ func normalizeTimelineBlocks(items []types.ConversationTimelineItem, events []ty
 			}
 			if content := findToolCallContent(currentAssistant, blocks, item.Result.ToolCallID); content != nil {
 				content.ResultPreview = clampPreview(item.Result.Content)
-				content.Status = "completed"
+				if item.Result.IsError {
+					content.Status = "failed"
+				} else {
+					content.Status = "completed"
+				}
 			}
 		default:
 			continue

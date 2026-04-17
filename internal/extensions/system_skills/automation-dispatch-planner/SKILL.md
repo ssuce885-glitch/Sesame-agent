@@ -20,12 +20,12 @@ Fill the standard dispatch shape for automation without introducing domain-speci
 ## Planning Rules
 
 - `response_plan` must use the versioned multi-phase runtime shape and describe when a one-shot child agent is allowed after a trigger or incident.
-- `delivery_policy` must describe how results return through notice-first runtime reporting, and when escalation or human review is required.
+- `delivery_policy` must describe mailbox/reporting as the canonical result channel, and when escalation or human review is required.
 - Prefer explicit assumptions over pretending domain certainty that does not exist.
 - Keep the plan generic enough that later domain skills can attach container, database, batch-job, or project-specific behavior on top.
 - When the automation should start immediately, make sure the normalized spec already has a runnable watcher signal because `automation_apply` will install it right away.
 - The final plan still requires an explicit user confirmation summary before `automation_apply`.
-- Delivery defaults are mailbox-first and notice-enabled; next-turn injection stays disabled unless the user explicitly opts in.
+- Delivery defaults are mailbox/reporting-first. Any runtime notice is only auxiliary queue or state signaling, and next-turn injection stays disabled.
 - Templates that may need elevated permissions must say so up front so the runtime can route approval through the workspace-level pending queue.
 
 ## Never Do

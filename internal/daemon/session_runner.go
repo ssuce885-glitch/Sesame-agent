@@ -10,6 +10,7 @@ import (
 	"go-agent/internal/automation"
 	"go-agent/internal/engine"
 	"go-agent/internal/session"
+	"go-agent/internal/sessionrole"
 	"go-agent/internal/store/sqlite"
 	"go-agent/internal/task"
 	"go-agent/internal/types"
@@ -62,6 +63,10 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	if hasDispatchAttempt {
 		in.Session.PermissionProfile = firstNonEmptyTrimmed(in.Session.PermissionProfile, "read_only")
 	}
+	role, err := a.store.ResolveSessionRole(ctx, in.Session.ID, in.Session.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
 	if resumeTaskObserver, ok, err := a.taskObserverForResume(in.Resume); err != nil {
 		return err
 	} else if ok {
@@ -88,6 +93,7 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 
 	err = a.engine.RunTurn(ctx, engine.Input{
 		Session:             in.Session,
+		SessionRole:         sessionrole.Normalize(string(role)),
 		Turn:                in.Turn,
 		TaskID:              firstNonEmptyTrimmed(taskIDFromResume(in.Resume)),
 		Sink:                sink,

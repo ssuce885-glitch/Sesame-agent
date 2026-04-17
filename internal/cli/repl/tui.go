@@ -1265,13 +1265,25 @@ func (m *tuiModel) upsertToolEntry(payload types.ToolEventPayload, completed boo
 	display := render.SummarizeToolDisplay(payload.ToolName, payload.Arguments, payload.ResultPreview)
 	status := "running"
 	if completed {
-		status = "completed"
+		if payload.IsError {
+			status = "failed"
+		} else {
+			status = "completed"
+		}
 	}
-	m.upsertToolDisplay(display, payload.ToolCallID, status)
+	hint := render.ToolArgumentRecoveryDetail(payload.ArgumentsRecovery, payload.ArgumentsRaw)
+	m.upsertToolDisplay(display, hint, payload.ToolCallID, status)
 }
 
-func (m *tuiModel) upsertToolDisplay(display render.ToolDisplay, toolCallID, status string) {
+func (m *tuiModel) upsertToolDisplay(display render.ToolDisplay, hint, toolCallID, status string) {
 	body := toolDisplayBody(display)
+	if strings.TrimSpace(hint) != "" {
+		if body == "" {
+			body = hint
+		} else {
+			body += "\n" + hint
+		}
+	}
 
 	if index, ok := m.toolIndexByCall[toolCallID]; ok && index >= 0 && index < len(m.entries) {
 		m.entries[index].Title = display.Action

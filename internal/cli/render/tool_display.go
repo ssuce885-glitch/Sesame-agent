@@ -27,6 +27,27 @@ func SummarizeToolDisplay(toolName, arguments, resultPreview string) ToolDisplay
 	}
 }
 
+func ToolArgumentRecoveryDetail(recovery, rawArguments string) string {
+	recovery = strings.TrimSpace(recovery)
+	if recovery == "" {
+		return ""
+	}
+	var summary string
+	switch recovery {
+	case "structure_completed":
+		summary = "recovered from partial arguments"
+	case "incomplete_fallback":
+		summary = "partial arguments could not be recovered; used empty input"
+	default:
+		summary = compactPlainLabel(recovery)
+	}
+	raw := strings.TrimSpace(strings.ReplaceAll(rawArguments, "\n", " "))
+	if raw == "" {
+		return summary
+	}
+	return summary + "\nraw " + raw
+}
+
 func compactToolAction(toolName string) string {
 	switch strings.TrimSpace(toolName) {
 	case "file_read":
@@ -41,6 +62,8 @@ func compactToolAction(toolName string) string {
 		return "shell"
 	case "schedule_report":
 		return "cron"
+	case "delegate_to_role":
+		return "delegate"
 	case "view_image":
 		return "image"
 	case "task_create":
@@ -114,7 +137,7 @@ func compactToolTarget(toolName string, args map[string]any, resultPreview strin
 		taskID := asString(args["task_id"])
 		if status, timedOut := extractTaskWaitStatus(resultPreview, taskID); status != "" {
 			if timedOut {
-				return compactPlainLabel(taskID + " (" + status + ", timed out)")
+				return compactPlainLabel(taskID + " (" + status + ", wait expired)")
 			}
 			return compactPlainLabel(taskID + " (" + status + ")")
 		}
@@ -142,6 +165,8 @@ func compactToolTarget(toolName string, args map[string]any, resultPreview strin
 			return base + " [" + group + "]"
 		}
 		return firstNonEmpty(base, group)
+	case "delegate_to_role":
+		return compactPlainLabel(asString(args["target_role"]))
 	case "task_list":
 		if status := asString(args["status"]); status != "" {
 			return compactPlainLabel("status=" + status)
@@ -168,8 +193,45 @@ func compactToolDetail(toolName string, args map[string]any, resultPreview, targ
 		return ""
 	}
 	switch strings.TrimSpace(toolName) {
-	case "task_get", "task_result", "task_stop", "task_update", "task_wait":
+	case "delegate_to_role":
 		return ""
+	case "task_get":
+		if status := extractTaskGetStatus(resultPreview, asString(args["task_id"])); status != "" {
+			return ""
+		}
+		if preview == target {
+			return ""
+		}
+		return preview
+	case "task_result":
+		if status := extractTaskResultStatus(resultPreview, asString(args["task_id"])); status != "" {
+			return ""
+		}
+		if preview == target {
+			return ""
+		}
+		return preview
+	case "task_stop":
+		if preview == target {
+			return ""
+		}
+		return preview
+	case "task_update":
+		if status := extractTaskUpdateStatus(resultPreview, asString(args["task_id"])); status != "" {
+			return ""
+		}
+		if preview == target {
+			return ""
+		}
+		return preview
+	case "task_wait":
+		if status, _ := extractTaskWaitStatus(resultPreview, asString(args["task_id"])); status != "" {
+			return ""
+		}
+		if preview == target {
+			return ""
+		}
+		return preview
 	}
 	switch compactToolAction(toolName) {
 	case "read", "search":
@@ -337,6 +399,10 @@ func extractTaskWaitStatus(resultPreview, taskID string) (string, bool) {
 	timedOutPrefix := "Task " + taskID + " still "
 	if strings.HasPrefix(resultPreview, timedOutPrefix) && strings.HasSuffix(resultPreview, " (timed out)") {
 		status := strings.TrimSuffix(strings.TrimPrefix(resultPreview, timedOutPrefix), " (timed out)")
+		return strings.TrimSpace(status), true
+	}
+	if strings.HasPrefix(resultPreview, timedOutPrefix) && strings.HasSuffix(resultPreview, " (wait expired)") {
+		status := strings.TrimSuffix(strings.TrimPrefix(resultPreview, timedOutPrefix), " (wait expired)")
 		return strings.TrimSpace(status), true
 	}
 	return "", false

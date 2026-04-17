@@ -3,10 +3,14 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
+	"strings"
 	"time"
 
 	"go-agent/internal/sessionbinding"
+	"go-agent/internal/sessionrole"
+	"go-agent/internal/types"
 )
 
 type queryRowContexter interface {
@@ -24,11 +28,62 @@ func (s *Store) SetCanonicalSessionID(ctx context.Context, sessionID string) err
 }
 
 func (s *Store) GetCurrentContextHeadID(ctx context.Context) (string, bool, error) {
-	return getRuntimeMetadataValue(ctx, s.db, sessionbinding.CurrentHeadMetadataKey(sessionbinding.FromContext(ctx)))
+	binding := sessionbinding.FromContext(ctx)
+	role := sessionrole.FromContext(ctx)
+	key := currentHeadMetadataKey(binding, role)
+	value, ok, err := getRuntimeMetadataValue(ctx, s.db, key)
+	if err != nil || ok || role != types.SessionRoleMainParent {
+		return value, ok, err
+	}
+	return getRuntimeMetadataValue(ctx, s.db, sessionbinding.CurrentHeadMetadataKey(binding))
 }
 
 func (s *Store) SetCurrentContextHeadID(ctx context.Context, headID string) error {
-	return setRuntimeMetadataValue(ctx, s.db, sessionbinding.CurrentHeadMetadataKey(sessionbinding.FromContext(ctx)), headID)
+	binding := sessionbinding.FromContext(ctx)
+	role := sessionrole.FromContext(ctx)
+	if err := setRuntimeMetadataValue(ctx, s.db, currentHeadMetadataKey(binding, role), headID); err != nil {
+		return err
+	}
+	if role == types.SessionRoleMainParent {
+		return setRuntimeMetadataValue(ctx, s.db, sessionbinding.CurrentHeadMetadataKey(binding), headID)
+	}
+	return nil
+}
+
+func (s *Store) GetRoleSessionID(ctx context.Context, workspaceRoot string, role types.SessionRole) (string, bool, error) {
+	role = sessionrole.Normalize(string(role))
+	if role == types.SessionRoleMainParent {
+		if sessionID, ok, err := getRuntimeMetadataValue(ctx, s.db, roleSessionMetadataKey(workspaceRoot, role)); err != nil {
+			return "", false, err
+		} else if ok {
+			return sessionID, true, nil
+		}
+	}
+	if role == types.SessionRoleMainParent {
+		return s.GetCanonicalSessionID(ctx)
+	}
+	return getRuntimeMetadataValue(ctx, s.db, roleSessionMetadataKey(workspaceRoot, role))
+}
+
+func (s *Store) SetRoleSessionID(ctx context.Context, workspaceRoot string, role types.SessionRole, sessionID string) error {
+	role = sessionrole.Normalize(string(role))
+	if err := setRuntimeMetadataValue(ctx, s.db, roleSessionMetadataKey(workspaceRoot, role), strings.TrimSpace(sessionID)); err != nil {
+		return err
+	}
+	if role == types.SessionRoleMainParent {
+		return s.SetCanonicalSessionID(ctx, strings.TrimSpace(sessionID))
+	}
+	return nil
+}
+
+func currentHeadMetadataKey(binding string, role types.SessionRole) string {
+	return sessionbinding.CurrentHeadMetadataKey(binding) + ":role:" + string(sessionrole.Normalize(string(role)))
+}
+
+func roleSessionMetadataKey(workspaceRoot string, role types.SessionRole) string {
+	normalized := strings.TrimSpace(workspaceRoot)
+	encodedRoot := base64.RawURLEncoding.EncodeToString([]byte(normalized))
+	return "role_session:" + encodedRoot + ":" + string(sessionrole.Normalize(string(role)))
 }
 
 func getRuntimeMetadataValue(ctx context.Context, queryer queryRowContexter, key string) (string, bool, error) {

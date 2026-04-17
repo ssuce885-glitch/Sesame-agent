@@ -11,6 +11,15 @@
 .runtime-data-test/
 data/
 data-local/
+attachments/
+automations/
+mailbox/
+memory/
+notices/
+resources/
+rules/
+runs/
+skills/
 .tmp-*/
 tmp/
 *.db

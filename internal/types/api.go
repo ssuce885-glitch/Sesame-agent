@@ -2,6 +2,7 @@ package types
 
 type EnsureSessionRequest struct {
 	WorkspaceRoot string `json:"workspace_root"`
+	SessionRole   string `json:"session_role,omitempty"`
 }
 
 type LoadContextHistoryRequest struct {

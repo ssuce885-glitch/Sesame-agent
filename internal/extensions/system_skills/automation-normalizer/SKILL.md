@@ -44,7 +44,8 @@ If the task should be saved without starting, use a paused automation instead of
 - Normalize `assumptions` to structured `{field,value,reason}` records.
 - Require each child agent to have a workspace asset bundle at `child_agents/<phase>/<agent_id>/strategy.json`, `prompt.md`, and `skills.json` before apply.
 - Treat `strategy.json` and `skills.json` as the runtime source of truth; `response_plan` preview fields are only compatibility caches.
-- Main-session delivery stays out-of-band through notice-first runtime reporting; never write the final result directly into the active main chat turn.
+- Main-session delivery stays out-of-band through mailbox/reporting. Runtime notices are only auxiliary queue or state signaling; never describe them as the canonical result channel, and never write the final result directly into the active main chat turn.
+- Next-turn injection is currently disabled; do not normalize delivery_policy as if runtime injection can be turned on today.
 - Long-running behavior belongs only to runtime-managed watchers or external scripts.
 - Child agents are one-shot execution units, not long-lived workers.
 - Never place skill names, prompts, or session ids into trigger payload assumptions.

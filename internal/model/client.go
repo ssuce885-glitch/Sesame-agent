@@ -122,10 +122,12 @@ type ToolResult struct {
 }
 
 type ToolCallChunk struct {
-	ID         string
-	Name       string
-	InputChunk string
-	Input      map[string]any
+	ID            string
+	Name          string
+	InputChunk    string
+	Input         map[string]any
+	InputRaw      string
+	InputRecovery string
 }
 
 type Usage struct {

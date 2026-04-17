@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"go-agent/internal/sessionbinding"
+	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
 )
 
@@ -30,13 +31,18 @@ type Client struct {
 	baseURL        string
 	httpClient     *http.Client
 	contextBinding string
+	sessionRole    types.SessionRole
 }
 
 func New(baseURL string, httpClient *http.Client) *Client {
-	return NewWithContextBinding(baseURL, httpClient, sessionbinding.DefaultContextBinding)
+	return NewWithContextBindingAndSessionRole(baseURL, httpClient, sessionbinding.DefaultContextBinding, types.SessionRoleMainParent)
 }
 
 func NewWithContextBinding(baseURL string, httpClient *http.Client, binding string) *Client {
+	return NewWithContextBindingAndSessionRole(baseURL, httpClient, binding, types.SessionRoleMainParent)
+}
+
+func NewWithContextBindingAndSessionRole(baseURL string, httpClient *http.Client, binding string, role types.SessionRole) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -44,6 +50,7 @@ func NewWithContextBinding(baseURL string, httpClient *http.Client, binding stri
 		baseURL:        strings.TrimRight(baseURL, "/"),
 		httpClient:     httpClient,
 		contextBinding: sessionbinding.Normalize(binding),
+		sessionRole:    sessionrole.Normalize(string(role)),
 	}
 }
 
@@ -59,6 +66,7 @@ func (c *Client) EnsureSession(ctx context.Context, workspaceRoot string) (types
 	var out types.Session
 	if err := c.doJSON(ctx, http.MethodPost, "/v1/session/ensure", types.EnsureSessionRequest{
 		WorkspaceRoot: workspaceRoot,
+		SessionRole:   string(c.sessionRole),
 	}, &out); err != nil {
 		return types.Session{}, err
 	}
@@ -425,6 +433,7 @@ func (c *Client) applyContextBinding(req *http.Request) {
 		return
 	}
 	req.Header.Set(sessionbinding.HeaderName, sessionbinding.Normalize(c.contextBinding))
+	req.Header.Set(sessionrole.HeaderName, string(sessionrole.Normalize(string(c.sessionRole))))
 }
 
 func decodeAPIError(resp *http.Response, method string, path string) error {

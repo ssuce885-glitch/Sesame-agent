@@ -14,6 +14,7 @@ import (
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
+	"go-agent/internal/sessionrole"
 	"go-agent/internal/skills"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
@@ -78,15 +79,16 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	}
 	permissionEngine := effectivePermissionEngine(e.permission, in)
 	toolExecCtx := tools.ExecContext{
-		WorkspaceRoot:     in.Session.WorkspaceRoot,
-		GlobalConfigRoot:  e.globalConfigRoot,
-		PermissionEngine:  permissionEngine,
-		AutomationService: e.automationService,
-		TaskManager:       e.taskManager,
-		RuntimeService:    e.runtimeService,
-		SchedulerService:  e.schedulerService,
-		TurnContext:       turnCtx,
-		EventSink:         in.Sink,
+		WorkspaceRoot:            in.Session.WorkspaceRoot,
+		GlobalConfigRoot:         e.globalConfigRoot,
+		PermissionEngine:         permissionEngine,
+		AutomationService:        e.automationService,
+		SessionDelegationService: e.sessionDelegationService,
+		TaskManager:              e.taskManager,
+		RuntimeService:           e.runtimeService,
+		SchedulerService:         e.schedulerService,
+		TurnContext:              turnCtx,
+		EventSink:                in.Sink,
 	}
 	toolRuntime := tools.NewRuntime(e.registry, toolRunStoreFromConversationStore(e.store))
 
@@ -143,7 +145,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		return err
 	}
 	baseInstructionsText := runtimeInstructions.Text
-	resolution := skills.Resolve(turnMessage, catalog, in.ActivatedSkillNames)
+	resolution := skills.Resolve(turnMessage, catalog, sessionrole.MergeActivatedSkillNames(in.ActivatedSkillNames, in.SessionRole))
 	visibleDefs := toolRuntime.VisibleDefinitions(toolExecCtx)
 	activeSkills := append([]skills.ActivatedSkill(nil), resolution.Activated...)
 	toolExecCtx.ActiveSkillNames = activatedSkillNames(activeSkills)
@@ -396,9 +398,11 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			for _, call := range batchToolCalls {
 				toolSteps++
 				payload := types.ToolEventPayload{
-					ToolCallID: call.ID,
-					ToolName:   call.Name,
-					Arguments:  marshalToolArguments(call.Input),
+					ToolCallID:        call.ID,
+					ToolName:          call.Name,
+					Arguments:         marshalToolArguments(call.Input),
+					ArgumentsRaw:      strings.TrimSpace(call.InputRaw),
+					ArgumentsRecovery: strings.TrimSpace(call.InputRecovery),
 				}
 				if err := emit(types.EventToolStarted, payload); err != nil {
 					return err
@@ -455,10 +459,13 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				}
 
 				payload := types.ToolEventPayload{
-					ToolCallID:    call.ID,
-					ToolName:      call.Name,
-					Arguments:     marshalToolArguments(call.Input),
-					ResultPreview: previewToolResult(toolResultText),
+					ToolCallID:        call.ID,
+					ToolName:          call.Name,
+					Arguments:         marshalToolArguments(call.Input),
+					ArgumentsRaw:      strings.TrimSpace(call.InputRaw),
+					ArgumentsRecovery: strings.TrimSpace(call.InputRecovery),
+					ResultPreview:     previewToolResult(toolResultText),
+					IsError:           toolIsError,
 				}
 				if err := emit(types.EventToolCompleted, payload); err != nil {
 					return err

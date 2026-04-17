@@ -9,6 +9,7 @@ import (
 	"go-agent/internal/permissions"
 	"go-agent/internal/runtimegraph"
 	"go-agent/internal/scheduler"
+	"go-agent/internal/session"
 	"go-agent/internal/task"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
@@ -16,6 +17,7 @@ import (
 
 type Input struct {
 	Session             types.Session
+	SessionRole         types.SessionRole
 	Turn                types.Turn
 	TaskID              string
 	Sink                EventSink
@@ -54,29 +56,30 @@ type SessionMemoryWorker interface {
 }
 
 type Engine struct {
-	model                   model.StreamingClient
-	registry                *tools.Registry
-	permission              *permissions.Engine
-	store                   ConversationStore
-	ctxManager              *contextstate.Manager
-	compactor               contextstate.Compactor
-	runtime                 *contextstate.Runtime
-	meta                    RuntimeMetadata
-	basePrompt              string
-	globalConfigRoot        string
-	maxWorkspacePromptBytes int
-	activeSkillTokenBudget  int
-	maxToolSteps            int
-	automationService       tools.AutomationService
-	taskManager             *task.Manager
-	runtimeService          *runtimegraph.Service
-	schedulerService        *scheduler.Service
-	sessionMemoryAsync      bool
-	sessionMemoryWorker     SessionMemoryWorker
-	sessionMemoryWG         sync.WaitGroup
-	sessionMemoryMu         sync.Mutex
-	sessionMemoryRunning    map[string]bool
-	sessionMemoryPending    map[string]Input
+	model                    model.StreamingClient
+	registry                 *tools.Registry
+	permission               *permissions.Engine
+	store                    ConversationStore
+	ctxManager               *contextstate.Manager
+	compactor                contextstate.Compactor
+	runtime                  *contextstate.Runtime
+	meta                     RuntimeMetadata
+	basePrompt               string
+	globalConfigRoot         string
+	maxWorkspacePromptBytes  int
+	activeSkillTokenBudget   int
+	maxToolSteps             int
+	automationService        tools.AutomationService
+	sessionDelegationService session.RoleDelegationService
+	taskManager              *task.Manager
+	runtimeService           *runtimegraph.Service
+	schedulerService         *scheduler.Service
+	sessionMemoryAsync       bool
+	sessionMemoryWorker      SessionMemoryWorker
+	sessionMemoryWG          sync.WaitGroup
+	sessionMemoryMu          sync.Mutex
+	sessionMemoryRunning     map[string]bool
+	sessionMemoryPending     map[string]Input
 }
 
 const defaultActiveSkillTokenBudget = 2048
@@ -175,6 +178,13 @@ func (e *Engine) SetAutomationService(service tools.AutomationService) {
 		return
 	}
 	e.automationService = service
+}
+
+func (e *Engine) SetSessionDelegationService(service session.RoleDelegationService) {
+	if e == nil {
+		return
+	}
+	e.sessionDelegationService = service
 }
 
 func (e *Engine) SetRuntimeService(service *runtimegraph.Service) {

@@ -13,6 +13,7 @@ import (
 type Store interface {
 	GetSession(context.Context, string) (types.Session, bool, error)
 	EnsureCanonicalSession(context.Context, string) (types.Session, types.ContextHead, bool, error)
+	EnsureRoleSession(context.Context, string, types.SessionRole) (types.Session, types.ContextHead, bool, error)
 	InsertTurn(context.Context, types.Turn) error
 	DeleteTurn(context.Context, string) error
 	ListTurnsBySession(context.Context, string) ([]types.Turn, error)

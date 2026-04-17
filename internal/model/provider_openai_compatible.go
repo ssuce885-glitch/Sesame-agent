@@ -134,7 +134,7 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 		// Prefer the accumulated delta stream as the authoritative source.
 		// The done event's snapshot is only a fallback when no complete delta
 		// stream was available.
-		input, err := parseFunctionCallArguments(functionCallArgumentDeltas[itemID], functionCallArgumentDone[itemID])
+		parsed, err := parseFunctionCallArguments(functionCallArgumentDeltas[itemID], functionCallArgumentDone[itemID])
 		if err != nil {
 			return err
 		}
@@ -144,9 +144,11 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 		return sendStreamEvent(ctx, events, StreamEvent{
 			Kind: StreamEventToolCallEnd,
 			ToolCall: ToolCallChunk{
-				ID:    callID,
-				Name:  resolvedName,
-				Input: input,
+				ID:            callID,
+				Name:          resolvedName,
+				Input:         parsed.Input,
+				InputRaw:      parsed.RawInput,
+				InputRecovery: parsed.Recovery,
 			},
 		})
 	}
@@ -658,29 +660,59 @@ func toResponsesToolChoice(choice string, tools []ToolSchema) any {
 	}
 }
 
-func parseFunctionCallArguments(preferred string, fallback string) (map[string]any, error) {
+type parsedFunctionCallArguments struct {
+	Input    map[string]any
+	RawInput string
+	Recovery string
+}
+
+func parseFunctionCallArguments(preferred string, fallback string) (parsedFunctionCallArguments, error) {
 	preferred = strings.TrimSpace(preferred)
 	fallback = strings.TrimSpace(fallback)
 	if preferred == "" && fallback == "" {
-		return map[string]any{}, nil
+		return parsedFunctionCallArguments{Input: map[string]any{}}, nil
 	}
 
+	candidates := functionCallArgumentCandidates(preferred, fallback)
 	var lastErr error
-	for _, candidate := range functionCallArgumentCandidates(preferred, fallback) {
-		candidate = unquoteDoubleEncodedJSON(candidate)
+	allCandidatesIncomplete := true
+	for _, rawCandidate := range candidates {
+		candidate := unquoteDoubleEncodedJSON(rawCandidate)
 		input := map[string]any{}
 		err := json.Unmarshal([]byte(candidate), &input)
 		if err == nil {
-			return input, nil
+			return parsedFunctionCallArguments{Input: input}, nil
+		}
+		lastErr = err
+		if !isIncompleteJSONObjectError(candidate, err) {
+			allCandidatesIncomplete = false
+		}
+	}
+
+	for _, rawCandidate := range candidates {
+		candidate := unquoteDoubleEncodedJSON(rawCandidate)
+		repaired, ok := safelyCompleteJSONStructure(candidate)
+		if !ok {
+			continue
+		}
+		input := map[string]any{}
+		err := json.Unmarshal([]byte(repaired), &input)
+		if err == nil {
+			return parsedFunctionCallArguments{
+				Input:    input,
+				RawInput: candidate,
+				Recovery: "structure_completed",
+			}, nil
 		}
 		lastErr = err
 	}
 
-	if fallback == "" && preferred != "" && isIncompleteJSONObjectError(preferred, lastErr) {
-		return map[string]any{}, nil
-	}
-	if preferred == "" && fallback != "" && isIncompleteJSONObjectError(fallback, lastErr) {
-		return map[string]any{}, nil
+	if allCandidatesIncomplete {
+		return parsedFunctionCallArguments{
+			Input:    map[string]any{},
+			RawInput: selectFunctionCallArgumentRaw(preferred, fallback),
+			Recovery: "incomplete_fallback",
+		}, nil
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("empty function call arguments")
@@ -689,7 +721,7 @@ func parseFunctionCallArguments(preferred string, fallback string) (map[string]a
 	if reported == "" {
 		reported = fallback
 	}
-	return nil, fmt.Errorf("decode function call arguments (raw=%q): %w", reported, lastErr)
+	return parsedFunctionCallArguments{}, fmt.Errorf("decode function call arguments (raw=%q): %w", reported, lastErr)
 }
 
 func functionCallArgumentCandidates(preferred string, fallback string) []string {
@@ -731,4 +763,65 @@ func unquoteDoubleEncodedJSON(candidate string) string {
 		return decoded
 	}
 	return candidate
+}
+
+func selectFunctionCallArgumentRaw(preferred string, fallback string) string {
+	if trimmed := strings.TrimSpace(unquoteDoubleEncodedJSON(preferred)); trimmed != "" {
+		return trimmed
+	}
+	return strings.TrimSpace(unquoteDoubleEncodedJSON(fallback))
+}
+
+func safelyCompleteJSONStructure(candidate string) (string, bool) {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return "", false
+	}
+	if !strings.HasPrefix(candidate, "{") && !strings.HasPrefix(candidate, "[") {
+		return "", false
+	}
+
+	stack := make([]rune, 0, 8)
+	inString := false
+	escaped := false
+	for _, r := range candidate {
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch r {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+
+		switch r {
+		case '"':
+			inString = true
+		case '{':
+			stack = append(stack, '}')
+		case '[':
+			stack = append(stack, ']')
+		case '}', ']':
+			if len(stack) == 0 || stack[len(stack)-1] != r {
+				return "", false
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+	if inString || escaped || len(stack) == 0 {
+		return "", false
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(candidate) + len(stack))
+	builder.WriteString(candidate)
+	for i := len(stack) - 1; i >= 0; i-- {
+		builder.WriteRune(stack[i])
+	}
+	return builder.String(), true
 }

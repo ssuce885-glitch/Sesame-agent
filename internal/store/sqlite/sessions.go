@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
+	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
 )
 
@@ -402,6 +404,82 @@ func requireSingleRow(result sql.Result) error {
 
 func isTerminalTurnState(state types.TurnState) bool {
 	return state == types.TurnStateCompleted || state == types.TurnStateFailed || state == types.TurnStateInterrupted
+}
+
+func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, role types.SessionRole) (types.Session, types.ContextHead, bool, error) {
+	role = sessionrole.Normalize(string(role))
+	roleCtx := sessionrole.WithSessionRole(ctx, role)
+
+	if role == types.SessionRoleMainParent {
+		session, head, created, err := s.EnsureCanonicalSession(roleCtx, workspaceRoot)
+		if err != nil {
+			return types.Session{}, types.ContextHead{}, false, err
+		}
+		if err := s.SetRoleSessionID(ctx, workspaceRoot, role, session.ID); err != nil {
+			return types.Session{}, types.ContextHead{}, false, err
+		}
+		return session, head, created, nil
+	}
+
+	if sessionID, ok, err := s.GetRoleSessionID(ctx, workspaceRoot, role); err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	} else if ok {
+		session, found, err := s.GetSession(ctx, sessionID)
+		if err != nil {
+			return types.Session{}, types.ContextHead{}, false, err
+		}
+		if found && session.WorkspaceRoot == workspaceRoot {
+			head, _, err := s.ensureCurrentContextHead(roleCtx, session)
+			return session, head, false, err
+		}
+	}
+
+	now := time.Now().UTC()
+	session := types.Session{
+		ID:            types.NewID("sess"),
+		WorkspaceRoot: workspaceRoot,
+		SystemPrompt:  sessionrole.DefaultSystemPrompt(role),
+		State:         types.SessionStateIdle,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.InsertSession(ctx, session); err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	}
+	if err := s.SetRoleSessionID(ctx, workspaceRoot, role, session.ID); err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	}
+	head, _, err := s.ensureCurrentContextHead(roleCtx, session)
+	if err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	}
+	return session, head, true, nil
+}
+
+func (s *Store) ResolveSessionRole(ctx context.Context, sessionID, workspaceRoot string) (types.SessionRole, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if sessionID == "" || workspaceRoot == "" {
+		return "", nil
+	}
+
+	for _, role := range []types.SessionRole{types.SessionRoleMonitoringParent, types.SessionRoleMainParent} {
+		mappedID, ok, err := s.GetRoleSessionID(ctx, workspaceRoot, role)
+		if err != nil {
+			return "", err
+		}
+		if !ok || strings.TrimSpace(mappedID) != sessionID {
+			continue
+		}
+		session, found, err := s.GetSession(ctx, sessionID)
+		if err != nil {
+			return "", err
+		}
+		if found && session.WorkspaceRoot == workspaceRoot {
+			return role, nil
+		}
+	}
+	return "", nil
 }
 
 func (s *Store) EnsureCanonicalSession(ctx context.Context, workspaceRoot string) (types.Session, types.ContextHead, bool, error) {
