@@ -126,6 +126,18 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists head_memories (
+			session_id text not null,
+			context_head_id text not null,
+			workspace_root text not null default '',
+			source_turn_id text not null default '',
+			up_to_item_id integer not null default 0,
+			item_count integer not null default 0,
+			summary_payload text not null default '',
+			created_at text not null,
+			updated_at text not null,
+			primary key (session_id, context_head_id)
+		);`,
 		`create table if not exists memory_candidates (
 			id text primary key,
 			scope text not null,
@@ -139,6 +151,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		`create table if not exists conversation_items (
 			id integer primary key autoincrement,
 			session_id text not null,
+			context_head_id text not null default '',
 			turn_id text not null default '',
 			position integer not null,
 			kind text not null,
@@ -169,8 +182,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		`create table if not exists conversation_compactions (
 			id text primary key,
 			session_id text not null,
+			context_head_id text not null default '',
 			kind text not null,
 			generation integer not null,
+			start_item_id integer not null default 0,
+			end_item_id integer not null default 0,
 			start_position integer not null,
 			end_position integer not null,
 			summary_payload text not null,
@@ -507,6 +523,15 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "turns", "foreground_lease_expires_at", `alter table turns add column foreground_lease_expires_at text not null default ''`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "memory_entries", "kind", `alter table memory_entries add column kind text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "memory_entries", "source_session_id", `alter table memory_entries add column source_session_id text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "memory_entries", "source_context_head_id", `alter table memory_entries add column source_context_head_id text not null default ''`); err != nil {
+		return err
+	}
 	if err := s.ensureColumn(ctx, "child_agent_specs", "session_id", `alter table child_agent_specs add column session_id text not null default ''`); err != nil {
 		return err
 	}
@@ -528,6 +553,18 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "report_mailbox_items", "workspace_root", `alter table report_mailbox_items add column workspace_root text not null default ''`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "conversation_items", "context_head_id", `alter table conversation_items add column context_head_id text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "conversation_compactions", "context_head_id", `alter table conversation_compactions add column context_head_id text not null default ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "conversation_compactions", "start_item_id", `alter table conversation_compactions add column start_item_id integer not null default 0`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "conversation_compactions", "end_item_id", `alter table conversation_compactions add column end_item_id integer not null default 0`); err != nil {
+		return err
+	}
 	if err := s.ensureColumn(ctx, "conversation_compactions", "metadata_json", `alter table conversation_compactions add column metadata_json text not null default ''`); err != nil {
 		return err
 	}
@@ -544,6 +581,14 @@ func (s *Store) migrate(ctx context.Context) error {
 			on reports(workspace_root, observed_at desc, id asc);`,
 		`create index if not exists report_deliveries_workspace_channel_state_idx
 			on report_deliveries(workspace_root, channel, state, observed_at desc, id asc);`,
+		`create index if not exists conversation_items_session_head_id_idx
+			on conversation_items(session_id, context_head_id, id);`,
+		`create index if not exists conversation_items_session_turn_id_idx
+			on conversation_items(session_id, turn_id, id);`,
+		`create index if not exists conversation_compactions_session_head_generation_idx
+			on conversation_compactions(session_id, context_head_id, generation, created_at, id);`,
+		`create index if not exists memory_entries_scope_kind_workspace_idx
+			on memory_entries(scope, kind, workspace_id, updated_at desc, created_at desc);`,
 	}
 	for _, stmt := range indexStmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
