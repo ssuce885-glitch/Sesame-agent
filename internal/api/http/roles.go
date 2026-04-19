@@ -24,7 +24,7 @@ func handleRoles(deps Dependencies) http.HandlerFunc {
 		case http.MethodGet:
 			catalog, err := deps.RoleService.List(deps.WorkspaceRoot)
 			if err != nil {
-				http.Error(w, "internal server error", http.StatusInternalServerError)
+				writeRoleServiceError(w, err)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")

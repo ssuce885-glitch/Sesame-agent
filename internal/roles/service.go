@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -75,7 +74,15 @@ func IsConflict(err error) bool { return KindOf(err) == ErrorKindConflict }
 func IsInternal(err error) bool { return KindOf(err) == ErrorKindInternal }
 
 func (s *Service) List(workspaceRoot string) (Catalog, error) {
-	return LoadCatalog(strings.TrimSpace(workspaceRoot))
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
+		return Catalog{}, newServiceError(ErrorKindInvalidInput, err)
+	}
+	catalog, err := LoadCatalog(workspaceRoot)
+	if err != nil {
+		return Catalog{}, newServiceError(ErrorKindInternal, err)
+	}
+	return catalog, nil
 }
 
 func (s *Service) Get(workspaceRoot, roleID string) (Spec, error) {
@@ -155,21 +162,12 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 	}
 	defer func() { _ = os.RemoveAll(stagingDir) }()
 
-	backupDir := filepath.Join(rolesRoot, fmt.Sprintf(".%s.backup.%d", normalized.RoleID, time.Now().UnixNano()))
-	if err := os.Rename(roleDir, backupDir); err != nil {
+	if err := replaceRoleFilesFromStaging(roleDir, stagingDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Spec{}, newServiceError(ErrorKindNotFound, err)
 		}
 		return Spec{}, newServiceError(ErrorKindInternal, err)
 	}
-
-	if err := os.Rename(stagingDir, roleDir); err != nil {
-		if rollbackErr := os.Rename(backupDir, roleDir); rollbackErr != nil {
-			return Spec{}, newServiceError(ErrorKindInternal, fmt.Errorf("apply update: %w; rollback failed: %v", err, rollbackErr))
-		}
-		return Spec{}, newServiceError(ErrorKindInternal, err)
-	}
-	_ = os.RemoveAll(backupDir)
 
 	spec, err := loadRoleSpec(rolesRoot, normalized.RoleID)
 	if err != nil {
@@ -213,6 +211,27 @@ func prepareRoleStagingDir(rolesRoot string, in UpsertInput) (string, error) {
 		return "", newServiceError(ErrorKindInternal, err)
 	}
 	return stagingDir, nil
+}
+
+func replaceRoleFilesFromStaging(roleDir, stagingDir string) error {
+	for _, name := range []string{"role.yaml", "prompt.md"} {
+		src := filepath.Join(stagingDir, name)
+		dst := filepath.Join(roleDir, name)
+		if err := replaceFileInPlace(src, dst); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func replaceFileInPlace(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Rename(src, dst)
 }
 
 func writeRoleFilesToDir(roleDir string, in UpsertInput) error {
