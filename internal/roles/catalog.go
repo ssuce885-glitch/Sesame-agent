@@ -30,7 +30,12 @@ type roleConfig struct {
 }
 
 func LoadCatalog(workspaceRoot string) (Catalog, error) {
-	root := filepath.Join(strings.TrimSpace(workspaceRoot), "roles")
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return Catalog{ByID: map[string]Spec{}}, nil
+	}
+
+	root := filepath.Join(workspaceRoot, "roles")
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return Catalog{ByID: map[string]Spec{}}, nil
@@ -64,7 +69,7 @@ func RenderRegistrySummary(catalog Catalog) string {
 	}
 	lines := []string{"# Installed Specialist Roles"}
 	for _, role := range catalog.Roles {
-		line := fmt.Sprintf("- %s: %s", role.RoleID, firstNonEmpty(role.Description, role.DisplayName))
+		line := fmt.Sprintf("- %s: %s", role.RoleID, firstNonEmpty(role.Description, role.DisplayName, role.RoleID))
 		if len(role.SkillNames) > 0 {
 			line += ". Skills: " + strings.Join(role.SkillNames, ", ")
 		}
@@ -84,8 +89,16 @@ func loadRoleSpec(root, roleID string) (Spec, error) {
 		return Spec{}, err
 	}
 
+	var node yaml.Node
+	if err := yaml.Unmarshal(roleData, &node); err != nil {
+		return Spec{}, err
+	}
+	if err := rejectInvalidRoleYAML(node.Content); err != nil {
+		return Spec{}, err
+	}
+
 	var cfg roleConfig
-	if err := yaml.Unmarshal(roleData, &cfg); err != nil {
+	if err := node.Decode(&cfg); err != nil {
 		return Spec{}, err
 	}
 
@@ -102,13 +115,48 @@ func normalizeSkillNames(skills []string) []string {
 	if len(skills) == 0 {
 		return nil
 	}
+	seen := make(map[string]struct{}, len(skills))
 	out := make([]string, 0, len(skills))
 	for _, skill := range skills {
 		if trimmed := strings.TrimSpace(skill); trimmed != "" {
+			if _, exists := seen[trimmed]; exists {
+				continue
+			}
+			seen[trimmed] = struct{}{}
 			out = append(out, trimmed)
 		}
 	}
 	return out
+}
+
+func rejectInvalidRoleYAML(content []*yaml.Node) error {
+	for _, node := range content {
+		if node == nil {
+			continue
+		}
+		if node.Kind != yaml.MappingNode {
+			continue
+		}
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			keyNode := node.Content[i]
+			valNode := node.Content[i+1]
+			if keyNode == nil || valNode == nil {
+				continue
+			}
+			if strings.TrimSpace(keyNode.Value) != "skills" {
+				continue
+			}
+			if valNode.Kind != yaml.SequenceNode {
+				return fmt.Errorf("skills must be a sequence")
+			}
+			for _, item := range valNode.Content {
+				if item == nil || item.Kind != yaml.ScalarNode {
+					return fmt.Errorf("skills entries must be scalar strings")
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func firstNonEmpty(values ...string) string {
