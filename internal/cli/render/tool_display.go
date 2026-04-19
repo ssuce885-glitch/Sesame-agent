@@ -9,6 +9,7 @@ import (
 
 type ToolDisplay struct {
 	Action      string
+	Params      string // key preview of arguments, e.g. "path=/tmp/log"
 	Target      string
 	Detail      string
 	CoalesceKey string
@@ -18,9 +19,11 @@ func SummarizeToolDisplay(toolName, arguments, resultPreview string) ToolDisplay
 	args := parseToolArguments(arguments)
 	action := compactToolAction(toolName)
 	target := compactToolTarget(toolName, args, resultPreview)
+	params := compactToolParams(toolName, args)
 	detail := compactToolDetail(toolName, args, resultPreview, target)
 	return ToolDisplay{
 		Action:      action,
+		Params:      params,
 		Target:      target,
 		Detail:      detail,
 		CoalesceKey: compactToolCoalesceKey(toolName, args),
@@ -182,6 +185,110 @@ func compactToolTarget(toolName string, args map[string]any, resultPreview strin
 	for _, key := range []string{"pattern", "url", "command", "task_id", "description"} {
 		if label := compactPlainLabel(asString(args[key])); label != "" {
 			return label
+		}
+	}
+	return ""
+}
+
+func compactToolParams(toolName string, args map[string]any) string {
+	switch strings.TrimSpace(toolName) {
+	case "file_read":
+		return compactPathParams(args, "path")
+	case "file_write":
+		return compactPathParams(args, "path")
+	case "file_edit":
+		return compactPathParams(args, "file_path")
+	case "notebook_edit":
+		return compactPathParams(args, "notebook_path")
+	case "grep":
+		return compactPatternParams(args)
+	case "glob":
+		return compactPatternParams(args)
+	case "list_dir":
+		return compactPathParams(args, "path", "dir_path")
+	case "shell_command":
+		return compactCommandParams(args)
+	case "view_image":
+		return compactPathParams(args, "path")
+	case "web_fetch":
+		return compactURLParams(args)
+	case "delegate_to_role":
+		return compactPlainParams(args, "target_role")
+	case "task_create":
+		return compactPlainParams(args, "command", "type")
+	case "task_update":
+		return compactPlainParams(args, "task_id")
+	case "task_output", "task_stop":
+		return compactPlainParams(args, "task_id")
+	case "schedule_report":
+		return compactPlainParams(args, "name", "cron")
+	}
+	// Generic: pick the first non-empty string or path value
+	for _, key := range []string{"path", "file_path", "url", "command", "pattern"} {
+		if v := asString(args[key]); v != "" {
+			if len(key) <= 4 {
+				return key + "=" + compactPlainLabel(v)
+			}
+			return compactPlainLabel(v)
+		}
+	}
+	return ""
+}
+
+func compactPathParams(args map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v := asString(args[key]); v != "" {
+			return compactPlainLabel(filepath.Base(filepath.Clean(v)))
+		}
+	}
+	return ""
+}
+
+func compactPatternParams(args map[string]any) string {
+	if v := asString(args["pattern"]); v != "" {
+		base := filepath.Base(v)
+		if base != "." && base != "" {
+			return compactPlainLabel(base)
+		}
+		return compactPlainLabel(v)
+	}
+	return ""
+}
+
+func compactCommandParams(args map[string]any) string {
+	if v := asString(args["command"]); v != "" {
+		// Just show the first line, truncated
+		trimmed := strings.TrimSpace(strings.Split(v, "\n")[0])
+		if len([]rune(trimmed)) > 40 {
+			return string([]rune(trimmed)[:40]) + "…"
+		}
+		return trimmed
+	}
+	return ""
+}
+
+func compactURLParams(args map[string]any) string {
+	if v := asString(args["url"]); v != "" {
+		parsed, err := url.Parse(v)
+		if err != nil || strings.TrimSpace(parsed.Host) == "" {
+			return compactPlainLabel(v)
+		}
+		base := filepath.Base(strings.TrimSpace(parsed.Path))
+		if base == "/" || base == "" {
+			return parsed.Host
+		}
+		if len([]rune(base)) > 32 {
+			return parsed.Host + "/" + string([]rune(base)[:32]) + "…"
+		}
+		return parsed.Host + "/" + base
+	}
+	return ""
+}
+
+func compactPlainParams(args map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v := asString(args[key]); v != "" {
+			return compactPlainLabel(v)
 		}
 	}
 	return ""

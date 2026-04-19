@@ -18,6 +18,7 @@ import (
 
 	clientapi "go-agent/internal/cli/client"
 	"go-agent/internal/cli/render"
+	tuiv2 "go-agent/internal/cli/repl/tui"
 	"go-agent/internal/extensions"
 	"go-agent/internal/types"
 )
@@ -218,18 +219,22 @@ func isTerminal(file *os.File) bool {
 }
 
 func (r *REPL) runTUI(ctx context.Context, initialPrompt string) error {
-	status, _ := r.client.Status(ctx)
-	timeline := types.SessionTimelineResponse{}
+	uiClient := newTUIClientAdapter(r.client)
+	status := tuiv2.StatusResponse{}
+	if loaded, err := uiClient.Status(ctx); err == nil {
+		status = loaded
+	}
+	timeline := tuiv2.SessionTimelineResponse{}
 	if strings.TrimSpace(r.sessionID) != "" {
-		if loaded, err := r.client.GetTimeline(ctx); err == nil {
+		if loaded, err := uiClient.GetTimeline(ctx); err == nil {
 			timeline = loaded
 			r.lastSeq = loaded.LatestSeq
 		}
 	}
 
-	model := newTUIModel(tuiModelOptions{
+	model := tuiv2.NewModel(tuiv2.ModelOptions{
 		Context:       ctx,
-		Client:        r.client,
+		Client:        uiClient,
 		SessionID:     r.sessionID,
 		WorkspaceRoot: r.workspaceRoot,
 		Status:        status,
