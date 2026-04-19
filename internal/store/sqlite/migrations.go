@@ -581,8 +581,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			on reports(workspace_root, observed_at desc, id asc);`,
 		`create index if not exists report_deliveries_workspace_channel_state_idx
 			on report_deliveries(workspace_root, channel, state, observed_at desc, id asc);`,
-		`create index if not exists conversation_items_session_head_id_idx
-			on conversation_items(session_id, context_head_id, id);`,
+		`create index if not exists conversation_items_session_head_position_idx
+			on conversation_items(session_id, context_head_id, position, id);`,
 		`create index if not exists conversation_items_session_turn_id_idx
 			on conversation_items(session_id, turn_id, id);`,
 		`create index if not exists conversation_compactions_session_head_generation_idx
