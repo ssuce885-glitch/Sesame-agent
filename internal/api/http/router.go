@@ -19,6 +19,7 @@ type Dependencies struct {
 	Manager       Manager
 	Scheduler     CronScheduler
 	Automation    AutomationService
+	RoleService   RoleService
 	Status        StatusPayload
 	ConsoleRoot   string
 	WorkspaceRoot string
@@ -66,6 +67,7 @@ func NewRouter(deps Dependencies) http.Handler {
 	registerReportingRoutes(mux, deps)
 	registerCronRoutes(mux, deps)
 	registerAutomationRoutes(mux, deps)
+	registerRoleRoutes(mux, deps)
 	registerConsoleRoutes(mux, deps)
 
 	return mux

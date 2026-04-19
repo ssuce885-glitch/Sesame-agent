@@ -5,6 +5,7 @@ import (
 
 	"go-agent/internal/automation"
 	"go-agent/internal/model"
+	"go-agent/internal/roles"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
 	"go-agent/internal/types"
@@ -60,3 +61,11 @@ type AutomationService interface {
 }
 
 var _ AutomationService = (*automation.Service)(nil)
+
+type RoleService interface {
+	List(string) (roles.Catalog, error)
+	Get(string, string) (roles.Spec, error)
+	Create(string, roles.UpsertInput) (roles.Spec, error)
+	Update(string, roles.UpsertInput) (roles.Spec, error)
+	Delete(string, string) error
+}
