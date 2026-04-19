@@ -19,6 +19,7 @@ type Paths struct {
 	WorkspacePromptFile string
 	WorkspaceRulesDir   string
 	WorkspaceSkillsDir  string
+	WorkspaceRolesDir   string
 	WorkspaceToolsDir   string
 	DataDir             string
 	DatabaseFile        string
@@ -65,6 +66,7 @@ func ResolvePaths(workspaceRoot string, explicitDataDir string) (Paths, error) {
 	paths.WorkspacePromptFile = filepath.Join(workspaceRoot, "docs", "prompt.md")
 	paths.WorkspaceRulesDir = filepath.Join(workspaceRoot, "rules")
 	paths.WorkspaceSkillsDir = filepath.Join(workspaceRoot, "skills")
+	paths.WorkspaceRolesDir = filepath.Join(workspaceRoot, "roles")
 	paths.WorkspaceToolsDir = filepath.Join(workspaceRoot, "resources", "tools")
 	return paths, nil
 }
