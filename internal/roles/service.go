@@ -22,6 +22,8 @@ type Service struct{}
 
 func NewService() *Service { return &Service{} }
 
+var renameRoleDir = os.Rename
+
 type ErrorKind string
 
 const (
@@ -125,8 +127,8 @@ func (s *Service) Create(workspaceRoot string, in UpsertInput) (Spec, error) {
 		return Spec{}, err
 	}
 	defer func() { _ = os.RemoveAll(stagingDir) }()
-	if err := os.Rename(stagingDir, roleDir); err != nil {
-		if errors.Is(err, os.ErrExist) {
+	if err := renameRoleDir(stagingDir, roleDir); err != nil {
+		if isCreateDestinationConflict(roleDir, err) {
 			return Spec{}, newServiceError(ErrorKindConflict, err)
 		}
 		return Spec{}, newServiceError(ErrorKindInternal, err)
@@ -136,6 +138,17 @@ func (s *Service) Create(workspaceRoot string, in UpsertInput) (Spec, error) {
 		return Spec{}, newServiceError(ErrorKindInternal, err)
 	}
 	return spec, nil
+}
+
+func isCreateDestinationConflict(roleDir string, renameErr error) bool {
+	if errors.Is(renameErr, os.ErrExist) {
+		return true
+	}
+	info, err := os.Stat(roleDir)
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }
 
 func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {

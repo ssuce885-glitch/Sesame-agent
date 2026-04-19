@@ -111,7 +111,7 @@ func toRoleResponse(spec roles.Spec) roleResponse {
 		DisplayName: spec.DisplayName,
 		Description: spec.Description,
 		Prompt:      spec.Prompt,
-		SkillNames:  spec.SkillNames,
+		SkillNames:  normalizeSkillsForResponse(spec.SkillNames),
 	}
 }
 
@@ -124,6 +124,13 @@ func toRoleResponseList(specs []roles.Spec) []roleResponse {
 		out = append(out, toRoleResponse(spec))
 	}
 	return out
+}
+
+func normalizeSkillsForResponse(skills []string) []string {
+	if skills == nil {
+		return []string{}
+	}
+	return skills
 }
 
 func decodeStrictJSONBody(r *http.Request, dst any) error {
