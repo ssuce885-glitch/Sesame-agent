@@ -20,6 +20,7 @@ import (
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/reporting"
+	"go-agent/internal/roles"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
 	"go-agent/internal/sessionbinding"
@@ -681,6 +682,7 @@ func buildHTTPDependencies(cfg config.Config, store *sqlite.Store, bus *stream.B
 		Manager:       manager,
 		Scheduler:     schedulerService,
 		Automation:    automationService,
+		RoleService:   roles.NewService(),
 		Status:        buildStatusPayload(cfg),
 		ConsoleRoot:   filepath.Join("web", "console", "dist"),
 		WorkspaceRoot: cfg.Paths.WorkspaceRoot,
