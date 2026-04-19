@@ -39,7 +39,7 @@ const (
 	memoryRecallCandidateLimit       = 8
 )
 
-type sessionMemoryRefreshReport struct {
+type headMemoryRefreshReport struct {
 	Updated                  bool
 	WorkspaceEntriesUpserted int
 	GlobalEntriesUpserted    int
@@ -54,62 +54,89 @@ const (
 	injectedMemoryRefGlobal            injectedMemoryRefKind = "global"
 )
 
-func loadSessionMemorySummary(ctx context.Context, store ConversationStore, sessionID string) (model.Summary, bool, error) {
-	if store == nil || strings.TrimSpace(sessionID) == "" {
+func loadHeadMemorySummary(ctx context.Context, store ConversationStore, sessionID, contextHeadID string) (model.Summary, bool, error) {
+	if store == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(contextHeadID) == "" {
 		return model.Summary{}, false, nil
 	}
 
-	memory, ok, err := store.GetSessionMemory(ctx, sessionID)
+	memory, ok, err := store.GetHeadMemory(ctx, sessionID, contextHeadID)
 	if err != nil || !ok {
 		return model.Summary{}, false, err
 	}
 	return decodeSessionMemorySummary(memory.SummaryPayload)
 }
 
-func loadSummaryBundle(ctx context.Context, store ConversationStore, sessionID string) (SummaryBundle, []types.ConversationCompaction, error) {
-	if store == nil || strings.TrimSpace(sessionID) == "" {
+func loadHeadMemoryBundle(ctx context.Context, store ConversationStore, sessionID, contextHeadID string) (SummaryBundle, []types.ConversationCompaction, error) {
+	if store == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(contextHeadID) == "" {
 		return SummaryBundle{}, nil, nil
 	}
 
-	summaries, err := store.ListConversationSummaries(ctx, sessionID)
+	compactions, err := store.ListConversationCompactionsByStoredContextHead(ctx, sessionID, contextHeadID)
 	if err != nil {
 		return SummaryBundle{}, nil, err
 	}
-	compactions, err := store.ListConversationCompactions(ctx, sessionID)
-	if err != nil {
-		return SummaryBundle{}, nil, err
-	}
-	sessionMemory, hasSessionMemory, err := loadSessionMemorySummary(ctx, store, sessionID)
+	headMemory, hasHeadMemory, err := loadHeadMemorySummary(ctx, store, sessionID, contextHeadID)
 	if err != nil {
 		return SummaryBundle{}, nil, err
 	}
 
-	if boundaryCompaction, ok := activeBoundaryCompaction(compactions); ok {
-		boundarySummary, hasBoundarySummary, err := decodeCompactionSummaryPayload(boundaryCompaction.SummaryPayload)
-		if err == nil && hasBoundarySummary {
-			rollingSummaries := removeMatchingSummary(dedupeSummaries(summaries), boundarySummary)
-			var sessionMemorySummary *model.Summary
-			if hasSessionMemory {
-				value := cloneSummaryForSessionMemory(sessionMemory)
-				sessionMemorySummary = &value
-			}
-			return selectPromptSummaryBundle(sessionMemorySummary, &boundarySummary, rollingSummaries), compactions, nil
-		}
+	var headMemorySummary *model.Summary
+	if hasHeadMemory {
+		value := cloneSummaryForSessionMemory(headMemory)
+		headMemorySummary = &value
 	}
 
-	if hasSessionMemory {
-		summaries = prependSessionMemorySummary(summaries, sessionMemory)
+	if boundarySummary, ok, err := activeBoundarySummary(compactions); err != nil {
+		return SummaryBundle{}, nil, err
+	} else if ok {
+		value := normalizeSummaryForPrompt(boundarySummary)
+		return selectPromptSummaryBundle(headMemorySummary, &value, nil), compactions, nil
 	}
-	return selectPromptSummaries(summaries, hasSessionMemory), compactions, nil
+
+	return selectPromptSummaryBundle(headMemorySummary, nil, nil), compactions, nil
 }
 
-func maybeRefreshSessionMemory(ctx context.Context, e *Engine, in Input) error {
-	_, err := refreshSessionMemory(ctx, e, in)
+func activeBoundarySummary(compactions []types.ConversationCompaction) (model.Summary, bool, error) {
+	boundaryCompaction, ok := activeBoundaryCompaction(compactions)
+	if !ok {
+		return model.Summary{}, false, nil
+	}
+	return decodeCompactionSummaryPayload(boundaryCompaction.SummaryPayload)
+}
+
+func resolveConversationReadContextHeadID(ctx context.Context, store ConversationStore, preferredContextHeadID string) (string, error) {
+	if resolved := strings.TrimSpace(preferredContextHeadID); resolved != "" {
+		return resolved, nil
+	}
+	if store == nil {
+		return "", nil
+	}
+	current, ok, err := store.GetCurrentContextHeadID(ctx)
+	if err != nil || !ok {
+		return "", err
+	}
+	return strings.TrimSpace(current), nil
+}
+
+func headMemoryStartIndexForUpToItemID(items []types.ConversationTimelineItem, upToItemID int64) int {
+	if upToItemID <= 0 || len(items) == 0 {
+		return 0
+	}
+	for i, item := range items {
+		if item.ItemID > upToItemID {
+			return i
+		}
+	}
+	return len(items)
+}
+
+func maybeRefreshHeadMemory(ctx context.Context, e *Engine, in Input) error {
+	_, err := refreshHeadMemory(ctx, e, in)
 	return err
 }
 
-func refreshSessionMemory(ctx context.Context, e *Engine, in Input) (sessionMemoryRefreshReport, error) {
-	report := sessionMemoryRefreshReport{}
+func refreshHeadMemory(ctx context.Context, e *Engine, in Input) (headMemoryRefreshReport, error) {
+	report := headMemoryRefreshReport{}
 	if e == nil || e.store == nil || e.compactor == nil {
 		return report, nil
 	}
@@ -122,20 +149,31 @@ func refreshSessionMemory(ctx context.Context, e *Engine, in Input) (sessionMemo
 		return report, nil
 	}
 
-	items, err := e.store.ListConversationItems(ctx, sessionID)
+	contextHeadID, err := resolveConversationReadContextHeadID(ctx, e.store, in.Turn.ContextHeadID)
+	if err != nil || contextHeadID == "" {
+		return report, err
+	}
+
+	timelineItems, err := e.store.ListConversationTimelineItemsByContextHead(ctx, sessionID, contextHeadID)
 	if err != nil {
 		return report, err
 	}
-	if len(items) == 0 {
+	if len(timelineItems) == 0 {
 		return report, nil
+	}
+
+	items := make([]model.ConversationItem, 0, len(timelineItems))
+	for _, item := range timelineItems {
+		items = append(items, item.Item)
 	}
 	safeEnd := model.NearestSafeConversationBoundary(items, len(items))
 	if safeEnd <= 0 {
 		return report, nil
 	}
+	timelineItems = timelineItems[:safeEnd]
 	items = items[:safeEnd]
 
-	existing, hasExisting, err := e.store.GetSessionMemory(ctx, sessionID)
+	existing, hasExisting, err := e.store.GetHeadMemory(ctx, sessionID, contextHeadID)
 	if err != nil {
 		return report, err
 	}
@@ -143,10 +181,13 @@ func refreshSessionMemory(ctx context.Context, e *Engine, in Input) (sessionMemo
 	start := 0
 	var existingSummary *model.Summary
 	if hasExisting {
-		if existing.UpToPosition < 0 || existing.UpToPosition > len(items) {
+		if existing.UpToItemID < 0 {
 			hasExisting = false
 		} else {
-			start = existing.UpToPosition
+			start = headMemoryStartIndexForUpToItemID(timelineItems, existing.UpToItemID)
+			if existing.UpToItemID > 0 && start == 0 && timelineItems[0].ItemID > existing.UpToItemID {
+				hasExisting = false
+			}
 			if summary, ok, err := decodeSessionMemorySummary(existing.SummaryPayload); err != nil {
 				return report, err
 			} else if ok {
@@ -175,13 +216,15 @@ func refreshSessionMemory(ctx context.Context, e *Engine, in Input) (sessionMemo
 	if strings.TrimSpace(summary.RangeLabel) == "" {
 		summary.RangeLabel = sessionMemoryRangeLabel
 	}
+	upToItemID := timelineItems[len(timelineItems)-1].ItemID
 
 	now := time.Now().UTC()
-	record := types.SessionMemory{
+	record := types.HeadMemory{
 		SessionID:      sessionID,
+		ContextHeadID:  contextHeadID,
 		WorkspaceRoot:  in.Session.WorkspaceRoot,
 		SourceTurnID:   in.Turn.ID,
-		UpToPosition:   safeEnd,
+		UpToItemID:     upToItemID,
 		ItemCount:      safeEnd,
 		SummaryPayload: encodeSessionMemorySummary(summary),
 		CreatedAt:      now,
@@ -190,10 +233,18 @@ func refreshSessionMemory(ctx context.Context, e *Engine, in Input) (sessionMemo
 	if hasExisting && !existing.CreatedAt.IsZero() {
 		record.CreatedAt = existing.CreatedAt
 	}
-	if err := e.store.UpsertSessionMemory(ctx, record); err != nil {
+	if err := e.store.UpsertHeadMemory(ctx, record); err != nil {
 		return report, err
 	}
 	report.Updated = true
+
+	canonicalHeadID, err := resolveConversationReadContextHeadID(ctx, e.store, "")
+	if err != nil {
+		return report, err
+	}
+	if !shouldPromoteHeadToDurableMemory(contextHeadID, canonicalHeadID) {
+		return report, nil
+	}
 
 	workspaceEntries := make([]types.MemoryEntry, 0, 1+durableWorkspaceDetailCapPerKind*4)
 	if workspaceMemory, ok := buildWorkspaceDurableMemory(record, summary); ok {
@@ -215,6 +266,12 @@ func refreshSessionMemory(ctx context.Context, e *Engine, in Input) (sessionMemo
 		}
 	}
 	return report, nil
+}
+
+func shouldPromoteHeadToDurableMemory(headID string, canonicalHeadID string) bool {
+	headID = strings.TrimSpace(headID)
+	canonicalHeadID = strings.TrimSpace(canonicalHeadID)
+	return headID != "" && headID == canonicalHeadID
 }
 
 func shouldRefreshSessionMemory(hasExisting bool, freshItems []model.ConversationItem) bool {
@@ -374,15 +431,18 @@ func durableWorkspaceMemoryPrefix(workspaceRoot string) string {
 	return "mem_workspace_" + hex.EncodeToString(sum[:8])
 }
 
-func findDurableWorkspaceMemory(entries []types.MemoryEntry, workspaceRoot string) (types.MemoryEntry, bool) {
-	targetID := durableWorkspaceOverviewID(workspaceRoot)
-	if targetID == "" {
-		return types.MemoryEntry{}, false
-	}
+func findMemoryEntry(entries []types.MemoryEntry, scope types.MemoryScope, kind types.MemoryKind, workspaceRoot string) (types.MemoryEntry, bool) {
 	for _, entry := range entries {
-		if entry.ID == targetID {
-			return entry, true
+		if entry.Scope != scope || entry.Kind != kind {
+			continue
 		}
+		if scope == types.MemoryScopeWorkspace && strings.TrimSpace(entry.WorkspaceID) != strings.TrimSpace(workspaceRoot) {
+			continue
+		}
+		if strings.TrimSpace(entry.Content) == "" {
+			continue
+		}
+		return entry, true
 	}
 	return types.MemoryEntry{}, false
 }
@@ -446,36 +506,12 @@ func buildMemoryRefs(entries []types.MemoryEntry, sessionMemoryPresent bool, wor
 	globalCount := 0
 
 	if !sessionMemoryPresent {
-		if workspaceMemory, ok := findDurableWorkspaceMemory(entries, workspaceRoot); ok {
+		if workspaceMemory, ok := findMemoryEntry(entries, types.MemoryScopeWorkspace, types.MemoryKindWorkspaceOverview, workspaceRoot); ok {
 			ref := strings.TrimSpace(workspaceMemory.Content)
 			if allowMemoryRef(ref, seen, 0, workspaceOverviewTokenBudget) {
 				out = append(out, ref)
 			}
 		}
-	}
-
-	for _, entry := range entries {
-		if entry.Scope != types.MemoryScopeGlobal {
-			continue
-		}
-		ref := strings.TrimSpace(entry.Content)
-		if ref == "" {
-			continue
-		}
-		if globalCount >= globalMemoryRecallMaxCount {
-			break
-		}
-		if globalCount > 0 && globalMemoryTokenBudget > 0 && globalTokens+estimateMemoryRefTokens(ref) > globalMemoryTokenBudget {
-			continue
-		}
-		if _, ok := seen[ref]; ok {
-			continue
-		}
-		seen[ref] = struct{}{}
-		out = append(out, ref)
-		globalCount++
-		globalTokens += estimateMemoryRefTokens(ref)
-		break
 	}
 
 	for _, entry := range recalled {
@@ -484,15 +520,15 @@ func buildMemoryRefs(entries []types.MemoryEntry, sessionMemoryPresent bool, wor
 			continue
 		}
 
-		switch injectedMemoryRefCategory(entry, workspaceRoot) {
-		case injectedMemoryRefWorkspaceOverview:
+		switch {
+		case entry.Scope == types.MemoryScopeWorkspace && entry.Kind == types.MemoryKindWorkspaceOverview:
 			if sessionMemoryPresent {
 				continue
 			}
 			if allowMemoryRef(ref, seen, 0, workspaceOverviewTokenBudget) {
 				out = append(out, ref)
 			}
-		case injectedMemoryRefGlobal:
+		case entry.Scope == types.MemoryScopeGlobal && entry.Kind == types.MemoryKindGlobalPreference:
 			if globalCount >= globalMemoryRecallMaxCount {
 				continue
 			}
@@ -507,7 +543,7 @@ func buildMemoryRefs(entries []types.MemoryEntry, sessionMemoryPresent bool, wor
 			out = append(out, ref)
 			globalCount++
 			globalTokens += cost
-		default:
+		case entry.Scope == types.MemoryScopeWorkspace && isWorkspaceDetailMemoryKind(entry.Kind):
 			if workspaceDetailCount >= workspaceDetailRecallMaxCount {
 				continue
 			}
@@ -543,16 +579,6 @@ func allowMemoryRef(ref string, seen map[string]struct{}, usedTokens int, tokenB
 	return true
 }
 
-func injectedMemoryRefCategory(entry types.MemoryEntry, workspaceRoot string) injectedMemoryRefKind {
-	if entry.Scope == types.MemoryScopeGlobal {
-		return injectedMemoryRefGlobal
-	}
-	if entry.ID == durableWorkspaceOverviewID(workspaceRoot) {
-		return injectedMemoryRefWorkspaceOverview
-	}
-	return injectedMemoryRefWorkspaceDetail
-}
-
 func estimateSummaryInjectionTokens(summary model.Summary) int {
 	return contextstate.EstimatePromptTokens("", nil, SummaryBundle{Rolling: []model.Summary{summary}}, nil)
 }
@@ -561,7 +587,7 @@ func estimateMemoryRefTokens(ref string) int {
 	return contextstate.EstimatePromptTokens("", nil, SummaryBundle{}, []string{ref})
 }
 
-func buildWorkspaceDurableMemory(memory types.SessionMemory, summary model.Summary) (types.MemoryEntry, bool) {
+func buildWorkspaceDurableMemory(memory types.HeadMemory, summary model.Summary) (types.MemoryEntry, bool) {
 	workspaceRoot := strings.TrimSpace(memory.WorkspaceRoot)
 	if workspaceRoot == "" || isZeroSummary(summary) {
 		return types.MemoryEntry{}, false
@@ -574,18 +600,21 @@ func buildWorkspaceDurableMemory(memory types.SessionMemory, summary model.Summa
 
 	now := time.Now().UTC()
 	return types.MemoryEntry{
-		ID:          durableWorkspaceOverviewID(workspaceRoot),
-		Scope:       types.MemoryScopeWorkspace,
-		WorkspaceID: workspaceRoot,
-		Content:     content,
-		SourceRefs:  dedupeSummaryStrings([]string{"session:" + memory.SessionID, "turn:" + memory.SourceTurnID}),
-		Confidence:  0.85,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:                  durableWorkspaceOverviewID(workspaceRoot),
+		Scope:               types.MemoryScopeWorkspace,
+		Kind:                types.MemoryKindWorkspaceOverview,
+		WorkspaceID:         workspaceRoot,
+		SourceSessionID:     memory.SessionID,
+		SourceContextHeadID: memory.ContextHeadID,
+		Content:             content,
+		SourceRefs:          dedupeSummaryStrings([]string{"session:" + memory.SessionID, "head:" + memory.ContextHeadID, "turn:" + memory.SourceTurnID}),
+		Confidence:          0.85,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}, true
 }
 
-func buildWorkspaceDetailMemories(memoryRecord types.SessionMemory, summary model.Summary) []types.MemoryEntry {
+func buildWorkspaceDetailMemories(memoryRecord types.HeadMemory, summary model.Summary) []types.MemoryEntry {
 	workspaceRoot := strings.TrimSpace(memoryRecord.WorkspaceRoot)
 	if workspaceRoot == "" || isZeroSummary(summary) {
 		return nil
@@ -616,14 +645,17 @@ func buildWorkspaceDetailMemories(memoryRecord types.SessionMemory, summary mode
 				continue
 			}
 			out = append(out, types.MemoryEntry{
-				ID:          durableWorkspaceDetailID(workspaceRoot, bucket.kind, content),
-				Scope:       types.MemoryScopeWorkspace,
-				WorkspaceID: workspaceRoot,
-				Content:     bucket.prefix + content,
-				SourceRefs:  dedupeSummaryStrings([]string{"session:" + memoryRecord.SessionID, "turn:" + memoryRecord.SourceTurnID}),
-				Confidence:  0.8,
-				CreatedAt:   now,
-				UpdatedAt:   now,
+				ID:                  durableWorkspaceDetailID(workspaceRoot, bucket.kind, content),
+				Scope:               types.MemoryScopeWorkspace,
+				Kind:                durableWorkspaceDetailKind(bucket.kind),
+				WorkspaceID:         workspaceRoot,
+				SourceSessionID:     memoryRecord.SessionID,
+				SourceContextHeadID: memoryRecord.ContextHeadID,
+				Content:             bucket.prefix + content,
+				SourceRefs:          dedupeSummaryStrings([]string{"session:" + memoryRecord.SessionID, "head:" + memoryRecord.ContextHeadID, "turn:" + memoryRecord.SourceTurnID}),
+				Confidence:          0.8,
+				CreatedAt:           now,
+				UpdatedAt:           now,
 			})
 		}
 	}
@@ -671,6 +703,21 @@ func durableWorkspaceDetailID(workspaceRoot string, kind string, content string)
 	return prefix + "_" + kind + "_" + hex.EncodeToString(sum[:6])
 }
 
+func durableWorkspaceDetailKind(kind string) types.MemoryKind {
+	switch strings.TrimSpace(kind) {
+	case "choice":
+		return types.MemoryKindWorkspaceChoice
+	case "file":
+		return types.MemoryKindWorkspaceFileFocus
+	case "thread":
+		return types.MemoryKindWorkspaceOpenThread
+	case "tool":
+		return types.MemoryKindWorkspaceToolOutcome
+	default:
+		return ""
+	}
+}
+
 func isWorkspaceDurableMemoryEntry(entry types.MemoryEntry, workspaceRoot string) bool {
 	prefix := durableWorkspaceMemoryPrefix(workspaceRoot)
 	if prefix == "" {
@@ -682,7 +729,19 @@ func isWorkspaceDurableMemoryEntry(entry types.MemoryEntry, workspaceRoot string
 	return strings.HasPrefix(entry.ID, prefix)
 }
 
-func buildGlobalDurableMemories(memoryRecord types.SessionMemory, summary model.Summary) []types.MemoryEntry {
+func isWorkspaceDetailMemoryKind(kind types.MemoryKind) bool {
+	switch kind {
+	case types.MemoryKindWorkspaceChoice,
+		types.MemoryKindWorkspaceFileFocus,
+		types.MemoryKindWorkspaceOpenThread,
+		types.MemoryKindWorkspaceToolOutcome:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildGlobalDurableMemories(memoryRecord types.HeadMemory, summary model.Summary) []types.MemoryEntry {
 	candidates := durableGlobalCandidates(summary)
 	if len(candidates) == 0 {
 		return nil
@@ -698,14 +757,17 @@ func buildGlobalDurableMemories(memoryRecord types.SessionMemory, summary model.
 			continue
 		}
 		out = append(out, types.MemoryEntry{
-			ID:          durableGlobalMemoryID(candidate),
-			Scope:       types.MemoryScopeGlobal,
-			WorkspaceID: "",
-			Content:     "[Global durable memory] " + candidate,
-			SourceRefs:  dedupeSummaryStrings([]string{"session:" + memoryRecord.SessionID, "turn:" + memoryRecord.SourceTurnID}),
-			Confidence:  0.9,
-			CreatedAt:   now,
-			UpdatedAt:   now,
+			ID:                  durableGlobalMemoryID(candidate),
+			Scope:               types.MemoryScopeGlobal,
+			Kind:                types.MemoryKindGlobalPreference,
+			WorkspaceID:         "",
+			SourceSessionID:     memoryRecord.SessionID,
+			SourceContextHeadID: memoryRecord.ContextHeadID,
+			Content:             "[Global durable memory] " + candidate,
+			SourceRefs:          dedupeSummaryStrings([]string{"session:" + memoryRecord.SessionID, "head:" + memoryRecord.ContextHeadID, "turn:" + memoryRecord.SourceTurnID}),
+			Confidence:          0.9,
+			CreatedAt:           now,
+			UpdatedAt:           now,
 		})
 	}
 	return out
@@ -827,17 +889,26 @@ func sessionIDForInput(in Input) string {
 	return strings.TrimSpace(in.Session.ID)
 }
 
-func runObservedSessionMemoryRefresh(ctx context.Context, e *Engine, in Input, async bool) error {
+func headMemoryKeyForInput(in Input) string {
+	sessionID := sessionIDForInput(in)
+	headID := strings.TrimSpace(in.Turn.ContextHeadID)
+	if sessionID == "" || headID == "" {
+		return sessionID
+	}
+	return sessionID + ":" + headID
+}
+
+func runObservedHeadMemoryRefresh(ctx context.Context, e *Engine, in Input, async bool) error {
 	ctx = context.WithoutCancel(ctx)
-	_ = emitSessionMemoryEvent(ctx, in, types.EventSessionMemoryStarted, types.SessionMemoryEventPayload{
+	_ = emitHeadMemoryEvent(ctx, in, types.EventHeadMemoryStarted, types.HeadMemoryEventPayload{
 		SourceTurnID:  in.Turn.ID,
 		WorkspaceRoot: in.Session.WorkspaceRoot,
 		Async:         async,
 	})
 
-	report, err := refreshSessionMemory(ctx, e, in)
+	report, err := refreshHeadMemory(ctx, e, in)
 	if err != nil {
-		_ = emitSessionMemoryEvent(ctx, in, types.EventSessionMemoryFailed, types.SessionMemoryEventPayload{
+		_ = emitHeadMemoryEvent(ctx, in, types.EventHeadMemoryFailed, types.HeadMemoryEventPayload{
 			SourceTurnID:  in.Turn.ID,
 			WorkspaceRoot: in.Session.WorkspaceRoot,
 			Async:         async,
@@ -846,7 +917,7 @@ func runObservedSessionMemoryRefresh(ctx context.Context, e *Engine, in Input, a
 		return err
 	}
 
-	_ = emitSessionMemoryEvent(ctx, in, types.EventSessionMemoryCompleted, types.SessionMemoryEventPayload{
+	_ = emitHeadMemoryEvent(ctx, in, types.EventHeadMemoryCompleted, types.HeadMemoryEventPayload{
 		SourceTurnID:             in.Turn.ID,
 		WorkspaceRoot:            in.Session.WorkspaceRoot,
 		Async:                    async,
@@ -858,7 +929,7 @@ func runObservedSessionMemoryRefresh(ctx context.Context, e *Engine, in Input, a
 	return nil
 }
 
-func emitSessionMemoryEvent(ctx context.Context, in Input, eventType string, payload types.SessionMemoryEventPayload) error {
+func emitHeadMemoryEvent(ctx context.Context, in Input, eventType string, payload types.HeadMemoryEventPayload) error {
 	if in.Sink == nil {
 		return nil
 	}
@@ -869,46 +940,46 @@ func emitSessionMemoryEvent(ctx context.Context, in Input, eventType string, pay
 	return in.Sink.Emit(ctx, event)
 }
 
-func startAsyncSessionMemoryRefresh(ctx context.Context, e *Engine, in Input) {
+func startAsyncHeadMemoryRefresh(ctx context.Context, e *Engine, in Input) {
 	if e == nil {
 		return
 	}
-	sessionID := sessionIDForInput(in)
-	if sessionID == "" {
+	headKey := headMemoryKeyForInput(in)
+	if headKey == "" {
 		return
 	}
 
-	e.sessionMemoryMu.Lock()
-	if e.sessionMemoryRunning == nil {
-		e.sessionMemoryRunning = make(map[string]bool)
+	e.headMemoryMu.Lock()
+	if e.headMemoryRunning == nil {
+		e.headMemoryRunning = make(map[string]bool)
 	}
-	if e.sessionMemoryPending == nil {
-		e.sessionMemoryPending = make(map[string]Input)
+	if e.headMemoryPending == nil {
+		e.headMemoryPending = make(map[string]Input)
 	}
-	if e.sessionMemoryRunning[sessionID] {
-		e.sessionMemoryPending[sessionID] = in
-		e.sessionMemoryMu.Unlock()
+	if e.headMemoryRunning[headKey] {
+		e.headMemoryPending[headKey] = in
+		e.headMemoryMu.Unlock()
 		return
 	}
-	e.sessionMemoryRunning[sessionID] = true
-	e.sessionMemoryMu.Unlock()
+	e.headMemoryRunning[headKey] = true
+	e.headMemoryMu.Unlock()
 
-	e.sessionMemoryWG.Add(1)
+	e.headMemoryWG.Add(1)
 	go func(current Input) {
-		defer e.sessionMemoryWG.Done()
+		defer e.headMemoryWG.Done()
 		for {
-			_ = runObservedSessionMemoryRefresh(ctx, e, current, true)
+			_ = runObservedHeadMemoryRefresh(ctx, e, current, true)
 
-			e.sessionMemoryMu.Lock()
-			next, ok := e.sessionMemoryPending[sessionID]
+			e.headMemoryMu.Lock()
+			next, ok := e.headMemoryPending[headKey]
 			if ok {
-				delete(e.sessionMemoryPending, sessionID)
-				e.sessionMemoryMu.Unlock()
+				delete(e.headMemoryPending, headKey)
+				e.headMemoryMu.Unlock()
 				current = next
 				continue
 			}
-			delete(e.sessionMemoryRunning, sessionID)
-			e.sessionMemoryMu.Unlock()
+			delete(e.headMemoryRunning, headKey)
+			e.headMemoryMu.Unlock()
 			return
 		}
 	}(in)

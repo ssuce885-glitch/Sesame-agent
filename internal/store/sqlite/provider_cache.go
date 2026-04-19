@@ -115,6 +115,37 @@ func (s *Store) InsertConversationCompaction(ctx context.Context, compaction typ
 	return err
 }
 
+func (s *Store) InsertConversationCompactionWithContextHead(ctx context.Context, compaction types.ConversationCompaction) error {
+	if err := validateStoredContextHeadID(compaction.ContextHeadID); err != nil {
+		return err
+	}
+
+	metadataJSON := compaction.MetadataJSON
+
+	_, err := s.db.ExecContext(ctx, `
+		insert into conversation_compactions (
+			id, session_id, context_head_id, kind, generation, start_item_id, end_item_id, start_position, end_position,
+			summary_payload, metadata_json, reason, provider_profile, created_at
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		compaction.ID,
+		compaction.SessionID,
+		compaction.ContextHeadID,
+		compaction.Kind,
+		compaction.Generation,
+		compaction.StartItemID,
+		compaction.EndItemID,
+		compaction.StartPosition,
+		compaction.EndPosition,
+		compaction.SummaryPayload,
+		metadataJSON,
+		compaction.Reason,
+		compaction.ProviderProfile,
+		compaction.CreatedAt.UTC().Format(timeLayout),
+	)
+	return err
+}
+
 func (s *Store) ListConversationCompactions(ctx context.Context, sessionID string) ([]types.ConversationCompaction, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		select id, session_id, kind, generation, start_position, end_position, summary_payload, metadata_json, reason, provider_profile, created_at
@@ -136,6 +167,55 @@ func (s *Store) ListConversationCompactions(ctx context.Context, sessionID strin
 			&raw.SessionID,
 			&raw.Kind,
 			&raw.Generation,
+			&raw.StartPosition,
+			&raw.EndPosition,
+			&raw.SummaryPayload,
+			&raw.MetadataJSON,
+			&raw.Reason,
+			&raw.ProviderProfile,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+		parsed, err := time.Parse(timeLayout, createdAt)
+		if err != nil {
+			return nil, err
+		}
+		raw.CreatedAt = parsed
+		out = append(out, raw)
+	}
+
+	return out, rows.Err()
+}
+
+func (s *Store) ListConversationCompactionsByStoredContextHead(ctx context.Context, sessionID, contextHeadID string) ([]types.ConversationCompaction, error) {
+	if err := validateStoredContextHeadID(contextHeadID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		select id, session_id, context_head_id, kind, generation, start_item_id, end_item_id, start_position, end_position, summary_payload, metadata_json, reason, provider_profile, created_at
+		from conversation_compactions
+		where session_id = ? and context_head_id = ?
+		order by created_at asc, id asc
+	`, sessionID, contextHeadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []types.ConversationCompaction
+	for rows.Next() {
+		var raw types.ConversationCompaction
+		var createdAt string
+		if err := rows.Scan(
+			&raw.ID,
+			&raw.SessionID,
+			&raw.ContextHeadID,
+			&raw.Kind,
+			&raw.Generation,
+			&raw.StartItemID,
+			&raw.EndItemID,
 			&raw.StartPosition,
 			&raw.EndPosition,
 			&raw.SummaryPayload,

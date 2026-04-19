@@ -57,8 +57,11 @@ type ProviderCacheEntry struct {
 type ConversationCompaction struct {
 	ID              string                     `json:"id"`
 	SessionID       string                     `json:"session_id"`
+	ContextHeadID   string                     `json:"context_head_id,omitempty"`
 	Kind            ConversationCompactionKind `json:"kind"`
 	Generation      int                        `json:"generation"`
+	StartItemID     int64                      `json:"start_item_id,omitempty"`
+	EndItemID       int64                      `json:"end_item_id,omitempty"`
 	StartPosition   int                        `json:"start_position"`
 	EndPosition     int                        `json:"end_position"`
 	SummaryPayload  string                     `json:"summary_payload"`
@@ -75,7 +78,7 @@ type CompactionBoundaryMetadata struct {
 	CompactedStart        int    `json:"compacted_start"`
 	CompactedEnd          int    `json:"compacted_end"`
 	PreservedRecentStart  int    `json:"preserved_recent_start"`
-	SessionMemoryUpTo     int    `json:"session_memory_up_to"`
+	HeadMemoryUpTo        int64  `json:"head_memory_up_to,omitempty"`
 	SourceItemCount       int    `json:"source_item_count"`
 	Reason                string `json:"reason"`
 	ProviderProfile       string `json:"provider_profile"`

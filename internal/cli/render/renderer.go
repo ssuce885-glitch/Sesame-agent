@@ -245,18 +245,18 @@ func (r *Renderer) RenderEvent(event types.Event) {
 		if err := json.Unmarshal(event.Payload, &payload); err == nil {
 			r.renderDetail("Notice", "", payload.Text)
 		}
-	case types.EventSessionMemoryStarted:
+	case types.EventHeadMemoryStarted:
 		return
-	case types.EventSessionMemoryCompleted:
+	case types.EventHeadMemoryCompleted:
 		return
-	case types.EventSessionMemoryFailed:
+	case types.EventHeadMemoryFailed:
 		r.closeAssistantStream()
-		var payload types.SessionMemoryEventPayload
+		var payload types.HeadMemoryEventPayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil && strings.TrimSpace(payload.Message) != "" {
-			r.renderDetail("Memory", "", "session memory refresh failed: "+payload.Message)
+			r.renderDetail("Memory", "", "head memory refresh failed: "+payload.Message)
 			return
 		}
-		r.renderDetail("Memory", "", "session memory refresh failed")
+		r.renderDetail("Memory", "", "head memory refresh failed")
 	case types.EventTurnFailed:
 		r.closeAssistantStream()
 		var payload types.TurnFailedPayload

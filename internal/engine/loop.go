@@ -189,7 +189,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 
 	if in.Resume == nil && turnKind == types.TurnKindUserMessage {
 		userItem := model.UserMessageItem(in.Turn.UserMessage)
-		if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, userItem); err != nil {
+		if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ContextHeadID, in.Turn.ID, nextPosition, userItem); err != nil {
 			if emitErr := emitFailed(err.Error()); emitErr != nil {
 				return errors.Join(err, emitErr)
 			}
@@ -198,7 +198,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		nextPosition++
 	} else if in.Resume != nil {
 		toolResultItem, toolResult := resumeToolResultItem(in.Resume)
-		if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
+		if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ContextHeadID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
 			if emitErr := emitFailed(err.Error()); emitErr != nil {
 				return errors.Join(err, emitErr)
 			}
@@ -317,7 +317,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		}
 
 		if len(toolCalls) == 0 {
-			nextPosition, _, err = flushAssistantItems(ctx, e.store, sessionID, in.Turn.ID, nextPosition, orderedAssistantItems, 0, "", &req, nativeContinuation)
+			nextPosition, _, err = flushAssistantItems(ctx, e.store, sessionID, in.Turn.ContextHeadID, in.Turn.ID, nextPosition, orderedAssistantItems, 0, "", &req, nativeContinuation)
 			if err != nil {
 				if emitErr := emitFailed(err.Error()); emitErr != nil {
 					return errors.Join(err, emitErr)
@@ -420,7 +420,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			stopAfterBatch := false
 			for index, execResult := range executed {
 				call := batchToolCalls[index]
-				nextPosition, assistantCursor, err = flushAssistantItems(ctx, e.store, sessionID, in.Turn.ID, nextPosition, orderedAssistantItems, assistantCursor, call.ID, &req, nativeContinuation)
+				nextPosition, assistantCursor, err = flushAssistantItems(ctx, e.store, sessionID, in.Turn.ContextHeadID, in.Turn.ID, nextPosition, orderedAssistantItems, assistantCursor, call.ID, &req, nativeContinuation)
 				if err != nil {
 					if emitErr := emitFailed(err.Error()); emitErr != nil {
 						return errors.Join(err, emitErr)
@@ -481,7 +481,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				persistToolResult := output.Interrupt == nil || !output.Interrupt.DeferToolResult
 				if persistToolResult {
 					toolResultItem := model.ToolResultItem(toolResult)
-					if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
+					if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ContextHeadID, in.Turn.ID, nextPosition, toolResultItem); err != nil {
 						if emitErr := emitFailed(err.Error()); emitErr != nil {
 							return errors.Join(err, emitErr)
 						}
@@ -494,7 +494,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 				}
 
 				for _, item := range output.NewItems {
-					if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ID, nextPosition, item); err != nil {
+					if err := persistConversationItem(ctx, e.store, sessionID, in.Turn.ContextHeadID, in.Turn.ID, nextPosition, item); err != nil {
 						if emitErr := emitFailed(err.Error()); emitErr != nil {
 							return errors.Join(err, emitErr)
 						}
@@ -589,7 +589,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 			}
 		}
 		if persistRemainingAssistantItems {
-			nextPosition, _, err = flushAssistantItems(ctx, e.store, sessionID, in.Turn.ID, nextPosition, orderedAssistantItems, assistantCursor, "", &req, nativeContinuation)
+			nextPosition, _, err = flushAssistantItems(ctx, e.store, sessionID, in.Turn.ContextHeadID, in.Turn.ID, nextPosition, orderedAssistantItems, assistantCursor, "", &req, nativeContinuation)
 			if err != nil {
 				if emitErr := emitFailed(err.Error()); emitErr != nil {
 					return errors.Join(err, emitErr)
@@ -663,25 +663,29 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 		return 0, contextstate.WorkingSet{}, nil
 	}
 
-	items, err := loadPromptItemsForCurrentHead(ctx, e.store, sessionID)
+	contextHeadID, err := resolveConversationReadContextHeadID(ctx, e.store, in.Turn.ContextHeadID)
+	if err != nil {
+		return 0, contextstate.WorkingSet{}, err
+	}
+	items, err := loadPromptItemsForHead(ctx, e.store, sessionID, contextHeadID)
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, err
 	}
 	totalItems := len(items)
 
-	summaryBundle, compactions, err := loadSummaryBundle(ctx, e.store, sessionID)
+	summaryBundle, compactions, err := loadHeadMemoryBundle(ctx, e.store, sessionID, contextHeadID)
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, err
 	}
-	hasSessionMemory := summaryBundle.SessionMemory != nil
-	sessionMemoryUpTo := loadSessionMemoryUpTo(ctx, e.store, sessionID)
+	hasHeadMemory := summaryBundle.HeadMemory != nil
+	headMemoryUpTo := loadHeadMemoryUpTo(ctx, e.store, sessionID, contextHeadID)
 
 	entries, err := e.store.ListMemoryEntriesByWorkspace(ctx, in.Session.WorkspaceRoot)
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, err
 	}
 
-	memoryRefs := buildMemoryRefs(entries, hasSessionMemory, in.Session.WorkspaceRoot, turnMessage)
+	memoryRefs := buildMemoryRefs(entries, hasHeadMemory, in.Session.WorkspaceRoot, turnMessage)
 
 	persistedMicroItems := activeMicrocompactItems(compactions)
 	recentWindowItems, recentWindowOverride := recentRawItemsForCompactionWindow(items, compactions)
@@ -692,13 +696,14 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 			ctx,
 			e,
 			sessionID,
+			contextHeadID,
 			turnMessage,
 			items,
 			summaryBundle,
 			memoryRefs,
 			compactions,
 			recentWindowItems,
-			sessionMemoryUpTo,
+			headMemoryUpTo,
 			working,
 		)
 		if err != nil {
@@ -713,13 +718,14 @@ func runCompactionPasses(
 	ctx context.Context,
 	e *Engine,
 	sessionID string,
+	turnContextHeadID string,
 	userMessage string,
 	items []model.ConversationItem,
 	summaryBundle SummaryBundle,
 	memoryRefs []string,
 	compactions []types.ConversationCompaction,
 	recentWindowItems []model.ConversationItem,
-	sessionMemoryUpTo int,
+	headMemoryUpTo int64,
 	working contextstate.WorkingSet,
 ) (contextstate.WorkingSet, SummaryBundle, error) {
 	switch working.Action.Kind {
@@ -728,12 +734,13 @@ func runCompactionPasses(
 			ctx,
 			e,
 			sessionID,
+			turnContextHeadID,
 			userMessage,
 			items,
 			summaryBundle,
 			memoryRefs,
 			compactions,
-			sessionMemoryUpTo,
+			headMemoryUpTo,
 			working,
 			len(compactions)+1,
 			types.ConversationCompactionKindRolling,
@@ -744,6 +751,7 @@ func runCompactionPasses(
 			ctx,
 			e,
 			sessionID,
+			turnContextHeadID,
 			userMessage,
 			items,
 			summaryBundle,
@@ -762,12 +770,13 @@ func runCompactionPasses(
 			ctx,
 			e,
 			sessionID,
+			turnContextHeadID,
 			userMessage,
 			items,
 			nextBundle,
 			memoryRefs,
 			nextCompactions,
-			sessionMemoryUpTo,
+			headMemoryUpTo,
 			nextWorking,
 			len(nextCompactions)+1,
 			types.ConversationCompactionKindRolling,
@@ -782,6 +791,7 @@ func applyMicrocompactPass(
 	ctx context.Context,
 	e *Engine,
 	sessionID string,
+	turnContextHeadID string,
 	userMessage string,
 	items []model.ConversationItem,
 	summaryBundle SummaryBundle,
@@ -794,13 +804,26 @@ func applyMicrocompactPass(
 	if !ok {
 		return working, summaryBundle, compactions, false, nil
 	}
-	if err := e.store.InsertConversationCompaction(ctx, types.ConversationCompaction{
+	contextHeadID, err := resolveConversationWriteContextHeadID(ctx, e.store, turnContextHeadID)
+	if err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
+	}
+	startPosition := firstPayloadPosition(candidatePayload)
+	endPosition := lastPayloadPosition(candidatePayload)
+	startItemID, endItemID, err := resolveConversationCompactionItemIDBounds(ctx, e.store, sessionID, contextHeadID, startPosition, endPosition)
+	if err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
+	}
+	if err := e.store.InsertConversationCompactionWithContextHead(ctx, types.ConversationCompaction{
 		ID:              types.NewID("compact"),
 		SessionID:       sessionID,
+		ContextHeadID:   contextHeadID,
 		Kind:            types.ConversationCompactionKindMicro,
 		Generation:      len(compactions) + 1,
-		StartPosition:   firstPayloadPosition(candidatePayload),
-		EndPosition:     lastPayloadPosition(candidatePayload),
+		StartItemID:     startItemID,
+		EndItemID:       endItemID,
+		StartPosition:   startPosition,
+		EndPosition:     endPosition,
 		SummaryPayload:  encodeMicrocompactPayload(candidatePayload),
 		Reason:          "microcompact_tool_results",
 		ProviderProfile: string(e.model.Capabilities().Profile),
@@ -809,7 +832,7 @@ func applyMicrocompactPass(
 		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
 	}
 
-	nextBundle, nextCompactions, err := loadSummaryBundle(ctx, e.store, sessionID)
+	nextBundle, nextCompactions, err := loadHeadMemoryBundle(ctx, e.store, sessionID, contextHeadID)
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
 	}
@@ -834,12 +857,13 @@ func applySummaryCompaction(
 	ctx context.Context,
 	e *Engine,
 	sessionID string,
+	turnContextHeadID string,
 	userMessage string,
 	items []model.ConversationItem,
 	summaryBundle SummaryBundle,
 	memoryRefs []string,
 	compactions []types.ConversationCompaction,
-	sessionMemoryUpTo int,
+	headMemoryUpTo int64,
 	working contextstate.WorkingSet,
 	generation int,
 	kind types.ConversationCompactionKind,
@@ -861,21 +885,31 @@ func applySummaryCompaction(
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
-	if err := e.store.InsertConversationSummary(ctx, sessionID, cutoff, summary); err != nil {
+	contextHeadID, err := resolveConversationWriteContextHeadID(ctx, e.store, turnContextHeadID)
+	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
-	if err := e.store.InsertConversationCompaction(ctx, types.ConversationCompaction{
+	startPosition := 0
+	endPosition := cutoff
+	startItemID, endItemID, err := resolveConversationCompactionItemIDBounds(ctx, e.store, sessionID, contextHeadID, startPosition, endPosition)
+	if err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, err
+	}
+	if err := e.store.InsertConversationCompactionWithContextHead(ctx, types.ConversationCompaction{
 		ID:             types.NewID("compact"),
 		SessionID:      sessionID,
+		ContextHeadID:  contextHeadID,
 		Kind:           kind,
 		Generation:     generation,
-		StartPosition:  0,
-		EndPosition:    cutoff,
+		StartItemID:    startItemID,
+		EndItemID:      endItemID,
+		StartPosition:  startPosition,
+		EndPosition:    endPosition,
 		SummaryPayload: marshalCompactionSummary(summary),
 		MetadataJSON: encodeBoundaryMetadata(newBoundaryMetadata(
 			generation,
 			cutoff,
-			sessionMemoryUpTo,
+			headMemoryUpTo,
 			len(items),
 			reason,
 			string(e.model.Capabilities().Profile),
@@ -888,7 +922,7 @@ func applySummaryCompaction(
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
 
-	summaryBundle, compactions, err = loadSummaryBundle(ctx, e.store, sessionID)
+	summaryBundle, compactions, err = loadHeadMemoryBundle(ctx, e.store, sessionID, contextHeadID)
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
@@ -900,7 +934,7 @@ func applySummaryCompaction(
 	return working, summaryBundle, nil
 }
 
-func newBoundaryMetadata(generation int, cutoff int, sessionMemoryUpTo int, sourceItemCount int, reason string, providerProfile string, hasRecentMicrocompact bool) types.CompactionBoundaryMetadata {
+func newBoundaryMetadata(generation int, cutoff int, headMemoryUpTo int64, sourceItemCount int, reason string, providerProfile string, hasRecentMicrocompact bool) types.CompactionBoundaryMetadata {
 	return types.CompactionBoundaryMetadata{
 		Version:               1,
 		PromptLayoutVersion:   1,
@@ -908,7 +942,7 @@ func newBoundaryMetadata(generation int, cutoff int, sessionMemoryUpTo int, sour
 		CompactedStart:        0,
 		CompactedEnd:          cutoff,
 		PreservedRecentStart:  cutoff,
-		SessionMemoryUpTo:     sessionMemoryUpTo,
+		HeadMemoryUpTo:        headMemoryUpTo,
 		SourceItemCount:       sourceItemCount,
 		Reason:                reason,
 		ProviderProfile:       providerProfile,
@@ -938,18 +972,15 @@ func setPromptItems(working contextstate.WorkingSet, carryForwardItems []model.C
 	return working
 }
 
-func loadSessionMemoryUpTo(ctx context.Context, store ConversationStore, sessionID string) int {
-	if store == nil || strings.TrimSpace(sessionID) == "" {
+func loadHeadMemoryUpTo(ctx context.Context, store ConversationStore, sessionID, contextHeadID string) int64 {
+	if store == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(contextHeadID) == "" {
 		return 0
 	}
-	memory, ok, err := store.GetSessionMemory(ctx, sessionID)
-	if err != nil || !ok {
+	memory, ok, err := store.GetHeadMemory(ctx, sessionID, contextHeadID)
+	if err != nil || !ok || memory.UpToItemID < 0 {
 		return 0
 	}
-	if memory.UpToPosition < 0 {
-		return 0
-	}
-	return memory.UpToPosition
+	return memory.UpToItemID
 }
 
 func appendPromptItems(carryForwardItems, recentItems []model.ConversationItem) []model.ConversationItem {
@@ -1238,20 +1269,88 @@ func structuredToolError(err error) any {
 	return nil
 }
 
-func persistConversationItem(ctx context.Context, store ConversationStore, sessionID, turnID string, position int, item model.ConversationItem) error {
+func resolveConversationWriteContextHeadID(ctx context.Context, store ConversationStore, preferredContextHeadID string) (string, error) {
+	if resolved := strings.TrimSpace(preferredContextHeadID); resolved != "" {
+		return resolved, nil
+	}
+	if store == nil {
+		return "", errors.New("context head id is required for head-scoped conversation writes")
+	}
+	current, ok, err := store.GetCurrentContextHeadID(ctx)
+	if err != nil {
+		return "", fmt.Errorf("load current context head id: %w", err)
+	}
+	current = strings.TrimSpace(current)
+	if !ok || current == "" {
+		return "", errors.New("context head id is required for head-scoped conversation writes")
+	}
+	return current, nil
+}
+
+func resolveConversationCompactionItemIDBounds(
+	ctx context.Context,
+	store ConversationStore,
+	sessionID string,
+	contextHeadID string,
+	startPosition int,
+	endPosition int,
+) (int64, int64, error) {
+	if store == nil {
+		return 0, 0, errors.New("store is required to resolve compaction bounds")
+	}
+	timelineItems, err := store.ListConversationTimelineItemsByContextHead(ctx, sessionID, contextHeadID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list timeline items for context head %q: %w", contextHeadID, err)
+	}
+
+	startItemID := int64(0)
+	if startPosition < 0 {
+		return 0, 0, fmt.Errorf("resolve start item id at position %d: invalid negative position", startPosition)
+	}
+	if startPosition > 0 {
+		startIndex := startPosition - 1
+		if startIndex < 0 || startIndex >= len(timelineItems) {
+			return 0, 0, fmt.Errorf("resolve start item id at position %d: not found in lineage timeline", startPosition)
+		}
+		startItemID = timelineItems[startIndex].ItemID
+		if startItemID == 0 {
+			return 0, 0, fmt.Errorf("resolve start item id at position %d: missing stable item id", startPosition)
+		}
+	}
+
+	if endPosition <= 0 {
+		return 0, 0, fmt.Errorf("resolve end item id at position %d: invalid non-positive position", endPosition)
+	}
+	endIndex := endPosition - 1
+	if endIndex < 0 || endIndex >= len(timelineItems) {
+		return 0, 0, fmt.Errorf("resolve end item id at position %d: not found in lineage timeline", endPosition)
+	}
+	endItemID := timelineItems[endIndex].ItemID
+	if endItemID == 0 {
+		return 0, 0, fmt.Errorf("resolve end item id at position %d: missing stable item id", endPosition)
+	}
+	return startItemID, endItemID, nil
+}
+
+func persistConversationItem(ctx context.Context, store ConversationStore, sessionID, turnContextHeadID, turnID string, position int, item model.ConversationItem) error {
 	if store == nil {
 		return nil
 	}
 	if (item.Kind == model.ConversationItemAssistantText || item.Kind == model.ConversationItemAssistantThinking) && strings.TrimSpace(item.Text) == "" {
 		return nil
 	}
-	return store.InsertConversationItem(ctx, sessionID, turnID, position, item)
+	contextHeadID, err := resolveConversationWriteContextHeadID(ctx, store, turnContextHeadID)
+	if err != nil {
+		return fmt.Errorf("resolve context head id for conversation item write: %w", err)
+	}
+	return store.InsertConversationItemWithContextHead(ctx, sessionID, contextHeadID, turnID, position, item)
 }
 
 func flushAssistantItems(
 	ctx context.Context,
 	store ConversationStore,
 	sessionID string,
+	turnContextHeadID string,
 	turnID string,
 	nextPosition int,
 	items []model.ConversationItem,
@@ -1264,7 +1363,7 @@ func flushAssistantItems(
 	foundTarget := targetToolCallID == ""
 	for cursor < len(items) {
 		item := items[cursor]
-		if err := persistConversationItem(ctx, store, sessionID, turnID, nextPosition, item); err != nil {
+		if err := persistConversationItem(ctx, store, sessionID, turnContextHeadID, turnID, nextPosition, item); err != nil {
 			return nextPosition, cursor, err
 		}
 		appendAssistantItemToRequest(req, item, nativeContinuation)
@@ -1367,14 +1466,14 @@ func finalizeTurn(ctx context.Context, e *Engine, in Input, usage *types.TurnUsa
 		}
 	}
 
-	if e != nil && e.sessionMemoryAsync {
-		if e.sessionMemoryWorker != nil {
-			e.sessionMemoryWorker.Enqueue(ctx, e, in)
+	if e != nil && e.headMemoryAsync {
+		if e.headMemoryWorker != nil {
+			e.headMemoryWorker.Enqueue(ctx, e, in)
 		} else {
-			startAsyncSessionMemoryRefresh(ctx, e, in)
+			startAsyncHeadMemoryRefresh(ctx, e, in)
 		}
 	} else {
-		_ = maybeRefreshSessionMemory(ctx, e, in)
+		_ = maybeRefreshHeadMemory(ctx, e, in)
 	}
 	return nil
 }

@@ -2,11 +2,12 @@ package types
 
 import "time"
 
-type SessionMemory struct {
+type HeadMemory struct {
 	SessionID      string    `json:"session_id"`
+	ContextHeadID  string    `json:"context_head_id"`
 	WorkspaceRoot  string    `json:"workspace_root,omitempty"`
 	SourceTurnID   string    `json:"source_turn_id,omitempty"`
-	UpToPosition   int       `json:"up_to_position"`
+	UpToItemID     int64     `json:"up_to_item_id"`
 	ItemCount      int       `json:"item_count"`
 	SummaryPayload string    `json:"summary_payload"`
 	CreatedAt      time.Time `json:"created_at"`
