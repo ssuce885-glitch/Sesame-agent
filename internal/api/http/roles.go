@@ -58,7 +58,7 @@ func handleRoleByID(deps Dependencies) http.HandlerFunc {
 			return
 		}
 		roleID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/roles/"))
-		if roleID == "" {
+		if roleID == "" || strings.Contains(roleID, "/") {
 			http.NotFound(w, r)
 			return
 		}
