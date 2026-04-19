@@ -38,6 +38,8 @@ type ConversationStore interface {
 	ListConversationCompactions(context.Context, string) ([]types.ConversationCompaction, error)
 	GetSessionMemory(context.Context, string) (types.SessionMemory, bool, error)
 	InsertConversationItem(context.Context, string, string, int, model.ConversationItem) error
+	InsertConversationItemWithContextHead(context.Context, string, string, string, int, model.ConversationItem) error
+	GetConversationItemIDByContextHeadAndPosition(context.Context, string, string, int) (int64, bool, error)
 	InsertConversationSummary(context.Context, string, int, model.Summary) error
 	UpsertTurnUsage(context.Context, types.TurnUsage) error
 	UpsertSessionMemory(context.Context, types.SessionMemory) error
@@ -48,6 +50,7 @@ type ConversationStore interface {
 	UpsertProviderCacheHead(context.Context, types.ProviderCacheHead) error
 	InsertProviderCacheEntry(context.Context, types.ProviderCacheEntry) error
 	InsertConversationCompaction(context.Context, types.ConversationCompaction) error
+	InsertConversationCompactionWithContextHead(context.Context, types.ConversationCompaction) error
 }
 
 type SessionMemoryWorker interface {
