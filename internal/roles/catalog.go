@@ -11,11 +11,11 @@ import (
 )
 
 type Spec struct {
-	RoleID      string
-	DisplayName string
-	Description string
-	Prompt      string
-	SkillNames  []string
+	RoleID      string   `json:"role_id"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	Prompt      string   `json:"prompt"`
+	SkillNames  []string `json:"skills"`
 }
 
 type Catalog struct {
