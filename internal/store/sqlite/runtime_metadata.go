@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/sessionbinding"
 	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
@@ -30,9 +31,10 @@ func (s *Store) SetCanonicalSessionID(ctx context.Context, sessionID string) err
 func (s *Store) GetCurrentContextHeadID(ctx context.Context) (string, bool, error) {
 	binding := sessionbinding.FromContext(ctx)
 	role := sessionrole.FromContext(ctx)
-	key := currentHeadMetadataKey(binding, role)
+	specialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
+	key := currentHeadMetadataKey(binding, role, specialistRoleID)
 	value, ok, err := getRuntimeMetadataValue(ctx, s.db, key)
-	if err != nil || ok || role != types.SessionRoleMainParent {
+	if err != nil || ok || role != types.SessionRoleMainParent || normalizeSpecialistRoleID(specialistRoleID) != "" {
 		return value, ok, err
 	}
 	return getRuntimeMetadataValue(ctx, s.db, sessionbinding.CurrentHeadMetadataKey(binding))
@@ -41,10 +43,11 @@ func (s *Store) GetCurrentContextHeadID(ctx context.Context) (string, bool, erro
 func (s *Store) SetCurrentContextHeadID(ctx context.Context, headID string) error {
 	binding := sessionbinding.FromContext(ctx)
 	role := sessionrole.FromContext(ctx)
-	if err := setRuntimeMetadataValue(ctx, s.db, currentHeadMetadataKey(binding, role), headID); err != nil {
+	specialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
+	if err := setRuntimeMetadataValue(ctx, s.db, currentHeadMetadataKey(binding, role, specialistRoleID), headID); err != nil {
 		return err
 	}
-	if role == types.SessionRoleMainParent {
+	if role == types.SessionRoleMainParent && normalizeSpecialistRoleID(specialistRoleID) == "" {
 		return setRuntimeMetadataValue(ctx, s.db, sessionbinding.CurrentHeadMetadataKey(binding), headID)
 	}
 	return nil
@@ -52,6 +55,11 @@ func (s *Store) SetCurrentContextHeadID(ctx context.Context, headID string) erro
 
 func (s *Store) GetRoleSessionID(ctx context.Context, workspaceRoot string, role types.SessionRole) (string, bool, error) {
 	role = sessionrole.Normalize(string(role))
+	if role == types.SessionRoleMonitoringParent {
+		if sessionID, ok, err := s.GetSpecialistSessionID(ctx, workspaceRoot, monitoringSpecialistRoleID); err != nil || ok {
+			return sessionID, ok, err
+		}
+	}
 	if role == types.SessionRoleMainParent {
 		if sessionID, ok, err := getRuntimeMetadataValue(ctx, s.db, roleSessionMetadataKey(workspaceRoot, role)); err != nil {
 			return "", false, err
@@ -67,6 +75,9 @@ func (s *Store) GetRoleSessionID(ctx context.Context, workspaceRoot string, role
 
 func (s *Store) SetRoleSessionID(ctx context.Context, workspaceRoot string, role types.SessionRole, sessionID string) error {
 	role = sessionrole.Normalize(string(role))
+	if role == types.SessionRoleMonitoringParent {
+		return s.SetSpecialistSessionID(ctx, workspaceRoot, monitoringSpecialistRoleID, strings.TrimSpace(sessionID))
+	}
 	if err := setRuntimeMetadataValue(ctx, s.db, roleSessionMetadataKey(workspaceRoot, role), strings.TrimSpace(sessionID)); err != nil {
 		return err
 	}
@@ -76,7 +87,27 @@ func (s *Store) SetRoleSessionID(ctx context.Context, workspaceRoot string, role
 	return nil
 }
 
-func currentHeadMetadataKey(binding string, role types.SessionRole) string {
+func (s *Store) GetSpecialistSessionID(ctx context.Context, workspaceRoot, roleID string) (string, bool, error) {
+	roleID = normalizeSpecialistRoleID(roleID)
+	if roleID == "" {
+		return "", false, nil
+	}
+	return getRuntimeMetadataValue(ctx, s.db, specialistSessionMetadataKey(workspaceRoot, roleID))
+}
+
+func (s *Store) SetSpecialistSessionID(ctx context.Context, workspaceRoot, roleID, sessionID string) error {
+	roleID = normalizeSpecialistRoleID(roleID)
+	if roleID == "" {
+		return errors.New("specialist role id is required")
+	}
+	return setRuntimeMetadataValue(ctx, s.db, specialistSessionMetadataKey(workspaceRoot, roleID), strings.TrimSpace(sessionID))
+}
+
+func currentHeadMetadataKey(binding string, role types.SessionRole, specialistRoleID string) string {
+	if specialistRoleID = normalizeSpecialistRoleID(specialistRoleID); specialistRoleID != "" {
+		encodedRoleID := base64.RawURLEncoding.EncodeToString([]byte(specialistRoleID))
+		return sessionbinding.CurrentHeadMetadataKey(binding) + ":specialist:" + encodedRoleID
+	}
 	return sessionbinding.CurrentHeadMetadataKey(binding) + ":role:" + string(sessionrole.Normalize(string(role)))
 }
 
@@ -84,6 +115,25 @@ func roleSessionMetadataKey(workspaceRoot string, role types.SessionRole) string
 	normalized := strings.TrimSpace(workspaceRoot)
 	encodedRoot := base64.RawURLEncoding.EncodeToString([]byte(normalized))
 	return "role_session:" + encodedRoot + ":" + string(sessionrole.Normalize(string(role)))
+}
+
+func specialistSessionMetadataKey(workspaceRoot, roleID string) string {
+	normalizedWorkspaceRoot := strings.TrimSpace(workspaceRoot)
+	encodedRoot := base64.RawURLEncoding.EncodeToString([]byte(normalizedWorkspaceRoot))
+	encodedRoleID := base64.RawURLEncoding.EncodeToString([]byte(normalizeSpecialistRoleID(roleID)))
+	return "specialist_session:" + encodedRoot + ":" + encodedRoleID
+}
+
+func normalizeSpecialistRoleID(roleID string) string {
+	roleID = strings.TrimSpace(roleID)
+	switch roleID {
+	case "", string(types.SessionRoleMainParent):
+		return ""
+	case string(types.SessionRoleMonitoringParent), monitoringSpecialistRoleID:
+		return monitoringSpecialistRoleID
+	default:
+		return roleID
+	}
 }
 
 func getRuntimeMetadataValue(ctx context.Context, queryer queryRowContexter, key string) (string, bool, error) {

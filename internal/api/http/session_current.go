@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/sessionbinding"
 	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
@@ -45,6 +46,7 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 
 		role := sessionrole.RequestRole(r, req.SessionRole)
 		r = r.WithContext(sessionrole.WithSessionRole(r.Context(), role))
+		r = r.WithContext(rolectx.WithSpecialistRoleID(r.Context(), req.SpecialistRoleID))
 
 		session, _, _, err := deps.Store.EnsureRoleSession(r.Context(), req.WorkspaceRoot, role)
 		if err != nil {
@@ -66,6 +68,7 @@ func handleCurrentSession(deps Dependencies, next sessionScopedHandlerFactory) h
 	return func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), r.Header.Get(sessionbinding.HeaderName)))
 		r = r.WithContext(sessionrole.WithSessionRole(r.Context(), sessionrole.RequestRole(r, "")))
+		r = r.WithContext(rolectx.WithSpecialistRoleID(r.Context(), r.URL.Query().Get("specialist_role_id")))
 		sessionID, ok := resolveCurrentSessionID(w, r, deps)
 		if !ok {
 			return

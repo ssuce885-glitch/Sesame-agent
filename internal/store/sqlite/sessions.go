@@ -3,15 +3,18 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"time"
 
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
 )
 
 const timeLayout = time.RFC3339Nano
+const monitoringSpecialistRoleID = "monitoring_role"
 
 func (s *Store) InsertSession(ctx context.Context, session types.Session) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -408,9 +411,23 @@ func isTerminalTurnState(state types.TurnState) bool {
 
 func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, role types.SessionRole) (types.Session, types.ContextHead, bool, error) {
 	role = sessionrole.Normalize(string(role))
-	roleCtx := sessionrole.WithSessionRole(ctx, role)
+	if specialistRoleID := normalizeSpecialistRoleID(rolectx.SpecialistRoleIDFromContext(ctx)); specialistRoleID != "" {
+		specialistCtx := rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent), specialistRoleID)
+		return s.EnsureSpecialistSession(specialistCtx, workspaceRoot, specialistRoleID, "", nil)
+	}
+	if role == types.SessionRoleMonitoringParent {
+		specialistCtx := rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent), monitoringSpecialistRoleID)
+		return s.EnsureSpecialistSession(
+			specialistCtx,
+			workspaceRoot,
+			monitoringSpecialistRoleID,
+			sessionrole.DefaultSystemPrompt(types.SessionRoleMonitoringParent),
+			sessionrole.DefaultSkillNames(types.SessionRoleMonitoringParent),
+		)
+	}
 
 	if role == types.SessionRoleMainParent {
+		roleCtx := sessionrole.WithSessionRole(ctx, role)
 		session, head, created, err := s.EnsureCanonicalSession(roleCtx, workspaceRoot)
 		if err != nil {
 			return types.Session{}, types.ContextHead{}, false, err
@@ -425,6 +442,7 @@ func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, rol
 		return session, head, created, nil
 	}
 
+	roleCtx := sessionrole.WithSessionRole(ctx, role)
 	if sessionID, ok, err := s.GetRoleSessionID(ctx, workspaceRoot, role); err != nil {
 		return types.Session{}, types.ContextHead{}, false, err
 	} else if ok {
@@ -464,11 +482,122 @@ func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, rol
 	return session, head, true, nil
 }
 
+func (s *Store) EnsureSpecialistSession(ctx context.Context, workspaceRoot, roleID, systemPrompt string, skillNames []string) (types.Session, types.ContextHead, bool, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	roleID = normalizeSpecialistRoleID(roleID)
+	if workspaceRoot == "" {
+		return types.Session{}, types.ContextHead{}, false, errors.New("workspace root is required")
+	}
+	if roleID == "" {
+		return types.Session{}, types.ContextHead{}, false, errors.New("specialist role id is required")
+	}
+	_ = skillNames
+
+	specialistCtx := rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent), roleID)
+
+	if sessionID, ok, err := s.GetSpecialistSessionID(ctx, workspaceRoot, roleID); err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	} else if ok {
+		session, found, err := s.GetSession(ctx, sessionID)
+		if err != nil {
+			return types.Session{}, types.ContextHead{}, false, err
+		}
+		if found && session.WorkspaceRoot == workspaceRoot {
+			session, err = s.ensureSpecialistSystemPrompt(specialistCtx, session, roleID, systemPrompt)
+			if err != nil {
+				return types.Session{}, types.ContextHead{}, false, err
+			}
+			head, _, err := s.ensureCurrentContextHead(specialistCtx, session)
+			return session, head, false, err
+		}
+	}
+
+	prompt := strings.TrimSpace(systemPrompt)
+	if prompt == "" && roleID == monitoringSpecialistRoleID {
+		prompt = strings.TrimSpace(sessionrole.DefaultSystemPrompt(types.SessionRoleMonitoringParent))
+	}
+	if prompt == "" {
+		prompt = strings.TrimSpace(sessionrole.DefaultSystemPrompt(types.SessionRoleMainParent))
+	}
+
+	now := time.Now().UTC()
+	session := types.Session{
+		ID:            types.NewID("sess"),
+		WorkspaceRoot: workspaceRoot,
+		SystemPrompt:  prompt,
+		State:         types.SessionStateIdle,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.InsertSession(ctx, session); err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	}
+	if err := s.SetSpecialistSessionID(ctx, workspaceRoot, roleID, session.ID); err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	}
+	head, _, err := s.ensureCurrentContextHead(specialistCtx, session)
+	if err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	}
+	return session, head, true, nil
+}
+
+func (s *Store) ResolveSpecialistRoleID(ctx context.Context, sessionID, workspaceRoot string) (string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if sessionID == "" || workspaceRoot == "" {
+		return "", nil
+	}
+
+	session, found, err := s.GetSession(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if !found || session.WorkspaceRoot != workspaceRoot {
+		return "", nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		select key, value
+		from runtime_metadata
+		where key like ?
+	`, specialistSessionMetadataKey(workspaceRoot, "")+"%")
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var metadataKey string
+		var mappedSessionID string
+		if err := rows.Scan(&metadataKey, &mappedSessionID); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(mappedSessionID) != sessionID {
+			continue
+		}
+		roleID, ok := specialistRoleIDFromMetadataKey(metadataKey)
+		if !ok {
+			continue
+		}
+		return roleID, nil
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return "", nil
+}
+
 func (s *Store) ResolveSessionRole(ctx context.Context, sessionID, workspaceRoot string) (types.SessionRole, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if sessionID == "" || workspaceRoot == "" {
 		return "", nil
+	}
+	if specialistRoleID, err := s.ResolveSpecialistRoleID(ctx, sessionID, workspaceRoot); err != nil {
+		return "", err
+	} else if specialistRoleID == monitoringSpecialistRoleID {
+		return types.SessionRoleMonitoringParent, nil
 	}
 
 	for _, role := range []types.SessionRole{types.SessionRoleMonitoringParent, types.SessionRoleMainParent} {
@@ -600,6 +729,52 @@ func (s *Store) ensureRoleSystemPrompt(ctx context.Context, session types.Sessio
 	session.SystemPrompt = prompt
 	session.UpdatedAt = now
 	return session, nil
+}
+
+func (s *Store) ensureSpecialistSystemPrompt(ctx context.Context, session types.Session, roleID, systemPrompt string) (types.Session, error) {
+	prompt := strings.TrimSpace(systemPrompt)
+	if prompt == "" && normalizeSpecialistRoleID(roleID) == monitoringSpecialistRoleID &&
+		sessionrole.ShouldRefreshDefaultSystemPrompt(types.SessionRoleMonitoringParent, session.SystemPrompt) {
+		prompt = strings.TrimSpace(sessionrole.DefaultSystemPrompt(types.SessionRoleMonitoringParent))
+	}
+	if prompt == "" || strings.TrimSpace(session.SystemPrompt) == prompt {
+		return session, nil
+	}
+
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `
+		update sessions
+		set system_prompt = ?, updated_at = ?
+		where id = ?`,
+		prompt,
+		now.Format(timeLayout),
+		session.ID,
+	)
+	if err != nil {
+		return types.Session{}, err
+	}
+	if err := requireSingleRow(result); err != nil {
+		return types.Session{}, err
+	}
+	session.SystemPrompt = prompt
+	session.UpdatedAt = now
+	return session, nil
+}
+
+func specialistRoleIDFromMetadataKey(metadataKey string) (string, bool) {
+	parts := strings.Split(metadataKey, ":")
+	if len(parts) != 3 || parts[0] != "specialist_session" {
+		return "", false
+	}
+	rawRoleID, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return "", false
+	}
+	roleID := normalizeSpecialistRoleID(string(rawRoleID))
+	if roleID == "" {
+		return "", false
+	}
+	return roleID, true
 }
 
 func (s *Store) ensureCurrentContextHead(ctx context.Context, session types.Session) (types.ContextHead, bool, error) {
