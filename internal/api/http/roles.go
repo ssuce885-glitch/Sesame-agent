@@ -117,7 +117,7 @@ func toRoleResponse(spec roles.Spec) roleResponse {
 
 func toRoleResponseList(specs []roles.Spec) []roleResponse {
 	if len(specs) == 0 {
-		return nil
+		return []roleResponse{}
 	}
 	out := make([]roleResponse, 0, len(specs))
 	for _, spec := range specs {

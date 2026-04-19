@@ -213,25 +213,69 @@ func prepareRoleStagingDir(rolesRoot string, in UpsertInput) (string, error) {
 	return stagingDir, nil
 }
 
+type roleFileBackup struct {
+	dst    string
+	backup string
+}
+
 func replaceRoleFilesFromStaging(roleDir, stagingDir string) error {
+	backupDir, err := os.MkdirTemp(roleDir, ".role-update-backup-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(backupDir) }()
+
+	replaced := make([]roleFileBackup, 0, 2)
+
 	for _, name := range []string{"role.yaml", "prompt.md"} {
 		src := filepath.Join(stagingDir, name)
 		dst := filepath.Join(roleDir, name)
-		if err := replaceFileInPlace(src, dst); err != nil {
+		backup := filepath.Join(backupDir, name)
+
+		if err := moveFileToBackup(dst, backup); err != nil {
+			if rollbackErr := rollbackRoleFiles(replaced); rollbackErr != nil {
+				return errors.Join(err, rollbackErr)
+			}
 			return err
 		}
+
+		if err := os.Rename(src, dst); err != nil {
+			restoreErr := os.Rename(backup, dst)
+			rollbackErr := rollbackRoleFiles(replaced)
+			return errors.Join(err, restoreErr, rollbackErr)
+		}
+
+		replaced = append(replaced, roleFileBackup{
+			dst:    dst,
+			backup: backup,
+		})
 	}
 	return nil
 }
 
-func replaceFileInPlace(src, dst string) error {
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	}
-	if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+func moveFileToBackup(src, backup string) error {
+	info, err := os.Stat(src)
+	if err != nil {
 		return err
 	}
-	return os.Rename(src, dst)
+	if info.IsDir() {
+		return fmt.Errorf("%s is a directory", src)
+	}
+	return os.Rename(src, backup)
+}
+
+func rollbackRoleFiles(replaced []roleFileBackup) error {
+	var rollbackErr error
+	for i := len(replaced) - 1; i >= 0; i-- {
+		entry := replaced[i]
+		if err := os.Remove(entry.dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
+		if err := os.Rename(entry.backup, entry.dst); err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
+	}
+	return rollbackErr
 }
 
 func writeRoleFilesToDir(roleDir string, in UpsertInput) error {
