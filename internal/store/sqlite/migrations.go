@@ -610,6 +610,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureAutomationDispatchDeliverySchema(ctx); err != nil {
 		return err
 	}
+	if err := s.backfillLegacyChatMemoryKeys(ctx); err != nil {
+		return err
+	}
 
 	return nil
 }
