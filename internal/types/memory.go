@@ -10,6 +10,17 @@ const (
 	MemoryScopeGlobal    MemoryScope = "global"
 )
 
+type MemoryKind string
+
+const (
+	MemoryKindWorkspaceOverview    MemoryKind = "workspace_overview"
+	MemoryKindWorkspaceChoice      MemoryKind = "workspace_choice"
+	MemoryKindWorkspaceFileFocus   MemoryKind = "workspace_file_focus"
+	MemoryKindWorkspaceOpenThread  MemoryKind = "workspace_open_thread"
+	MemoryKindWorkspaceToolOutcome MemoryKind = "workspace_tool_outcome"
+	MemoryKindGlobalPreference     MemoryKind = "global_preference"
+)
+
 type MemoryEntry struct {
 	ID          string      `json:"id"`
 	Scope       MemoryScope `json:"scope"`

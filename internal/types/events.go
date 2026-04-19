@@ -29,6 +29,9 @@ const (
 	EventSessionMemoryStarted   = "session_memory.started"
 	EventSessionMemoryCompleted = "session_memory.completed"
 	EventSessionMemoryFailed    = "session_memory.failed"
+	EventHeadMemoryStarted      = "head_memory.started"
+	EventHeadMemoryCompleted    = "head_memory.completed"
+	EventHeadMemoryFailed       = "head_memory.failed"
 	EventSessionQueueUpdated    = "session.queue_updated"
 	EventSystemNotice           = "system.notice"
 )
@@ -92,6 +95,17 @@ type PermissionResolvedPayload struct {
 }
 
 type SessionMemoryEventPayload struct {
+	SourceTurnID             string `json:"source_turn_id,omitempty"`
+	WorkspaceRoot            string `json:"workspace_root,omitempty"`
+	Async                    bool   `json:"async,omitempty"`
+	Updated                  bool   `json:"updated,omitempty"`
+	WorkspaceEntriesUpserted int    `json:"workspace_entries_upserted,omitempty"`
+	GlobalEntriesUpserted    int    `json:"global_entries_upserted,omitempty"`
+	WorkspaceEntriesPruned   int    `json:"workspace_entries_pruned,omitempty"`
+	Message                  string `json:"message,omitempty"`
+}
+
+type HeadMemoryEventPayload struct {
 	SourceTurnID             string `json:"source_turn_id,omitempty"`
 	WorkspaceRoot            string `json:"workspace_root,omitempty"`
 	Async                    bool   `json:"async,omitempty"`
