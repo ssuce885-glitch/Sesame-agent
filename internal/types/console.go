@@ -49,9 +49,9 @@ type TimelineContentBlock struct {
 }
 
 type SessionTimelineResponse struct {
-	Blocks             []TimelineBlock `json:"blocks"`
-	LatestSeq          int64           `json:"latest_seq"`
-	PendingReportCount int             `json:"pending_report_count"`
+	Blocks             []TimelineBlock     `json:"blocks"`
+	LatestSeq          int64               `json:"latest_seq"`
+	PendingReportCount int                 `json:"pending_report_count"`
 	Queue              SessionQueueSummary `json:"queue"`
 }
 
@@ -65,8 +65,10 @@ type SessionQueueSummary struct {
 }
 
 type ConversationTimelineItem struct {
-	TurnID string                 `json:"turn_id,omitempty"`
-	Item   model.ConversationItem `json:"item"`
+	ItemID   int64                  `json:"item_id,omitempty"`
+	Position int                    `json:"position,omitempty"`
+	TurnID   string                 `json:"turn_id,omitempty"`
+	Item     model.ConversationItem `json:"item"`
 }
 
 type WorkspaceResponse struct {

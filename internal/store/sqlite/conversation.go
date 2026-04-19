@@ -106,7 +106,7 @@ func (s *Store) ListConversationItems(ctx context.Context, sessionID string) ([]
 
 func (s *Store) ListConversationTimelineItems(ctx context.Context, sessionID string) ([]types.ConversationTimelineItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select turn_id, payload
+		select id, position, turn_id, payload
 		from conversation_items
 		where session_id = ?
 		order by position asc, id asc
@@ -118,9 +118,11 @@ func (s *Store) ListConversationTimelineItems(ctx context.Context, sessionID str
 
 	var out []types.ConversationTimelineItem
 	for rows.Next() {
+		var itemID int64
+		var position int
 		var turnID string
 		var rawPayload string
-		if err := rows.Scan(&turnID, &rawPayload); err != nil {
+		if err := rows.Scan(&itemID, &position, &turnID, &rawPayload); err != nil {
 			return nil, err
 		}
 
@@ -129,8 +131,10 @@ func (s *Store) ListConversationTimelineItems(ctx context.Context, sessionID str
 			return nil, err
 		}
 		out = append(out, types.ConversationTimelineItem{
-			TurnID: turnID,
-			Item:   item,
+			ItemID:   itemID,
+			Position: position,
+			TurnID:   turnID,
+			Item:     item,
 		})
 	}
 
@@ -143,7 +147,7 @@ func (s *Store) ListConversationTimelineItemsByStoredContextHeads(ctx context.Co
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		select turn_id, payload
+		select id, position, turn_id, payload
 		from conversation_items
 		where session_id = ? and context_head_id = ?
 		order by position asc, id asc
@@ -155,9 +159,11 @@ func (s *Store) ListConversationTimelineItemsByStoredContextHeads(ctx context.Co
 
 	var out []types.ConversationTimelineItem
 	for rows.Next() {
+		var itemID int64
+		var position int
 		var turnID string
 		var rawPayload string
-		if err := rows.Scan(&turnID, &rawPayload); err != nil {
+		if err := rows.Scan(&itemID, &position, &turnID, &rawPayload); err != nil {
 			return nil, err
 		}
 
@@ -166,8 +172,10 @@ func (s *Store) ListConversationTimelineItemsByStoredContextHeads(ctx context.Co
 			return nil, err
 		}
 		out = append(out, types.ConversationTimelineItem{
-			TurnID: turnID,
-			Item:   item,
+			ItemID:   itemID,
+			Position: position,
+			TurnID:   turnID,
+			Item:     item,
 		})
 	}
 

@@ -881,9 +881,6 @@ func applySummaryCompaction(
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
-	if err := e.store.InsertConversationSummary(ctx, sessionID, cutoff, summary); err != nil {
-		return contextstate.WorkingSet{}, SummaryBundle{}, err
-	}
 	contextHeadID, err := resolveConversationWriteContextHeadID(ctx, e.store, turnContextHeadID)
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
@@ -892,6 +889,9 @@ func applySummaryCompaction(
 	endPosition := cutoff
 	startItemID, endItemID, err := resolveConversationCompactionItemIDBounds(ctx, e.store, sessionID, contextHeadID, startPosition, endPosition)
 	if err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, err
+	}
+	if err := e.store.InsertConversationSummary(ctx, sessionID, cutoff, summary); err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
 	if err := e.store.InsertConversationCompactionWithContextHead(ctx, types.ConversationCompaction{
@@ -1297,20 +1297,39 @@ func resolveConversationCompactionItemIDBounds(
 	startPosition int,
 	endPosition int,
 ) (int64, int64, error) {
-	startItemID, ok, err := store.GetConversationItemIDByContextHeadAndPosition(ctx, sessionID, contextHeadID, startPosition)
-	if err != nil {
-		return 0, 0, fmt.Errorf("resolve start item id at position %d: %w", startPosition, err)
+	if store == nil {
+		return 0, 0, errors.New("store is required to resolve compaction bounds")
 	}
-	if !ok {
-		startItemID = 0
+	timelineItems, err := store.ListConversationTimelineItemsByContextHead(ctx, sessionID, contextHeadID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list timeline items for context head %q: %w", contextHeadID, err)
 	}
 
-	endItemID, ok, err := store.GetConversationItemIDByContextHeadAndPosition(ctx, sessionID, contextHeadID, endPosition)
-	if err != nil {
-		return 0, 0, fmt.Errorf("resolve end item id at position %d: %w", endPosition, err)
+	startItemID := int64(0)
+	if startPosition < 0 {
+		return 0, 0, fmt.Errorf("resolve start item id at position %d: invalid negative position", startPosition)
 	}
-	if !ok {
-		endItemID = 0
+	if startPosition > 0 {
+		startIndex := startPosition - 1
+		if startIndex < 0 || startIndex >= len(timelineItems) {
+			return 0, 0, fmt.Errorf("resolve start item id at position %d: not found in lineage timeline", startPosition)
+		}
+		startItemID = timelineItems[startIndex].ItemID
+		if startItemID == 0 {
+			return 0, 0, fmt.Errorf("resolve start item id at position %d: missing stable item id", startPosition)
+		}
+	}
+
+	if endPosition <= 0 {
+		return 0, 0, fmt.Errorf("resolve end item id at position %d: invalid non-positive position", endPosition)
+	}
+	endIndex := endPosition - 1
+	if endIndex < 0 || endIndex >= len(timelineItems) {
+		return 0, 0, fmt.Errorf("resolve end item id at position %d: not found in lineage timeline", endPosition)
+	}
+	endItemID := timelineItems[endIndex].ItemID
+	if endItemID == 0 {
+		return 0, 0, fmt.Errorf("resolve end item id at position %d: missing stable item id", endPosition)
 	}
 	return startItemID, endItemID, nil
 }
