@@ -1185,15 +1185,15 @@ func (m *tuiModel) applyEvent(event types.Event) tea.Cmd {
 		refreshAgents = true
 	case types.EventTaskUpdated, types.EventToolRunUpdated, types.EventWorktreeUpdated:
 		refreshAgents = true
-	case types.EventSessionMemoryStarted:
+	case types.EventHeadMemoryStarted:
 		return nil
-	case types.EventSessionMemoryCompleted:
+	case types.EventHeadMemoryCompleted:
 		return nil
-	case types.EventSessionMemoryFailed:
-		var payload types.SessionMemoryEventPayload
+	case types.EventHeadMemoryFailed:
+		var payload types.HeadMemoryEventPayload
 		if err := decodeEventPayload(event.Payload, &payload); err == nil && strings.TrimSpace(payload.Message) != "" {
 			m.closeAssistantStream()
-			m.appendError("session memory refresh failed: " + payload.Message)
+			m.appendError("head memory refresh failed: " + payload.Message)
 		}
 	case types.EventTurnFailed:
 		var payload types.TurnFailedPayload

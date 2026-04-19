@@ -6,34 +6,31 @@ import (
 )
 
 const (
-	EventTurnStarted            = "turn.started"
-	EventTurnCompleted          = "turn.completed"
-	EventTurnFailed             = "turn.failed"
-	EventTurnInterrupted        = "turn.interrupted"
-	EventTurnUsage              = "turn.usage"
-	EventAssistantStarted       = "assistant.started"
-	EventAssistantDelta         = "assistant.delta"
-	EventAssistantCompleted     = "assistant.completed"
-	EventToolStarted            = "tool.started"
-	EventToolProgress           = "tool.progress"
-	EventToolCompleted          = "tool.completed"
-	EventPermissionRequested    = "permission.requested"
-	EventPermissionResolved     = "permission.resolved"
-	EventPlanUpdated            = "plan.updated"
-	EventTaskUpdated            = "task.updated"
-	EventTaskResultReady        = "task.result_ready"
-	EventReportReady            = "report.ready"
-	EventToolRunUpdated         = "tool_run.updated"
-	EventWorktreeUpdated        = "worktree.updated"
-	EventContextCompacted       = "context.compacted"
-	EventSessionMemoryStarted   = "session_memory.started"
-	EventSessionMemoryCompleted = "session_memory.completed"
-	EventSessionMemoryFailed    = "session_memory.failed"
-	EventHeadMemoryStarted      = "head_memory.started"
-	EventHeadMemoryCompleted    = "head_memory.completed"
-	EventHeadMemoryFailed       = "head_memory.failed"
-	EventSessionQueueUpdated    = "session.queue_updated"
-	EventSystemNotice           = "system.notice"
+	EventTurnStarted         = "turn.started"
+	EventTurnCompleted       = "turn.completed"
+	EventTurnFailed          = "turn.failed"
+	EventTurnInterrupted     = "turn.interrupted"
+	EventTurnUsage           = "turn.usage"
+	EventAssistantStarted    = "assistant.started"
+	EventAssistantDelta      = "assistant.delta"
+	EventAssistantCompleted  = "assistant.completed"
+	EventToolStarted         = "tool.started"
+	EventToolProgress        = "tool.progress"
+	EventToolCompleted       = "tool.completed"
+	EventPermissionRequested = "permission.requested"
+	EventPermissionResolved  = "permission.resolved"
+	EventPlanUpdated         = "plan.updated"
+	EventTaskUpdated         = "task.updated"
+	EventTaskResultReady     = "task.result_ready"
+	EventReportReady         = "report.ready"
+	EventToolRunUpdated      = "tool_run.updated"
+	EventWorktreeUpdated     = "worktree.updated"
+	EventContextCompacted    = "context.compacted"
+	EventHeadMemoryStarted   = "head_memory.started"
+	EventHeadMemoryCompleted = "head_memory.completed"
+	EventHeadMemoryFailed    = "head_memory.failed"
+	EventSessionQueueUpdated = "session.queue_updated"
+	EventSystemNotice        = "system.notice"
 )
 
 type Event struct {
@@ -92,17 +89,6 @@ type PermissionResolvedPayload struct {
 	DecisionScope    string `json:"decision_scope,omitempty"`
 	EffectiveProfile string `json:"effective_profile,omitempty"`
 	TurnID           string `json:"turn_id,omitempty"`
-}
-
-type SessionMemoryEventPayload struct {
-	SourceTurnID             string `json:"source_turn_id,omitempty"`
-	WorkspaceRoot            string `json:"workspace_root,omitempty"`
-	Async                    bool   `json:"async,omitempty"`
-	Updated                  bool   `json:"updated,omitempty"`
-	WorkspaceEntriesUpserted int    `json:"workspace_entries_upserted,omitempty"`
-	GlobalEntriesUpserted    int    `json:"global_entries_upserted,omitempty"`
-	WorkspaceEntriesPruned   int    `json:"workspace_entries_pruned,omitempty"`
-	Message                  string `json:"message,omitempty"`
 }
 
 type HeadMemoryEventPayload struct {

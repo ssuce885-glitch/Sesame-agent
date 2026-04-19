@@ -7,21 +7,21 @@ import (
 
 type SummaryBundle = contextstate.SummaryBundle
 
-func selectPromptSummaryBundle(sessionMemory *model.Summary, boundary *model.Summary, rolling []model.Summary) SummaryBundle {
+func selectPromptSummaryBundle(headMemory *model.Summary, boundary *model.Summary, rolling []model.Summary) SummaryBundle {
 	if rollingSummaryMaxCount > 0 && len(rolling) > rollingSummaryMaxCount {
 		rolling = rolling[len(rolling)-rollingSummaryMaxCount:]
 	}
 	return SummaryBundle{
-		SessionMemory: normalizeOptionalSummary(sessionMemory, sessionMemorySummaryTokenBudget),
-		Boundary:      normalizeOptionalSummary(boundary, boundarySummaryTokenBudget),
-		Rolling:       takeSummaryBudget(rolling, rollingSummaryTokenBudget, rollingSummaryMaxCount),
+		HeadMemory: normalizeOptionalSummary(headMemory, sessionMemorySummaryTokenBudget),
+		Boundary:   normalizeOptionalSummary(boundary, boundarySummaryTokenBudget),
+		Rolling:    takeSummaryBudget(rolling, rollingSummaryTokenBudget, rollingSummaryMaxCount),
 	}
 }
 
 func flattenSummaryBundle(bundle SummaryBundle) []model.Summary {
 	out := make([]model.Summary, 0, 2+len(bundle.Rolling))
-	if bundle.SessionMemory != nil {
-		out = append(out, *bundle.SessionMemory)
+	if bundle.HeadMemory != nil {
+		out = append(out, *bundle.HeadMemory)
 	}
 	if bundle.Boundary != nil {
 		out = append(out, *bundle.Boundary)

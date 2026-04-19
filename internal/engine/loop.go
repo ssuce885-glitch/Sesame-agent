@@ -663,25 +663,29 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 		return 0, contextstate.WorkingSet{}, nil
 	}
 
-	items, err := loadPromptItemsForCurrentHead(ctx, e.store, sessionID)
+	contextHeadID, err := resolveConversationReadContextHeadID(ctx, e.store, in.Turn.ContextHeadID)
+	if err != nil {
+		return 0, contextstate.WorkingSet{}, err
+	}
+	items, err := loadPromptItemsForHead(ctx, e.store, sessionID, contextHeadID)
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, err
 	}
 	totalItems := len(items)
 
-	summaryBundle, compactions, err := loadSummaryBundle(ctx, e.store, sessionID)
+	summaryBundle, compactions, err := loadHeadMemoryBundle(ctx, e.store, sessionID, contextHeadID)
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, err
 	}
-	hasSessionMemory := summaryBundle.SessionMemory != nil
-	sessionMemoryUpTo := loadSessionMemoryUpTo(ctx, e.store, sessionID)
+	hasHeadMemory := summaryBundle.HeadMemory != nil
+	headMemoryUpTo := loadHeadMemoryUpTo(ctx, e.store, sessionID, contextHeadID)
 
 	entries, err := e.store.ListMemoryEntriesByWorkspace(ctx, in.Session.WorkspaceRoot)
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, err
 	}
 
-	memoryRefs := buildMemoryRefs(entries, hasSessionMemory, in.Session.WorkspaceRoot, turnMessage)
+	memoryRefs := buildMemoryRefs(entries, hasHeadMemory, in.Session.WorkspaceRoot, turnMessage)
 
 	persistedMicroItems := activeMicrocompactItems(compactions)
 	recentWindowItems, recentWindowOverride := recentRawItemsForCompactionWindow(items, compactions)
@@ -692,14 +696,14 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 			ctx,
 			e,
 			sessionID,
-			in.Turn.ContextHeadID,
+			contextHeadID,
 			turnMessage,
 			items,
 			summaryBundle,
 			memoryRefs,
 			compactions,
 			recentWindowItems,
-			sessionMemoryUpTo,
+			headMemoryUpTo,
 			working,
 		)
 		if err != nil {
@@ -721,7 +725,7 @@ func runCompactionPasses(
 	memoryRefs []string,
 	compactions []types.ConversationCompaction,
 	recentWindowItems []model.ConversationItem,
-	sessionMemoryUpTo int,
+	headMemoryUpTo int64,
 	working contextstate.WorkingSet,
 ) (contextstate.WorkingSet, SummaryBundle, error) {
 	switch working.Action.Kind {
@@ -736,7 +740,7 @@ func runCompactionPasses(
 			summaryBundle,
 			memoryRefs,
 			compactions,
-			sessionMemoryUpTo,
+			headMemoryUpTo,
 			working,
 			len(compactions)+1,
 			types.ConversationCompactionKindRolling,
@@ -772,7 +776,7 @@ func runCompactionPasses(
 			nextBundle,
 			memoryRefs,
 			nextCompactions,
-			sessionMemoryUpTo,
+			headMemoryUpTo,
 			nextWorking,
 			len(nextCompactions)+1,
 			types.ConversationCompactionKindRolling,
@@ -828,7 +832,7 @@ func applyMicrocompactPass(
 		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
 	}
 
-	nextBundle, nextCompactions, err := loadSummaryBundle(ctx, e.store, sessionID)
+	nextBundle, nextCompactions, err := loadHeadMemoryBundle(ctx, e.store, sessionID, contextHeadID)
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
 	}
@@ -859,7 +863,7 @@ func applySummaryCompaction(
 	summaryBundle SummaryBundle,
 	memoryRefs []string,
 	compactions []types.ConversationCompaction,
-	sessionMemoryUpTo int,
+	headMemoryUpTo int64,
 	working contextstate.WorkingSet,
 	generation int,
 	kind types.ConversationCompactionKind,
@@ -891,9 +895,6 @@ func applySummaryCompaction(
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
-	if err := e.store.InsertConversationSummary(ctx, sessionID, cutoff, summary); err != nil {
-		return contextstate.WorkingSet{}, SummaryBundle{}, err
-	}
 	if err := e.store.InsertConversationCompactionWithContextHead(ctx, types.ConversationCompaction{
 		ID:             types.NewID("compact"),
 		SessionID:      sessionID,
@@ -908,7 +909,7 @@ func applySummaryCompaction(
 		MetadataJSON: encodeBoundaryMetadata(newBoundaryMetadata(
 			generation,
 			cutoff,
-			sessionMemoryUpTo,
+			headMemoryUpTo,
 			len(items),
 			reason,
 			string(e.model.Capabilities().Profile),
@@ -921,7 +922,7 @@ func applySummaryCompaction(
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
 
-	summaryBundle, compactions, err = loadSummaryBundle(ctx, e.store, sessionID)
+	summaryBundle, compactions, err = loadHeadMemoryBundle(ctx, e.store, sessionID, contextHeadID)
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
@@ -933,7 +934,7 @@ func applySummaryCompaction(
 	return working, summaryBundle, nil
 }
 
-func newBoundaryMetadata(generation int, cutoff int, sessionMemoryUpTo int, sourceItemCount int, reason string, providerProfile string, hasRecentMicrocompact bool) types.CompactionBoundaryMetadata {
+func newBoundaryMetadata(generation int, cutoff int, headMemoryUpTo int64, sourceItemCount int, reason string, providerProfile string, hasRecentMicrocompact bool) types.CompactionBoundaryMetadata {
 	return types.CompactionBoundaryMetadata{
 		Version:               1,
 		PromptLayoutVersion:   1,
@@ -941,7 +942,7 @@ func newBoundaryMetadata(generation int, cutoff int, sessionMemoryUpTo int, sour
 		CompactedStart:        0,
 		CompactedEnd:          cutoff,
 		PreservedRecentStart:  cutoff,
-		SessionMemoryUpTo:     sessionMemoryUpTo,
+		HeadMemoryUpTo:        headMemoryUpTo,
 		SourceItemCount:       sourceItemCount,
 		Reason:                reason,
 		ProviderProfile:       providerProfile,
@@ -971,18 +972,15 @@ func setPromptItems(working contextstate.WorkingSet, carryForwardItems []model.C
 	return working
 }
 
-func loadSessionMemoryUpTo(ctx context.Context, store ConversationStore, sessionID string) int {
-	if store == nil || strings.TrimSpace(sessionID) == "" {
+func loadHeadMemoryUpTo(ctx context.Context, store ConversationStore, sessionID, contextHeadID string) int64 {
+	if store == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(contextHeadID) == "" {
 		return 0
 	}
-	memory, ok, err := store.GetSessionMemory(ctx, sessionID)
-	if err != nil || !ok {
+	memory, ok, err := store.GetHeadMemory(ctx, sessionID, contextHeadID)
+	if err != nil || !ok || memory.UpToItemID < 0 {
 		return 0
 	}
-	if memory.UpToPosition < 0 {
-		return 0
-	}
-	return memory.UpToPosition
+	return memory.UpToItemID
 }
 
 func appendPromptItems(carryForwardItems, recentItems []model.ConversationItem) []model.ConversationItem {
@@ -1468,14 +1466,14 @@ func finalizeTurn(ctx context.Context, e *Engine, in Input, usage *types.TurnUsa
 		}
 	}
 
-	if e != nil && e.sessionMemoryAsync {
-		if e.sessionMemoryWorker != nil {
-			e.sessionMemoryWorker.Enqueue(ctx, e, in)
+	if e != nil && e.headMemoryAsync {
+		if e.headMemoryWorker != nil {
+			e.headMemoryWorker.Enqueue(ctx, e, in)
 		} else {
-			startAsyncSessionMemoryRefresh(ctx, e, in)
+			startAsyncHeadMemoryRefresh(ctx, e, in)
 		}
 	} else {
-		_ = maybeRefreshSessionMemory(ctx, e, in)
+		_ = maybeRefreshHeadMemory(ctx, e, in)
 	}
 	return nil
 }

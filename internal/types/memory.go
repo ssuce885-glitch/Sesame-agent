@@ -5,7 +5,6 @@ import "time"
 type MemoryScope string
 
 const (
-	MemoryScopeSession   MemoryScope = "session"
 	MemoryScopeWorkspace MemoryScope = "workspace"
 	MemoryScopeGlobal    MemoryScope = "global"
 )

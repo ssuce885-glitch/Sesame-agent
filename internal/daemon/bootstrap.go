@@ -41,7 +41,7 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 		buildMaxToolSteps(cfg),
 	)
 	runner.SetGlobalConfigRoot(cfg.Paths.GlobalRoot)
-	runner.SetSessionMemoryAsync(true)
+	runner.SetHeadMemoryAsync(true)
 	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
 	runner.SetRuntimeService(runtimeService)
 	runner.SetAutomationService(automationService)

@@ -20,6 +20,6 @@ func Classify(candidate Candidate) types.MemoryScope {
 	case strings.Contains(content, "i prefer"), strings.Contains(content, "always address me"):
 		return types.MemoryScopeGlobal
 	default:
-		return types.MemoryScopeSession
+		return types.MemoryScopeWorkspace
 	}
 }

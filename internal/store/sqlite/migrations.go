@@ -138,16 +138,6 @@ func (s *Store) migrate(ctx context.Context) error {
 			updated_at text not null,
 			primary key (session_id, context_head_id)
 		);`,
-		`create table if not exists memory_candidates (
-			id text primary key,
-			scope text not null,
-			workspace_id text not null default '',
-			content text not null,
-			source_refs text not null,
-			confidence real not null,
-			created_at text not null,
-			approved integer not null default 0
-		);`,
 		`create table if not exists conversation_items (
 			id integer primary key autoincrement,
 			session_id text not null,
@@ -172,13 +162,6 @@ func (s *Store) migrate(ctx context.Context) error {
 		);`,
 		`create unique index if not exists conversation_items_session_position_idx
 			on conversation_items(session_id, position);`,
-		`create table if not exists conversation_summaries (
-			id integer primary key autoincrement,
-			session_id text not null,
-			up_to_position integer not null,
-			payload text not null,
-			created_at text not null
-		);`,
 		`create table if not exists conversation_compactions (
 			id text primary key,
 			session_id text not null,
@@ -194,16 +177,6 @@ func (s *Store) migrate(ctx context.Context) error {
 			reason text not null,
 			provider_profile text not null,
 			created_at text not null
-		);`,
-		`create table if not exists session_memories (
-			session_id text primary key,
-			workspace_root text not null default '',
-			source_turn_id text not null default '',
-			up_to_position integer not null default 0,
-			item_count integer not null default 0,
-			summary_payload text not null default '',
-			created_at text not null,
-			updated_at text not null
 		);`,
 		`create table if not exists session_pending_confirmations (
 			session_id text primary key,
@@ -612,6 +585,18 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	if err := s.backfillLegacyChatMemoryKeys(ctx); err != nil {
 		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `delete from memory_entries where scope = 'session'`); err != nil {
+		return err
+	}
+	for _, stmt := range []string{
+		`drop table if exists memory_candidates;`,
+		`drop table if exists conversation_summaries;`,
+		`drop table if exists session_memories;`,
+	} {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
 	}
 
 	return nil

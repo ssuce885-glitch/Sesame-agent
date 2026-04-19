@@ -78,8 +78,7 @@ type CompactionBoundaryMetadata struct {
 	CompactedStart        int    `json:"compacted_start"`
 	CompactedEnd          int    `json:"compacted_end"`
 	PreservedRecentStart  int    `json:"preserved_recent_start"`
-	SessionMemoryUpTo     int    `json:"session_memory_up_to"`
-	HeadMemoryUpTo        int    `json:"head_memory_up_to,omitempty"`
+	HeadMemoryUpTo        int64  `json:"head_memory_up_to,omitempty"`
 	SourceItemCount       int    `json:"source_item_count"`
 	Reason                string `json:"reason"`
 	ProviderProfile       string `json:"provider_profile"`

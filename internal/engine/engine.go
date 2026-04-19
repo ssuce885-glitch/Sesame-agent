@@ -35,15 +35,13 @@ type ConversationStore interface {
 	ListConversationItems(context.Context, string) ([]model.ConversationItem, error)
 	ListConversationTimelineItemsByContextHead(context.Context, string, string) ([]types.ConversationTimelineItem, error)
 	ListConversationItemsByContextHead(context.Context, string, string) ([]model.ConversationItem, error)
-	ListConversationSummaries(context.Context, string) ([]model.Summary, error)
-	ListConversationCompactions(context.Context, string) ([]types.ConversationCompaction, error)
-	GetSessionMemory(context.Context, string) (types.SessionMemory, bool, error)
+	ListConversationCompactionsByStoredContextHead(context.Context, string, string) ([]types.ConversationCompaction, error)
+	GetHeadMemory(context.Context, string, string) (types.HeadMemory, bool, error)
 	InsertConversationItem(context.Context, string, string, int, model.ConversationItem) error
 	InsertConversationItemWithContextHead(context.Context, string, string, string, int, model.ConversationItem) error
 	GetConversationItemIDByContextHeadAndPosition(context.Context, string, string, int) (int64, bool, error)
-	InsertConversationSummary(context.Context, string, int, model.Summary) error
 	UpsertTurnUsage(context.Context, types.TurnUsage) error
-	UpsertSessionMemory(context.Context, types.SessionMemory) error
+	UpsertHeadMemory(context.Context, types.HeadMemory) error
 	UpsertMemoryEntry(context.Context, types.MemoryEntry) error
 	DeleteMemoryEntries(context.Context, []string) error
 	ListMemoryEntriesByWorkspace(context.Context, string) ([]types.MemoryEntry, error)
@@ -54,7 +52,7 @@ type ConversationStore interface {
 	InsertConversationCompactionWithContextHead(context.Context, types.ConversationCompaction) error
 }
 
-type SessionMemoryWorker interface {
+type HeadMemoryWorker interface {
 	Enqueue(context.Context, *Engine, Input)
 	Wait()
 }
@@ -78,12 +76,12 @@ type Engine struct {
 	taskManager              *task.Manager
 	runtimeService           *runtimegraph.Service
 	schedulerService         *scheduler.Service
-	sessionMemoryAsync       bool
-	sessionMemoryWorker      SessionMemoryWorker
-	sessionMemoryWG          sync.WaitGroup
-	sessionMemoryMu          sync.Mutex
-	sessionMemoryRunning     map[string]bool
-	sessionMemoryPending     map[string]Input
+	headMemoryAsync          bool
+	headMemoryWorker         HeadMemoryWorker
+	headMemoryWG             sync.WaitGroup
+	headMemoryMu             sync.Mutex
+	headMemoryRunning        map[string]bool
+	headMemoryPending        map[string]Input
 }
 
 const defaultActiveSkillTokenBudget = 2048
@@ -205,26 +203,26 @@ func (e *Engine) SetSchedulerService(service *scheduler.Service) {
 	e.schedulerService = service
 }
 
-func (e *Engine) SetSessionMemoryAsync(enabled bool) {
+func (e *Engine) SetHeadMemoryAsync(enabled bool) {
 	if e == nil {
 		return
 	}
-	e.sessionMemoryAsync = enabled
-	if enabled && e.sessionMemoryWorker == nil {
-		e.sessionMemoryWorker = NewInProcessSessionMemoryWorker()
+	e.headMemoryAsync = enabled
+	if enabled && e.headMemoryWorker == nil {
+		e.headMemoryWorker = NewInProcessHeadMemoryWorker()
 	}
 	if !enabled {
-		e.sessionMemoryWorker = nil
+		e.headMemoryWorker = nil
 	}
 }
 
-func (e *Engine) SetSessionMemoryWorker(worker SessionMemoryWorker) {
+func (e *Engine) SetHeadMemoryWorker(worker HeadMemoryWorker) {
 	if e == nil {
 		return
 	}
-	e.sessionMemoryWorker = worker
+	e.headMemoryWorker = worker
 	if worker != nil {
-		e.sessionMemoryAsync = true
+		e.headMemoryAsync = true
 	}
 }
 
@@ -232,8 +230,8 @@ func (e *Engine) waitBackgroundTasks() {
 	if e == nil {
 		return
 	}
-	if e.sessionMemoryWorker != nil {
-		e.sessionMemoryWorker.Wait()
+	if e.headMemoryWorker != nil {
+		e.headMemoryWorker.Wait()
 	}
-	e.sessionMemoryWG.Wait()
+	e.headMemoryWG.Wait()
 }

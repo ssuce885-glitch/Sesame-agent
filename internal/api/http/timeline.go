@@ -221,17 +221,17 @@ func normalizeTimelineBlocks(items []types.ConversationTimelineItem, events []ty
 				Kind:   "notice",
 				Text:   p.Text,
 			})
-		case types.EventSessionMemoryFailed:
-			var p types.SessionMemoryEventPayload
+		case types.EventHeadMemoryFailed:
+			var p types.HeadMemoryEventPayload
 			if err := json.Unmarshal(event.Payload, &p); err != nil {
 				continue
 			}
-			text := "会话记忆刷新失败。"
+			text := "Head memory refresh failed."
 			if p.Message != "" {
-				text = "会话记忆刷新失败：" + p.Message
+				text = "Head memory refresh failed: " + p.Message
 			}
 			blocks = append(blocks, types.TimelineBlock{
-				ID:     "session_memory_failed_" + strconv.FormatInt(event.Seq, 10),
+				ID:     "head_memory_failed_" + strconv.FormatInt(event.Seq, 10),
 				TurnID: event.TurnID,
 				Kind:   "notice",
 				Text:   text,

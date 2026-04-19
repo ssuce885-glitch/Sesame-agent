@@ -38,8 +38,8 @@ func (r *Runtime) PrepareRequest(plan WorkingSet, head *types.ProviderCacheHead,
 func BuildReinjectedPromptItems(bundle SummaryBundle, carryForward []model.ConversationItem, recentRaw []model.ConversationItem, userItem model.ConversationItem) []model.ConversationItem {
 	hasUserItem := userItem.Kind != ""
 	out := make([]model.ConversationItem, 0, 2+len(bundle.Rolling)+len(carryForward)+len(recentRaw)+map[bool]int{true: 1, false: 0}[hasUserItem])
-	if bundle.SessionMemory != nil {
-		summary := cloneSummary(*bundle.SessionMemory)
+	if bundle.HeadMemory != nil {
+		summary := cloneSummary(*bundle.HeadMemory)
 		out = append(out, model.ConversationItem{
 			Kind:    model.ConversationItemSummary,
 			Summary: &summary,
