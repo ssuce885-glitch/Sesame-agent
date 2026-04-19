@@ -144,11 +144,8 @@ func isCreateDestinationConflict(roleDir string, renameErr error) bool {
 	if errors.Is(renameErr, os.ErrExist) {
 		return true
 	}
-	info, err := os.Stat(roleDir)
-	if err != nil {
-		return false
-	}
-	return info.IsDir()
+	_, err := os.Stat(roleDir)
+	return err == nil
 }
 
 func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
