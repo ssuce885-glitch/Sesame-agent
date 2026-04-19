@@ -22,12 +22,15 @@ const (
 )
 
 type MemoryEntry struct {
-	ID          string      `json:"id"`
-	Scope       MemoryScope `json:"scope"`
-	WorkspaceID string      `json:"workspace_id,omitempty"`
-	Content     string      `json:"content"`
-	SourceRefs  []string    `json:"source_refs"`
-	Confidence  float64     `json:"confidence"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
+	ID                  string      `json:"id"`
+	Scope               MemoryScope `json:"scope"`
+	WorkspaceID         string      `json:"workspace_id,omitempty"`
+	Kind                MemoryKind  `json:"kind,omitempty"`
+	SourceSessionID     string      `json:"source_session_id,omitempty"`
+	SourceContextHeadID string      `json:"source_context_head_id,omitempty"`
+	Content             string      `json:"content"`
+	SourceRefs          []string    `json:"source_refs"`
+	Confidence          float64     `json:"confidence"`
+	CreatedAt           time.Time   `json:"created_at"`
+	UpdatedAt           time.Time   `json:"updated_at"`
 }

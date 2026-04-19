@@ -22,6 +22,19 @@ func (s *Store) InsertConversationItem(ctx context.Context, sessionID, turnID st
 	return err
 }
 
+func (s *Store) InsertConversationItemWithContextHead(ctx context.Context, sessionID, contextHeadID, turnID string, position int, item model.ConversationItem) error {
+	payload, err := json.Marshal(item)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		insert into conversation_items (session_id, context_head_id, turn_id, position, kind, payload, created_at)
+		values (?, ?, ?, ?, ?, ?, ?)
+	`, sessionID, contextHeadID, turnID, position, item.Kind, string(payload), time.Now().UTC().Format(timeLayout))
+	return err
+}
+
 func (s *Store) InsertConversationSummary(ctx context.Context, sessionID string, upToPosition int, summary model.Summary) error {
 	payload, err := json.Marshal(summary)
 	if err != nil {
@@ -97,6 +110,39 @@ func (s *Store) ListConversationTimelineItems(ctx context.Context, sessionID str
 	return out, rows.Err()
 }
 
+func (s *Store) ListConversationTimelineItemsByStoredContextHeads(ctx context.Context, sessionID, headID string) ([]types.ConversationTimelineItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		select turn_id, payload
+		from conversation_items
+		where session_id = ? and context_head_id = ?
+		order by position asc, id asc
+	`, sessionID, headID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []types.ConversationTimelineItem
+	for rows.Next() {
+		var turnID string
+		var rawPayload string
+		if err := rows.Scan(&turnID, &rawPayload); err != nil {
+			return nil, err
+		}
+
+		var item model.ConversationItem
+		if err := json.Unmarshal([]byte(rawPayload), &item); err != nil {
+			return nil, err
+		}
+		out = append(out, types.ConversationTimelineItem{
+			TurnID: turnID,
+			Item:   item,
+		})
+	}
+
+	return out, rows.Err()
+}
+
 func (s *Store) ListConversationTimelineItemsByContextHead(ctx context.Context, sessionID, headID string) ([]types.ConversationTimelineItem, error) {
 	lineage, err := s.ListContextHeadLineage(ctx, sessionID, headID)
 	if err != nil {
@@ -129,6 +175,18 @@ func (s *Store) ListConversationTimelineItemsByContextHead(ctx context.Context, 
 
 func (s *Store) ListConversationItemsByContextHead(ctx context.Context, sessionID, headID string) ([]model.ConversationItem, error) {
 	timelineItems, err := s.ListConversationTimelineItemsByContextHead(ctx, sessionID, headID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.ConversationItem, 0, len(timelineItems))
+	for _, item := range timelineItems {
+		out = append(out, item.Item)
+	}
+	return out, nil
+}
+
+func (s *Store) ListConversationItemsByStoredContextHeads(ctx context.Context, sessionID, headID string) ([]model.ConversationItem, error) {
+	timelineItems, err := s.ListConversationTimelineItemsByStoredContextHeads(ctx, sessionID, headID)
 	if err != nil {
 		return nil, err
 	}

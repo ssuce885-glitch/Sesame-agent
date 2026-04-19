@@ -57,8 +57,11 @@ type ProviderCacheEntry struct {
 type ConversationCompaction struct {
 	ID              string                     `json:"id"`
 	SessionID       string                     `json:"session_id"`
+	ContextHeadID   string                     `json:"context_head_id,omitempty"`
 	Kind            ConversationCompactionKind `json:"kind"`
 	Generation      int                        `json:"generation"`
+	StartItemID     int64                      `json:"start_item_id,omitempty"`
+	EndItemID       int64                      `json:"end_item_id,omitempty"`
 	StartPosition   int                        `json:"start_position"`
 	EndPosition     int                        `json:"end_position"`
 	SummaryPayload  string                     `json:"summary_payload"`

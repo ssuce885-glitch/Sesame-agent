@@ -28,11 +28,16 @@ func (s *Store) UpsertMemoryEntry(ctx context.Context, entry types.MemoryEntry) 
 	}
 
 	_, err = s.db.ExecContext(ctx, `
-		insert into memory_entries (id, scope, workspace_id, content, source_refs, confidence, created_at, updated_at)
-		values (?, ?, ?, ?, ?, ?, ?, ?)
+		insert into memory_entries (
+			id, scope, workspace_id, kind, source_session_id, source_context_head_id, content, source_refs, confidence, created_at, updated_at
+		)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set
 			scope = excluded.scope,
 			workspace_id = excluded.workspace_id,
+			kind = excluded.kind,
+			source_session_id = excluded.source_session_id,
+			source_context_head_id = excluded.source_context_head_id,
 			content = excluded.content,
 			source_refs = excluded.source_refs,
 			confidence = excluded.confidence,
@@ -40,6 +45,9 @@ func (s *Store) UpsertMemoryEntry(ctx context.Context, entry types.MemoryEntry) 
 		entry.ID,
 		entry.Scope,
 		entry.WorkspaceID,
+		entry.Kind,
+		entry.SourceSessionID,
+		entry.SourceContextHeadID,
 		entry.Content,
 		string(rawRefs),
 		entry.Confidence,
@@ -52,7 +60,7 @@ func (s *Store) UpsertMemoryEntry(ctx context.Context, entry types.MemoryEntry) 
 
 func (s *Store) ListMemoryEntriesByWorkspace(ctx context.Context, workspaceID string) ([]types.MemoryEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select id, scope, workspace_id, content, source_refs, confidence, created_at, updated_at
+		select id, scope, workspace_id, kind, source_session_id, source_context_head_id, content, source_refs, confidence, created_at, updated_at
 		from memory_entries
 		where workspace_id = ? or scope = ?
 		order by
@@ -69,13 +77,19 @@ func (s *Store) ListMemoryEntriesByWorkspace(ctx context.Context, workspaceID st
 	for rows.Next() {
 		var entry types.MemoryEntry
 		var scope string
+		var kind string
+		var sourceSessionID string
+		var sourceContextHeadID string
 		var rawRefs string
 		var createdAt string
 		var updatedAt string
-		if err := rows.Scan(&entry.ID, &scope, &entry.WorkspaceID, &entry.Content, &rawRefs, &entry.Confidence, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&entry.ID, &scope, &entry.WorkspaceID, &kind, &sourceSessionID, &sourceContextHeadID, &entry.Content, &rawRefs, &entry.Confidence, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		entry.Scope = types.MemoryScope(scope)
+		entry.Kind = types.MemoryKind(kind)
+		entry.SourceSessionID = sourceSessionID
+		entry.SourceContextHeadID = sourceContextHeadID
 		if err := json.Unmarshal([]byte(rawRefs), &entry.SourceRefs); err != nil {
 			return nil, err
 		}
