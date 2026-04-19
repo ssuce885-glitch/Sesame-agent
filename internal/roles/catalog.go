@@ -80,11 +80,11 @@ func RenderRegistrySummary(catalog Catalog) string {
 
 func loadRoleSpec(root, roleID string) (Spec, error) {
 	rolePath := filepath.Join(root, roleID)
-	roleData, err := os.ReadFile(filepath.Join(rolePath, "role.yaml"))
+	roleData, err := readConcreteRoleFile(filepath.Join(rolePath, "role.yaml"))
 	if err != nil {
 		return Spec{}, err
 	}
-	promptData, err := os.ReadFile(filepath.Join(rolePath, "prompt.md"))
+	promptData, err := readConcreteRoleFile(filepath.Join(rolePath, "prompt.md"))
 	if err != nil {
 		return Spec{}, err
 	}
@@ -109,6 +109,20 @@ func loadRoleSpec(root, roleID string) (Spec, error) {
 		Prompt:      strings.TrimSpace(string(promptData)),
 		SkillNames:  normalizeSkillNames(cfg.Skills),
 	}, nil
+}
+
+func readConcreteRoleFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("role file %s is a symlink: %w", path, os.ErrNotExist)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("role file %s is not a regular file", path)
+	}
+	return os.ReadFile(path)
 }
 
 func normalizeSkillNames(skills []string) []string {
