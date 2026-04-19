@@ -117,7 +117,7 @@ func (s *Service) Create(workspaceRoot string, in UpsertInput) (Spec, error) {
 	}
 	rolesRoot := filepath.Join(workspaceRoot, "roles")
 	roleDir := filepath.Join(rolesRoot, normalized.RoleID)
-	if _, err := os.Stat(roleDir); err == nil {
+	if _, err := os.Lstat(roleDir); err == nil {
 		return Spec{}, newServiceError(ErrorKindConflict, fmt.Errorf("role already exists: %s", normalized.RoleID))
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Spec{}, newServiceError(ErrorKindInternal, err)
@@ -144,7 +144,7 @@ func isCreateDestinationConflict(roleDir string, renameErr error) bool {
 	if errors.Is(renameErr, os.ErrExist) {
 		return true
 	}
-	_, err := os.Stat(roleDir)
+	_, err := os.Lstat(roleDir)
 	return err == nil
 }
 
