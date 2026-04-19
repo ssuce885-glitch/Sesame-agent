@@ -204,7 +204,7 @@ func (s *Service) Delete(workspaceRoot, roleID string) error {
 		return newServiceError(ErrorKindInvalidInput, err)
 	}
 	roleDir := filepath.Join(workspaceRoot, "roles", roleID)
-	if _, err := os.Stat(roleDir); err != nil {
+	if _, err := os.Lstat(roleDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return newServiceError(ErrorKindNotFound, err)
 		}
