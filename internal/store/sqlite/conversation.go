@@ -23,6 +23,10 @@ func (s *Store) InsertConversationItem(ctx context.Context, sessionID, turnID st
 }
 
 func (s *Store) InsertConversationItemWithContextHead(ctx context.Context, sessionID, contextHeadID, turnID string, position int, item model.ConversationItem) error {
+	if err := validateStoredContextHeadID(contextHeadID); err != nil {
+		return err
+	}
+
 	payload, err := json.Marshal(item)
 	if err != nil {
 		return err
@@ -111,6 +115,10 @@ func (s *Store) ListConversationTimelineItems(ctx context.Context, sessionID str
 }
 
 func (s *Store) ListConversationTimelineItemsByStoredContextHeads(ctx context.Context, sessionID, headID string) ([]types.ConversationTimelineItem, error) {
+	if err := validateStoredContextHeadID(headID); err != nil {
+		return nil, err
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		select turn_id, payload
 		from conversation_items
@@ -186,6 +194,10 @@ func (s *Store) ListConversationItemsByContextHead(ctx context.Context, sessionI
 }
 
 func (s *Store) ListConversationItemsByStoredContextHeads(ctx context.Context, sessionID, headID string) ([]model.ConversationItem, error) {
+	if err := validateStoredContextHeadID(headID); err != nil {
+		return nil, err
+	}
+
 	timelineItems, err := s.ListConversationTimelineItemsByStoredContextHeads(ctx, sessionID, headID)
 	if err != nil {
 		return nil, err

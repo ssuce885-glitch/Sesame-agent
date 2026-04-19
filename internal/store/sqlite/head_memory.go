@@ -10,6 +10,10 @@ import (
 )
 
 func (s *Store) GetHeadMemory(ctx context.Context, sessionID, contextHeadID string) (types.HeadMemory, bool, error) {
+	if err := validateStoredContextHeadID(contextHeadID); err != nil {
+		return types.HeadMemory{}, false, err
+	}
+
 	var memory types.HeadMemory
 	var createdAt string
 	var updatedAt string
@@ -49,6 +53,10 @@ func (s *Store) GetHeadMemory(ctx context.Context, sessionID, contextHeadID stri
 }
 
 func (s *Store) UpsertHeadMemory(ctx context.Context, record types.HeadMemory) error {
+	if err := validateStoredContextHeadID(record.ContextHeadID); err != nil {
+		return err
+	}
+
 	now := time.Now().UTC()
 	if record.CreatedAt.IsZero() {
 		record.CreatedAt = now
@@ -67,7 +75,6 @@ func (s *Store) UpsertHeadMemory(ctx context.Context, record types.HeadMemory) e
 			up_to_item_id = excluded.up_to_item_id,
 			item_count = excluded.item_count,
 			summary_payload = excluded.summary_payload,
-			created_at = excluded.created_at,
 			updated_at = excluded.updated_at
 	`,
 		record.SessionID,

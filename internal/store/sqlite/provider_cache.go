@@ -116,6 +116,10 @@ func (s *Store) InsertConversationCompaction(ctx context.Context, compaction typ
 }
 
 func (s *Store) InsertConversationCompactionWithContextHead(ctx context.Context, compaction types.ConversationCompaction) error {
+	if err := validateStoredContextHeadID(compaction.ContextHeadID); err != nil {
+		return err
+	}
+
 	metadataJSON := compaction.MetadataJSON
 
 	_, err := s.db.ExecContext(ctx, `
@@ -185,6 +189,10 @@ func (s *Store) ListConversationCompactions(ctx context.Context, sessionID strin
 }
 
 func (s *Store) ListConversationCompactionsByStoredContextHead(ctx context.Context, sessionID, contextHeadID string) ([]types.ConversationCompaction, error) {
+	if err := validateStoredContextHeadID(contextHeadID); err != nil {
+		return nil, err
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		select id, session_id, context_head_id, kind, generation, start_item_id, end_item_id, start_position, end_position, summary_payload, metadata_json, reason, provider_profile, created_at
 		from conversation_compactions
