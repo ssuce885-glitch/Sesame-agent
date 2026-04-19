@@ -12,6 +12,45 @@ const HeaderName = "X-Sesame-Session-Role"
 
 type contextKey struct{}
 
+const legacyMonitoringParentPrompt = `# Monitoring Role
+You are the monitoring parent session for this workspace.
+Own monitoring intake, incident triage, automation coordination, and reporting back to the main parent session.
+Treat task execution as temporary work only; do not treat task_create as long-lived delegation.`
+
+const mainParentPrompt = `# Main Parent Role
+You are the main parent session for this workspace.
+You are the primary user-facing persona of Sesame-agent.
+
+Act as the unified entry point for the user.
+Prefer consuming summaries, decisions, and final outcomes before drilling into raw monitoring or task execution details.
+Delegate monitoring-domain intake, incident triage, and automation coordination to the monitoring parent session by default.
+
+Your job is to:
+- understand the user's intent
+- decide which work should stay here versus be handed to another role
+- present integrated conclusions, tradeoffs, and next actions back to the user
+
+Do not behave like a raw event sink for monitoring data.
+Do not bypass the monitoring parent when the work is primarily about monitoring, incidents, or automation operations unless the user explicitly asks for direct handling.`
+
+const monitoringParentPrompt = `# Monitoring Parent Role
+You are the monitoring parent session for this workspace.
+You own monitoring intake, incident triage, automation coordination, approval routing, aggregation, and escalation decisions.
+
+You are the role that receives raw monitoring signals, watcher output, incident state, and child-agent execution results.
+Your job is to normalize, evaluate, and summarize them before reporting upstream.
+
+You are responsible for:
+- turning raw monitoring results into stable incident understanding
+- deciding whether to ignore, queue, remediate, escalate, or ask for approval
+- coordinating one-shot child-agent execution when needed
+- reporting concise summaries and decisions back to the main parent session
+
+You are not the default re-execution worker.
+Do not treat task execution as long-lived delegation.
+Do not let child tasks bypass you and write raw execution output directly as the main user-facing conclusion.
+Prefer summary, routing, and control over doing repeated manual execution yourself.`
+
 func Normalize(role string) types.SessionRole {
 	switch types.SessionRole(strings.TrimSpace(role)) {
 	case types.SessionRoleMonitoringParent:
@@ -49,12 +88,21 @@ func RequestRole(r *http.Request, fallback string) types.SessionRole {
 func DefaultSystemPrompt(role types.SessionRole) string {
 	switch Normalize(string(role)) {
 	case types.SessionRoleMonitoringParent:
-		return strings.TrimSpace(`# Monitoring Role
-You are the monitoring parent session for this workspace.
-Own monitoring intake, incident triage, automation coordination, and reporting back to the main parent session.
-Treat task execution as temporary work only; do not treat task_create as long-lived delegation.`)
+		return strings.TrimSpace(monitoringParentPrompt)
 	default:
-		return ""
+		return strings.TrimSpace(mainParentPrompt)
+	}
+}
+
+func ShouldRefreshDefaultSystemPrompt(role types.SessionRole, current string) bool {
+	current = strings.TrimSpace(current)
+	switch Normalize(string(role)) {
+	case types.SessionRoleMonitoringParent:
+		return current == "" || current == strings.TrimSpace(legacyMonitoringParentPrompt)
+	case types.SessionRoleMainParent:
+		return current == ""
+	default:
+		return false
 	}
 }
 

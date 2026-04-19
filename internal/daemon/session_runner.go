@@ -10,6 +10,7 @@ import (
 	"go-agent/internal/automation"
 	"go-agent/internal/engine"
 	"go-agent/internal/session"
+	"go-agent/internal/sessionbinding"
 	"go-agent/internal/sessionrole"
 	"go-agent/internal/store/sqlite"
 	"go-agent/internal/task"
@@ -67,6 +68,16 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	if err != nil {
 		return err
 	}
+	runCtx := withRunnerSessionContext(ctx, in.Session, role)
+	if in.Turn.ContextHeadID == "" && a.store != nil {
+		headID, ok, err := a.store.GetCurrentContextHeadID(runCtx)
+		if err != nil {
+			return err
+		}
+		if ok {
+			in.Turn.ContextHeadID = strings.TrimSpace(headID)
+		}
+	}
 	if resumeTaskObserver, ok, err := a.taskObserverForResume(in.Resume); err != nil {
 		return err
 	} else if ok {
@@ -91,7 +102,7 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		}
 	}
 
-	err = a.engine.RunTurn(ctx, engine.Input{
+	err = a.engine.RunTurn(runCtx, engine.Input{
 		Session:             in.Session,
 		SessionRole:         sessionrole.Normalize(string(role)),
 		Turn:                in.Turn,
@@ -104,7 +115,7 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		finalDispatchText = strings.TrimSpace(observerSink.FinalText())
 		if in.Resume != nil && finalDispatchText != "" {
 			taskCompleted = true
-		} else if turn, ok, turnErr := a.store.GetTurn(ctx, in.Turn.ID); turnErr != nil {
+		} else if turn, ok, turnErr := a.store.GetTurn(runCtx, in.Turn.ID); turnErr != nil {
 			return turnErr
 		} else if ok && turn.State != types.TurnStateAwaitingPermission {
 			taskCompleted = true
@@ -131,7 +142,7 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		}
 	}
 	if taskObserver != nil {
-		if notifyErr := a.notifyResumedTaskTerminal(ctx, in.Resume, in.Session.WorkspaceRoot); notifyErr != nil {
+		if notifyErr := a.notifyResumedTaskTerminal(runCtx, in.Resume, in.Session.WorkspaceRoot); notifyErr != nil {
 			if err != nil {
 				return errors.Join(err, notifyErr)
 			}
@@ -190,6 +201,14 @@ func (s *taskEventSink) Emit(_ context.Context, event types.Event) error {
 	default:
 		return nil
 	}
+}
+
+func withRunnerSessionContext(ctx context.Context, sessionRow types.Session, role types.SessionRole) context.Context {
+	ctx = sessionrole.WithSessionRole(ctx, role)
+	if strings.HasPrefix(strings.TrimSpace(sessionRow.ID), "task_session_") {
+		return sessionbinding.WithContextBinding(ctx, taskContextBinding(sessionRow.ID))
+	}
+	return ctx
 }
 
 func (s *taskEventSink) FinalText() string {

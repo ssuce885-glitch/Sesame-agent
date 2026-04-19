@@ -195,11 +195,11 @@ func (s *Store) GetTurn(ctx context.Context, turnID string) (types.Turn, bool, e
 	var createdAt string
 	var updatedAt string
 	err := s.db.QueryRowContext(ctx, `
-		select id, session_id, turn_kind, client_turn_id, state, user_message, created_at, updated_at
+		select id, session_id, context_head_id, turn_kind, client_turn_id, state, user_message, created_at, updated_at
 		from turns
 		where id = ?`,
 		turnID,
-	).Scan(&turn.ID, &turn.SessionID, &kind, &turn.ClientTurnID, &state, &turn.UserMessage, &createdAt, &updatedAt)
+	).Scan(&turn.ID, &turn.SessionID, &turn.ContextHeadID, &kind, &turn.ClientTurnID, &state, &turn.UserMessage, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return types.Turn{}, false, nil
@@ -243,7 +243,7 @@ func updateTurnStateWithExec(ctx context.Context, execer execContexter, turnID s
 
 func (s *Store) ListRunningTurns(ctx context.Context) ([]types.Turn, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select id, session_id, turn_kind, client_turn_id, state, user_message, created_at, updated_at
+		select id, session_id, context_head_id, turn_kind, client_turn_id, state, user_message, created_at, updated_at
 		from turns
 		where state in (?, ?, ?, ?, ?, ?)
 		order by created_at asc
@@ -267,7 +267,7 @@ func (s *Store) ListRunningTurns(ctx context.Context) ([]types.Turn, error) {
 		var state string
 		var createdAt string
 		var updatedAt string
-		if err := rows.Scan(&turn.ID, &turn.SessionID, &kind, &turn.ClientTurnID, &state, &turn.UserMessage, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&turn.ID, &turn.SessionID, &turn.ContextHeadID, &kind, &turn.ClientTurnID, &state, &turn.UserMessage, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		turn.Kind = types.TurnKind(kind)
@@ -415,6 +415,10 @@ func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, rol
 		if err != nil {
 			return types.Session{}, types.ContextHead{}, false, err
 		}
+		session, err = s.ensureRoleSystemPrompt(roleCtx, session, role)
+		if err != nil {
+			return types.Session{}, types.ContextHead{}, false, err
+		}
 		if err := s.SetRoleSessionID(ctx, workspaceRoot, role, session.ID); err != nil {
 			return types.Session{}, types.ContextHead{}, false, err
 		}
@@ -429,6 +433,10 @@ func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, rol
 			return types.Session{}, types.ContextHead{}, false, err
 		}
 		if found && session.WorkspaceRoot == workspaceRoot {
+			session, err = s.ensureRoleSystemPrompt(roleCtx, session, role)
+			if err != nil {
+				return types.Session{}, types.ContextHead{}, false, err
+			}
 			head, _, err := s.ensureCurrentContextHead(roleCtx, session)
 			return session, head, false, err
 		}
@@ -553,6 +561,7 @@ func (s *Store) resolveOrCreateCanonicalSession(ctx context.Context, workspaceRo
 	session = types.Session{
 		ID:            types.NewID("sess"),
 		WorkspaceRoot: workspaceRoot,
+		SystemPrompt:  sessionrole.DefaultSystemPrompt(sessionrole.FromContext(ctx)),
 		State:         types.SessionStateIdle,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -561,6 +570,36 @@ func (s *Store) resolveOrCreateCanonicalSession(ctx context.Context, workspaceRo
 		return types.Session{}, false, err
 	}
 	return session, true, nil
+}
+
+func (s *Store) ensureRoleSystemPrompt(ctx context.Context, session types.Session, role types.SessionRole) (types.Session, error) {
+	if !sessionrole.ShouldRefreshDefaultSystemPrompt(role, session.SystemPrompt) {
+		return session, nil
+	}
+
+	prompt := strings.TrimSpace(sessionrole.DefaultSystemPrompt(role))
+	if prompt == "" {
+		return session, nil
+	}
+
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `
+		update sessions
+		set system_prompt = ?, updated_at = ?
+		where id = ?`,
+		prompt,
+		now.Format(timeLayout),
+		session.ID,
+	)
+	if err != nil {
+		return types.Session{}, err
+	}
+	if err := requireSingleRow(result); err != nil {
+		return types.Session{}, err
+	}
+	session.SystemPrompt = prompt
+	session.UpdatedAt = now
+	return session, nil
 }
 
 func (s *Store) ensureCurrentContextHead(ctx context.Context, session types.Session) (types.ContextHead, bool, error) {

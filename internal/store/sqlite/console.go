@@ -7,10 +7,9 @@ import (
 	"go-agent/internal/types"
 )
 
-
 func (s *Store) ListTurnsBySession(ctx context.Context, sessionID string) ([]types.Turn, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select id, session_id, turn_kind, client_turn_id, state, user_message, created_at, updated_at
+		select id, session_id, context_head_id, turn_kind, client_turn_id, state, user_message, created_at, updated_at
 		from turns
 		where session_id = ?
 		order by created_at asc, id asc
@@ -27,7 +26,7 @@ func (s *Store) ListTurnsBySession(ctx context.Context, sessionID string) ([]typ
 		var state string
 		var createdAt string
 		var updatedAt string
-		if err := rows.Scan(&turn.ID, &turn.SessionID, &kind, &turn.ClientTurnID, &state, &turn.UserMessage, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&turn.ID, &turn.SessionID, &turn.ContextHeadID, &kind, &turn.ClientTurnID, &state, &turn.UserMessage, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		turn.Kind = types.TurnKind(kind)

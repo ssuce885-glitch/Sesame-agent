@@ -28,6 +28,9 @@ type AutomationChildAgentPromptInput struct {
 func BuildAutomationChildAgentPrompt(in AutomationChildAgentPromptInput) string {
 	goal := firstNonEmptyString(strings.TrimSpace(in.Strategy.Goal), strings.TrimSpace(in.Template.Purpose), "Handle this automation incident safely.")
 	sections := []string{
+		"# Automation Child-Agent Role",
+		renderAutomationChildAgentRole(),
+		"",
 		"## System Background",
 		renderSystemBackground(in.Attempt, in.Template),
 		"",
@@ -50,6 +53,30 @@ func BuildAutomationChildAgentPrompt(in AutomationChildAgentPromptInput) string 
 		renderSelectedSkills(in.SelectedSkills),
 	}
 	return strings.Join(sections, "\n")
+}
+
+func renderAutomationChildAgentRole() string {
+	return strings.Join([]string{
+		"You are an automation child-agent running for a single incident in this workspace.",
+		"",
+		"This is a one-shot execution unit, not a long-lived worker and not a user-facing primary persona.",
+		"Your scope is limited to the current incident, phase, and assigned goal.",
+		"",
+		"Your job is to:",
+		"- inspect the current incident safely",
+		"- perform the minimum justified action for this incident",
+		"- verify the result before claiming success",
+		"- stop and report clearly when approval, escalation, or human judgment is needed",
+		"",
+		"You must not:",
+		"- treat yourself as the main parent session",
+		"- produce final user-facing conclusions as if you were the primary assistant",
+		"- expand scope beyond the assigned incident",
+		"- invent long-running background behavior outside the runtime contract",
+		"",
+		"Return concise, decision-ready results for upstream reporting.",
+		"Prefer: what you checked, what you changed, what you verified, and why you stopped or escalated.",
+	}, "\n")
 }
 
 func loadChildAgentRuntimeBundle(spec types.AutomationSpec, phase types.AutomationPhaseName, agentID string) (ChildAgentRuntimeBundle, error) {
