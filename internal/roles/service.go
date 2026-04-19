@@ -96,7 +96,15 @@ func (s *Service) Get(workspaceRoot, roleID string) (Spec, error) {
 	if err := validateRoleID(roleID); err != nil {
 		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
 	}
-	spec, err := loadRoleSpec(filepath.Join(workspaceRoot, "roles"), roleID)
+	rolesRoot := filepath.Join(workspaceRoot, "roles")
+	roleDir := filepath.Join(rolesRoot, roleID)
+	if err := ensureConcreteRoleDir(roleDir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Spec{}, newServiceError(ErrorKindNotFound, err)
+		}
+		return Spec{}, newServiceError(ErrorKindInternal, err)
+	}
+	spec, err := loadRoleSpec(rolesRoot, roleID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Spec{}, newServiceError(ErrorKindNotFound, err)
@@ -159,7 +167,7 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 	}
 	rolesRoot := filepath.Join(workspaceRoot, "roles")
 	roleDir := filepath.Join(rolesRoot, normalized.RoleID)
-	if _, err := os.Stat(roleDir); err != nil {
+	if err := ensureConcreteRoleDir(roleDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Spec{}, newServiceError(ErrorKindNotFound, err)
 		}
@@ -301,6 +309,20 @@ func writeRoleFilesToDir(roleDir string, in UpsertInput) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(roleDir, "prompt.md"), []byte(in.Prompt+"\n"), 0o644)
+}
+
+func ensureConcreteRoleDir(roleDir string) error {
+	info, err := os.Lstat(roleDir)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("role directory %s is a symlink: %w", roleDir, os.ErrNotExist)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("role path %s is not a directory", roleDir)
+	}
+	return nil
 }
 
 func dedupeStrings(values []string) []string {
