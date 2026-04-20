@@ -574,9 +574,6 @@ func (s *Store) ResolveSessionRole(ctx context.Context, sessionID, workspaceRoot
 	if sessionID == "" || workspaceRoot == "" {
 		return "", nil
 	}
-	if _, err := s.ResolveSpecialistRoleID(ctx, sessionID, workspaceRoot); err != nil {
-		return "", err
-	}
 
 	for _, role := range []types.SessionRole{types.SessionRoleMonitoringParent, types.SessionRoleMainParent} {
 		mappedID, ok, err := s.GetRoleSessionID(ctx, workspaceRoot, role)
