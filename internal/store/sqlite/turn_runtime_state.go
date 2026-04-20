@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"go-agent/internal/types"
@@ -52,6 +53,34 @@ func (s *Store) CommitPermissionResume(ctx context.Context, sessionID, turnID st
 	}
 	if err := updateSessionStateWithExec(ctx, tx, sessionID, types.SessionStateRunning, turnID, true); err != nil {
 		return err
+	}
+	if err := upsertTurnContinuationWithExec(ctx, tx, continuation); err != nil {
+		return err
+	}
+	if toolRun != nil {
+		if err := upsertToolRunWithExec(ctx, tx, *toolRun); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) CommitPermissionDecision(ctx context.Context, request types.PermissionRequest, continuation types.TurnContinuation, toolRun *types.ToolRun, sessionPermissionProfile string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := upsertPermissionRequestWithExec(ctx, tx, request); err != nil {
+		return err
+	}
+	if strings.TrimSpace(sessionPermissionProfile) != "" {
+		if err := updateSessionPermissionProfileWithExec(ctx, tx, request.SessionID, sessionPermissionProfile, true); err != nil {
+			return err
+		}
 	}
 	if err := upsertTurnContinuationWithExec(ctx, tx, continuation); err != nil {
 		return err

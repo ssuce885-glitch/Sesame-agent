@@ -154,7 +154,7 @@ func mustParseDetectorSignalForPrompt(incident types.AutomationIncident) types.A
 	return detectorSignal
 }
 
-func (a agentTaskExecutor) RunTask(ctx context.Context, taskID string, workspaceRoot string, prompt string, activatedSkillNames []string, observer task.AgentTaskObserver) error {
+func (a agentTaskExecutor) RunTask(ctx context.Context, taskID string, workspaceRoot string, prompt string, activatedSkillNames []string, targetRole string, observer task.AgentTaskObserver) error {
 	if a.runner == nil {
 		return errors.New("engine runner is not configured")
 	}
@@ -163,6 +163,12 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, taskID string, workspace
 	turnID := types.NewID("task_turn")
 	taskCtx := sessionbinding.WithContextBinding(ctx, taskContextBinding(sessionID))
 	taskCtx = workspace.WithWorkspaceRoot(taskCtx, workspaceRoot)
+	targetRole = strings.TrimSpace(targetRole)
+	specialistRoleID := ""
+	if targetRole != "" && targetRole != string(types.SessionRoleMainParent) {
+		specialistRoleID = targetRole
+	}
+	taskCtx = rolectx.WithSpecialistRoleID(taskCtx, specialistRoleID)
 	if err := a.prepareTaskRun(taskCtx, sessionID, turnID, workspaceRoot, prompt); err != nil {
 		return err
 	}

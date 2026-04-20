@@ -216,6 +216,18 @@ func (s *Store) migrate(ctx context.Context) error {
 			value text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists workspace_session_bindings (
+			workspace_root text not null,
+			binding_kind text not null,
+			role text not null default '',
+			specialist_role_id text not null default '',
+			session_id text not null,
+			created_at text not null,
+			updated_at text not null,
+			primary key (workspace_root, binding_kind, role, specialist_role_id)
+		);`,
+		`create unique index if not exists workspace_session_bindings_session_idx
+			on workspace_session_bindings(workspace_root, session_id);`,
 		`create table if not exists workspace_tasks (
 			workspace_root text not null,
 			task_id text not null,

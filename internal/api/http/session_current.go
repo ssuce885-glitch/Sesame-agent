@@ -33,7 +33,7 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), r.Header.Get(sessionbinding.HeaderName)))
+		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), resolveRequestBinding(r)))
 
 		var req types.EnsureSessionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -84,7 +84,7 @@ type sessionScopedHandlerFactory func(Dependencies, string) http.HandlerFunc
 
 func handleCurrentSession(deps Dependencies, next sessionScopedHandlerFactory) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), r.Header.Get(sessionbinding.HeaderName)))
+		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), resolveRequestBinding(r)))
 		if workspaceRoot := strings.TrimSpace(deps.WorkspaceRoot); workspaceRoot != "" {
 			r = r.WithContext(workspace.WithWorkspaceRoot(r.Context(), workspaceRoot))
 		}
@@ -101,6 +101,16 @@ func handleCurrentSession(deps Dependencies, next sessionScopedHandlerFactory) h
 		}
 		next(deps, sessionID)(w, r)
 	}
+}
+
+func resolveRequestBinding(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if binding := strings.TrimSpace(r.URL.Query().Get("binding")); binding != "" {
+		return binding
+	}
+	return r.Header.Get(sessionbinding.HeaderName)
 }
 
 func resolveRequestedSessionRole(r *http.Request, fallback string) (types.SessionRole, bool) {

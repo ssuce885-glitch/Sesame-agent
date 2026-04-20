@@ -17,11 +17,9 @@ type DelegateToRoleInput struct {
 }
 
 type DelegateToRoleOutput struct {
-	TargetRole      string `json:"target_role"`
-	TargetSessionID string `json:"target_session_id"`
-	TargetTurnID    string `json:"target_turn_id"`
-	Accepted        bool   `json:"accepted"`
-	CreatedSession  bool   `json:"created_session"`
+	TaskID     string `json:"task_id"`
+	TargetRole string `json:"target_role"`
+	Accepted   bool   `json:"accepted"`
 }
 
 func (delegateToRoleTool) IsEnabled(execCtx ExecContext) bool {
@@ -31,7 +29,7 @@ func (delegateToRoleTool) IsEnabled(execCtx ExecContext) bool {
 func (delegateToRoleTool) Definition() Definition {
 	return Definition{
 		Name:        "delegate_to_role",
-		Description: "Hand off work to a long-lived role session. Use this instead of task_create when transferring ownership to main_parent or an installed specialist role id.",
+		Description: "Hand off work to a background role task. Use this instead of task_create when transferring ownership to main_parent or an installed specialist role id.",
 		InputSchema: objectSchema(map[string]any{
 			"target_role": map[string]any{
 				"type":        "string",
@@ -39,7 +37,7 @@ func (delegateToRoleTool) Definition() Definition {
 			},
 			"message": map[string]any{
 				"type":        "string",
-				"description": "The user-style message to enqueue on the target role session.",
+				"description": "The delegated work item for the target role task.",
 			},
 			"reason": map[string]any{
 				"type":        "string",
@@ -47,12 +45,10 @@ func (delegateToRoleTool) Definition() Definition {
 			},
 		}, "target_role", "message"),
 		OutputSchema: objectSchema(map[string]any{
-			"target_role":       map[string]any{"type": "string"},
-			"target_session_id": map[string]any{"type": "string"},
-			"target_turn_id":    map[string]any{"type": "string"},
-			"accepted":          map[string]any{"type": "boolean"},
-			"created_session":   map[string]any{"type": "boolean"},
-		}, "target_role", "target_session_id", "target_turn_id", "accepted", "created_session"),
+			"task_id":     map[string]any{"type": "string"},
+			"target_role": map[string]any{"type": "string"},
+			"accepted":    map[string]any{"type": "boolean"},
+		}, "task_id", "target_role", "accepted"),
 	}
 }
 
@@ -110,18 +106,15 @@ func (delegateToRoleTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 		return ToolExecutionResult{}, err
 	}
 	output := DelegateToRoleOutput{
-		TargetRole:      out.TargetRole,
-		TargetSessionID: out.TargetSessionID,
-		TargetTurnID:    out.TargetTurnID,
-		Accepted:        out.Accepted,
-		CreatedSession:  out.CreatedSession,
+		TaskID:     out.TaskID,
+		TargetRole: out.TargetRole,
+		Accepted:   out.Accepted,
 	}
 	text := mustJSON(output)
 	modelText := fmt.Sprintf(
-		"Delegated to %s session %s with turn %s. Continue this turn instead of waiting here.",
+		"Delegated to %s via background task %s. Continue this turn and wait for child reports instead of taking over here.",
 		output.TargetRole,
-		output.TargetSessionID,
-		output.TargetTurnID,
+		output.TaskID,
 	)
 	return ToolExecutionResult{
 		Result: Result{

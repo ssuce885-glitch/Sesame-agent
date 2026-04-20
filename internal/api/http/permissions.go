@@ -31,6 +31,7 @@ type permissionStore interface {
 	UpsertTurnContinuation(context.Context, types.TurnContinuation) error
 	UpsertToolRun(context.Context, types.ToolRun) error
 	ReplaceAutomationWatcherHolds(context.Context, string, string, []types.AutomationWatcherHold) error
+	CommitPermissionDecision(context.Context, types.PermissionRequest, types.TurnContinuation, *types.ToolRun, string) error
 	CommitPermissionResume(context.Context, string, string, types.TurnContinuation, *types.ToolRun) error
 	UpdateSessionPermissionProfile(context.Context, string, string) (types.Session, bool, error)
 	UpdateTurnState(context.Context, string, types.TurnState) error
@@ -219,6 +220,33 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 				ToolName:   continuation.ToolName,
 			}
 		}
+		var toolRunPtr *types.ToolRun
+		if strings.TrimSpace(toolRun.ID) != "" {
+			toolRunPtr = &toolRun
+		}
+
+		if permissionRequest.Status != types.PermissionRequestStatusRequested || continuation.State != types.TurnContinuationStatePending {
+			if strings.TrimSpace(permissionRequest.Decision) == "" || permissionRequest.Status == types.PermissionRequestStatusRequested {
+				http.Error(w, "conflict", http.StatusConflict)
+				return
+			}
+			if permissionRequest.Decision != req.Decision {
+				http.Error(w, "conflict", http.StatusConflict)
+				return
+			}
+			resumed, err := resumeCommittedPermissionDecision(r.Context(), deps, store, permissionRequest, continuation, turn, sessionRow, toolRunPtr, resolvedPermissionEffectiveProfile(sessionRow, permissionRequest))
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(types.PermissionDecisionResponse{
+				Request: permissionRequest,
+				TurnID:  turn.ID,
+				Resumed: resumed,
+			})
+			return
+		}
 
 		now := time.Now().UTC()
 		permissionRequest.Decision = req.Decision
@@ -229,64 +257,14 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 		}
 		permissionRequest.ResolvedAt = now
 		permissionRequest.UpdatedAt = now
-		if err := store.UpsertPermissionRequest(r.Context(), permissionRequest); err != nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
+
+		effectiveProfile := resolvedPermissionEffectiveProfile(sessionRow, permissionRequest)
+		sessionPermissionProfile := ""
+		if req.Decision == types.PermissionDecisionAllowSession && effectiveProfile != "" {
+			sessionPermissionProfile = effectiveProfile
+			sessionRow.PermissionProfile = effectiveProfile
 		}
 
-		effectiveProfile := strings.TrimSpace(sessionRow.PermissionProfile)
-		if types.PermissionDecisionGrantsProfile(req.Decision) {
-			effectiveProfile = permissionRequest.RequestedProfile
-			if req.Decision == types.PermissionDecisionAllowSession {
-				updatedSession, ok, err := store.UpdateSessionPermissionProfile(r.Context(), sessionRow.ID, effectiveProfile)
-				if err != nil {
-					http.Error(w, "internal server error", http.StatusInternalServerError)
-					return
-				}
-				if ok {
-					sessionRow = updatedSession
-					_ = deps.Manager.UpdateSession(updatedSession)
-				}
-			}
-		}
-
-		if err := appendPermissionResolvedEvent(r.Context(), deps, permissionRequest, continuation, effectiveProfile); err != nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		resume := &types.TurnResume{
-			ContinuationID:             continuation.ID,
-			PermissionRequestID:        permissionRequest.ID,
-			ToolRunID:                  continuation.ToolRunID,
-			ToolCallID:                 continuation.ToolCallID,
-			ToolName:                   continuation.ToolName,
-			RequestedProfile:           continuation.RequestedProfile,
-			Reason:                     continuation.Reason,
-			Decision:                   req.Decision,
-			DecisionScope:              req.Decision,
-			EffectivePermissionProfile: effectiveProfile,
-			RunID:                      continuation.RunID,
-			TaskID:                     continuation.TaskID,
-		}
-		specialistRoleID, err := store.ResolveSpecialistRoleID(r.Context(), sessionRow.ID, sessionRow.WorkspaceRoot)
-		if err != nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		resumeCtx := workspace.WithWorkspaceRoot(
-			rolectx.WithSpecialistRoleID(r.Context(), specialistRoleID),
-			sessionRow.WorkspaceRoot,
-		)
-		if _, err := deps.Manager.ResumeTurn(resumeCtx, sessionRow.ID, session.ResumeTurnInput{
-			Turn:   turn,
-			Resume: resume,
-		}); err != nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		continuation.State = types.TurnContinuationStateResumed
 		continuation.Decision = req.Decision
 		continuation.DecisionScope = req.Decision
 		continuation.UpdatedAt = now
@@ -302,20 +280,21 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 			toolRun.State = types.ToolRunStateCompleted
 			toolRun.Error = ""
 		}
-		if err := store.CommitPermissionResume(r.Context(), sessionRow.ID, turn.ID, continuation, &toolRun); err != nil {
-			if interrupter, ok := deps.Manager.(interface {
-				InterruptTurn(string, string) bool
-			}); ok {
-				interrupter.InterruptTurn(sessionRow.ID, turn.ID)
-			}
+
+		if err := store.CommitPermissionDecision(r.Context(), permissionRequest, continuation, toolRunPtr, sessionPermissionProfile); err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		if err := automation.RestoreDispatchAfterApprovalResume(r.Context(), store, continuation.TaskID, permissionRequest.ID, now); err != nil {
+		if sessionPermissionProfile != "" {
+			_ = deps.Manager.UpdateSession(sessionRow)
+		}
+		if err := appendPermissionResolvedEvent(r.Context(), deps, permissionRequest, continuation, effectiveProfile); err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		if err := appendRuntimeTimelineEvent(r.Context(), deps, turn.SessionID, turn.ID, types.EventToolRunUpdated, types.TimelineBlockFromToolRun(toolRun)); err != nil {
+
+		resumed, err := resumeCommittedPermissionDecision(r.Context(), deps, store, permissionRequest, continuation, turn, sessionRow, toolRunPtr, effectiveProfile)
+		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -324,9 +303,95 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 		_ = json.NewEncoder(w).Encode(types.PermissionDecisionResponse{
 			Request: permissionRequest,
 			TurnID:  turn.ID,
-			Resumed: true,
+			Resumed: resumed,
 		})
 	}
+}
+
+func resolvedPermissionEffectiveProfile(sessionRow types.Session, request types.PermissionRequest) string {
+	effectiveProfile := strings.TrimSpace(sessionRow.PermissionProfile)
+	if !types.PermissionDecisionGrantsProfile(request.Decision) {
+		return effectiveProfile
+	}
+	if requestedProfile := strings.TrimSpace(request.RequestedProfile); requestedProfile != "" {
+		effectiveProfile = requestedProfile
+	}
+	return effectiveProfile
+}
+
+func resumeCommittedPermissionDecision(
+	ctx context.Context,
+	deps Dependencies,
+	store permissionStore,
+	request types.PermissionRequest,
+	continuation types.TurnContinuation,
+	turn types.Turn,
+	sessionRow types.Session,
+	toolRun *types.ToolRun,
+	effectiveProfile string,
+) (bool, error) {
+	if continuation.State == types.TurnContinuationStateResumed {
+		return false, nil
+	}
+	if continuation.State != types.TurnContinuationStatePending {
+		return false, nil
+	}
+
+	decisionScope := strings.TrimSpace(request.DecisionScope)
+	if decisionScope == "" {
+		decisionScope = request.Decision
+	}
+	resume := &types.TurnResume{
+		ContinuationID:             continuation.ID,
+		PermissionRequestID:        request.ID,
+		ToolRunID:                  continuation.ToolRunID,
+		ToolCallID:                 continuation.ToolCallID,
+		ToolName:                   continuation.ToolName,
+		RequestedProfile:           continuation.RequestedProfile,
+		Reason:                     continuation.Reason,
+		Decision:                   request.Decision,
+		DecisionScope:              decisionScope,
+		EffectivePermissionProfile: effectiveProfile,
+		RunID:                      continuation.RunID,
+		TaskID:                     continuation.TaskID,
+	}
+	specialistRoleID, err := store.ResolveSpecialistRoleID(ctx, sessionRow.ID, sessionRow.WorkspaceRoot)
+	if err != nil {
+		return false, err
+	}
+	resumeCtx := workspace.WithWorkspaceRoot(
+		rolectx.WithSpecialistRoleID(ctx, specialistRoleID),
+		sessionRow.WorkspaceRoot,
+	)
+	if _, err := deps.Manager.ResumeTurn(resumeCtx, sessionRow.ID, session.ResumeTurnInput{
+		Turn:   turn,
+		Resume: resume,
+	}); err != nil {
+		return false, err
+	}
+
+	now := time.Now().UTC()
+	continuation.State = types.TurnContinuationStateResumed
+	continuation.Decision = request.Decision
+	continuation.DecisionScope = decisionScope
+	continuation.UpdatedAt = now
+	if err := store.CommitPermissionResume(ctx, sessionRow.ID, turn.ID, continuation, nil); err != nil {
+		if interrupter, ok := deps.Manager.(interface {
+			InterruptTurn(string, string) bool
+		}); ok {
+			interrupter.InterruptTurn(sessionRow.ID, turn.ID)
+		}
+		return false, err
+	}
+	if err := automation.RestoreDispatchAfterApprovalResume(ctx, store, continuation.TaskID, request.ID, now); err != nil {
+		return false, err
+	}
+	if toolRun != nil {
+		if err := appendRuntimeTimelineEvent(ctx, deps, turn.SessionID, turn.ID, types.EventToolRunUpdated, types.TimelineBlockFromToolRun(*toolRun)); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func appendPermissionResolvedEvent(ctx context.Context, deps Dependencies, request types.PermissionRequest, continuation types.TurnContinuation, effectiveProfile string) error {

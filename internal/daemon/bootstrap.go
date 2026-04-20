@@ -100,7 +100,7 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	if taskNotifier != nil {
 		taskNotifier.manager = sessionManager
 	}
-	runner.SetSessionDelegationService(session.NewDelegationService(store, sessionManager))
+	runner.SetSessionDelegationService(session.NewDelegationService(store, taskManager))
 
 	reportingService := reporting.NewService(store)
 	if taskNotifier != nil && taskNotifier.reporting != nil {

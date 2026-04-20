@@ -50,6 +50,7 @@ type Task struct {
 	WorktreeID           string                  `json:"worktree_id,omitempty"`
 	ScheduledJobID       string                  `json:"scheduled_job_id,omitempty"`
 	ActivatedSkillNames  []string                `json:"activated_skill_names,omitempty"`
+	TargetRole           string                  `json:"target_role,omitempty"`
 	WorkspaceRoot        string                  `json:"workspace_root"`
 	Output               string                  `json:"output,omitempty"`
 	OutputPath           string                  `json:"output_path,omitempty"`
@@ -93,6 +94,7 @@ type CreateTaskInput struct {
 	WorktreeID          string
 	ScheduledJobID      string
 	ActivatedSkillNames []string
+	TargetRole          string
 	WorkspaceRoot       string
 	TimeoutSeconds      int
 	Start               bool
@@ -151,7 +153,7 @@ type AgentTaskObserver interface {
 }
 
 type AgentExecutor interface {
-	RunTask(ctx context.Context, taskID string, workspaceRoot string, prompt string, activatedSkillNames []string, observer AgentTaskObserver) error
+	RunTask(ctx context.Context, taskID string, workspaceRoot string, prompt string, activatedSkillNames []string, targetRole string, observer AgentTaskObserver) error
 }
 
 type TerminalNotifier interface {

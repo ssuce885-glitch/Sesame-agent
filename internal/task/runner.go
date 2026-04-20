@@ -43,7 +43,7 @@ func (r AgentRunner) Run(ctx context.Context, task *Task, sink OutputSink) error
 		resultSink:  resultSink,
 		outcomeSink: outcomeSink,
 	}
-	return r.executor.RunTask(ctx, task.ID, task.WorkspaceRoot, task.Command, task.ActivatedSkillNames, observer)
+	return r.executor.RunTask(ctx, task.ID, task.WorkspaceRoot, task.Command, task.ActivatedSkillNames, task.TargetRole, observer)
 }
 
 type outputSinkObserver struct {

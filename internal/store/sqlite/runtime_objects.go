@@ -246,13 +246,17 @@ func (s *Store) UpsertWorktree(ctx context.Context, worktree types.Worktree) err
 }
 
 func (s *Store) UpsertPermissionRequest(ctx context.Context, request types.PermissionRequest) error {
+	return upsertPermissionRequestWithExec(ctx, s.db, request)
+}
+
+func upsertPermissionRequestWithExec(ctx context.Context, execer execContexter, request types.PermissionRequest) error {
 	request = normalizePermissionRequest(request)
 	payload, err := marshalRuntimePayload(request)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err = execer.ExecContext(ctx, `
 		insert into permission_requests (id, session_id, turn_id, run_id, task_id, tool_run_id, status, payload, created_at, updated_at)
 		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set

@@ -30,9 +30,10 @@ After all tool calls in a turn are complete, always provide a final text summary
 
 # Tool routing
 For delayed or recurring reports, use schedule_report.
-For handing specialist work to another long-lived role session, use delegate_to_role with a specialist role id.
+For handing specialist work to an installed specialist role, use delegate_to_role with a specialist role id.
+delegate_to_role creates a background role task and the result returns via child reports.
 Do not fake delayed reporting with task_create.
-Do not use task_create to hand work to a long-lived specialist role session.
+Do not use task_create to hand work to a specialist role.
 Do not combine task_create and schedule_report for the same delayed objective unless the user explicitly asks for both an immediate run and a scheduled follow-up.
 Do not fetch report contents during scheduling unless the user explicitly asked for an immediate preview as well.
 

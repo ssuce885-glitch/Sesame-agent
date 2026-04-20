@@ -345,7 +345,11 @@ func (c *Client) GetPendingAutomationPermission(ctx context.Context, requestID s
 }
 
 func (c *Client) StreamEvents(ctx context.Context, afterSeq int64) (<-chan types.Event, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/v1/session/events?after=%d", c.baseURL, afterSeq), nil)
+	params := url.Values{}
+	params.Set("after", strconv.FormatInt(afterSeq, 10))
+	params.Set("binding", sessionbinding.Normalize(c.contextBinding))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/v1/session/events?%s", c.baseURL, params.Encode()), nil)
 	if err != nil {
 		return nil, err
 	}

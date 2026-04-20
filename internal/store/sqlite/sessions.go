@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"strings"
 	"time"
@@ -118,26 +117,31 @@ func (s *Store) GetSession(ctx context.Context, sessionID string) (types.Session
 }
 
 func (s *Store) UpdateSessionPermissionProfile(ctx context.Context, sessionID, permissionProfile string) (types.Session, bool, error) {
-	now := time.Now().UTC().Format(timeLayout)
-	result, err := s.db.ExecContext(ctx, `
+	if err := updateSessionPermissionProfileWithExec(ctx, s.db, sessionID, permissionProfile, true); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return types.Session{}, false, nil
+		}
+		return types.Session{}, false, err
+	}
+	return s.GetSession(ctx, sessionID)
+}
+
+func updateSessionPermissionProfileWithExec(ctx context.Context, execer execContexter, sessionID, permissionProfile string, requireExisting bool) error {
+	result, err := execer.ExecContext(ctx, `
 		update sessions
 		set permission_profile = ?, updated_at = ?
 		where id = ?`,
 		permissionProfile,
-		now,
+		time.Now().UTC().Format(timeLayout),
 		sessionID,
 	)
 	if err != nil {
-		return types.Session{}, false, err
+		return err
 	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return types.Session{}, false, err
+	if !requireExisting {
+		return nil
 	}
-	if rowsAffected == 0 {
-		return types.Session{}, false, nil
-	}
-	return s.GetSession(ctx, sessionID)
+	return requireSingleRow(result)
 }
 
 func (s *Store) UpdateSessionState(ctx context.Context, sessionID string, state types.SessionState, activeTurnID string) error {
@@ -507,34 +511,23 @@ func (s *Store) ResolveSpecialistRoleID(ctx context.Context, sessionID, workspac
 	if !found || session.WorkspaceRoot != workspaceRoot {
 		return "", nil
 	}
-
-	rows, err := s.db.QueryContext(ctx, `
-		select key, value
-		from runtime_metadata
-		where substr(key, 1, length(?)) = ?
-	`, specialistSessionMetadataKey(workspaceRoot, ""), specialistSessionMetadataKey(workspaceRoot, ""))
+	binding, ok, err := getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var metadataKey string
-		var mappedSessionID string
-		if err := rows.Scan(&metadataKey, &mappedSessionID); err != nil {
+	if ok && binding.BindingKind == workspaceSessionBindingKindSpecialist {
+		return binding.SpecialistRoleID, nil
+	}
+	if _, ok, err := s.backfillSpecialistSessionBindingBySessionFromMetadata(ctx, sessionID, workspaceRoot); err != nil {
+		return "", err
+	} else if ok {
+		binding, ok, err = getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
+		if err != nil {
 			return "", err
 		}
-		if strings.TrimSpace(mappedSessionID) != sessionID {
-			continue
+		if ok && binding.BindingKind == workspaceSessionBindingKindSpecialist {
+			return binding.SpecialistRoleID, nil
 		}
-		roleID, ok := specialistRoleIDFromMetadataKey(metadataKey)
-		if !ok {
-			continue
-		}
-		return roleID, nil
-	}
-	if err := rows.Err(); err != nil {
-		return "", err
 	}
 	return "", nil
 }
@@ -545,21 +538,30 @@ func (s *Store) ResolveSessionRole(ctx context.Context, sessionID, workspaceRoot
 	if sessionID == "" || workspaceRoot == "" {
 		return "", nil
 	}
+	session, found, err := s.GetSession(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if !found || strings.TrimSpace(session.WorkspaceRoot) != workspaceRoot {
+		return "", nil
+	}
 
-	for _, role := range []types.SessionRole{types.SessionRoleMainParent} {
-		mappedID, ok, err := s.GetRoleSessionID(ctx, workspaceRoot, role)
+	binding, ok, err := getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if ok && binding.BindingKind == workspaceSessionBindingKindMainParent {
+		return types.SessionRole(binding.Role), nil
+	}
+	if _, ok, err := s.backfillRoleSessionBindingFromMetadata(ctx, workspaceRoot, types.SessionRoleMainParent); err != nil {
+		return "", err
+	} else if ok {
+		binding, ok, err = getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
 		if err != nil {
 			return "", err
 		}
-		if !ok || strings.TrimSpace(mappedID) != sessionID {
-			continue
-		}
-		session, found, err := s.GetSession(ctx, sessionID)
-		if err != nil {
-			return "", err
-		}
-		if found && session.WorkspaceRoot == workspaceRoot {
-			return role, nil
+		if ok && binding.BindingKind == workspaceSessionBindingKindMainParent {
+			return types.SessionRole(binding.Role), nil
 		}
 	}
 	return "", nil
@@ -569,56 +571,16 @@ func (s *Store) EnsureCanonicalSession(ctx context.Context, workspaceRoot string
 	return s.EnsureRoleSession(ctx, workspaceRoot, types.SessionRoleMainParent)
 }
 
-func (s *Store) resolveOrCreateCanonicalSession(ctx context.Context, workspaceRoot string) (types.Session, bool, error) {
-	var session types.Session
-	var state string
-	var createdAt string
-	var updatedAt string
-	err := s.db.QueryRowContext(ctx, `
-		select id, workspace_root, system_prompt, permission_profile, state, active_turn_id, created_at, updated_at
-		from sessions
-		where workspace_root = ?
-		order by updated_at desc, created_at desc
-		limit 1
-	`, workspaceRoot).Scan(
-		&session.ID,
-		&session.WorkspaceRoot,
-		&session.SystemPrompt,
-		&session.PermissionProfile,
-		&state,
-		&session.ActiveTurnID,
-		&createdAt,
-		&updatedAt,
-	)
-	if err == nil {
-		session.State = types.SessionState(state)
-		session.CreatedAt, err = time.Parse(timeLayout, createdAt)
-		if err != nil {
-			return types.Session{}, false, err
-		}
-		session.UpdatedAt, err = time.Parse(timeLayout, updatedAt)
-		if err != nil {
-			return types.Session{}, false, err
-		}
-		return session, false, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return types.Session{}, false, err
-	}
-
+func (s *Store) newSession(workspaceRoot, systemPrompt string) types.Session {
 	now := time.Now().UTC()
-	session = types.Session{
+	return types.Session{
 		ID:            types.NewID("sess"),
 		WorkspaceRoot: workspaceRoot,
-		SystemPrompt:  sessionrole.DefaultSystemPrompt(sessionrole.FromContext(ctx)),
+		SystemPrompt:  strings.TrimSpace(systemPrompt),
 		State:         types.SessionStateIdle,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-	if err := s.InsertSession(ctx, session); err != nil {
-		return types.Session{}, false, err
-	}
-	return session, true, nil
 }
 
 func (s *Store) ensureRoleSystemPrompt(ctx context.Context, session types.Session, role types.SessionRole) (types.Session, error) {
@@ -692,23 +654,11 @@ func (s *Store) resolveOrCreateRoleSession(ctx context.Context, workspaceRoot st
 			return session, false, nil
 		}
 	}
-	return s.resolveOrCreateCanonicalSession(ctx, workspaceRoot)
-}
-
-func specialistRoleIDFromMetadataKey(metadataKey string) (string, bool) {
-	parts := strings.Split(metadataKey, ":")
-	if len(parts) != 3 || parts[0] != "specialist_session" {
-		return "", false
+	session := s.newSession(workspaceRoot, sessionrole.DefaultSystemPrompt(role))
+	if err := s.InsertSession(ctx, session); err != nil {
+		return types.Session{}, false, err
 	}
-	rawRoleID, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		return "", false
-	}
-	roleID := normalizeSpecialistRoleID(string(rawRoleID))
-	if roleID == "" {
-		return "", false
-	}
-	return roleID, true
+	return session, true, nil
 }
 
 func (s *Store) ensureCurrentContextHead(ctx context.Context, session types.Session) (types.ContextHead, bool, error) {

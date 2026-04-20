@@ -109,17 +109,17 @@ export function deleteSession(sessionId: string): Promise<DeleteSessionResponse>
   });
 }
 
-// ─── Session-scoped (uses X-Session-Binding header) ───────────────────────────
+// ─── Session-scoped ────────────────────────────────────────────────────────────
 
 export function getTimeline(sessionId: string): Promise<TimelineResponse> {
   return apiFetch<TimelineResponse>("/v1/session/timeline", {
-    headers: { "X-Session-Binding": sessionId },
+    headers: { "X-Sesame-Context-Binding": sessionId },
   });
 }
 
 export function getWorkspace(sessionId: string): Promise<Workspace> {
   return apiFetch<Workspace>("/v1/session/workspace", {
-    headers: { "X-Session-Binding": sessionId },
+    headers: { "X-Sesame-Context-Binding": sessionId },
   });
 }
 
@@ -130,7 +130,7 @@ export function submitMessage(
 ): Promise<{ id: string }> {
   return apiFetch<{ id: string }>("/v1/session/turns", {
     method: "POST",
-    headers: { "X-Session-Binding": sessionId },
+    headers: { "X-Sesame-Context-Binding": sessionId },
     body: JSON.stringify({ client_turn_id: clientTurnId, message }),
   });
 }
@@ -142,7 +142,7 @@ export function submitPermission(
 ): Promise<{ request: unknown; turn_id: string; resumed: boolean }> {
   return apiFetch(`/v1/permissions/decide`, {
     method: "POST",
-    headers: { "X-Session-Binding": sessionId },
+    headers: { "X-Sesame-Context-Binding": sessionId },
     body: JSON.stringify({ request_id: requestId, decision, session_id: sessionId }),
   });
 }
@@ -155,9 +155,11 @@ export function fileContentUrl(sessionId: string, path: string): string {
 // ─── SSE stream ────────────────────────────────────────────────────────────────
 
 export function openEventStream(sessionId: string, afterSeq: number): EventSource {
-  return new EventSource(
-    `${BASE_URL}/v1/session/events?after=${afterSeq}`,
-  );
+  const params = new URLSearchParams({
+    after: String(afterSeq),
+    binding: sessionId.trim(),
+  });
+  return new EventSource(`${BASE_URL}/v1/session/events?${params.toString()}`);
 }
 
 // ─── Metrics ──────────────────────────────────────────────────────────────────

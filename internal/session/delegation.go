@@ -2,15 +2,12 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	rolectx "go-agent/internal/roles"
-	"go-agent/internal/sessionrole"
+	"go-agent/internal/task"
 	"go-agent/internal/types"
-	"go-agent/internal/workspace"
 )
 
 type DelegateToRoleInput struct {
@@ -23,11 +20,9 @@ type DelegateToRoleInput struct {
 }
 
 type DelegateToRoleOutput struct {
-	TargetRole      string
-	TargetSessionID string
-	TargetTurnID    string
-	Accepted        bool
-	CreatedSession  bool
+	TaskID     string
+	TargetRole string
+	Accepted   bool
 }
 
 type RoleDelegationService interface {
@@ -35,38 +30,28 @@ type RoleDelegationService interface {
 }
 
 type roleDelegationStore interface {
-	EnsureRoleSession(context.Context, string, types.SessionRole) (types.Session, types.ContextHead, bool, error)
-	EnsureSpecialistSession(context.Context, string, string, string, []string) (types.Session, types.ContextHead, bool, error)
 	ResolveSessionRole(context.Context, string, string) (types.SessionRole, error)
 	ResolveSpecialistRoleID(context.Context, string, string) (string, error)
-	InsertTurn(context.Context, types.Turn) error
-	DeleteTurn(context.Context, string) error
 }
 
-type roleDelegationManager interface {
-	RegisterSession(types.Session)
-	UpdateSession(types.Session) bool
-	SubmitTurn(context.Context, string, SubmitTurnInput) (string, error)
+type roleDelegationTaskManager interface {
+	Create(context.Context, task.CreateTaskInput) (task.Task, error)
 }
 
 type DelegationService struct {
-	store   roleDelegationStore
-	manager roleDelegationManager
-	now     func() time.Time
+	store       roleDelegationStore
+	taskManager roleDelegationTaskManager
 }
 
-func NewDelegationService(store roleDelegationStore, manager roleDelegationManager) *DelegationService {
+func NewDelegationService(store roleDelegationStore, taskManager roleDelegationTaskManager) *DelegationService {
 	return &DelegationService{
-		store:   store,
-		manager: manager,
-		now: func() time.Time {
-			return time.Now().UTC()
-		},
+		store:       store,
+		taskManager: taskManager,
 	}
 }
 
 func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRoleInput) (DelegateToRoleOutput, error) {
-	if s == nil || s.store == nil || s.manager == nil {
+	if s == nil || s.store == nil || s.taskManager == nil {
 		return DelegateToRoleOutput{}, fmt.Errorf("session delegation service is not configured")
 	}
 
@@ -106,24 +91,9 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 		return DelegateToRoleOutput{}, fmt.Errorf("specialist roles cannot delegate directly to another specialist role; report back to main_parent and ask it to delegate")
 	}
 
-	var (
-		targetCtx      context.Context
-		targetSession  types.Session
-		targetHead     types.ContextHead
-		createdSession bool
-	)
+	activatedSkillNames := []string(nil)
 	if targetRole == string(types.SessionRoleMainParent) {
-		targetCtx = workspace.WithWorkspaceRoot(
-			rolectx.WithSpecialistRoleID(
-				sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent),
-				"",
-			),
-			workspaceRoot,
-		)
-		targetSession, targetHead, createdSession, err = s.store.EnsureRoleSession(targetCtx, workspaceRoot, types.SessionRoleMainParent)
-		if err != nil {
-			return DelegateToRoleOutput{}, err
-		}
+		targetRole = string(types.SessionRoleMainParent)
 	} else {
 		catalog, err := rolectx.LoadCatalog(workspaceRoot)
 		if err != nil {
@@ -133,61 +103,32 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 		if !ok {
 			return DelegateToRoleOutput{}, fmt.Errorf("target_role %q is currently unavailable", targetRole)
 		}
-		targetCtx = workspace.WithWorkspaceRoot(
-			rolectx.WithSpecialistRoleID(
-				sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent),
-				spec.RoleID,
-			),
-			workspaceRoot,
-		)
-		targetSession, targetHead, createdSession, err = s.store.EnsureSpecialistSession(
-			targetCtx,
-			workspaceRoot,
-			spec.RoleID,
-			spec.Prompt,
-			spec.SkillNames,
-		)
-		if err != nil {
-			return DelegateToRoleOutput{}, err
-		}
-	}
-	if strings.TrimSpace(targetSession.ID) == sourceSessionID {
-		return DelegateToRoleOutput{}, fmt.Errorf("target role resolves to the current session; continue in this session instead")
-	}
-	if targetSession.State == types.SessionStateAwaitingPermission {
-		return DelegateToRoleOutput{}, fmt.Errorf("target role session is awaiting permission; resolve that request before delegating more work")
+		activatedSkillNames = append([]string(nil), spec.SkillNames...)
 	}
 
-	now := s.now()
-	turn := types.Turn{
-		ID:            types.NewID("turn"),
-		SessionID:     targetSession.ID,
-		ContextHeadID: strings.TrimSpace(targetHead.ID),
-		Kind:          types.TurnKindUserMessage,
-		State:         types.TurnStateCreated,
-		UserMessage:   message,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+	description := strings.TrimSpace(in.Reason)
+	if description == "" {
+		description = fmt.Sprintf("delegate_to_role -> %s", targetRole)
 	}
-	if err := s.store.InsertTurn(targetCtx, turn); err != nil {
+	createdTask, err := s.taskManager.Create(ctx, task.CreateTaskInput{
+		Type:                task.TaskTypeAgent,
+		Command:             message,
+		Description:         description,
+		ParentSessionID:     sourceSessionID,
+		ParentTurnID:        strings.TrimSpace(in.SourceTurnID),
+		Kind:                "specialist_role",
+		Owner:               targetRole,
+		ActivatedSkillNames: activatedSkillNames,
+		TargetRole:          targetRole,
+		WorkspaceRoot:       workspaceRoot,
+		Start:               true,
+	})
+	if err != nil {
 		return DelegateToRoleOutput{}, err
 	}
-	if !s.manager.UpdateSession(targetSession) {
-		s.manager.RegisterSession(targetSession)
-	}
-	if _, err := s.manager.SubmitTurn(targetCtx, targetSession.ID, SubmitTurnInput{Turn: turn}); err != nil {
-		deleteErr := s.store.DeleteTurn(context.WithoutCancel(targetCtx), turn.ID)
-		if deleteErr != nil {
-			return DelegateToRoleOutput{}, errors.Join(err, deleteErr)
-		}
-		return DelegateToRoleOutput{}, err
-	}
-
 	return DelegateToRoleOutput{
-		TargetRole:      targetRole,
-		TargetSessionID: targetSession.ID,
-		TargetTurnID:    turn.ID,
-		Accepted:        true,
-		CreatedSession:  createdSession,
+		TaskID:     createdTask.ID,
+		TargetRole: targetRole,
+		Accepted:   true,
 	}, nil
 }
