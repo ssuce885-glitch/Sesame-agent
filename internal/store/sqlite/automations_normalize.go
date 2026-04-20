@@ -438,98 +438,12 @@ func normalizeAutomationRawJSON(raw json.RawMessage) json.RawMessage {
 	return json.RawMessage(trimmed)
 }
 
-func normalizeAutomationResponsePlanForStore(raw json.RawMessage) json.RawMessage {
-	raw = normalizeAutomationRawJSON(raw)
-	if len(raw) == 0 || !json.Valid(raw) {
-		return raw
-	}
-
-	var object map[string]any
-	if err := json.Unmarshal(raw, &object); err != nil {
-		return raw
-	}
-	if strings.EqualFold(strings.TrimSpace(normalizeAutomationResponsePlanModeString(object["schema_version"])), types.ResponsePlanSchemaVersionV2) {
-		return types.NormalizeAutomationResponsePlanJSON(raw)
-	}
-
-	mode := strings.TrimSpace(normalizeAutomationResponsePlanModeString(object["mode"]))
-	refs := normalizeAutomationAnyToStringSlice(object["child_agent_template_refs"])
-	switch mode {
-	case "summary", "digest", "investigate_only":
-		object["mode"] = "investigate"
-	case "investigate_then_remediate":
-		object["mode"] = "investigate_then_act"
-	case "remediate_only":
-		object["mode"] = "act_only"
-	case "verify":
-		object = map[string]any{
-			"schema_version": types.ResponsePlanSchemaVersionV2,
-			"phases": []any{
-				legacyAutomationResponsePlanPhaseObject(string(types.AutomationPhaseVerify), "", refs, 0),
-			},
-		}
-	case "investigate_then_remediate_then_verify", "investigate_then_act_then_verify":
-		object = map[string]any{
-			"schema_version": types.ResponsePlanSchemaVersionV2,
-			"phases": []any{
-				legacyAutomationResponsePlanPhaseObject(string(types.AutomationPhaseDiagnose), string(types.AutomationPhaseTransitionNextPhase), refs, 0),
-				legacyAutomationResponsePlanPhaseObject(string(types.AutomationPhaseRemediate), string(types.AutomationPhaseTransitionNextPhase), refs, 1),
-				legacyAutomationResponsePlanPhaseObject(string(types.AutomationPhaseVerify), "", refs, 2),
-			},
-		}
-	}
-
-	normalized, err := json.Marshal(object)
-	if err != nil {
-		return raw
-	}
-	return types.NormalizeAutomationResponsePlanJSON(normalized)
-}
-
 func normalizeAutomationObjectJSON(raw json.RawMessage) json.RawMessage {
 	raw = normalizeAutomationRawJSON(raw)
 	if len(raw) == 0 || string(raw) == "null" {
 		return json.RawMessage("{}")
 	}
 	return raw
-}
-
-func normalizeAutomationResponsePlanModeString(value any) string {
-	text, _ := value.(string)
-	return text
-}
-
-func normalizeAutomationAnyToStringSlice(value any) []string {
-	items, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		text, _ := item.(string)
-		out = append(out, text)
-	}
-	return normalizeAutomationStringList(out)
-}
-
-func legacyAutomationResponsePlanPhaseObject(phase string, onSuccess string, refs []string, index int) map[string]any {
-	phaseObject := map[string]any{"phase": phase}
-	if strings.TrimSpace(onSuccess) != "" {
-		phaseObject["on_success"] = onSuccess
-	}
-	if ref := legacyAutomationResponsePlanRefForIndex(refs, index); ref != "" {
-		phaseObject["child_agents"] = []any{
-			map[string]any{"agent_id": ref},
-		}
-	}
-	return phaseObject
-}
-
-func legacyAutomationResponsePlanRefForIndex(refs []string, index int) string {
-	if index < 0 || index >= len(refs) {
-		return ""
-	}
-	return strings.TrimSpace(refs[index])
 }
 
 func normalizeAutomationPhaseNameForStore(phase types.AutomationPhaseName) types.AutomationPhaseName {
