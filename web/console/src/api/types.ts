@@ -227,8 +227,22 @@ export interface RoleSpec {
   skills: string[];
 }
 
+export interface RoleSummary {
+  role_id: string;
+  display_name: string;
+  description: string;
+  skills: string[];
+}
+
+export interface RoleDiagnostic {
+  role_id: string;
+  path: string;
+  error: string;
+}
+
 export interface RoleListResponse {
-  roles: RoleSpec[];
+  roles: RoleSummary[];
+  diagnostics: RoleDiagnostic[];
 }
 
 // ─── Token Usage ───────────────────────────────────────────────────────────────
@@ -245,7 +259,9 @@ export interface TokenUsage {
 // ─── Workspace ─────────────────────────────────────────────────────────────────
 
 export interface Workspace {
-  session_id: string;
+  id?: string;
+  name?: string;
+  session_id?: string;
   workspace_root: string;
   provider?: string;
   model?: string;

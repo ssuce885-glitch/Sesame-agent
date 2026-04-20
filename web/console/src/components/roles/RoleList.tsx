@@ -1,7 +1,7 @@
-import type { RoleSpec } from "../../api/types";
+import type { RoleSummary } from "../../api/types";
 
 interface RoleListProps {
-  roles: RoleSpec[];
+  roles: RoleSummary[];
   selectedRoleID: string | null;
   isLoading: boolean;
   onSelectRole: (roleID: string) => void;
@@ -17,9 +17,8 @@ export function RoleList({
 }: RoleListProps) {
   return (
     <section
-      className="h-full flex flex-col"
+      className="flex w-full shrink-0 flex-col lg:h-full lg:w-[280px] lg:min-w-[280px]"
       style={{
-        width: 280,
         backgroundColor: "var(--color-surface-2)",
         borderRight: "1px solid var(--color-border)",
       }}

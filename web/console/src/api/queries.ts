@@ -10,6 +10,7 @@ import {
   submitPermission,
   getMetricsOverview,
   getMetricsTimeseries,
+  getRole,
   listRoles,
   createRole,
   updateRole,
@@ -71,6 +72,15 @@ export function useRoles() {
   return useQuery({
     queryKey: ["roles"],
     queryFn: listRoles,
+    staleTime: 10_000,
+  });
+}
+
+export function useRole(roleID: string | null) {
+  return useQuery({
+    queryKey: ["roles", roleID],
+    queryFn: () => getRole(roleID!),
+    enabled: !!roleID,
     staleTime: 10_000,
   });
 }

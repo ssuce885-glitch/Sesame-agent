@@ -40,23 +40,67 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-// ─── Sessions ─────────────────────────────────────────────────────────────────
-
-export function getSessions(): Promise<SessionListResponse> {
-  return apiFetch<SessionListResponse>("/v1/sessions");
+async function getRuntimeWorkspace(): Promise<Workspace> {
+  return apiFetch<Workspace>("/v1/workspace");
 }
 
-export function createSession(
+function isNotFoundError(err: unknown): boolean {
+  return err instanceof Error && (err.message.includes("HTTP 404") || err.message.includes("not found"));
+}
+
+// ─── Sessions ─────────────────────────────────────────────────────────────────
+
+export async function getSessions(): Promise<SessionListResponse> {
+  try {
+    return await apiFetch<SessionListResponse>("/v1/sessions");
+  } catch (err) {
+    if (!isNotFoundError(err)) {
+      throw err;
+    }
+
+    let workspace: Workspace;
+    try {
+      workspace = await getRuntimeWorkspace();
+    } catch {
+      throw new Error("Sessions unavailable and workspace endpoint not reachable.");
+    }
+    const session = await createSession(workspace.workspace_root);
+    return {
+      sessions: [
+        {
+          id: session.id,
+          title: workspace.name || "Main session",
+          workspace_root: session.workspace_root,
+          state: "idle",
+          updated_at: "1970-01-01T00:00:00Z",
+          is_selected: true,
+        },
+      ],
+      selected_session_id: session.id,
+    };
+  }
+}
+
+export async function createSession(
   workspaceRoot: string,
 ): Promise<CreateSessionResponse> {
-  return apiFetch<CreateSessionResponse>("/v1/sessions", {
+  const resolvedWorkspaceRoot =
+    workspaceRoot.trim() !== ""
+      ? workspaceRoot.trim()
+      : (await getRuntimeWorkspace()).workspace_root;
+
+  return apiFetch<CreateSessionResponse>("/v1/session/ensure", {
     method: "POST",
-    body: JSON.stringify({ workspace_root: workspaceRoot }),
+    body: JSON.stringify({ workspace_root: resolvedWorkspaceRoot }),
   });
 }
 
-export function selectSession(sessionId: string): Promise<{ selected_session_id: string }> {
-  return apiFetch(`/v1/sessions/${sessionId}/select`, { method: "POST" });
+export async function selectSession(sessionId: string): Promise<{ selected_session_id: string }> {
+  try {
+    return await apiFetch(`/v1/sessions/${sessionId}/select`, { method: "POST" });
+  } catch (err) {
+    throw err;
+  }
 }
 
 export function deleteSession(sessionId: string): Promise<DeleteSessionResponse> {
@@ -136,6 +180,10 @@ export function getMetricsTimeseries(
 
 export function listRoles(): Promise<RoleListResponse> {
   return apiFetch<RoleListResponse>("/v1/roles");
+}
+
+export function getRole(roleID: string): Promise<RoleSpec> {
+  return apiFetch<RoleSpec>(`/v1/roles/${encodeURIComponent(roleID)}`);
 }
 
 export function createRole(role: RoleSpec): Promise<RoleSpec> {
