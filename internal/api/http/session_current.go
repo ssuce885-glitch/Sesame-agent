@@ -118,6 +118,10 @@ func ensureSession(ctx context.Context, deps Dependencies, workspaceRoot string,
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	specialistRoleID = strings.TrimSpace(specialistRoleID)
 
+	if specialistRoleID == string(types.SessionRoleMainParent) {
+		return types.Session{}, http.StatusBadRequest, errors.New("specialist role id cannot be main_parent")
+	}
+
 	if specialistRoleID == "" {
 		session, _, _, err := deps.Store.EnsureRoleSession(ctx, workspaceRoot, role)
 		return session, 0, err
