@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go-agent/internal/automation"
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/session"
 	"go-agent/internal/types"
 )
@@ -17,6 +18,7 @@ type permissionStore interface {
 	GetTurnContinuationByPermissionRequest(context.Context, string) (types.TurnContinuation, bool, error)
 	GetTurn(context.Context, string) (types.Turn, bool, error)
 	GetSession(context.Context, string) (types.Session, bool, error)
+	ResolveSpecialistRoleID(context.Context, string, string) (string, error)
 	GetToolRun(context.Context, string) (types.ToolRun, bool, error)
 	ListDispatchAttempts(context.Context, types.DispatchAttemptFilter) ([]types.DispatchAttempt, error)
 	ListPendingAutomationPermissions(context.Context, string) ([]types.PendingAutomationPermission, error)
@@ -266,7 +268,13 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 			RunID:                      continuation.RunID,
 			TaskID:                     continuation.TaskID,
 		}
-		if _, err := deps.Manager.ResumeTurn(r.Context(), sessionRow.ID, session.ResumeTurnInput{
+		specialistRoleID, err := store.ResolveSpecialistRoleID(r.Context(), sessionRow.ID, sessionRow.WorkspaceRoot)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		resumeCtx := rolectx.WithSpecialistRoleID(r.Context(), specialistRoleID)
+		if _, err := deps.Manager.ResumeTurn(resumeCtx, sessionRow.ID, session.ResumeTurnInput{
 			Turn:   turn,
 			Resume: resume,
 		}); err != nil {

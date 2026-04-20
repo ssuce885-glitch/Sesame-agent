@@ -9,6 +9,7 @@ import (
 
 	"go-agent/internal/automation"
 	"go-agent/internal/engine"
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/session"
 	"go-agent/internal/sessionbinding"
 	"go-agent/internal/sessionrole"
@@ -68,7 +69,15 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	if err != nil {
 		return err
 	}
-	runCtx := withRunnerSessionContext(ctx, in.Session, role)
+	specialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
+	if specialistRoleID == "" {
+		resolvedSpecialistRoleID, err := a.store.ResolveSpecialistRoleID(ctx, in.Session.ID, in.Session.WorkspaceRoot)
+		if err != nil {
+			return err
+		}
+		specialistRoleID = resolvedSpecialistRoleID
+	}
+	runCtx := withRunnerSessionContext(ctx, in.Session, role, specialistRoleID)
 	if in.Turn.ContextHeadID == "" && a.store != nil {
 		headID, ok, err := a.store.GetCurrentContextHeadID(runCtx)
 		if err != nil {
@@ -203,8 +212,8 @@ func (s *taskEventSink) Emit(_ context.Context, event types.Event) error {
 	}
 }
 
-func withRunnerSessionContext(ctx context.Context, sessionRow types.Session, role types.SessionRole) context.Context {
-	ctx = sessionrole.WithSessionRole(ctx, role)
+func withRunnerSessionContext(ctx context.Context, sessionRow types.Session, role types.SessionRole, specialistRoleID string) context.Context {
+	ctx = rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, role), specialistRoleID)
 	if strings.HasPrefix(strings.TrimSpace(sessionRow.ID), "task_session_") {
 		return sessionbinding.WithContextBinding(ctx, taskContextBinding(sessionRow.ID))
 	}

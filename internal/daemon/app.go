@@ -20,7 +20,7 @@ import (
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	"go-agent/internal/reporting"
-	"go-agent/internal/roles"
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
 	"go-agent/internal/sessionbinding"
@@ -683,7 +683,7 @@ func buildHTTPDependencies(cfg config.Config, store *sqlite.Store, bus *stream.B
 		Manager:       manager,
 		Scheduler:     schedulerService,
 		Automation:    automationService,
-		RoleService:   roles.NewService(),
+		RoleService:   rolectx.NewService(),
 		Status:        buildStatusPayload(cfg),
 		ConsoleRoot:   filepath.Join("web", "console", "dist"),
 		WorkspaceRoot: cfg.Paths.WorkspaceRoot,
@@ -988,7 +988,12 @@ func resumeResolvedContinuations(ctx context.Context, store *sqlite.Store, manag
 			RunID:                      continuation.RunID,
 			TaskID:                     continuation.TaskID,
 		}
-		if _, err := manager.ResumeTurn(ctx, sessionRow.ID, session.ResumeTurnInput{
+		specialistRoleID, err := store.ResolveSpecialistRoleID(ctx, sessionRow.ID, sessionRow.WorkspaceRoot)
+		if err != nil {
+			return nil, err
+		}
+		resumeCtx := rolectx.WithSpecialistRoleID(ctx, specialistRoleID)
+		if _, err := manager.ResumeTurn(resumeCtx, sessionRow.ID, session.ResumeTurnInput{
 			Turn:   turn,
 			Resume: resume,
 		}); err != nil {
