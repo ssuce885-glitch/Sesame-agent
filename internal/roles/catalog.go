@@ -47,7 +47,7 @@ func LoadCatalog(workspaceRoot string) (Catalog, error) {
 
 	out := Catalog{ByID: map[string]Spec{}}
 	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+		if !entry.IsDir() {
 			continue
 		}
 		roleID, err := CanonicalRoleID(entry.Name())
