@@ -147,13 +147,18 @@ type PermissionRequest struct {
 }
 
 type RuntimeDiagnostic struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"session_id"`
-	TurnID    string    `json:"turn_id,omitempty"`
-	EventType string    `json:"event_type"`
-	Reason    string    `json:"reason,omitempty"`
-	Summary   string    `json:"summary,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         string    `json:"id"`
+	SessionID  string    `json:"session_id"`
+	TurnID     string    `json:"turn_id,omitempty"`
+	EventType  string    `json:"event_type"`
+	Category   string    `json:"category,omitempty"`
+	Severity   string    `json:"severity,omitempty"`
+	Reason     string    `json:"reason,omitempty"`
+	Summary    string    `json:"summary,omitempty"`
+	RepairHint string    `json:"repair_hint,omitempty"`
+	AssetKind  string    `json:"asset_kind,omitempty"`
+	AssetID    string    `json:"asset_id,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type RuntimeGraph struct {

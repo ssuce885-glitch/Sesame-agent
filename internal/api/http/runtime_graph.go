@@ -111,6 +111,13 @@ type interruptedReasonPayload struct {
 	Reason string `json:"reason"`
 }
 
+type runtimeDiagnosticDescriptor struct {
+	Category   string
+	Severity   string
+	Summary    string
+	RepairHint string
+}
+
 var runtimeDiagnosticReasons = []string{
 	"task_session_replay_unsupported",
 	"unmapped_session",
@@ -147,14 +154,20 @@ func collectRuntimeDiagnostics(ctx context.Context, store any, workspaceRoot str
 			if !slices.Contains(runtimeDiagnosticReasons, strings.TrimSpace(payload.Reason)) {
 				continue
 			}
+			descriptor := describeRuntimeDiagnostic(payload.Reason)
 			diagnostics = append(diagnostics, types.RuntimeDiagnostic{
-				ID:        event.ID,
-				SessionID: event.SessionID,
-				TurnID:    event.TurnID,
-				EventType: event.Type,
-				Reason:    payload.Reason,
-				Summary:   runtimeDiagnosticSummary(payload.Reason),
-				CreatedAt: event.Time.UTC(),
+				ID:         event.ID,
+				SessionID:  event.SessionID,
+				TurnID:     event.TurnID,
+				EventType:  event.Type,
+				Category:   descriptor.Category,
+				Severity:   descriptor.Severity,
+				Reason:     payload.Reason,
+				Summary:    descriptor.Summary,
+				RepairHint: descriptor.RepairHint,
+				AssetKind:  "turn",
+				AssetID:    event.TurnID,
+				CreatedAt:  event.Time.UTC(),
 			})
 		}
 	}
@@ -165,14 +178,29 @@ func collectRuntimeDiagnostics(ctx context.Context, store any, workspaceRoot str
 	return diagnostics, nil
 }
 
-func runtimeDiagnosticSummary(reason string) string {
+func describeRuntimeDiagnostic(reason string) runtimeDiagnosticDescriptor {
 	switch strings.TrimSpace(reason) {
 	case "task_session_replay_unsupported":
-		return "Task-session replay was quarantined during daemon recovery."
+		return runtimeDiagnosticDescriptor{
+			Category:   "task_recovery",
+			Severity:   "warning",
+			Summary:    "Task-session replay was quarantined during daemon recovery.",
+			RepairHint: "Review the interrupted task, then restart or recreate it from the workspace runtime view.",
+		}
 	case "unmapped_session":
-		return "A created turn was quarantined because its session binding was no longer canonical."
+		return runtimeDiagnosticDescriptor{
+			Category:   "session_binding",
+			Severity:   "warning",
+			Summary:    "A created turn was quarantined because its session binding was no longer canonical.",
+			RepairHint: "Inspect workspace session bindings and reopen the parent context if needed.",
+		}
 	default:
-		return "Runtime quarantine diagnostic."
+		return runtimeDiagnosticDescriptor{
+			Category:   "runtime_recovery",
+			Severity:   "warning",
+			Summary:    "Runtime quarantine diagnostic.",
+			RepairHint: "Inspect the affected runtime asset and decide whether it should be restarted or left quarantined.",
+		}
 	}
 }
 

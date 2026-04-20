@@ -76,11 +76,16 @@ export function RoleList({
                 cursor: "pointer",
               }}
             >
-              <div
-                className="text-sm font-medium truncate"
-                style={{ color: selected ? "var(--color-text)" : "var(--color-text-muted)" }}
-              >
-                {role.role_id}
+              <div className="flex items-center justify-between gap-2">
+                <div
+                  className="text-sm font-medium truncate"
+                  style={{ color: selected ? "var(--color-text)" : "var(--color-text-muted)" }}
+                >
+                  {role.role_id}
+                </div>
+                <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+                  v{role.version || 1}
+                </span>
               </div>
               {role.display_name && (
                 <div className="text-xs truncate mt-0.5" style={{ color: "var(--color-text-muted)" }}>

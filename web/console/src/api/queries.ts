@@ -13,6 +13,7 @@ import {
   getMetricsOverview,
   getMetricsTimeseries,
   getRole,
+  listRoleVersions,
   listRoles,
   createRole,
   updateRole,
@@ -131,6 +132,15 @@ export function useRole(roleID: string | null) {
   });
 }
 
+export function useRoleVersions(roleID: string | null) {
+  return useQuery({
+    queryKey: ["roles", roleID, "versions"],
+    queryFn: () => listRoleVersions(roleID!),
+    enabled: !!roleID,
+    staleTime: 10_000,
+  });
+}
+
 // ─── Mutations ─────────────────────────────────────────────────────────────────
 
 export function useSubmitMessage(sessionId: string) {
@@ -165,7 +175,10 @@ export function useUpdateRole() {
   return useMutation({
     mutationFn: ({ roleID, role }: { roleID: string; role: import("./types").RoleSpec }) =>
       updateRole(roleID, role),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["roles"] }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["roles"] });
+      qc.invalidateQueries({ queryKey: ["roles", vars.roleID, "versions"] });
+    },
   });
 }
 
@@ -173,6 +186,9 @@ export function useDeleteRole() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (roleID: string) => deleteRole(roleID),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["roles"] }),
+    onSuccess: (_data, roleID) => {
+      qc.invalidateQueries({ queryKey: ["roles"] });
+      qc.removeQueries({ queryKey: ["roles", roleID, "versions"] });
+    },
   });
 }

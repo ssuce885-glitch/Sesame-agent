@@ -3,6 +3,7 @@ import type { RoleSpec } from "../../api/types";
 
 interface RoleEditorProps {
   role: RoleSpec | null;
+  versions: RoleSpec[];
   resetToken: number;
   isSaving: boolean;
   isDeleting: boolean;
@@ -16,6 +17,8 @@ const EMPTY_ROLE: RoleSpec = {
   description: "",
   prompt: "",
   skills: [],
+  policy: {},
+  version: 1,
 };
 
 function parseSkills(input: string): string[] {
@@ -27,6 +30,7 @@ function parseSkills(input: string): string[] {
 
 export function RoleEditor({
   role,
+  versions,
   resetToken,
   isSaving,
   isDeleting,
@@ -35,18 +39,31 @@ export function RoleEditor({
 }: RoleEditorProps) {
   const [draft, setDraft] = useState<RoleSpec>(role ?? EMPTY_ROLE);
   const [skillsInput, setSkillsInput] = useState(role?.skills.join("\n") ?? "");
+  const [policyInput, setPolicyInput] = useState(JSON.stringify(role?.policy ?? {}, null, 2));
+  const [policyError, setPolicyError] = useState<string | null>(null);
 
   useEffect(() => {
     const next = role ?? EMPTY_ROLE;
     setDraft(next);
     setSkillsInput(next.skills.join("\n"));
+    setPolicyInput(JSON.stringify(next.policy ?? {}, null, 2));
+    setPolicyError(null);
   }, [role, resetToken]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    let parsedPolicy: Record<string, unknown> = {};
+    try {
+      parsedPolicy = JSON.parse(policyInput || "{}") as Record<string, unknown>;
+      setPolicyError(null);
+    } catch {
+      setPolicyError("Policy must be valid JSON.");
+      return;
+    }
     await onSave({
       ...draft,
       skills: parseSkills(skillsInput),
+      policy: parsedPolicy,
     });
   }
 
@@ -67,6 +84,19 @@ export function RoleEditor({
         <p className="text-sm mt-1 mb-4" style={{ color: "var(--color-text-muted)" }}>
           Specialist role definition for this workspace.
         </p>
+        {policyError ? (
+          <div
+            className="mb-4 rounded-lg px-3 py-2 text-sm"
+            role="alert"
+            style={{
+              backgroundColor: "rgba(220, 38, 38, 0.04)",
+              border: "1px solid rgba(220, 38, 38, 0.18)",
+              color: "var(--color-error)",
+            }}
+          >
+            {policyError}
+          </div>
+        ) : null}
 
         <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
           <label className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
@@ -122,6 +152,21 @@ export function RoleEditor({
           </label>
 
           <label className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
+            Version
+            <input
+              aria-label="Version"
+              value={String(draft.version || 1)}
+              disabled
+              className="mt-1 w-full rounded-md px-3 py-2"
+              style={{
+                border: "1px solid var(--color-border)",
+                backgroundColor: "var(--color-surface-2)",
+                color: "var(--color-text)",
+              }}
+            />
+          </label>
+
+          <label className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
             Prompt
             <textarea
               aria-label="Prompt"
@@ -156,6 +201,64 @@ export function RoleEditor({
               }}
             />
           </label>
+
+          <label className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
+            Policy
+            <textarea
+              aria-label="Policy"
+              value={policyInput}
+              onChange={(event) => {
+                setPolicyInput(event.target.value);
+                if (policyError) {
+                  setPolicyError(null);
+                }
+              }}
+              className="mt-1 w-full rounded-md px-3 py-2 font-mono text-sm"
+              rows={8}
+              style={{
+                border: "1px solid var(--color-border)",
+                backgroundColor: "var(--color-surface)",
+                color: "var(--color-text)",
+                resize: "vertical",
+              }}
+            />
+          </label>
+
+          {isExisting && versions.length > 0 ? (
+            <section
+              className="rounded-lg border px-4 py-3"
+              style={{
+                backgroundColor: "var(--color-surface-2)",
+                borderColor: "var(--color-border)",
+              }}
+            >
+              <h2 className="m-0 text-sm font-semibold" style={{ color: "var(--color-text)" }}>
+                Version history
+              </h2>
+              <div className="mt-3 flex flex-col gap-2">
+                {versions
+                  .slice()
+                  .sort((a, b) => b.version - a.version)
+                  .map((version) => (
+                    <div
+                      key={`${version.role_id}:${version.version}`}
+                      className="rounded-md px-3 py-2"
+                      style={{
+                        backgroundColor: "var(--color-surface)",
+                        border: "1px solid var(--color-border)",
+                      }}
+                    >
+                      <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
+                        v{version.version} {version.display_name || version.role_id}
+                      </div>
+                      <div className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                        Skills: {version.skills.join(", ") || "none"}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </section>
+          ) : null}
 
           <div className="flex items-center gap-2">
             <button

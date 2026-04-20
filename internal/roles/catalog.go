@@ -16,6 +16,8 @@ type Spec struct {
 	Description string
 	Prompt      string
 	SkillNames  []string
+	Policy      map[string]any
+	Version     int
 }
 
 type Catalog struct {
@@ -25,9 +27,21 @@ type Catalog struct {
 }
 
 type roleConfig struct {
-	DisplayName string   `yaml:"display_name"`
-	Description string   `yaml:"description"`
-	Skills      []string `yaml:"skills"`
+	DisplayName string         `yaml:"display_name"`
+	Description string         `yaml:"description"`
+	Skills      []string       `yaml:"skills"`
+	Policy      map[string]any `yaml:"policy"`
+	Version     int            `yaml:"version"`
+}
+
+type roleSnapshot struct {
+	RoleID      string         `yaml:"role_id"`
+	DisplayName string         `yaml:"display_name"`
+	Description string         `yaml:"description"`
+	Prompt      string         `yaml:"prompt"`
+	SkillNames  []string       `yaml:"skills"`
+	Policy      map[string]any `yaml:"policy"`
+	Version     int            `yaml:"version"`
 }
 
 func LoadCatalog(workspaceRoot string) (Catalog, error) {
@@ -149,6 +163,32 @@ func loadRoleSpec(root, roleID string) (Spec, error) {
 		Description: strings.TrimSpace(cfg.Description),
 		Prompt:      strings.TrimSpace(string(promptData)),
 		SkillNames:  normalizeSkillNames(cfg.Skills),
+		Policy:      normalizePolicyMap(cfg.Policy),
+		Version:     normalizeRoleVersion(cfg.Version),
+	}, nil
+}
+
+func loadRoleVersionSnapshot(path string) (Spec, error) {
+	snapshotData, err := readConcreteRoleFile(path)
+	if err != nil {
+		return Spec{}, err
+	}
+	var snapshot roleSnapshot
+	if err := yaml.Unmarshal(snapshotData, &snapshot); err != nil {
+		return Spec{}, err
+	}
+	roleID, err := CanonicalRoleID(snapshot.RoleID)
+	if err != nil {
+		return Spec{}, err
+	}
+	return Spec{
+		RoleID:      roleID,
+		DisplayName: strings.TrimSpace(snapshot.DisplayName),
+		Description: strings.TrimSpace(snapshot.Description),
+		Prompt:      strings.TrimSpace(snapshot.Prompt),
+		SkillNames:  normalizeSkillNames(snapshot.SkillNames),
+		Policy:      normalizePolicyMap(snapshot.Policy),
+		Version:     normalizeRoleVersion(snapshot.Version),
 	}, nil
 }
 
@@ -182,6 +222,13 @@ func normalizeSkillNames(skills []string) []string {
 		}
 	}
 	return out
+}
+
+func normalizeRoleVersion(version int) int {
+	if version <= 0 {
+		return 1
+	}
+	return version
 }
 
 func rejectInvalidRoleYAML(content []*yaml.Node) error {

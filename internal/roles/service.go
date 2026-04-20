@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"go-agent/internal/config"
@@ -14,11 +15,12 @@ import (
 )
 
 type UpsertInput struct {
-	RoleID      string   `json:"role_id"`
-	DisplayName string   `json:"display_name"`
-	Description string   `json:"description"`
-	Prompt      string   `json:"prompt"`
-	SkillNames  []string `json:"skills"`
+	RoleID      string         `json:"role_id"`
+	DisplayName string         `json:"display_name"`
+	Description string         `json:"description"`
+	Prompt      string         `json:"prompt"`
+	SkillNames  []string       `json:"skills"`
+	Policy      map[string]any `json:"policy"`
 }
 
 type Service struct {
@@ -140,11 +142,15 @@ func (s *Service) Create(workspaceRoot string, in UpsertInput) (Spec, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Spec{}, newServiceError(ErrorKindInternal, err)
 	}
-	stagingDir, err := prepareRoleStagingDir(workspaceRoot, rolesRoot, normalized)
+	stagingDir, err := prepareRoleStagingDir(workspaceRoot, rolesRoot, normalized, 1)
 	if err != nil {
 		return Spec{}, err
 	}
 	defer func() { _ = os.RemoveAll(stagingDir) }()
+	createdSpec := specFromUpsertInput(normalized, 1)
+	if err := writeRoleSnapshotToDir(stagingDir, createdSpec); err != nil {
+		return Spec{}, newServiceError(ErrorKindInternal, err)
+	}
 	if err := renameRoleDir(stagingDir, roleDir); err != nil {
 		if isCreateDestinationConflict(roleDir, err) {
 			return Spec{}, newServiceError(ErrorKindConflict, err)
@@ -197,11 +203,17 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 		return Spec{}, newServiceError(ErrorKindInternal, err)
 	}
 
-	stagingDir, err := prepareRoleStagingDir(workspaceRoot, rolesRoot, normalized)
+	currentVersion := readRoleVersion(roleDir)
+	nextVersion := currentVersion + 1
+	stagingDir, err := prepareRoleStagingDir(workspaceRoot, rolesRoot, normalized, nextVersion)
 	if err != nil {
 		return Spec{}, err
 	}
 	defer func() { _ = os.RemoveAll(stagingDir) }()
+	updatedSpec := specFromUpsertInput(normalized, nextVersion)
+	if err := writeRoleSnapshotToDir(stagingDir, updatedSpec); err != nil {
+		return Spec{}, newServiceError(ErrorKindInternal, err)
+	}
 
 	if err := replaceRoleFilesFromStaging(workspaceRoot, roleDir, stagingDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -215,6 +227,58 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 		return Spec{}, newServiceError(ErrorKindInternal, err)
 	}
 	return spec, nil
+}
+
+func (s *Service) ListVersions(workspaceRoot, roleID string) ([]Spec, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
+		return nil, newServiceError(ErrorKindInvalidInput, err)
+	}
+	roleID, err := CanonicalRoleID(roleID)
+	if err != nil {
+		return nil, newServiceError(ErrorKindInvalidInput, err)
+	}
+	roleDir := filepath.Join(workspaceRoot, "roles", roleID)
+	if err := ensureConcreteRoleDir(roleDir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, newServiceError(ErrorKindNotFound, err)
+		}
+		return nil, newServiceError(ErrorKindInternal, err)
+	}
+	versionsDir := filepath.Join(roleDir, ".role-versions")
+	entries, err := os.ReadDir(versionsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		spec, getErr := s.Get(workspaceRoot, roleID)
+		if getErr != nil {
+			return nil, getErr
+		}
+		return []Spec{spec}, nil
+	}
+	if err != nil {
+		return nil, newServiceError(ErrorKindInternal, err)
+	}
+	versions := make([]Spec, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+			continue
+		}
+		spec, loadErr := loadRoleVersionSnapshot(filepath.Join(versionsDir, entry.Name()))
+		if loadErr != nil {
+			return nil, newServiceError(ErrorKindInternal, loadErr)
+		}
+		versions = append(versions, spec)
+	}
+	if len(versions) == 0 {
+		spec, getErr := s.Get(workspaceRoot, roleID)
+		if getErr != nil {
+			return nil, getErr
+		}
+		return []Spec{spec}, nil
+	}
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i].Version < versions[j].Version
+	})
+	return versions, nil
 }
 
 func (s *Service) Delete(workspaceRoot, roleID string) error {
@@ -239,7 +303,7 @@ func (s *Service) Delete(workspaceRoot, roleID string) error {
 	return nil
 }
 
-func prepareRoleStagingDir(workspaceRoot, rolesRoot string, in UpsertInput) (string, error) {
+func prepareRoleStagingDir(workspaceRoot, rolesRoot string, in UpsertInput, version int) (string, error) {
 	if err := os.MkdirAll(rolesRoot, 0o755); err != nil {
 		return "", newServiceError(ErrorKindInternal, err)
 	}
@@ -251,7 +315,7 @@ func prepareRoleStagingDir(workspaceRoot, rolesRoot string, in UpsertInput) (str
 	if err != nil {
 		return "", newServiceError(ErrorKindInternal, err)
 	}
-	if err := writeRoleFilesToDir(stagingDir, in); err != nil {
+	if err := writeRoleFilesToDir(stagingDir, in, version); err != nil {
 		_ = os.RemoveAll(stagingDir)
 		return "", newServiceError(ErrorKindInternal, err)
 	}
@@ -353,11 +417,13 @@ func copyRoleEntry(src, dst string) error {
 	return os.WriteFile(dst, data, info.Mode().Perm())
 }
 
-func writeRoleFilesToDir(roleDir string, in UpsertInput) error {
+func writeRoleFilesToDir(roleDir string, in UpsertInput, version int) error {
 	raw, err := yaml.Marshal(map[string]any{
 		"display_name": strings.TrimSpace(in.DisplayName),
 		"description":  strings.TrimSpace(in.Description),
 		"skills":       dedupeStrings(in.SkillNames),
+		"policy":       normalizePolicyMap(in.Policy),
+		"version":      normalizeRoleVersion(version),
 	})
 	if err != nil {
 		return err
@@ -366,6 +432,54 @@ func writeRoleFilesToDir(roleDir string, in UpsertInput) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(roleDir, "prompt.md"), []byte(in.Prompt+"\n"), 0o644)
+}
+
+func writeRoleSnapshotToDir(roleDir string, spec Spec) error {
+	snapshotDir := filepath.Join(roleDir, ".role-versions")
+	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
+		return err
+	}
+	raw, err := yaml.Marshal(roleSnapshot{
+		RoleID:      spec.RoleID,
+		DisplayName: spec.DisplayName,
+		Description: spec.Description,
+		Prompt:      spec.Prompt,
+		SkillNames:  normalizeSkillNames(spec.SkillNames),
+		Policy:      normalizePolicyMap(spec.Policy),
+		Version:     normalizeRoleVersion(spec.Version),
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(snapshotDir, roleVersionSnapshotFileName(spec.Version)), raw, 0o644)
+}
+
+func roleVersionSnapshotFileName(version int) string {
+	return fmt.Sprintf("%06d.yaml", normalizeRoleVersion(version))
+}
+
+func specFromUpsertInput(in UpsertInput, version int) Spec {
+	return Spec{
+		RoleID:      in.RoleID,
+		DisplayName: strings.TrimSpace(in.DisplayName),
+		Description: strings.TrimSpace(in.Description),
+		Prompt:      strings.TrimSpace(in.Prompt),
+		SkillNames:  normalizeSkillNames(in.SkillNames),
+		Policy:      normalizePolicyMap(in.Policy),
+		Version:     normalizeRoleVersion(version),
+	}
+}
+
+func readRoleVersion(roleDir string) int {
+	roleData, err := readConcreteRoleFile(filepath.Join(roleDir, "role.yaml"))
+	if err != nil {
+		return 1
+	}
+	var cfg roleConfig
+	if err := yaml.Unmarshal(roleData, &cfg); err != nil {
+		return 1
+	}
+	return normalizeRoleVersion(cfg.Version)
 }
 
 func ensureConcreteRoleDir(roleDir string) error {

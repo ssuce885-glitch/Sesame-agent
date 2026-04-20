@@ -264,19 +264,82 @@ export interface RuntimeDiagnostic {
   session_id: string;
   turn_id: string;
   event_type: string;
+  category?: string;
+  severity?: string;
   reason?: string;
   summary?: string;
+  repair_hint?: string;
+  asset_kind?: string;
+  asset_id?: string;
   created_at: string;
+}
+
+export interface RuntimeToolRun {
+  id: string;
+  run_id: string;
+  task_id?: string;
+  state: string;
+  tool_name: string;
+  tool_call_id?: string;
+  input_json?: string;
+  output_json?: string;
+  error?: string;
+  permission_request_id?: string;
+  lock_wait_ms?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface RuntimeWorktree {
+  id: string;
+  run_id: string;
+  task_id?: string;
+  state: string;
+  worktree_path: string;
+  worktree_branch?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface RuntimeIncident {
+  id: string;
+  automation_id: string;
+  workspace_root: string;
+  status: string;
+  signal_kind?: string;
+  source?: string;
+  summary?: string;
+  observed_at?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface RuntimeDispatchAttempt {
+  dispatch_id: string;
+  incident_id: string;
+  automation_id: string;
+  workspace_root: string;
+  phase: string;
+  attempt: number;
+  status: string;
+  outcome?: string;
+  outcome_summary?: string;
+  task_id?: string;
+  child_agent_id?: string;
+  permission_request_id?: string;
+  activated_skill_names?: string[];
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface RuntimeGraph {
   runs: Array<{ id: string; session_id: string; turn_id?: string; state: string }>;
   plans: Array<{ id: string; run_id: string; state: string; title?: string }>;
   tasks: RuntimeTask[];
-  tool_runs: Array<{ id: string; run_id: string; task_id?: string; state: string; tool_name: string }>;
-  worktrees: Array<{ id: string; run_id: string; task_id?: string; state: string; worktree_path: string }>;
-  incidents: unknown[];
-  dispatch_attempts: unknown[];
+  tool_runs: RuntimeToolRun[];
+  worktrees: RuntimeWorktree[];
+  incidents: RuntimeIncident[];
+  dispatch_attempts: RuntimeDispatchAttempt[];
   permission_requests: RuntimePermissionRequest[];
   diagnostics?: RuntimeDiagnostic[];
 }
@@ -328,6 +391,8 @@ export interface RoleSpec {
   description: string;
   prompt: string;
   skills: string[];
+  policy: Record<string, unknown>;
+  version: number;
 }
 
 export interface RoleSummary {
@@ -335,6 +400,8 @@ export interface RoleSummary {
   display_name: string;
   description: string;
   skills: string[];
+  policy: Record<string, unknown>;
+  version: number;
 }
 
 export interface RoleDiagnostic {
@@ -346,6 +413,10 @@ export interface RoleDiagnostic {
 export interface RoleListResponse {
   roles: RoleSummary[];
   diagnostics: RoleDiagnostic[];
+}
+
+export interface RoleVersionListResponse {
+  versions: RoleSpec[];
 }
 
 // ─── Token Usage ───────────────────────────────────────────────────────────────

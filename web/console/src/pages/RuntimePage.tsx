@@ -10,8 +10,12 @@ import {
 import type {
   HistoryEntry,
   RuntimeDiagnostic,
+  RuntimeDispatchAttempt,
+  RuntimeIncident,
   RuntimePermissionRequest,
   RuntimeTask,
+  RuntimeToolRun,
+  RuntimeWorktree,
   WorkspaceMailboxItem,
 } from "../api/types";
 
@@ -28,6 +32,10 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
 
   const contextEntries = [...(history.data?.entries ?? [])].sort(sortByUpdatedAtDesc);
   const tasks = [...(runtimeGraph.data?.graph.tasks ?? [])].sort(sortByUpdatedAtDesc);
+  const toolRuns = [...(runtimeGraph.data?.graph.tool_runs ?? [])].sort(sortByUpdatedAtDesc);
+  const worktrees = [...(runtimeGraph.data?.graph.worktrees ?? [])].sort(sortByUpdatedAtDesc);
+  const incidents = [...(runtimeGraph.data?.graph.incidents ?? [])].sort(sortByUpdatedAtDesc);
+  const dispatchAttempts = [...(runtimeGraph.data?.graph.dispatch_attempts ?? [])].sort(sortByUpdatedAtDesc);
   const diagnostics = [...(runtimeGraph.data?.graph.diagnostics ?? [])].sort(sortByCreatedAtDesc);
   const pendingApprovals = (runtimeGraph.data?.graph.permission_requests ?? []).filter(
     (request) => request.status === "requested",
@@ -36,8 +44,20 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
   const activeTaskCount = tasks.filter((task) => task.state === "running" || task.state === "pending").length;
   const [selection, setSelection] = useState<RuntimeSelection | null>(null);
   const selectedDetail = useMemo(
-    () => buildSelectionDetail(selection, contextEntries, tasks, mailboxItems, pendingApprovals, diagnostics),
-    [selection, contextEntries, tasks, mailboxItems, pendingApprovals, diagnostics],
+    () =>
+      buildSelectionDetail(
+        selection,
+        contextEntries,
+        tasks,
+        mailboxItems,
+        pendingApprovals,
+        diagnostics,
+        toolRuns,
+        worktrees,
+        incidents,
+        dispatchAttempts,
+      ),
+    [selection, contextEntries, tasks, mailboxItems, pendingApprovals, diagnostics, toolRuns, worktrees, incidents, dispatchAttempts],
   );
 
   const isInitialLoading =
@@ -159,10 +179,74 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
         </Panel>
       </div>
 
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1fr]">
+        <Panel
+          title="Incidents"
+          subtitle="Automation incidents currently attached to this workspace"
+          emptyText="No incidents recorded yet."
+        >
+          {incidents.map((incident) => (
+            <IncidentRow
+              key={incident.id}
+              incident={incident}
+              selected={selection?.kind === "incident" && selection.id === incident.id}
+              onSelect={() => setSelection({ kind: "incident", id: incident.id })}
+            />
+          ))}
+        </Panel>
+
+        <Panel
+          title="Dispatch Attempts"
+          subtitle="Child-agent dispatches and approval-gated execution handoffs"
+          emptyText="No dispatch attempts recorded yet."
+        >
+          {dispatchAttempts.map((attempt) => (
+            <DispatchAttemptRow
+              key={attempt.dispatch_id}
+              attempt={attempt}
+              selected={selection?.kind === "dispatch" && selection.id === attempt.dispatch_id}
+              onSelect={() => setSelection({ kind: "dispatch", id: attempt.dispatch_id })}
+            />
+          ))}
+        </Panel>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1fr]">
+        <Panel
+          title="Tool Runs"
+          subtitle="Tool execution detail attached to active tasks"
+          emptyText="No tool runs recorded yet."
+        >
+          {toolRuns.map((toolRun) => (
+            <ToolRunRow
+              key={toolRun.id}
+              toolRun={toolRun}
+              selected={selection?.kind === "tool_run" && selection.id === toolRun.id}
+              onSelect={() => setSelection({ kind: "tool_run", id: toolRun.id })}
+            />
+          ))}
+        </Panel>
+
+        <Panel
+          title="Worktrees"
+          subtitle="Attached worktrees created for task execution"
+          emptyText="No worktrees recorded yet."
+        >
+          {worktrees.map((worktree) => (
+            <WorktreeRow
+              key={worktree.id}
+              worktree={worktree}
+              selected={selection?.kind === "worktree" && selection.id === worktree.id}
+              onSelect={() => setSelection({ kind: "worktree", id: worktree.id })}
+            />
+          ))}
+        </Panel>
+      </div>
+
       <Panel
         title="Selection Detail"
         subtitle="Inspect one runtime asset at a time"
-        emptyText="Choose a diagnostic, context head, task, report, or approval request to inspect its details."
+        emptyText="Choose a runtime asset to inspect its details."
       >
         {selectedDetail ? (
           <SelectionDetailCard
@@ -172,6 +256,11 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
               contextEntries,
               tasks,
               mailboxItems,
+              toolRuns,
+              worktrees,
+              incidents,
+              dispatchAttempts,
+              pendingApprovals,
               reopenContext,
               loadContextHistory,
               setSelection,
@@ -188,7 +277,11 @@ type RuntimeSelection =
   | { kind: "task"; id: string }
   | { kind: "report"; id: string }
   | { kind: "diagnostic"; id: string }
-  | { kind: "approval"; id: string };
+  | { kind: "approval"; id: string }
+  | { kind: "incident"; id: string }
+  | { kind: "dispatch"; id: string }
+  | { kind: "tool_run"; id: string }
+  | { kind: "worktree"; id: string };
 
 interface DetailItem {
   label: string;
@@ -350,6 +443,173 @@ function TaskRow({
         <span>Owner: {task.owner || "runtime"}</span>
         <span>Kind: {task.kind || "task"}</span>
         <span>Updated {formatTimestamp(task.updated_at)}</span>
+      </div>
+    </button>
+  );
+}
+
+function IncidentRow({
+  incident,
+  selected,
+  onSelect,
+}: {
+  incident: RuntimeIncident;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className="rounded-xl px-4 py-3"
+      style={{
+        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
+        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
+        textAlign: "left",
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
+            {incident.summary || incident.id}
+          </div>
+          {incident.signal_kind && (
+            <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
+              Signal: {incident.signal_kind}
+            </div>
+          )}
+        </div>
+        <StatusBadge tone={toneFromState(incident.status)}>{incident.status}</StatusBadge>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+        <span>Automation: {incident.automation_id}</span>
+        <span>Source: {incident.source || "runtime"}</span>
+        <span>Updated {formatTimestamp(incident.updated_at || incident.created_at)}</span>
+      </div>
+    </button>
+  );
+}
+
+function DispatchAttemptRow({
+  attempt,
+  selected,
+  onSelect,
+}: {
+  attempt: RuntimeDispatchAttempt;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className="rounded-xl px-4 py-3"
+      style={{
+        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
+        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
+        textAlign: "left",
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
+            {attempt.outcome_summary || attempt.dispatch_id}
+          </div>
+          <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
+            Dispatch {attempt.dispatch_id}
+          </div>
+        </div>
+        <StatusBadge tone={toneFromState(attempt.status)}>{attempt.status}</StatusBadge>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+        <span>Phase: {attempt.phase}</span>
+        <span>Task: {attempt.task_id || "none"}</span>
+        <span>Updated {formatTimestamp(attempt.updated_at || attempt.created_at)}</span>
+      </div>
+    </button>
+  );
+}
+
+function ToolRunRow({
+  toolRun,
+  selected,
+  onSelect,
+}: {
+  toolRun: RuntimeToolRun;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className="rounded-xl px-4 py-3"
+      style={{
+        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
+        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
+        textAlign: "left",
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
+            {toolRun.tool_name}
+          </div>
+          {toolRun.input_json && (
+            <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
+              {toolRun.input_json}
+            </div>
+          )}
+        </div>
+        <StatusBadge tone={toneFromState(toolRun.state)}>{toolRun.state}</StatusBadge>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+        <span>Task: {toolRun.task_id || "none"}</span>
+        <span>Call: {toolRun.tool_call_id || "n/a"}</span>
+        <span>Updated {formatTimestamp(toolRun.updated_at || toolRun.created_at)}</span>
+      </div>
+    </button>
+  );
+}
+
+function WorktreeRow({
+  worktree,
+  selected,
+  onSelect,
+}: {
+  worktree: RuntimeWorktree;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className="rounded-xl px-4 py-3"
+      style={{
+        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
+        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
+        textAlign: "left",
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
+            {worktree.worktree_branch || worktree.id}
+          </div>
+          <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
+            {worktree.worktree_path}
+          </div>
+        </div>
+        <StatusBadge tone={toneFromState(worktree.state)}>{worktree.state}</StatusBadge>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+        <span>Task: {worktree.task_id || "none"}</span>
+        <span>Updated {formatTimestamp(worktree.updated_at || worktree.created_at)}</span>
       </div>
     </button>
   );
@@ -660,6 +920,10 @@ function buildSelectionDetail(
   mailboxItems: WorkspaceMailboxItem[],
   pendingApprovals: RuntimePermissionRequest[],
   diagnostics: RuntimeDiagnostic[],
+  toolRuns: RuntimeToolRun[],
+  worktrees: RuntimeWorktree[],
+  incidents: RuntimeIncident[],
+  dispatchAttempts: RuntimeDispatchAttempt[],
 ): SelectionDetail | null {
   if (!selection) {
     return null;
@@ -738,8 +1002,13 @@ function buildSelectionDetail(
           { label: "Session ID", value: diagnostic.session_id },
           { label: "Turn ID", value: diagnostic.turn_id },
           { label: "Event Type", value: diagnostic.event_type },
+          { label: "Category", value: diagnostic.category },
+          { label: "Severity", value: diagnostic.severity },
           { label: "Reason", value: diagnostic.reason },
           { label: "Summary", value: diagnostic.summary },
+          { label: "Repair Hint", value: diagnostic.repair_hint },
+          { label: "Asset Kind", value: diagnostic.asset_kind },
+          { label: "Asset ID", value: diagnostic.asset_id },
           { label: "Created", value: formatTimestamp(diagnostic.created_at) },
         ]),
       };
@@ -763,6 +1032,91 @@ function buildSelectionDetail(
         ]),
       };
     }
+    case "incident": {
+      const incident = incidents.find((item) => item.id === selection.id);
+      if (!incident) {
+        return null;
+      }
+      return {
+        title: incident.summary || incident.id,
+        kindLabel: "incident",
+        summary: incident.source,
+        items: compactDetailItems([
+          { label: "Incident ID", value: incident.id },
+          { label: "Automation", value: incident.automation_id },
+          { label: "Status", value: incident.status },
+          { label: "Signal", value: incident.signal_kind },
+          { label: "Source", value: incident.source },
+          { label: "Observed", value: formatTimestamp(incident.observed_at) },
+          { label: "Updated", value: formatTimestamp(incident.updated_at || incident.created_at) },
+        ]),
+      };
+    }
+    case "dispatch": {
+      const attempt = dispatchAttempts.find((item) => item.dispatch_id === selection.id);
+      if (!attempt) {
+        return null;
+      }
+      return {
+        title: attempt.outcome_summary || attempt.dispatch_id,
+        kindLabel: "dispatch",
+        summary: attempt.child_agent_id,
+        items: compactDetailItems([
+          { label: "Dispatch ID", value: attempt.dispatch_id },
+          { label: "Incident ID", value: attempt.incident_id },
+          { label: "Automation", value: attempt.automation_id },
+          { label: "Phase", value: attempt.phase },
+          { label: "Attempt", value: String(attempt.attempt) },
+          { label: "Status", value: attempt.status },
+          { label: "Task ID", value: attempt.task_id },
+          { label: "Permission Request", value: attempt.permission_request_id },
+          { label: "Skills", value: attempt.activated_skill_names?.join(", ") },
+          { label: "Updated", value: formatTimestamp(attempt.updated_at || attempt.created_at) },
+        ]),
+      };
+    }
+    case "tool_run": {
+      const toolRun = toolRuns.find((item) => item.id === selection.id);
+      if (!toolRun) {
+        return null;
+      }
+      return {
+        title: toolRun.tool_name || toolRun.id,
+        kindLabel: "tool run",
+        summary: toolRun.error || toolRun.output_json,
+        items: compactDetailItems([
+          { label: "Tool Run ID", value: toolRun.id },
+          { label: "Run ID", value: toolRun.run_id },
+          { label: "Task ID", value: toolRun.task_id },
+          { label: "State", value: toolRun.state },
+          { label: "Tool Call", value: toolRun.tool_call_id },
+          { label: "Input", value: toolRun.input_json },
+          { label: "Permission Request", value: toolRun.permission_request_id },
+          { label: "Lock Wait", value: toolRun.lock_wait_ms != null ? `${toolRun.lock_wait_ms} ms` : undefined },
+          { label: "Updated", value: formatTimestamp(toolRun.updated_at || toolRun.created_at) },
+        ]),
+      };
+    }
+    case "worktree": {
+      const worktree = worktrees.find((item) => item.id === selection.id);
+      if (!worktree) {
+        return null;
+      }
+      return {
+        title: worktree.worktree_branch || worktree.id,
+        kindLabel: "worktree",
+        summary: worktree.worktree_path,
+        items: compactDetailItems([
+          { label: "Worktree ID", value: worktree.id },
+          { label: "Run ID", value: worktree.run_id },
+          { label: "Task ID", value: worktree.task_id },
+          { label: "State", value: worktree.state },
+          { label: "Branch", value: worktree.worktree_branch },
+          { label: "Path", value: worktree.worktree_path },
+          { label: "Updated", value: formatTimestamp(worktree.updated_at || worktree.created_at) },
+        ]),
+      };
+    }
   }
 }
 
@@ -771,6 +1125,11 @@ function buildSelectionActions({
   contextEntries,
   tasks,
   mailboxItems,
+  toolRuns,
+  worktrees,
+  incidents,
+  dispatchAttempts,
+  pendingApprovals,
   reopenContext,
   loadContextHistory,
   setSelection,
@@ -779,6 +1138,11 @@ function buildSelectionActions({
   contextEntries: HistoryEntry[];
   tasks: RuntimeTask[];
   mailboxItems: WorkspaceMailboxItem[];
+  toolRuns: RuntimeToolRun[];
+  worktrees: RuntimeWorktree[];
+  incidents: RuntimeIncident[];
+  dispatchAttempts: RuntimeDispatchAttempt[];
+  pendingApprovals: RuntimePermissionRequest[];
   reopenContext: ReturnType<typeof useReopenContext>;
   loadContextHistory: ReturnType<typeof useLoadContextHistory>;
   setSelection: (selection: RuntimeSelection | null) => void;
@@ -818,15 +1182,35 @@ function buildSelectionActions({
     case "task": {
       const task = tasks.find((item) => item.id === selection.id);
       const relatedReport = mailboxItems.find((item) => item.source_id === task?.id);
-      if (!relatedReport) {
-        return [];
-      }
-      return [
-        {
+      const relatedDispatch = dispatchAttempts.find((item) => item.task_id === task?.id);
+      const relatedToolRun = toolRuns.find((item) => item.task_id === task?.id);
+      const relatedWorktree = worktrees.find((item) => item.task_id === task?.id || item.id === task?.worktree_id);
+      const actions: SelectionAction[] = [];
+      if (relatedReport) {
+        actions.push({
           label: "Open related report",
           onClick: () => setSelection({ kind: "report", id: relatedReport.id }),
-        },
-      ];
+        });
+      }
+      if (relatedDispatch) {
+        actions.push({
+          label: "Open dispatch",
+          onClick: () => setSelection({ kind: "dispatch", id: relatedDispatch.dispatch_id }),
+        });
+      }
+      if (relatedToolRun) {
+        actions.push({
+          label: "Open tool run",
+          onClick: () => setSelection({ kind: "tool_run", id: relatedToolRun.id }),
+        });
+      }
+      if (relatedWorktree) {
+        actions.push({
+          label: "Open worktree",
+          onClick: () => setSelection({ kind: "worktree", id: relatedWorktree.id }),
+        });
+      }
+      return actions;
     }
     case "report": {
       const report = mailboxItems.find((item) => item.id === selection.id);
@@ -837,6 +1221,77 @@ function buildSelectionActions({
       return [
         {
           label: "Open source task",
+          onClick: () => setSelection({ kind: "task", id: relatedTask.id }),
+        },
+      ];
+    }
+    case "incident": {
+      const incident = incidents.find((item) => item.id === selection.id);
+      const latestDispatch = dispatchAttempts.find((item) => item.incident_id === incident?.id);
+      if (!latestDispatch) {
+        return [];
+      }
+      return [
+        {
+          label: "Open latest dispatch",
+          onClick: () => setSelection({ kind: "dispatch", id: latestDispatch.dispatch_id }),
+        },
+      ];
+    }
+    case "dispatch": {
+      const attempt = dispatchAttempts.find((item) => item.dispatch_id === selection.id);
+      const relatedIncident = incidents.find((item) => item.id === attempt?.incident_id);
+      const relatedTask = tasks.find((item) => item.id === attempt?.task_id);
+      const relatedApproval = pendingApprovals.find((item) => item.id === attempt?.permission_request_id);
+      const actions: SelectionAction[] = [];
+      if (relatedIncident) {
+        actions.push({
+          label: "Open incident",
+          onClick: () => setSelection({ kind: "incident", id: relatedIncident.id }),
+        });
+      }
+      if (relatedTask) {
+        actions.push({
+          label: "Open related task",
+          onClick: () => setSelection({ kind: "task", id: relatedTask.id }),
+        });
+      }
+      if (relatedApproval) {
+        actions.push({
+          label: "Open approval request",
+          onClick: () => setSelection({ kind: "approval", id: relatedApproval.id }),
+        });
+      }
+      return actions;
+    }
+    case "tool_run": {
+      const toolRun = toolRuns.find((item) => item.id === selection.id);
+      const relatedTask = tasks.find((item) => item.id === toolRun?.task_id);
+      const relatedApproval = pendingApprovals.find((item) => item.id === toolRun?.permission_request_id);
+      const actions: SelectionAction[] = [];
+      if (relatedTask) {
+        actions.push({
+          label: "Open related task",
+          onClick: () => setSelection({ kind: "task", id: relatedTask.id }),
+        });
+      }
+      if (relatedApproval) {
+        actions.push({
+          label: "Open approval request",
+          onClick: () => setSelection({ kind: "approval", id: relatedApproval.id }),
+        });
+      }
+      return actions;
+    }
+    case "worktree": {
+      const worktree = worktrees.find((item) => item.id === selection.id);
+      const relatedTask = tasks.find((item) => item.id === worktree?.task_id);
+      if (!relatedTask) {
+        return [];
+      }
+      return [
+        {
+          label: "Open attached task",
           onClick: () => setSelection({ kind: "task", id: relatedTask.id }),
         },
       ];

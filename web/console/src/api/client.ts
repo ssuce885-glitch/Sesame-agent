@@ -10,6 +10,7 @@ import type {
   WorkspaceRuntimeGraphResponse,
   RoleListResponse,
   RoleSpec,
+  RoleVersionListResponse,
 } from "./types";
 
 // ─── Base fetch ────────────────────────────────────────────────────────────────
@@ -173,6 +174,10 @@ export function listRoles(): Promise<RoleListResponse> {
 
 export function getRole(roleID: string): Promise<RoleSpec> {
   return apiFetch<RoleSpec>(`/v1/roles/${encodeURIComponent(roleID)}`);
+}
+
+export function listRoleVersions(roleID: string): Promise<RoleVersionListResponse> {
+  return apiFetch<RoleVersionListResponse>(`/v1/roles/${encodeURIComponent(roleID)}/versions`);
 }
 
 export function createRole(role: RoleSpec): Promise<RoleSpec> {

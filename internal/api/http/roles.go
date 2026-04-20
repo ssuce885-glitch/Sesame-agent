@@ -58,7 +58,35 @@ func handleRoleByID(deps Dependencies) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		roleID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/roles/"))
+		rolePath := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/roles/"))
+		if rolePath == "" {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.HasSuffix(rolePath, "/versions") {
+			roleID := strings.TrimSpace(strings.TrimSuffix(rolePath, "/versions"))
+			roleID = strings.TrimSuffix(roleID, "/")
+			if roleID == "" || strings.Contains(roleID, "/") {
+				http.NotFound(w, r)
+				return
+			}
+			switch r.Method {
+			case http.MethodGet:
+				versions, err := deps.RoleService.ListVersions(deps.WorkspaceRoot, roleID)
+				if err != nil {
+					writeRoleServiceError(w, err)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(struct {
+					Versions []roleResponse `json:"versions"`
+				}{Versions: toRoleResponseList(versions)})
+			default:
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+		roleID := rolePath
 		if roleID == "" || strings.Contains(roleID, "/") {
 			http.NotFound(w, r)
 			return
@@ -99,18 +127,22 @@ func handleRoleByID(deps Dependencies) http.HandlerFunc {
 }
 
 type roleResponse struct {
-	RoleID      string   `json:"role_id"`
-	DisplayName string   `json:"display_name"`
-	Description string   `json:"description"`
-	Prompt      string   `json:"prompt"`
-	SkillNames  []string `json:"skills"`
+	RoleID      string         `json:"role_id"`
+	DisplayName string         `json:"display_name"`
+	Description string         `json:"description"`
+	Prompt      string         `json:"prompt"`
+	SkillNames  []string       `json:"skills"`
+	Policy      map[string]any `json:"policy"`
+	Version     int            `json:"version"`
 }
 
 type roleSummaryResponse struct {
-	RoleID      string   `json:"role_id"`
-	DisplayName string   `json:"display_name"`
-	Description string   `json:"description"`
-	SkillNames  []string `json:"skills"`
+	RoleID      string         `json:"role_id"`
+	DisplayName string         `json:"display_name"`
+	Description string         `json:"description"`
+	SkillNames  []string       `json:"skills"`
+	Policy      map[string]any `json:"policy"`
+	Version     int            `json:"version"`
 }
 
 type roleDiagnosticResponse struct {
@@ -126,6 +158,8 @@ func toRoleResponse(spec roles.Spec) roleResponse {
 		Description: spec.Description,
 		Prompt:      spec.Prompt,
 		SkillNames:  normalizeSkillsForResponse(spec.SkillNames),
+		Policy:      normalizePolicyForResponse(spec.Policy),
+		Version:     spec.Version,
 	}
 }
 
@@ -140,7 +174,20 @@ func toRoleSummaryResponseList(specs []roles.Spec) []roleSummaryResponse {
 			DisplayName: spec.DisplayName,
 			Description: spec.Description,
 			SkillNames:  normalizeSkillsForResponse(spec.SkillNames),
+			Policy:      normalizePolicyForResponse(spec.Policy),
+			Version:     spec.Version,
 		})
+	}
+	return out
+}
+
+func toRoleResponseList(specs []roles.Spec) []roleResponse {
+	if len(specs) == 0 {
+		return []roleResponse{}
+	}
+	out := make([]roleResponse, 0, len(specs))
+	for _, spec := range specs {
+		out = append(out, toRoleResponse(spec))
 	}
 	return out
 }
@@ -165,6 +212,13 @@ func normalizeSkillsForResponse(skills []string) []string {
 		return []string{}
 	}
 	return skills
+}
+
+func normalizePolicyForResponse(policy map[string]any) map[string]any {
+	if len(policy) == 0 {
+		return map[string]any{}
+	}
+	return policy
 }
 
 func decodeStrictJSONBody(r *http.Request, dst any) error {

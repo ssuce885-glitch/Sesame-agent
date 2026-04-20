@@ -65,6 +65,7 @@ var _ AutomationService = (*automation.Service)(nil)
 type RoleService interface {
 	List(string) (roles.Catalog, error)
 	Get(string, string) (roles.Spec, error)
+	ListVersions(string, string) ([]roles.Spec, error)
 	Create(string, roles.UpsertInput) (roles.Spec, error)
 	Update(string, roles.UpsertInput) (roles.Spec, error)
 	Delete(string, string) error

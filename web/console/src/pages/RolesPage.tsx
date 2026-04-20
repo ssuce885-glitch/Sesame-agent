@@ -3,6 +3,7 @@ import {
   useCreateRole,
   useDeleteRole,
   useRole,
+  useRoleVersions,
   useRoles,
   useUpdateRole,
 } from "../api/queries";
@@ -25,6 +26,7 @@ export function RolesPage() {
   const roles = data?.roles ?? [];
   const diagnostics = data?.diagnostics ?? [];
   const selectedRoleDetails = useRole(selectedRoleID);
+  const selectedRoleVersions = useRoleVersions(isCreatingNew ? null : selectedRoleID);
   const hasSelectedRoleLoadError =
     !isCreatingNew &&
     selectedRoleID !== null &&
@@ -191,6 +193,7 @@ export function RolesPage() {
         ) : (
           <RoleEditor
             role={isCreatingNew ? null : editorRole}
+            versions={isCreatingNew ? [] : selectedRoleVersions.data?.versions ?? []}
             resetToken={resetToken}
             isSaving={createRole.isPending || updateRole.isPending}
             isDeleting={deleteRole.isPending}
