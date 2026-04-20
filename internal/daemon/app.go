@@ -858,7 +858,7 @@ func recoverQueuedCreatedTurns(ctx context.Context, store *sqlite.Store, manager
 
 	for _, sessionRow := range sessions {
 		sessionID := strings.TrimSpace(sessionRow.ID)
-		if sessionID == "" || strings.HasPrefix(sessionID, "task_session_") {
+		if sessionID == "" {
 			continue
 		}
 
@@ -875,6 +875,14 @@ func recoverQueuedCreatedTurns(ctx context.Context, store *sqlite.Store, manager
 		if len(createdTurns) == 0 {
 			continue
 		}
+		if strings.HasPrefix(sessionID, "task_session_") {
+			for _, turn := range createdTurns {
+				if err := interruptUnrecoverableCreatedTurn(ctx, store, turn, "task_session_replay_unsupported"); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 
 		specialistRoleID, err := store.ResolveSpecialistRoleID(ctx, sessionID, sessionRow.WorkspaceRoot)
 		if err != nil {
@@ -886,6 +894,11 @@ func recoverQueuedCreatedTurns(ctx context.Context, store *sqlite.Store, manager
 		}
 
 		if specialistRoleID == "" && role != types.SessionRoleMainParent {
+			for _, turn := range createdTurns {
+				if err := interruptUnrecoverableCreatedTurn(ctx, store, turn, "unmapped_session"); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 
@@ -905,6 +918,23 @@ func recoverQueuedCreatedTurns(ctx context.Context, store *sqlite.Store, manager
 		}
 	}
 	return nil
+}
+
+func interruptUnrecoverableCreatedTurn(ctx context.Context, store *sqlite.Store, turn types.Turn, reason string) error {
+	if store == nil {
+		return nil
+	}
+	if err := store.MarkTurnInterrupted(ctx, turn.ID); err != nil {
+		return err
+	}
+	event, err := types.NewEvent(turn.SessionID, turn.ID, types.EventTurnInterrupted, map[string]string{
+		"reason": strings.TrimSpace(reason),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = store.AppendEvent(ctx, event)
+	return err
 }
 
 func failLegacyDispatchAttempts(ctx context.Context, store *sqlite.Store, now time.Time) error {

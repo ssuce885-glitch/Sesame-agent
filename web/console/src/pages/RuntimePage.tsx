@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   useContextHistory,
@@ -22,6 +23,11 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
   );
   const mailboxItems = [...(mailbox.data?.items ?? [])].sort(sortByUpdatedAtDesc);
   const activeTaskCount = tasks.filter((task) => task.state === "running" || task.state === "pending").length;
+  const [selection, setSelection] = useState<RuntimeSelection | null>(null);
+  const selectedDetail = useMemo(
+    () => buildSelectionDetail(selection, contextEntries, tasks, mailboxItems, pendingApprovals),
+    [selection, contextEntries, tasks, mailboxItems, pendingApprovals],
+  );
 
   const isInitialLoading =
     (history.isLoading && !history.data) ||
@@ -69,7 +75,12 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
           emptyText="No context heads recorded yet."
         >
           {contextEntries.map((entry) => (
-            <ContextHeadRow key={entry.id} entry={entry} />
+            <ContextHeadRow
+              key={entry.id}
+              entry={entry}
+              selected={selection?.kind === "context" && selection.id === entry.id}
+              onSelect={() => setSelection({ kind: "context", id: entry.id })}
+            />
           ))}
         </Panel>
 
@@ -79,7 +90,12 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
           emptyText="No reports waiting."
         >
           {mailboxItems.map((item) => (
-            <ReportRow key={item.id} item={item} />
+            <ReportRow
+              key={item.id}
+              item={item}
+              selected={selection?.kind === "report" && selection.id === item.id}
+              onSelect={() => setSelection({ kind: "report", id: item.id })}
+            />
           ))}
         </Panel>
       </div>
@@ -87,7 +103,12 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.3fr_0.9fr]">
         <Panel title="Tasks" subtitle="Workspace execution spine" emptyText="No tasks recorded yet.">
           {tasks.map((task) => (
-            <TaskRow key={task.id} task={task} />
+            <TaskRow
+              key={task.id}
+              task={task}
+              selected={selection?.kind === "task" && selection.id === task.id}
+              onSelect={() => setSelection({ kind: "task", id: task.id })}
+            />
           ))}
         </Panel>
 
@@ -97,12 +118,43 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
           emptyText="No approval requests are waiting."
         >
           {pendingApprovals.map((request) => (
-            <ApprovalRow key={request.id} request={request} />
+            <ApprovalRow
+              key={request.id}
+              request={request}
+              selected={selection?.kind === "approval" && selection.id === request.id}
+              onSelect={() => setSelection({ kind: "approval", id: request.id })}
+            />
           ))}
         </Panel>
       </div>
+
+      <Panel
+        title="Selection Detail"
+        subtitle="Inspect one runtime asset at a time"
+        emptyText="Choose a context head, task, report, or approval request to inspect its details."
+      >
+        {selectedDetail ? <SelectionDetailCard detail={selectedDetail} /> : null}
+      </Panel>
     </div>
   );
+}
+
+type RuntimeSelection =
+  | { kind: "context"; id: string }
+  | { kind: "task"; id: string }
+  | { kind: "report"; id: string }
+  | { kind: "approval"; id: string };
+
+interface DetailItem {
+  label: string;
+  value: string;
+}
+
+interface SelectionDetail {
+  title: string;
+  kindLabel: string;
+  summary?: string;
+  items: DetailItem[];
 }
 
 function SummaryCard({ label, value, detail }: { label: string; value: string; detail: string }) {
@@ -166,11 +218,26 @@ function Panel({
   );
 }
 
-function ContextHeadRow({ entry }: { entry: HistoryEntry }) {
+function ContextHeadRow({
+  entry,
+  selected,
+  onSelect,
+}: {
+  entry: HistoryEntry;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
       className="rounded-xl px-4 py-3"
-      style={{ backgroundColor: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}
+      style={{
+        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
+        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
+        textAlign: "left",
+      }}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -190,15 +257,30 @@ function ContextHeadRow({ entry }: { entry: HistoryEntry }) {
       <div className="mt-3 text-xs" style={{ color: "var(--color-text-muted)" }}>
         Updated {formatTimestamp(entry.updated_at)}
       </div>
-    </div>
+    </button>
   );
 }
 
-function TaskRow({ task }: { task: RuntimeTask }) {
+function TaskRow({
+  task,
+  selected,
+  onSelect,
+}: {
+  task: RuntimeTask;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
       className="rounded-xl px-4 py-3"
-      style={{ backgroundColor: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}
+      style={{
+        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
+        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
+        textAlign: "left",
+      }}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -218,15 +300,30 @@ function TaskRow({ task }: { task: RuntimeTask }) {
         <span>Kind: {task.kind || "task"}</span>
         <span>Updated {formatTimestamp(task.updated_at)}</span>
       </div>
-    </div>
+    </button>
   );
 }
 
-function ReportRow({ item }: { item: WorkspaceMailboxItem }) {
+function ReportRow({
+  item,
+  selected,
+  onSelect,
+}: {
+  item: WorkspaceMailboxItem;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
       className="rounded-xl px-4 py-3"
-      style={{ backgroundColor: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}
+      style={{
+        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
+        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
+        textAlign: "left",
+      }}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -246,15 +343,30 @@ function ReportRow({ item }: { item: WorkspaceMailboxItem }) {
         <span>Severity: {item.envelope.severity || "info"}</span>
         <span>Updated {formatTimestamp(item.updated_at || item.created_at)}</span>
       </div>
-    </div>
+    </button>
   );
 }
 
-function ApprovalRow({ request }: { request: RuntimePermissionRequest }) {
+function ApprovalRow({
+  request,
+  selected,
+  onSelect,
+}: {
+  request: RuntimePermissionRequest;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
       className="rounded-xl px-4 py-3"
-      style={{ backgroundColor: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}
+      style={{
+        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
+        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
+        textAlign: "left",
+      }}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -270,6 +382,45 @@ function ApprovalRow({ request }: { request: RuntimePermissionRequest }) {
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
         <span>Profile: {request.requested_profile}</span>
         <span>Updated {formatTimestamp(request.updated_at)}</span>
+      </div>
+    </button>
+  );
+}
+
+function SelectionDetailCard({ detail }: { detail: SelectionDetail }) {
+  return (
+    <div
+      className="rounded-xl px-4 py-4"
+      style={{ backgroundColor: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
+            {detail.title}
+          </div>
+          {detail.summary && (
+            <div className="mt-1 text-sm leading-6" style={{ color: "var(--color-text-muted)" }}>
+              {detail.summary}
+            </div>
+          )}
+        </div>
+        <StatusBadge tone="accent">{detail.kindLabel}</StatusBadge>
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+        {detail.items.map((item) => (
+          <div
+            key={`${detail.kindLabel}:${item.label}`}
+            className="rounded-lg px-3 py-3"
+            style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border)" }}
+          >
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: "var(--color-text-muted)" }}>
+              {item.label}
+            </div>
+            <div className="mt-1 text-sm break-words" style={{ color: "var(--color-text)" }}>
+              {item.value}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -358,4 +509,98 @@ function formatTimestamp(value?: string) {
     return value;
   }
   return parsed.toLocaleString();
+}
+
+function buildSelectionDetail(
+  selection: RuntimeSelection | null,
+  contextEntries: HistoryEntry[],
+  tasks: RuntimeTask[],
+  mailboxItems: WorkspaceMailboxItem[],
+  pendingApprovals: RuntimePermissionRequest[],
+): SelectionDetail | null {
+  if (!selection) {
+    return null;
+  }
+  switch (selection.kind) {
+    case "context": {
+      const entry = contextEntries.find((item) => item.id === selection.id);
+      if (!entry) {
+        return null;
+      }
+      return {
+        title: entry.title || entry.id,
+        kindLabel: "context head",
+        summary: entry.preview,
+        items: compactDetailItems([
+          { label: "Head ID", value: entry.id },
+          { label: "Source", value: entry.source_kind || "history" },
+          { label: "Current", value: entry.is_current ? "yes" : "no" },
+          { label: "Updated", value: formatTimestamp(entry.updated_at) },
+        ]),
+      };
+    }
+    case "task": {
+      const task = tasks.find((item) => item.id === selection.id);
+      if (!task) {
+        return null;
+      }
+      return {
+        title: task.title || task.id,
+        kindLabel: "task",
+        summary: task.description,
+        items: compactDetailItems([
+          { label: "Task ID", value: task.id },
+          { label: "Run ID", value: task.run_id },
+          { label: "Kind", value: task.kind || "task" },
+          { label: "Owner", value: task.owner || "runtime" },
+          { label: "State", value: task.state },
+          { label: "Plan ID", value: task.plan_id },
+        ]),
+      };
+    }
+    case "report": {
+      const item = mailboxItems.find((entry) => entry.id === selection.id);
+      if (!item) {
+        return null;
+      }
+      return {
+        title: item.envelope.title || item.source_id,
+        kindLabel: "report",
+        summary: item.envelope.summary,
+        items: compactDetailItems([
+          { label: "Report ID", value: item.report_id || item.id },
+          { label: "Source", value: item.source_kind },
+          { label: "Source Role", value: item.source_role_id },
+          { label: "Severity", value: item.envelope.severity || "info" },
+          { label: "Delivery State", value: item.delivery_state || "queued" },
+          { label: "Updated", value: formatTimestamp(item.updated_at || item.created_at) },
+        ]),
+      };
+    }
+    case "approval": {
+      const request = pendingApprovals.find((item) => item.id === selection.id);
+      if (!request) {
+        return null;
+      }
+      return {
+        title: request.tool_name || request.requested_profile,
+        kindLabel: "approval",
+        summary: request.reason || "Awaiting approval to continue execution.",
+        items: compactDetailItems([
+          { label: "Request ID", value: request.id },
+          { label: "Profile", value: request.requested_profile },
+          { label: "Turn ID", value: request.turn_id },
+          { label: "Task ID", value: request.task_id },
+          { label: "Status", value: request.status },
+          { label: "Updated", value: formatTimestamp(request.updated_at) },
+        ]),
+      };
+    }
+  }
+}
+
+function compactDetailItems(items: Array<{ label: string; value?: string }>): DetailItem[] {
+  return items
+    .filter((item) => item.value != null && item.value !== "")
+    .map((item) => ({ label: item.label, value: item.value! }));
 }
