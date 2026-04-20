@@ -40,15 +40,13 @@ internal/cli/daemons/
 .worktrees/
 claude-code-skill-scrapling/
 
-# Internal planning docs that should not go to the public repo by default
-docs/superpowers/
-docs/specs/
+# Internal implementation plans
+docs/superpowers/plans/
 
-# Frontend
-web/
+# Frontend build artifacts
+web/console/dist/
+web/console/node_modules/
 
-# Public release excludes Go tests
-*_test.go
 .tmp-public-upload-files.txt
 
 # Editor / OS files

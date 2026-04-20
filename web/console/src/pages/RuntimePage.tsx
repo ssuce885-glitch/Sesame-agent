@@ -18,12 +18,14 @@ import type {
   RuntimeWorktree,
   WorkspaceMailboxItem,
 } from "../api/types";
+import { useI18n } from "../i18n";
 
 interface RuntimePageProps {
   sessionId: string;
 }
 
 export function RuntimePage({ sessionId }: RuntimePageProps) {
+  const { t } = useI18n();
   const history = useContextHistory(sessionId || null);
   const runtimeGraph = useWorkspaceRuntimeGraph();
   const mailbox = useWorkspaceMailbox();
@@ -68,7 +70,7 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
   if (isInitialLoading) {
     return (
       <div className="flex h-full items-center justify-center text-sm" style={{ color: "var(--color-text-muted)" }}>
-        Loading workspace runtime...
+        {t("runtime.loading")}
       </div>
     );
   }
@@ -77,37 +79,37 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
     <div className="flex flex-col gap-6 overflow-y-auto p-4 md:p-6" style={{ backgroundColor: "var(--color-bg)" }}>
       <div className="flex flex-col gap-2">
         <h1 className="text-lg font-semibold" style={{ color: "var(--color-text)" }}>
-          Workspace Runtime
+          {t("runtime.title")}
         </h1>
         <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-          Context history, task execution, and report delivery for the current workspace.
+          {t("runtime.subtitle")}
         </p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <SummaryCard label="Context Heads" value={String(contextEntries.length)} detail="Available history branches" />
-        <SummaryCard label="Active Tasks" value={String(activeTaskCount)} detail={`${tasks.length} total tracked tasks`} />
+        <SummaryCard label={t("runtime.summary.contextHeads")} value={String(contextEntries.length)} detail={t("runtime.summary.contextHeadsDetail")} />
+        <SummaryCard label={t("runtime.summary.activeTasks")} value={String(activeTaskCount)} detail={t("runtime.summary.activeTasksDetail", { count: tasks.length })} />
         <SummaryCard
-          label="Diagnostics"
+          label={t("runtime.summary.diagnostics")}
           value={String(diagnostics.length)}
-          detail="Runtime graph events that need attention"
+          detail={t("runtime.summary.diagnosticsDetail")}
         />
         <SummaryCard
-          label="Pending Reports"
+          label={t("runtime.summary.pendingReports")}
           value={String(mailbox.data?.pending_count ?? 0)}
-          detail={`${mailboxItems.length} mailbox items`}
+          detail={t("runtime.summary.pendingReportsDetail", { count: mailboxItems.length })}
         />
         <SummaryCard
-          label="Approval Requests"
+          label={t("runtime.summary.approvals")}
           value={String(pendingApprovals.length)}
-          detail="Runtime permission waits"
+          detail={t("runtime.summary.approvalsDetail")}
         />
       </div>
 
       <Panel
-        title="Diagnostics"
-        subtitle="Runtime graph diagnostics surfaced as first-class runtime events"
-        emptyText="No diagnostics were emitted for this workspace."
+        title={t("runtime.panels.diagnosticsTitle")}
+        subtitle={t("runtime.panels.diagnosticsSubtitle")}
+        emptyText={t("runtime.panels.diagnosticsEmpty")}
       >
         {diagnostics.map((diagnostic) => (
           <DiagnosticRow
@@ -121,9 +123,9 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_1fr]">
         <Panel
-          title="Context Heads"
-          subtitle="Current session history branches"
-          emptyText="No context heads recorded yet."
+          title={t("runtime.panels.contextTitle")}
+          subtitle={t("runtime.panels.contextSubtitle")}
+          emptyText={t("runtime.panels.contextEmpty")}
         >
           {contextEntries.map((entry) => (
             <ContextHeadRow
@@ -136,9 +138,9 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
         </Panel>
 
         <Panel
-          title="Pending Reports"
-          subtitle="Workspace mailbox deliveries waiting on the parent flow"
-          emptyText="No reports waiting."
+          title={t("runtime.panels.reportsTitle")}
+          subtitle={t("runtime.panels.reportsSubtitle")}
+          emptyText={t("runtime.panels.reportsEmpty")}
         >
           {mailboxItems.map((item) => (
             <ReportRow
@@ -152,7 +154,7 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
       </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.3fr_0.9fr]">
-        <Panel title="Tasks" subtitle="Workspace execution spine" emptyText="No tasks recorded yet.">
+        <Panel title={t("runtime.panels.tasksTitle")} subtitle={t("runtime.panels.tasksSubtitle")} emptyText={t("runtime.panels.tasksEmpty")}>
           {tasks.map((task) => (
             <TaskRow
               key={task.id}
@@ -164,9 +166,9 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
         </Panel>
 
         <Panel
-          title="Approval Queue"
-          subtitle="Permission requests currently blocking execution"
-          emptyText="No approval requests are waiting."
+          title={t("runtime.panels.approvalsTitle")}
+          subtitle={t("runtime.panels.approvalsSubtitle")}
+          emptyText={t("runtime.panels.approvalsEmpty")}
         >
           {pendingApprovals.map((request) => (
             <ApprovalRow
@@ -181,9 +183,9 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1fr]">
         <Panel
-          title="Incidents"
-          subtitle="Automation incidents currently attached to this workspace"
-          emptyText="No incidents recorded yet."
+          title={t("runtime.panels.incidentsTitle")}
+          subtitle={t("runtime.panels.incidentsSubtitle")}
+          emptyText={t("runtime.panels.incidentsEmpty")}
         >
           {incidents.map((incident) => (
             <IncidentRow
@@ -196,9 +198,9 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
         </Panel>
 
         <Panel
-          title="Dispatch Attempts"
-          subtitle="Child-agent dispatches and approval-gated execution handoffs"
-          emptyText="No dispatch attempts recorded yet."
+          title={t("runtime.panels.dispatchTitle")}
+          subtitle={t("runtime.panels.dispatchSubtitle")}
+          emptyText={t("runtime.panels.dispatchEmpty")}
         >
           {dispatchAttempts.map((attempt) => (
             <DispatchAttemptRow
@@ -213,9 +215,9 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1fr]">
         <Panel
-          title="Tool Runs"
-          subtitle="Tool execution detail attached to active tasks"
-          emptyText="No tool runs recorded yet."
+          title={t("runtime.panels.toolRunsTitle")}
+          subtitle={t("runtime.panels.toolRunsSubtitle")}
+          emptyText={t("runtime.panels.toolRunsEmpty")}
         >
           {toolRuns.map((toolRun) => (
             <ToolRunRow
@@ -228,9 +230,9 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
         </Panel>
 
         <Panel
-          title="Worktrees"
-          subtitle="Attached worktrees created for task execution"
-          emptyText="No worktrees recorded yet."
+          title={t("runtime.panels.worktreesTitle")}
+          subtitle={t("runtime.panels.worktreesSubtitle")}
+          emptyText={t("runtime.panels.worktreesEmpty")}
         >
           {worktrees.map((worktree) => (
             <WorktreeRow
@@ -244,9 +246,9 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
       </div>
 
       <Panel
-        title="Selection Detail"
-        subtitle="Inspect one runtime asset at a time"
-        emptyText="Choose a runtime asset to inspect its details."
+        title={t("runtime.panels.detailTitle")}
+        subtitle={t("runtime.panels.detailSubtitle")}
+        emptyText={t("runtime.panels.detailEmpty")}
       >
         {selectedDetail ? (
           <SelectionDetailCard

@@ -1,4 +1,5 @@
 import type { RoleSummary } from "../../api/types";
+import { useI18n } from "../../i18n";
 
 interface RoleListProps {
   roles: RoleSummary[];
@@ -15,6 +16,8 @@ export function RoleList({
   onSelectRole,
   onNewRole,
 }: RoleListProps) {
+  const { t } = useI18n();
+
   return (
     <section
       className="flex w-full shrink-0 flex-col lg:h-full lg:w-[280px] lg:min-w-[280px]"
@@ -28,7 +31,7 @@ export function RoleList({
         style={{ borderBottom: "1px solid var(--color-border)" }}
       >
         <h2 className="text-sm font-semibold m-0" style={{ color: "var(--color-text-muted)" }}>
-          Roles
+          {t("roles.title")}
         </h2>
         <button
           type="button"
@@ -41,20 +44,20 @@ export function RoleList({
             cursor: "pointer",
           }}
         >
-          New role
+          {t("roles.newRole")}
         </button>
       </div>
 
       <div className="flex-1 overflow-y-auto py-2">
         {isLoading && (
           <p className="px-4 text-sm" style={{ color: "var(--color-text-muted)" }}>
-            Loading...
+            {t("roles.loading")}
           </p>
         )}
 
         {!isLoading && roles.length === 0 && (
           <p className="px-4 text-sm" style={{ color: "var(--color-text-muted)" }}>
-            No roles yet.
+            {t("roles.empty")}
           </p>
         )}
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
 import {
   createBrowserRouter,
   RouterProvider,
@@ -13,6 +13,7 @@ import { RuntimePage } from "./pages/RuntimePage";
 import { UsagePage } from "./pages/UsagePage";
 import { RolesPage } from "./pages/RolesPage";
 import { useCurrentSession, useWorkspaceMeta } from "./api/queries";
+import { useI18n, I18nProvider, type Locale } from "./i18n";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,7 +28,9 @@ const queryClient = new QueryClient({
 
 function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <I18nProvider>{children}</I18nProvider>
+    </QueryClientProvider>
   );
 }
 
@@ -36,6 +39,7 @@ function RootLayout({ children }: { children: React.ReactNode }) {
 export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { locale, setLocale, t } = useI18n();
   const { data: currentSession } = useCurrentSession();
   const { data: workspace } = useWorkspaceMeta();
   const activeSessionId = currentSession?.id ?? null;
@@ -82,38 +86,40 @@ export function AppShell() {
                 border: "1px solid var(--color-border)",
               }}
             >
-              {workspace?.name || "Current workspace"}
+              {workspace?.name || t("app.currentWorkspace")}
             </span>
           )}
         </div>
 
-        {/* Nav tabs */}
-        <nav className="flex gap-1">
+        <div className="flex items-center gap-4">
+          <LanguageSwitcher locale={locale} onChange={setLocale} label={t("app.language")} />
+          <nav className="flex gap-1">
           <NavTab
             to="/chat"
             active={isChat}
           >
-            Chat
+            {t("nav.chat")}
           </NavTab>
           <NavTab
             to="/runtime"
             active={isRuntime}
           >
-            Runtime
+            {t("nav.runtime")}
           </NavTab>
           <NavTab
             to="/usage"
             active={isUsage}
           >
-            Usage
+            {t("nav.usage")}
           </NavTab>
           <NavTab
             to="/roles"
             active={isRoles}
           >
-            Roles
+            {t("nav.roles")}
           </NavTab>
-        </nav>
+          </nav>
+        </div>
       </header>
 
       {/* Body */}
@@ -125,6 +131,56 @@ export function AppShell() {
           {isUsage && <UsagePage sessionId={activeSessionId ?? undefined} />}
           {isRoles && <RolesPage />}
         </main>
+      </div>
+    </div>
+  );
+}
+
+function LanguageSwitcher({
+  locale,
+  onChange,
+  label,
+}: {
+  locale: Locale;
+  onChange: (locale: Locale) => void;
+  label: string;
+}) {
+  const options: Array<{ value: Locale; label: string }> = [
+    { value: "en-US", label: "EN" },
+    { value: "zh-CN", label: "中文" },
+  ];
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+        {label}
+      </span>
+      <div
+        className="flex rounded-lg p-1"
+        style={{
+          backgroundColor: "var(--color-surface-2)",
+          border: "1px solid var(--color-border)",
+        }}
+      >
+        {options.map((option) => {
+          const active = option.value === locale;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => onChange(option.value)}
+              className="rounded-md px-2.5 py-1 text-xs font-medium"
+              style={{
+                backgroundColor: active ? "var(--color-accent)" : "transparent",
+                color: active ? "#fff" : "var(--color-text-muted)",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              {option.label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

@@ -11,8 +11,10 @@ import type { RoleSpec } from "../api/types";
 import { RoleEditor } from "../components/roles/RoleEditor";
 import { RoleDiagnostics } from "../components/roles/RoleDiagnostics";
 import { RoleList } from "../components/roles/RoleList";
+import { useI18n } from "../i18n";
 
 export function RolesPage() {
+  const { t } = useI18n();
   const { data, isLoading } = useRoles();
   const createRole = useCreateRole();
   const updateRole = useUpdateRole();
@@ -91,7 +93,7 @@ export function RolesPage() {
       setSelectedRoleID(created.role_id);
       setIsCreatingNew(false);
     } catch (err) {
-      setErrorMessage("Failed to save role.");
+      setErrorMessage(t("roles.saveFailed"));
       console.error("Failed to save role:", err);
     }
   }
@@ -107,7 +109,7 @@ export function RolesPage() {
       setSelectedRoleID(null);
       setIsCreatingNew(false);
     } catch (err) {
-      setErrorMessage("Failed to delete role.");
+      setErrorMessage(t("roles.deleteFailed"));
       console.error("Failed to delete role:", err);
     }
   }
@@ -159,7 +161,7 @@ export function RolesPage() {
                 color: "var(--color-text-muted)",
               }}
             >
-              Loading role...
+              {t("roles.loadingRole")}
             </div>
           </section>
         ) : hasSelectedRoleLoadError ? (
@@ -172,7 +174,7 @@ export function RolesPage() {
                 color: "var(--color-error)",
               }}
             >
-              <div role="alert">Failed to load role details for {selectedRoleID}.</div>
+              <div role="alert">{t("roles.loadFailed", { roleID: selectedRoleID ?? "" })}</div>
               <button
                 type="button"
                 className="mt-3 rounded-md px-3 py-2 text-sm font-medium"
@@ -186,7 +188,7 @@ export function RolesPage() {
                   cursor: "pointer",
                 }}
               >
-                Retry
+                {t("roles.retry")}
               </button>
             </div>
           </section>
