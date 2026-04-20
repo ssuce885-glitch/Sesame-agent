@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -31,21 +32,14 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 		}
 		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), resolveRequestBinding(r)))
 
-		var req struct {
-			types.EnsureSessionRequest
-			SpecialistRoleID string `json:"specialist_role_id,omitempty"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		req, err := decodeEnsureSessionRequest(r)
+		if err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		workspaceRoot := strings.TrimSpace(req.EnsureSessionRequest.WorkspaceRoot)
+		workspaceRoot := strings.TrimSpace(req.WorkspaceRoot)
 		if workspaceRoot == "" {
 			http.Error(w, "workspace_root is required", http.StatusBadRequest)
-			return
-		}
-		if strings.TrimSpace(req.SpecialistRoleID) != "" {
-			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 		r = r.WithContext(workspace.WithWorkspaceRoot(r.Context(), workspaceRoot))
@@ -54,7 +48,7 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 			return
 		}
 
-		role, roleOK := resolveRequestedSessionRole(r, req.EnsureSessionRequest.SessionRole)
+		role, roleOK := resolveRequestedSessionRole(r, req.SessionRole)
 		if !roleOK {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
@@ -80,6 +74,25 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(session)
 	}
+}
+
+func decodeEnsureSessionRequest(r *http.Request) (types.EnsureSessionRequest, error) {
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		return types.EnsureSessionRequest{}, err
+	}
+	if _, ok := raw["specialist_role_id"]; ok {
+		return types.EnsureSessionRequest{}, errors.New("specialist_role_id is not supported")
+	}
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		return types.EnsureSessionRequest{}, err
+	}
+	var req types.EnsureSessionRequest
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return types.EnsureSessionRequest{}, err
+	}
+	return req, nil
 }
 
 type sessionScopedHandlerFactory func(Dependencies, string) http.HandlerFunc
