@@ -72,6 +72,7 @@ type Engine struct {
 	activeSkillTokenBudget   int
 	maxToolSteps             int
 	automationService        tools.AutomationService
+	roleService              tools.RoleService
 	sessionDelegationService session.RoleDelegationService
 	taskManager              *task.Manager
 	runtimeService           *runtimegraph.Service
@@ -180,6 +181,13 @@ func (e *Engine) SetAutomationService(service tools.AutomationService) {
 		return
 	}
 	e.automationService = service
+}
+
+func (e *Engine) SetRoleService(service tools.RoleService) {
+	if e == nil {
+		return
+	}
+	e.roleService = service
 }
 
 func (e *Engine) SetSessionDelegationService(service session.RoleDelegationService) {

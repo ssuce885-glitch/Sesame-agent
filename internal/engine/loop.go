@@ -84,6 +84,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		GlobalConfigRoot:         e.globalConfigRoot,
 		PermissionEngine:         permissionEngine,
 		AutomationService:        e.automationService,
+		RoleService:              e.roleService,
 		SessionDelegationService: e.sessionDelegationService,
 		TaskManager:              e.taskManager,
 		RuntimeService:           e.runtimeService,

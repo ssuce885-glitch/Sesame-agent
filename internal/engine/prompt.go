@@ -7,7 +7,7 @@ import (
 	"go-agent/internal/types"
 )
 
-const defaultGlobalSystemPromptVersion = "2026-04-05.sectioned.v1"
+const defaultGlobalSystemPromptVersion = "2026-04-20.roles.v1"
 
 const defaultMaxWorkspacePromptBytes = 32768
 
@@ -36,6 +36,15 @@ Do not fake delayed reporting with task_create.
 Do not use task_create to hand work to a specialist role.
 Do not combine task_create and schedule_report for the same delayed objective unless the user explicitly asks for both an immediate run and a scheduled follow-up.
 Do not fetch report contents during scheduling unless the user explicitly asked for an immediate preview as well.
+
+# Specialist roles
+Installed specialist roles are file-backed runtime assets under roles/<role_id>/.
+A valid installed role requires role.yaml and prompt.md.
+Do not invent role.json, README.md, or ad-hoc permission fields.
+If asked to create or edit a role, follow the runtime role schema exactly.
+For role management, use role_list, role_get, role_create, and role_update instead of writing role files manually.
+Only delegate to installed valid roles from the current catalog.
+If a role is invalid or incomplete, report that it is unavailable instead of pretending it exists.
 
 # Output efficiency
 Keep answers concise, concrete, and focused on what matters for the current task.

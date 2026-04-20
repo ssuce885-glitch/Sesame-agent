@@ -6,6 +6,7 @@ import (
 
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
+	"go-agent/internal/roles"
 	"go-agent/internal/runtimegraph"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
@@ -67,6 +68,7 @@ type ExecContext struct {
 	InjectedEnv              map[string]string
 	PermissionEngine         *permissions.Engine
 	AutomationService        AutomationService
+	RoleService              RoleService
 	SessionDelegationService session.RoleDelegationService
 	TaskManager              *task.Manager
 	RuntimeService           *runtimegraph.Service
@@ -92,6 +94,13 @@ type AutomationService interface {
 	ListIncidents(context.Context, types.AutomationIncidentFilter) ([]types.AutomationIncident, error)
 	GetIncident(context.Context, string) (types.AutomationIncident, bool, error)
 	ControlIncident(context.Context, string, types.IncidentControlAction) (types.AutomationIncident, bool, error)
+}
+
+type RoleService interface {
+	List(string) (roles.Catalog, error)
+	Get(string, string) (roles.Spec, error)
+	Create(string, roles.UpsertInput) (roles.Spec, error)
+	Update(string, roles.UpsertInput) (roles.Spec, error)
 }
 
 type ResourceClaimMode string

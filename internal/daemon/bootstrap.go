@@ -11,6 +11,7 @@ import (
 	"go-agent/internal/engine"
 	"go-agent/internal/model"
 	"go-agent/internal/reporting"
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/runtimegraph"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
@@ -45,6 +46,7 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
 	runner.SetRuntimeService(runtimeService)
 	runner.SetAutomationService(automationService)
+	runner.SetRoleService(rolectx.NewServiceWithGlobalRoot(cfg.Paths.GlobalRoot))
 
 	taskNotifier := buildTaskTerminalNotifier(store, bus, cfg.Paths.WorkspaceRoot)
 	var deliveryService *automation.DeliveryService
