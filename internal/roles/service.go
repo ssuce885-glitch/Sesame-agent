@@ -103,10 +103,8 @@ func (s *Service) Get(workspaceRoot, roleID string) (Spec, error) {
 	if spec, ok := catalog.ByID[roleID]; ok {
 		return spec, nil
 	}
-	for _, diagnostic := range catalog.Diagnostics {
-		if diagnostic.RoleID == roleID {
-			return Spec{}, newServiceError(ErrorKindConflict, fmt.Errorf("%s: %s", diagnostic.Path, diagnostic.Error))
-		}
+	if diagnostic, ok := catalogDiagnosticByRoleID(catalog, roleID); ok {
+		return Spec{}, newServiceError(ErrorKindConflict, fmt.Errorf("%s: %s", diagnostic.Path, diagnostic.Error))
 	}
 	return Spec{}, newServiceError(ErrorKindNotFound, os.ErrNotExist)
 }
@@ -172,6 +170,13 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 	roleDir := filepath.Join(rolesRoot, normalized.RoleID)
 	if err := ensureConcreteRoleDir(roleDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			catalog, loadErr := LoadCatalog(workspaceRoot)
+			if loadErr != nil {
+				return Spec{}, newServiceError(ErrorKindInternal, loadErr)
+			}
+			if diagnostic, ok := catalogDiagnosticByRoleID(catalog, normalized.RoleID); ok {
+				return Spec{}, newServiceError(ErrorKindConflict, fmt.Errorf("%s: %s", diagnostic.Path, diagnostic.Error))
+			}
 			return Spec{}, newServiceError(ErrorKindNotFound, err)
 		}
 		return Spec{}, newServiceError(ErrorKindInternal, err)
@@ -341,4 +346,13 @@ func validateWorkspaceRoot(workspaceRoot string) error {
 
 func newServiceError(kind ErrorKind, cause error) error {
 	return &ServiceError{kind: kind, cause: cause}
+}
+
+func catalogDiagnosticByRoleID(catalog Catalog, roleID string) (Diagnostic, bool) {
+	for _, diagnostic := range catalog.Diagnostics {
+		if diagnostic.RoleID == roleID {
+			return diagnostic, true
+		}
+	}
+	return Diagnostic{}, false
 }
