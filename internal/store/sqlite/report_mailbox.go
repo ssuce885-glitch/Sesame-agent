@@ -25,11 +25,6 @@ func (s *Store) workspaceRootForSession(ctx context.Context, sessionID string) s
 		from sessions
 		where id = ?
 	`, sessionID).Scan(&root); err != nil {
-		// Backwards-compatible fallback: some code paths/tests write mailbox data without
-		// persisting a session row. Treat session_id as a stable scope key in that case.
-		if err == sql.ErrNoRows {
-			return sessionID
-		}
 		return ""
 	}
 	return strings.TrimSpace(root)
@@ -100,16 +95,16 @@ func (s *Store) UpsertReportMailboxItem(ctx context.Context, item types.ReportMa
 
 func (s *Store) ListReportMailboxItems(ctx context.Context, sessionID string) ([]types.ReportMailboxItem, error) {
 	workspaceRoot := s.workspaceRootForSession(ctx, sessionID)
-	if workspaceRoot == "" || workspaceRoot == strings.TrimSpace(sessionID) {
-		return listSessionReportMailboxItemsWithQuery(ctx, s.db, sessionID, "")
+	if workspaceRoot == "" {
+		return nil, nil
 	}
 	return s.ListWorkspaceReportMailboxItems(ctx, workspaceRoot)
 }
 
 func (s *Store) CountPendingReportMailboxItems(ctx context.Context, sessionID string) (int, error) {
 	workspaceRoot := s.workspaceRootForSession(ctx, sessionID)
-	if workspaceRoot == "" || workspaceRoot == strings.TrimSpace(sessionID) {
-		return countPendingSessionReportMailboxItemsWithQuery(ctx, s.db, sessionID)
+	if workspaceRoot == "" {
+		return 0, nil
 	}
 	return s.CountPendingWorkspaceReportMailboxItems(ctx, workspaceRoot)
 }
@@ -134,57 +129,8 @@ func (s *Store) ClaimPendingReportMailboxItemsForTurn(ctx context.Context, sessi
 	}
 
 	workspaceRoot := s.workspaceRootForSession(ctx, sessionID)
-	if workspaceRoot == "" || workspaceRoot == strings.TrimSpace(sessionID) {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			_ = tx.Rollback()
-		}()
-
-		claimed, err := listSessionReportMailboxItemsWithQuery(ctx, tx, sessionID, turnID)
-		if err != nil {
-			return nil, err
-		}
-		if len(claimed) > 0 {
-			if err := tx.Commit(); err != nil {
-				return nil, err
-			}
-			return claimed, nil
-		}
-
-		pending, err := listPendingMailboxDeliveriesWithSessionQuery(ctx, tx, sessionID)
-		if err != nil {
-			return nil, err
-		}
-		if len(pending) == 0 {
-			if err := tx.Commit(); err != nil {
-				return nil, err
-			}
-			return nil, nil
-		}
-
-		now := time.Now().UTC()
-		for index := range pending {
-			pending[index].State = types.ReportDeliveryStateDelivered
-			pending[index].InjectedTurnID = turnID
-			pending[index].InjectedAt = now
-			pending[index].UpdatedAt = now
-			pending[index].SessionID = sessionID
-			if err := upsertReportDeliveryWithExec(ctx, tx, pending[index]); err != nil {
-				return nil, err
-			}
-		}
-
-		claimed, err = listSessionReportMailboxItemsWithQuery(ctx, tx, sessionID, turnID)
-		if err != nil {
-			return nil, err
-		}
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
-		return claimed, nil
+	if workspaceRoot == "" {
+		return nil, nil
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)

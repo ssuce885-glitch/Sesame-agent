@@ -36,6 +36,8 @@ type RoleDelegationService interface {
 type roleDelegationStore interface {
 	EnsureRoleSession(context.Context, string, types.SessionRole) (types.Session, types.ContextHead, bool, error)
 	EnsureSpecialistSession(context.Context, string, string, string, []string) (types.Session, types.ContextHead, bool, error)
+	ResolveSessionRole(context.Context, string, string) (types.SessionRole, error)
+	ResolveSpecialistRoleID(context.Context, string, string) (string, error)
 	InsertTurn(context.Context, types.Turn) error
 	DeleteTurn(context.Context, string) error
 }
@@ -84,7 +86,21 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 	if err != nil {
 		return DelegateToRoleOutput{}, err
 	}
+	sourceSessionRole, err := s.store.ResolveSessionRole(ctx, sourceSessionID, workspaceRoot)
+	if err != nil {
+		return DelegateToRoleOutput{}, err
+	}
 	sourceSpecialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
+	if sourceSpecialistRoleID == "" {
+		resolvedSpecialistRoleID, err := s.store.ResolveSpecialistRoleID(ctx, sourceSessionID, workspaceRoot)
+		if err != nil {
+			return DelegateToRoleOutput{}, err
+		}
+		sourceSpecialistRoleID = resolvedSpecialistRoleID
+	}
+	if strings.TrimSpace(sourceSpecialistRoleID) == "" && sourceSessionRole != types.SessionRoleMainParent && !strings.HasPrefix(sourceSessionID, "task_session_") {
+		return DelegateToRoleOutput{}, fmt.Errorf("source session %q in workspace %q is neither main_parent nor mapped specialist", sourceSessionID, workspaceRoot)
+	}
 	if sourceSpecialistRoleID != "" && targetRole != string(types.SessionRoleMainParent) {
 		return DelegateToRoleOutput{}, fmt.Errorf("specialist roles cannot delegate directly to another specialist role; report back to main_parent and ask it to delegate")
 	}

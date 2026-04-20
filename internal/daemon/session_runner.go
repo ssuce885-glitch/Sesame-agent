@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -69,13 +70,23 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	if err != nil {
 		return err
 	}
-	specialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
+	resolvedSpecialistRoleID, err := a.store.ResolveSpecialistRoleID(ctx, in.Session.ID, in.Session.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
+	specialistRoleID := strings.TrimSpace(resolvedSpecialistRoleID)
 	if specialistRoleID == "" {
-		resolvedSpecialistRoleID, err := a.store.ResolveSpecialistRoleID(ctx, in.Session.ID, in.Session.WorkspaceRoot)
-		if err != nil {
-			return err
-		}
-		specialistRoleID = resolvedSpecialistRoleID
+		specialistRoleID = rolectx.SpecialistRoleIDFromContext(ctx)
+	}
+	if specialistRoleID != "" && role == "" {
+		role = types.SessionRoleMainParent
+	}
+	isTaskSession := strings.HasPrefix(strings.TrimSpace(in.Session.ID), "task_session_")
+	if specialistRoleID == "" && role != types.SessionRoleMainParent && !isTaskSession {
+		return fmt.Errorf("session %q in workspace %q is neither main_parent nor mapped specialist", strings.TrimSpace(in.Session.ID), strings.TrimSpace(in.Session.WorkspaceRoot))
+	}
+	if isTaskSession && role == "" {
+		role = types.SessionRoleMainParent
 	}
 	runCtx := withRunnerSessionContext(ctx, in.Session, role, specialistRoleID)
 	if in.Turn.ContextHeadID == "" && a.store != nil {

@@ -24,6 +24,7 @@ import (
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
 	"go-agent/internal/sessionbinding"
+	"go-agent/internal/sessionrole"
 	"go-agent/internal/store/artifacts"
 	"go-agent/internal/store/sqlite"
 	"go-agent/internal/stream"
@@ -825,33 +826,54 @@ func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *sess
 		}
 	}
 
-	if err := recoverQueuedCanonicalTurns(ctx, store, manager); err != nil {
+	if err := recoverQueuedCreatedTurns(ctx, store, manager, sessions); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func recoverQueuedCanonicalTurns(ctx context.Context, store *sqlite.Store, manager *session.Manager) error {
+func recoverQueuedCreatedTurns(ctx context.Context, store *sqlite.Store, manager *session.Manager, sessions []types.Session) error {
 	if store == nil || manager == nil {
 		return nil
 	}
 
-	canonicalSessionID, ok, err := store.GetCanonicalSessionID(ctx)
-	if err != nil || !ok {
-		return err
-	}
-
-	turns, err := store.ListTurnsBySession(ctx, canonicalSessionID)
-	if err != nil {
-		return err
-	}
-	for _, turn := range turns {
-		if turn.State != types.TurnStateCreated {
+	for _, sessionRow := range sessions {
+		sessionID := strings.TrimSpace(sessionRow.ID)
+		if sessionID == "" || strings.HasPrefix(sessionID, "task_session_") {
 			continue
 		}
-		if _, err := manager.SubmitTurn(ctx, canonicalSessionID, session.SubmitTurnInput{Turn: turn}); err != nil {
+
+		specialistRoleID, err := store.ResolveSpecialistRoleID(ctx, sessionID, sessionRow.WorkspaceRoot)
+		if err != nil {
 			return err
+		}
+		role, err := store.ResolveSessionRole(ctx, sessionID, sessionRow.WorkspaceRoot)
+		if err != nil {
+			return err
+		}
+
+		if specialistRoleID == "" && role != types.SessionRoleMainParent {
+			continue
+		}
+
+		replayRole := role
+		if specialistRoleID != "" {
+			replayRole = types.SessionRoleMainParent
+		}
+		replayCtx := rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, replayRole), specialistRoleID)
+
+		turns, err := store.ListTurnsBySession(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		for _, turn := range turns {
+			if turn.State != types.TurnStateCreated {
+				continue
+			}
+			if _, err := manager.SubmitTurn(replayCtx, sessionID, session.SubmitTurnInput{Turn: turn}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

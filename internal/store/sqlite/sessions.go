@@ -414,11 +414,15 @@ func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, rol
 		return types.Session{}, types.ContextHead{}, false, errors.New("invalid built-in session role")
 	}
 	roleCtx := rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, role), "")
-	session, head, created, err := s.EnsureCanonicalSession(roleCtx, workspaceRoot)
+	session, created, err := s.resolveOrCreateRoleSession(roleCtx, workspaceRoot, role)
 	if err != nil {
 		return types.Session{}, types.ContextHead{}, false, err
 	}
 	session, err = s.ensureRoleSystemPrompt(roleCtx, session, role)
+	if err != nil {
+		return types.Session{}, types.ContextHead{}, false, err
+	}
+	head, _, err := s.ensureCurrentContextHead(roleCtx, session)
 	if err != nil {
 		return types.Session{}, types.ContextHead{}, false, err
 	}
@@ -458,7 +462,10 @@ func (s *Store) EnsureSpecialistSession(ctx context.Context, workspaceRoot, role
 		}
 	}
 
-	prompt := strings.TrimSpace(systemPrompt)
+	prompt := strings.TrimSpace(sessionrole.SpecialistSystemPrompt(rolectx.Spec{
+		RoleID: roleID,
+		Prompt: systemPrompt,
+	}))
 	if prompt == "" {
 		return types.Session{}, types.ContextHead{}, false, errors.New("specialist system prompt is required")
 	}
@@ -558,33 +565,7 @@ func (s *Store) ResolveSessionRole(ctx context.Context, sessionID, workspaceRoot
 }
 
 func (s *Store) EnsureCanonicalSession(ctx context.Context, workspaceRoot string) (types.Session, types.ContextHead, bool, error) {
-	if sessionID, ok, err := s.GetCanonicalSessionID(ctx); err != nil {
-		return types.Session{}, types.ContextHead{}, false, err
-	} else if ok {
-		session, found, err := s.GetSession(ctx, sessionID)
-		if err != nil {
-			return types.Session{}, types.ContextHead{}, false, err
-		}
-		if found && session.WorkspaceRoot == workspaceRoot {
-			head, _, err := s.ensureCurrentContextHead(ctx, session)
-			return session, head, false, err
-		}
-		// The stored canonical session may be stale for a different workspace.
-		// Fall through and resolve/create the canonical session for workspaceRoot.
-	}
-
-	session, created, err := s.resolveOrCreateCanonicalSession(ctx, workspaceRoot)
-	if err != nil {
-		return types.Session{}, types.ContextHead{}, false, err
-	}
-	if err := s.SetCanonicalSessionID(ctx, session.ID); err != nil {
-		return types.Session{}, types.ContextHead{}, false, err
-	}
-	head, _, err := s.ensureCurrentContextHead(ctx, session)
-	if err != nil {
-		return types.Session{}, types.ContextHead{}, false, err
-	}
-	return session, head, created, nil
+	return s.EnsureRoleSession(ctx, workspaceRoot, types.SessionRoleMainParent)
 }
 
 func (s *Store) resolveOrCreateCanonicalSession(ctx context.Context, workspaceRoot string) (types.Session, bool, error) {
@@ -670,8 +651,10 @@ func (s *Store) ensureRoleSystemPrompt(ctx context.Context, session types.Sessio
 }
 
 func (s *Store) ensureSpecialistSystemPrompt(ctx context.Context, session types.Session, roleID, systemPrompt string) (types.Session, error) {
-	_ = roleID
-	prompt := strings.TrimSpace(systemPrompt)
+	prompt := strings.TrimSpace(sessionrole.SpecialistSystemPrompt(rolectx.Spec{
+		RoleID: roleID,
+		Prompt: systemPrompt,
+	}))
 	if prompt == "" || strings.TrimSpace(session.SystemPrompt) == prompt {
 		return session, nil
 	}
@@ -694,6 +677,21 @@ func (s *Store) ensureSpecialistSystemPrompt(ctx context.Context, session types.
 	session.SystemPrompt = prompt
 	session.UpdatedAt = now
 	return session, nil
+}
+
+func (s *Store) resolveOrCreateRoleSession(ctx context.Context, workspaceRoot string, role types.SessionRole) (types.Session, bool, error) {
+	if sessionID, ok, err := s.GetRoleSessionID(ctx, workspaceRoot, role); err != nil {
+		return types.Session{}, false, err
+	} else if ok {
+		session, found, err := s.GetSession(ctx, sessionID)
+		if err != nil {
+			return types.Session{}, false, err
+		}
+		if found && session.WorkspaceRoot == workspaceRoot {
+			return session, false, nil
+		}
+	}
+	return s.resolveOrCreateCanonicalSession(ctx, workspaceRoot)
 }
 
 func specialistRoleIDFromMetadataKey(metadataKey string) (string, bool) {

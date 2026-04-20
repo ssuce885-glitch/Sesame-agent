@@ -20,6 +20,7 @@ type Store interface {
 	UpsertReportDelivery(context.Context, types.ReportDelivery) error
 	UpsertChildAgentResult(context.Context, types.ChildAgentResult) error
 	GetSession(context.Context, string) (types.Session, bool, error)
+	ResolveSessionRole(context.Context, string, string) (types.SessionRole, error)
 	ResolveSpecialistRoleID(context.Context, string, string) (string, error)
 	EnsureRoleSession(context.Context, string, types.SessionRole) (types.Session, types.ContextHead, bool, error)
 	GetChildAgentSpec(context.Context, string) (types.ChildAgentSpec, bool, error)
@@ -561,7 +562,7 @@ func (s *Service) prepareReportForDelivery(ctx context.Context, report types.Rep
 	}
 	report.SourceSessionID = sourceSessionID
 
-	roleID, err := s.resolveSpecialistRoleID(ctx, sourceSessionID, report.WorkspaceRoot)
+	roleID, err := s.resolveSpecialistRoleIDStrict(ctx, sourceSessionID, report.WorkspaceRoot)
 	if err != nil {
 		return types.ReportRecord{}, err
 	}
@@ -583,7 +584,7 @@ func (s *Service) prepareReportForDelivery(ctx context.Context, report types.Rep
 	return report, nil
 }
 
-func (s *Service) resolveSpecialistRoleID(ctx context.Context, sessionID, workspaceRoot string) (string, error) {
+func (s *Service) resolveSpecialistRoleIDStrict(ctx context.Context, sessionID, workspaceRoot string) (string, error) {
 	if s == nil || s.store == nil {
 		return "", nil
 	}
@@ -592,7 +593,22 @@ func (s *Service) resolveSpecialistRoleID(ctx context.Context, sessionID, worksp
 	if sessionID == "" || workspaceRoot == "" {
 		return "", nil
 	}
-	return s.store.ResolveSpecialistRoleID(ctx, sessionID, workspaceRoot)
+	roleID, err := s.store.ResolveSpecialistRoleID(ctx, sessionID, workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(roleID) != "" {
+		return roleID, nil
+	}
+
+	role, err := s.store.ResolveSessionRole(ctx, sessionID, workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	if role == types.SessionRoleMainParent || strings.HasPrefix(sessionID, "task_session_") {
+		return "", nil
+	}
+	return "", fmt.Errorf("source session %q in workspace %q is neither main_parent nor mapped specialist", sessionID, workspaceRoot)
 }
 
 func (s *Service) ensureMainParentSessionID(ctx context.Context, workspaceRoot string) (string, error) {

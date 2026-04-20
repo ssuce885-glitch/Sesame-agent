@@ -33,50 +33,24 @@ func (s *Store) GetCurrentContextHeadID(ctx context.Context) (string, bool, erro
 	role := sessionrole.FromContext(ctx)
 	specialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
 	key := currentHeadMetadataKey(binding, role, specialistRoleID)
-	value, ok, err := getRuntimeMetadataValue(ctx, s.db, key)
-	if err != nil || ok || role != types.SessionRoleMainParent || normalizeSpecialistRoleID(specialistRoleID) != "" {
-		return value, ok, err
-	}
-	return getRuntimeMetadataValue(ctx, s.db, sessionbinding.CurrentHeadMetadataKey(binding))
+	return getRuntimeMetadataValue(ctx, s.db, key)
 }
 
 func (s *Store) SetCurrentContextHeadID(ctx context.Context, headID string) error {
 	binding := sessionbinding.FromContext(ctx)
 	role := sessionrole.FromContext(ctx)
 	specialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
-	if err := setRuntimeMetadataValue(ctx, s.db, currentHeadMetadataKey(binding, role, specialistRoleID), headID); err != nil {
-		return err
-	}
-	if role == types.SessionRoleMainParent && normalizeSpecialistRoleID(specialistRoleID) == "" {
-		return setRuntimeMetadataValue(ctx, s.db, sessionbinding.CurrentHeadMetadataKey(binding), headID)
-	}
-	return nil
+	return setRuntimeMetadataValue(ctx, s.db, currentHeadMetadataKey(binding, role, specialistRoleID), headID)
 }
 
 func (s *Store) GetRoleSessionID(ctx context.Context, workspaceRoot string, role types.SessionRole) (string, bool, error) {
 	role = sessionrole.Normalize(string(role))
-	if role == types.SessionRoleMainParent {
-		if sessionID, ok, err := getRuntimeMetadataValue(ctx, s.db, roleSessionMetadataKey(workspaceRoot, role)); err != nil {
-			return "", false, err
-		} else if ok {
-			return sessionID, true, nil
-		}
-	}
-	if role == types.SessionRoleMainParent {
-		return s.GetCanonicalSessionID(ctx)
-	}
 	return getRuntimeMetadataValue(ctx, s.db, roleSessionMetadataKey(workspaceRoot, role))
 }
 
 func (s *Store) SetRoleSessionID(ctx context.Context, workspaceRoot string, role types.SessionRole, sessionID string) error {
 	role = sessionrole.Normalize(string(role))
-	if err := setRuntimeMetadataValue(ctx, s.db, roleSessionMetadataKey(workspaceRoot, role), strings.TrimSpace(sessionID)); err != nil {
-		return err
-	}
-	if role == types.SessionRoleMainParent {
-		return s.SetCanonicalSessionID(ctx, strings.TrimSpace(sessionID))
-	}
-	return nil
+	return setRuntimeMetadataValue(ctx, s.db, roleSessionMetadataKey(workspaceRoot, role), strings.TrimSpace(sessionID))
 }
 
 func (s *Store) GetSpecialistSessionID(ctx context.Context, workspaceRoot, roleID string) (string, bool, error) {
