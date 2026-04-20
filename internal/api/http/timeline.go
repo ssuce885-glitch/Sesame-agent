@@ -10,6 +10,7 @@ import (
 
 	"go-agent/internal/model"
 	"go-agent/internal/types"
+	"go-agent/internal/workspace"
 )
 
 type reportMailboxStore interface {
@@ -35,25 +36,29 @@ func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		reqCtx := r.Context()
+		if strings.TrimSpace(deps.WorkspaceRoot) != "" {
+			reqCtx = workspace.WithWorkspaceRoot(reqCtx, deps.WorkspaceRoot)
+		}
 
-		items, err := listTimelineItems(r.Context(), deps.Store, sessionID)
+		items, err := listTimelineItems(reqCtx, deps.Store, sessionID)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		events, err := deps.Store.ListSessionEvents(r.Context(), sessionID, 0)
+		events, err := deps.Store.ListSessionEvents(reqCtx, sessionID, 0)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		latestSeq, err := deps.Store.LatestSessionEventSeq(r.Context(), sessionID)
+		latestSeq, err := deps.Store.LatestSessionEventSeq(reqCtx, sessionID)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		pendingReportCount := 0
 		if mailboxStore, ok := deps.Store.(reportMailboxStore); ok {
-			pendingReportCount, err = mailboxStore.CountPendingReportMailboxItems(r.Context(), sessionID)
+			pendingReportCount, err = mailboxStore.CountPendingReportMailboxItems(reqCtx, sessionID)
 			if err != nil {
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
@@ -61,7 +66,7 @@ func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 		}
 		queueSummary := types.SessionQueueSummary{}
 		if childReportStore, ok := deps.Store.(childReportCountStore); ok {
-			queueSummary.PendingChildReports, err = childReportStore.CountPendingChildReports(r.Context(), sessionID)
+			queueSummary.PendingChildReports, err = childReportStore.CountPendingChildReports(reqCtx, sessionID)
 			if err != nil {
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
@@ -79,7 +84,7 @@ func handleGetTimeline(deps Dependencies, sessionID string) http.HandlerFunc {
 
 		blocks := normalizeTimelineBlocks(items, events)
 		if graphStore, ok := deps.Store.(runtimeGraphStore); ok {
-			graph, err := graphStore.ListRuntimeGraph(r.Context())
+			graph, err := graphStore.ListRuntimeGraph(reqCtx)
 			if err != nil {
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return

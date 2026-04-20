@@ -12,6 +12,7 @@ import (
 	"go-agent/internal/sessionbinding"
 	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
+	"go-agent/internal/workspace"
 )
 
 type queryRowContexter interface {
@@ -32,7 +33,15 @@ func (s *Store) GetCurrentContextHeadID(ctx context.Context) (string, bool, erro
 	binding := sessionbinding.FromContext(ctx)
 	role := sessionrole.FromContext(ctx)
 	specialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
-	key := currentHeadMetadataKey(binding, role, specialistRoleID)
+	workspaceRoot := workspace.WorkspaceRootFromContext(ctx)
+	key := currentHeadMetadataKey(binding, workspaceRoot, role, specialistRoleID)
+	if workspaceRoot != "" {
+		currentHeadID, found, err := getRuntimeMetadataValue(ctx, s.db, key)
+		if err != nil || found {
+			return currentHeadID, found, err
+		}
+	}
+	key = legacyCurrentHeadMetadataKey(binding, role, specialistRoleID)
 	return getRuntimeMetadataValue(ctx, s.db, key)
 }
 
@@ -40,7 +49,9 @@ func (s *Store) SetCurrentContextHeadID(ctx context.Context, headID string) erro
 	binding := sessionbinding.FromContext(ctx)
 	role := sessionrole.FromContext(ctx)
 	specialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
-	return setRuntimeMetadataValue(ctx, s.db, currentHeadMetadataKey(binding, role, specialistRoleID), headID)
+	workspaceRoot := workspace.WorkspaceRootFromContext(ctx)
+	key := currentHeadMetadataKey(binding, workspaceRoot, role, specialistRoleID)
+	return setRuntimeMetadataValue(ctx, s.db, key, strings.TrimSpace(headID))
 }
 
 func (s *Store) GetRoleSessionID(ctx context.Context, workspaceRoot string, role types.SessionRole) (string, bool, error) {
@@ -69,7 +80,17 @@ func (s *Store) SetSpecialistSessionID(ctx context.Context, workspaceRoot, roleI
 	return setRuntimeMetadataValue(ctx, s.db, specialistSessionMetadataKey(workspaceRoot, roleID), strings.TrimSpace(sessionID))
 }
 
-func currentHeadMetadataKey(binding string, role types.SessionRole, specialistRoleID string) string {
+func currentHeadMetadataKey(binding string, workspaceRoot string, role types.SessionRole, specialistRoleID string) string {
+	normalizedWorkspaceRoot := strings.TrimSpace(workspaceRoot)
+	encodedWorkspaceRoot := base64.RawURLEncoding.EncodeToString([]byte(normalizedWorkspaceRoot))
+	if specialistRoleID = normalizeSpecialistRoleID(specialistRoleID); specialistRoleID != "" {
+		encodedRoleID := base64.RawURLEncoding.EncodeToString([]byte(specialistRoleID))
+		return sessionbinding.CurrentHeadMetadataKey(binding) + ":" + encodedWorkspaceRoot + ":specialist:" + encodedRoleID
+	}
+	return sessionbinding.CurrentHeadMetadataKey(binding) + ":" + encodedWorkspaceRoot + ":role:" + string(sessionrole.Normalize(string(role)))
+}
+
+func legacyCurrentHeadMetadataKey(binding string, role types.SessionRole, specialistRoleID string) string {
 	if specialistRoleID = normalizeSpecialistRoleID(specialistRoleID); specialistRoleID != "" {
 		encodedRoleID := base64.RawURLEncoding.EncodeToString([]byte(specialistRoleID))
 		return sessionbinding.CurrentHeadMetadataKey(binding) + ":specialist:" + encodedRoleID

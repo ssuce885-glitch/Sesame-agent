@@ -11,6 +11,7 @@ import (
 	"go-agent/internal/sessionbinding"
 	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
+	"go-agent/internal/workspace"
 )
 
 var errRoleServiceUnavailable = errors.New("role service is required")
@@ -44,6 +45,7 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 			http.Error(w, "workspace_root is required", http.StatusBadRequest)
 			return
 		}
+		r = r.WithContext(workspace.WithWorkspaceRoot(r.Context(), workspaceRoot))
 		if deps.Store == nil || deps.Manager == nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
@@ -80,6 +82,9 @@ type sessionScopedHandlerFactory func(Dependencies, string) http.HandlerFunc
 func handleCurrentSession(deps Dependencies, next sessionScopedHandlerFactory) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), r.Header.Get(sessionbinding.HeaderName)))
+		if workspaceRoot := strings.TrimSpace(deps.WorkspaceRoot); workspaceRoot != "" {
+			r = r.WithContext(workspace.WithWorkspaceRoot(r.Context(), workspaceRoot))
+		}
 		role, roleOK := resolveRequestedSessionRole(r, "")
 		if !roleOK {
 			http.Error(w, "bad request", http.StatusBadRequest)

@@ -17,6 +17,7 @@ import (
 	"go-agent/internal/store/sqlite"
 	"go-agent/internal/task"
 	"go-agent/internal/types"
+	"go-agent/internal/workspace"
 )
 
 type sessionRunnerAdapter struct {
@@ -224,6 +225,7 @@ func (s *taskEventSink) Emit(_ context.Context, event types.Event) error {
 }
 
 func withRunnerSessionContext(ctx context.Context, sessionRow types.Session, role types.SessionRole, specialistRoleID string) context.Context {
+	ctx = workspace.WithWorkspaceRoot(ctx, sessionRow.WorkspaceRoot)
 	ctx = rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, role), specialistRoleID)
 	if strings.HasPrefix(strings.TrimSpace(sessionRow.ID), "task_session_") {
 		return sessionbinding.WithContextBinding(ctx, taskContextBinding(sessionRow.ID))

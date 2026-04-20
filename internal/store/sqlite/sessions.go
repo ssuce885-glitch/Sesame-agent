@@ -11,6 +11,7 @@ import (
 	rolectx "go-agent/internal/roles"
 	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
+	"go-agent/internal/workspace"
 )
 
 const timeLayout = time.RFC3339Nano
@@ -711,15 +712,16 @@ func specialistRoleIDFromMetadataKey(metadataKey string) (string, bool) {
 }
 
 func (s *Store) ensureCurrentContextHead(ctx context.Context, session types.Session) (types.ContextHead, bool, error) {
-	if headID, ok, err := s.GetCurrentContextHeadID(ctx); err != nil {
+	sessionCtx := workspace.WithWorkspaceRoot(ctx, session.WorkspaceRoot)
+	if headID, ok, err := s.GetCurrentContextHeadID(sessionCtx); err != nil {
 		return types.ContextHead{}, false, err
 	} else if ok {
-		head, found, err := s.GetContextHead(ctx, headID)
+		head, found, err := s.GetContextHead(sessionCtx, headID)
 		if err != nil {
 			return types.ContextHead{}, false, err
 		}
 		if found && head.SessionID == session.ID {
-			if err := s.AssignTurnsWithoutHead(ctx, session.ID, head.ID); err != nil {
+			if err := s.AssignTurnsWithoutHead(sessionCtx, session.ID, head.ID); err != nil {
 				return types.ContextHead{}, false, err
 			}
 			return head, false, nil
@@ -739,10 +741,10 @@ func (s *Store) ensureCurrentContextHead(ctx context.Context, session types.Sess
 	if err := s.InsertContextHead(ctx, head); err != nil {
 		return types.ContextHead{}, false, err
 	}
-	if err := s.AssignTurnsWithoutHead(ctx, session.ID, head.ID); err != nil {
+	if err := s.AssignTurnsWithoutHead(sessionCtx, session.ID, head.ID); err != nil {
 		return types.ContextHead{}, false, err
 	}
-	if err := s.SetCurrentContextHeadID(ctx, head.ID); err != nil {
+	if err := s.SetCurrentContextHeadID(sessionCtx, head.ID); err != nil {
 		return types.ContextHead{}, false, err
 	}
 	return head, true, nil

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go-agent/internal/types"
+	"go-agent/internal/workspace"
 )
 
 func (s *Store) InsertContextHead(ctx context.Context, head types.ContextHead) error {
@@ -118,7 +119,14 @@ func (s *Store) ListContextHeadLineage(ctx context.Context, sessionID, headID st
 }
 
 func (s *Store) ListContextHistory(ctx context.Context, sessionID string) ([]types.HistoryEntry, string, error) {
-	currentHeadID, ok, err := s.GetCurrentContextHeadID(ctx)
+	sessionCtx := ctx
+	if session, ok, err := s.GetSession(ctx, sessionID); err != nil {
+		return nil, "", err
+	} else if ok {
+		sessionCtx = workspace.WithWorkspaceRoot(ctx, session.WorkspaceRoot)
+	}
+
+	currentHeadID, ok, err := s.GetCurrentContextHeadID(sessionCtx)
 	if err != nil {
 		return nil, "", err
 	}
@@ -194,15 +202,18 @@ func (s *Store) CreateReopenContextHead(ctx context.Context, sessionID string) (
 	if strings.TrimSpace(head.SessionID) == "" {
 		return types.ContextHead{}, fmt.Errorf("session_id is required")
 	}
-	if _, found, err := s.GetSession(ctx, head.SessionID); err != nil {
+	session, found, err := s.GetSession(ctx, head.SessionID)
+	if err != nil {
 		return types.ContextHead{}, err
-	} else if !found {
+	}
+	if !found {
 		return types.ContextHead{}, sql.ErrNoRows
 	}
+	sessionCtx := workspace.WithWorkspaceRoot(ctx, session.WorkspaceRoot)
 	if err := s.InsertContextHead(ctx, head); err != nil {
 		return types.ContextHead{}, err
 	}
-	if err := s.SetCurrentContextHeadID(ctx, head.ID); err != nil {
+	if err := s.SetCurrentContextHeadID(sessionCtx, head.ID); err != nil {
 		return types.ContextHead{}, err
 	}
 	return head, nil
@@ -225,6 +236,14 @@ func (s *Store) LoadContextHead(ctx context.Context, sessionID, headID string) (
 	if !found || parent.SessionID != sessionID {
 		return types.ContextHead{}, sql.ErrNoRows
 	}
+	session, found, err := s.GetSession(ctx, parent.SessionID)
+	if err != nil {
+		return types.ContextHead{}, err
+	}
+	if !found {
+		return types.ContextHead{}, sql.ErrNoRows
+	}
+	sessionCtx := workspace.WithWorkspaceRoot(ctx, session.WorkspaceRoot)
 
 	head := types.ContextHead{
 		ID:           types.NewID("head"),
@@ -239,7 +258,7 @@ func (s *Store) LoadContextHead(ctx context.Context, sessionID, headID string) (
 	if err := s.InsertContextHead(ctx, head); err != nil {
 		return types.ContextHead{}, err
 	}
-	if err := s.SetCurrentContextHeadID(ctx, head.ID); err != nil {
+	if err := s.SetCurrentContextHeadID(sessionCtx, head.ID); err != nil {
 		return types.ContextHead{}, err
 	}
 	return head, nil

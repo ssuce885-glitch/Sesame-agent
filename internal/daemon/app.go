@@ -31,6 +31,7 @@ import (
 	"go-agent/internal/task"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
+	"go-agent/internal/workspace"
 )
 
 type storeAndBusSink struct {
@@ -161,6 +162,7 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, taskID string, workspace
 	sessionID := types.NewID("task_session")
 	turnID := types.NewID("task_turn")
 	taskCtx := sessionbinding.WithContextBinding(ctx, taskContextBinding(sessionID))
+	taskCtx = workspace.WithWorkspaceRoot(taskCtx, workspaceRoot)
 	if err := a.prepareTaskRun(taskCtx, sessionID, turnID, workspaceRoot, prompt); err != nil {
 		return err
 	}
@@ -246,6 +248,7 @@ func (a agentTaskExecutor) ensureTaskContextHead(ctx context.Context, sessionRow
 	if a.store == nil {
 		return nil
 	}
+	ctx = workspace.WithWorkspaceRoot(ctx, sessionRow.WorkspaceRoot)
 	if headID, ok, err := a.store.GetCurrentContextHeadID(ctx); err != nil {
 		return err
 	} else if ok {
@@ -506,6 +509,15 @@ func (n taskTerminalNotifier) enqueueSyntheticChildReportTurn(ctx context.Contex
 	if n.store == nil || n.manager == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
+	sessionRow, ok, err := n.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	ctx = workspace.WithWorkspaceRoot(ctx, strings.TrimSpace(sessionRow.WorkspaceRoot))
+
 	if state, ok := n.manager.GetRuntimeState(sessionID); ok {
 		if state.QueuedChildReportBatches > 0 {
 			return nil
@@ -527,7 +539,7 @@ func (n taskTerminalNotifier) enqueueSyntheticChildReportTurn(ctx context.Contex
 	if err := n.store.InsertTurn(ctx, turn); err != nil {
 		return err
 	}
-	_, err := n.manager.SubmitTurn(ctx, sessionID, session.SubmitTurnInput{Turn: turn})
+	_, err = n.manager.SubmitTurn(ctx, sessionID, session.SubmitTurnInput{Turn: turn})
 	return err
 }
 

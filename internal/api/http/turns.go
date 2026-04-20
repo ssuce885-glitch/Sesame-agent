@@ -9,6 +9,7 @@ import (
 
 	"go-agent/internal/session"
 	"go-agent/internal/types"
+	"go-agent/internal/workspace"
 )
 
 type turnInterruptStore interface {
@@ -64,6 +65,9 @@ func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 			UserMessage:  req.Message,
 			CreatedAt:    now,
 			UpdatedAt:    now,
+		}
+		if strings.TrimSpace(deps.WorkspaceRoot) != "" {
+			r = r.WithContext(workspace.WithWorkspaceRoot(r.Context(), deps.WorkspaceRoot))
 		}
 		if headStore, ok := deps.Store.(currentContextHeadStore); ok {
 			headID, hasHead, err := headStore.GetCurrentContextHeadID(r.Context())
