@@ -137,7 +137,7 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 			targetCtx,
 			workspaceRoot,
 			spec.RoleID,
-			sessionrole.SpecialistSystemPrompt(spec),
+			spec.Prompt,
 			spec.SkillNames,
 		)
 		if err != nil {

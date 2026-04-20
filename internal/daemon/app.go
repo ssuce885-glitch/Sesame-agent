@@ -844,6 +844,20 @@ func recoverQueuedCreatedTurns(ctx context.Context, store *sqlite.Store, manager
 			continue
 		}
 
+		turns, err := store.ListTurnsBySession(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		createdTurns := make([]types.Turn, 0, len(turns))
+		for _, turn := range turns {
+			if turn.State == types.TurnStateCreated {
+				createdTurns = append(createdTurns, turn)
+			}
+		}
+		if len(createdTurns) == 0 {
+			continue
+		}
+
 		specialistRoleID, err := store.ResolveSpecialistRoleID(ctx, sessionID, sessionRow.WorkspaceRoot)
 		if err != nil {
 			return err
@@ -854,7 +868,7 @@ func recoverQueuedCreatedTurns(ctx context.Context, store *sqlite.Store, manager
 		}
 
 		if specialistRoleID == "" && role != types.SessionRoleMainParent {
-			continue
+			return fmt.Errorf("session %q in workspace %q has created turns but is neither main_parent nor mapped specialist", sessionID, strings.TrimSpace(sessionRow.WorkspaceRoot))
 		}
 
 		replayRole := role
@@ -863,14 +877,7 @@ func recoverQueuedCreatedTurns(ctx context.Context, store *sqlite.Store, manager
 		}
 		replayCtx := rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, replayRole), specialistRoleID)
 
-		turns, err := store.ListTurnsBySession(ctx, sessionID)
-		if err != nil {
-			return err
-		}
-		for _, turn := range turns {
-			if turn.State != types.TurnStateCreated {
-				continue
-			}
+		for _, turn := range createdTurns {
 			if _, err := manager.SubmitTurn(replayCtx, sessionID, session.SubmitTurnInput{Turn: turn}); err != nil {
 				return err
 			}
