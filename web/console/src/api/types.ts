@@ -1,29 +1,8 @@
-// ─── Session ──────────────────────────────────────────────────────────────────
-
-export interface Session {
-  id: string;
-  title?: string;
-  last_preview?: string;
-  workspace_root: string;
-  state: string;
-  active_turn_id?: string;
-  updated_at: string;
-  is_selected: boolean;
-}
-
-export interface SessionListResponse {
-  sessions: Session[];
-  selected_session_id?: string;
-}
+// ─── Current session ──────────────────────────────────────────────────────────
 
 export interface CreateSessionResponse {
   id: string;
   workspace_root: string;
-}
-
-export interface DeleteSessionResponse {
-  deleted_session_id: string;
-  selected_session_id?: string;
 }
 
 // ─── Timeline ─────────────────────────────────────────────────────────────────

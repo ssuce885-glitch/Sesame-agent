@@ -11,7 +11,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatPage } from "./pages/ChatPage";
 import { UsagePage } from "./pages/UsagePage";
 import { RolesPage } from "./pages/RolesPage";
-import { useSessions, useSelectSession } from "./api/queries";
+import { useCurrentSession, useWorkspaceMeta } from "./api/queries";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,26 +35,16 @@ function RootLayout({ children }: { children: React.ReactNode }) {
 export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const { data } = useSessions();
-  const selectSession = useSelectSession();
+  const { data: currentSession } = useCurrentSession();
+  const { data: workspace } = useWorkspaceMeta();
+  const activeSessionId = currentSession?.id ?? null;
 
-  // Auto-select first session on load
+  // Auto-enter chat once the current session is ready.
   useEffect(() => {
-    if (!activeSessionId && data?.sessions.length) {
-      const selected = data.sessions.find((s) => s.is_selected) ?? data.sessions[0];
-      setActiveSessionId(selected.id);
-      if (location.pathname === "/") {
-        navigate("/chat");
-      }
+    if (activeSessionId && location.pathname === "/") {
+      navigate("/chat");
     }
-  }, [data, activeSessionId, navigate, location.pathname]);
-
-  function handleSelectSession(id: string) {
-    setActiveSessionId(id);
-    selectSession.mutate(id);
-    navigate("/chat");
-  }
+  }, [activeSessionId, navigate, location.pathname]);
 
   const isChat = location.pathname === "/chat" || location.pathname === "/";
   const isUsage = location.pathname === "/usage";
@@ -90,7 +80,7 @@ export function AppShell() {
                 border: "1px solid var(--color-border)",
               }}
             >
-              {data?.sessions.find((s) => s.id === activeSessionId)?.title || "Session"}
+              {workspace?.name || "Current workspace"}
             </span>
           )}
         </div>
@@ -120,17 +110,9 @@ export function AppShell() {
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar
-          activeSessionId={activeSessionId}
-          onSelectSession={handleSelectSession}
-        />
+        <Sidebar workspaceName={workspace?.name} workspaceRoot={workspace?.workspace_root} />
         <main className="flex-1 flex flex-col overflow-hidden">
-          {isChat && (
-            <ChatPage
-              sessionId={activeSessionId ?? ""}
-              onSessionIdChange={handleSelectSession}
-            />
-          )}
+          {isChat && <ChatPage sessionId={activeSessionId ?? ""} />}
           {isUsage && <UsagePage sessionId={activeSessionId ?? undefined} />}
           {isRoles && <RolesPage />}
         </main>

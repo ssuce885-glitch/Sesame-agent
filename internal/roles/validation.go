@@ -3,6 +3,7 @@ package roles
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -12,6 +13,8 @@ type Diagnostic struct {
 	Error  string
 }
 
+var canonicalRoleIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
 func CanonicalRoleID(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -20,13 +23,15 @@ func CanonicalRoleID(raw string) (string, error) {
 	if trimmed != raw {
 		return "", fmt.Errorf("invalid role_id: %s", raw)
 	}
-	if raw == "." || strings.HasPrefix(raw, ".") {
-		return "", fmt.Errorf("invalid role_id: %s", raw)
-	}
-	if strings.Contains(raw, "/") || strings.Contains(raw, "\\") || strings.Contains(raw, "..") {
+	if !canonicalRoleIDPattern.MatchString(raw) {
 		return "", fmt.Errorf("invalid role_id: %s", raw)
 	}
 	return raw, nil
+}
+
+func shouldIgnoreInternalRoleDir(name string) bool {
+	name = strings.TrimSpace(name)
+	return strings.HasPrefix(name, ".role-staging-") || strings.HasPrefix(name, ".role-update-backup-")
 }
 
 func normalizeUpsertInput(in UpsertInput) (UpsertInput, error) {

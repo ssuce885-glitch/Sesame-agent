@@ -886,7 +886,7 @@ func recoverQueuedCreatedTurns(ctx context.Context, store *sqlite.Store, manager
 		}
 
 		if specialistRoleID == "" && role != types.SessionRoleMainParent {
-			return fmt.Errorf("session %q in workspace %q has created turns but is neither main_parent nor mapped specialist", sessionID, strings.TrimSpace(sessionRow.WorkspaceRoot))
+			continue
 		}
 
 		replayRole := role

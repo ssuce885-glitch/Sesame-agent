@@ -47,6 +47,9 @@ func LoadCatalog(workspaceRoot string) (Catalog, error) {
 
 	out := Catalog{ByID: map[string]Spec{}}
 	for _, entry := range entries {
+		if shouldIgnoreInternalRoleDir(entry.Name()) {
+			continue
+		}
 		roleID, err := CanonicalRoleID(entry.Name())
 		if err != nil {
 			out.Diagnostics = append(out.Diagnostics, Diagnostic{

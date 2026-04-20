@@ -1,7 +1,5 @@
 import type {
-  SessionListResponse,
   CreateSessionResponse,
-  DeleteSessionResponse,
   TimelineResponse,
   MetricsOverview,
   MetricsTimeseries,
@@ -40,45 +38,12 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-async function getRuntimeWorkspace(): Promise<Workspace> {
+export async function getWorkspace(): Promise<Workspace> {
   return apiFetch<Workspace>("/v1/workspace");
 }
 
 function isNotFoundError(err: unknown): boolean {
   return err instanceof Error && (err.message.includes("HTTP 404") || err.message.includes("not found"));
-}
-
-// ─── Sessions ─────────────────────────────────────────────────────────────────
-
-export async function getSessions(): Promise<SessionListResponse> {
-  try {
-    return await apiFetch<SessionListResponse>("/v1/sessions");
-  } catch (err) {
-    if (!isNotFoundError(err)) {
-      throw err;
-    }
-
-    let workspace: Workspace;
-    try {
-      workspace = await getRuntimeWorkspace();
-    } catch {
-      throw new Error("Sessions unavailable and workspace endpoint not reachable.");
-    }
-    const session = await createSession(workspace.workspace_root);
-    return {
-      sessions: [
-        {
-          id: session.id,
-          title: workspace.name || "Main session",
-          workspace_root: session.workspace_root,
-          state: "idle",
-          updated_at: "1970-01-01T00:00:00Z",
-          is_selected: true,
-        },
-      ],
-      selected_session_id: session.id,
-    };
-  }
 }
 
 export async function createSession(
@@ -87,7 +52,7 @@ export async function createSession(
   const resolvedWorkspaceRoot =
     workspaceRoot.trim() !== ""
       ? workspaceRoot.trim()
-      : (await getRuntimeWorkspace()).workspace_root;
+      : (await getWorkspace()).workspace_root;
 
   return apiFetch<CreateSessionResponse>("/v1/session/ensure", {
     method: "POST",
@@ -95,30 +60,14 @@ export async function createSession(
   });
 }
 
-export async function selectSession(sessionId: string): Promise<{ selected_session_id: string }> {
-  try {
-    return await apiFetch(`/v1/sessions/${sessionId}/select`, { method: "POST" });
-  } catch (err) {
-    throw err;
-  }
-}
-
-export function deleteSession(sessionId: string): Promise<DeleteSessionResponse> {
-  return apiFetch<DeleteSessionResponse>(`/v1/sessions/${sessionId}`, {
-    method: "DELETE",
-  });
+export function ensureCurrentSession(): Promise<CreateSessionResponse> {
+  return createSession("");
 }
 
 // ─── Session-scoped ────────────────────────────────────────────────────────────
 
 export function getTimeline(sessionId: string): Promise<TimelineResponse> {
   return apiFetch<TimelineResponse>("/v1/session/timeline", {
-    headers: { "X-Sesame-Context-Binding": sessionId },
-  });
-}
-
-export function getWorkspace(sessionId: string): Promise<Workspace> {
-  return apiFetch<Workspace>("/v1/session/workspace", {
     headers: { "X-Sesame-Context-Binding": sessionId },
   });
 }

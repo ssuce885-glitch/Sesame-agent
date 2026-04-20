@@ -1,9 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  getSessions,
-  createSession,
-  selectSession,
-  deleteSession,
+  ensureCurrentSession,
   getTimeline,
   getWorkspace,
   submitMessage,
@@ -17,15 +14,21 @@ import {
   deleteRole,
   generateClientTurnId,
 } from "./client";
-import { timelineToMessages } from "./events";
-import type { Session } from "./types";
 
-// ─── Session queries ────────────────────────────────────────────────────────────
+// ─── Current workspace/session queries ─────────────────────────────────────────
 
-export function useSessions() {
+export function useWorkspaceMeta() {
   return useQuery({
-    queryKey: ["sessions"],
-    queryFn: getSessions,
+    queryKey: ["workspace"],
+    queryFn: getWorkspace,
+    staleTime: 30_000,
+  });
+}
+
+export function useCurrentSession() {
+  return useQuery({
+    queryKey: ["session", "current"],
+    queryFn: ensureCurrentSession,
     staleTime: 10_000,
   });
 }
@@ -36,15 +39,6 @@ export function useTimeline(sessionId: string | null) {
     queryFn: () => getTimeline(sessionId!),
     enabled: !!sessionId,
     staleTime: Infinity,
-  });
-}
-
-export function useWorkspace(sessionId: string | null) {
-  return useQuery({
-    queryKey: ["workspace", sessionId],
-    queryFn: () => getWorkspace(sessionId!),
-    enabled: !!sessionId,
-    staleTime: 30_000,
   });
 }
 
@@ -86,30 +80,6 @@ export function useRole(roleID: string | null) {
 }
 
 // ─── Mutations ─────────────────────────────────────────────────────────────────
-
-export function useCreateSession() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (workspaceRoot: string) => createSession(workspaceRoot),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }),
-  });
-}
-
-export function useSelectSession() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (sessionId: string) => selectSession(sessionId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }),
-  });
-}
-
-export function useDeleteSession() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (sessionId: string) => deleteSession(sessionId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }),
-  });
-}
 
 export function useSubmitMessage(sessionId: string) {
   const qc = useQueryClient();
