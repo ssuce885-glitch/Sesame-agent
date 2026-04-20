@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
 )
@@ -15,13 +16,13 @@ type DelegateToRoleInput struct {
 	WorkspaceRoot   string
 	SourceSessionID string
 	SourceTurnID    string
-	TargetRole      types.SessionRole
+	TargetRole      string
 	Message         string
 	Reason          string
 }
 
 type DelegateToRoleOutput struct {
-	TargetRole      types.SessionRole
+	TargetRole      string
 	TargetSessionID string
 	TargetTurnID    string
 	Accepted        bool
@@ -34,6 +35,7 @@ type RoleDelegationService interface {
 
 type roleDelegationStore interface {
 	EnsureRoleSession(context.Context, string, types.SessionRole) (types.Session, types.ContextHead, bool, error)
+	EnsureSpecialistSession(context.Context, string, string, string, []string) (types.Session, types.ContextHead, bool, error)
 	InsertTurn(context.Context, types.Turn) error
 	DeleteTurn(context.Context, string) error
 }
@@ -78,11 +80,53 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 		return DelegateToRoleOutput{}, fmt.Errorf("message is required")
 	}
 
-	targetRole := sessionrole.Normalize(string(in.TargetRole))
-	roleCtx := sessionrole.WithSessionRole(ctx, targetRole)
-	targetSession, targetHead, createdSession, err := s.store.EnsureRoleSession(roleCtx, workspaceRoot, targetRole)
+	targetRole, err := validateRoleID(in.TargetRole)
 	if err != nil {
 		return DelegateToRoleOutput{}, err
+	}
+	sourceSpecialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
+	if sourceSpecialistRoleID != "" && targetRole != string(types.SessionRoleMainParent) {
+		return DelegateToRoleOutput{}, fmt.Errorf("specialist roles cannot delegate directly to another specialist role; report back to main_parent and ask it to delegate")
+	}
+
+	var (
+		targetCtx      context.Context
+		targetSession  types.Session
+		targetHead     types.ContextHead
+		createdSession bool
+	)
+	if targetRole == string(types.SessionRoleMainParent) {
+		targetCtx = rolectx.WithSpecialistRoleID(
+			sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent),
+			"",
+		)
+		targetSession, targetHead, createdSession, err = s.store.EnsureRoleSession(targetCtx, workspaceRoot, types.SessionRoleMainParent)
+		if err != nil {
+			return DelegateToRoleOutput{}, err
+		}
+	} else {
+		catalog, err := rolectx.LoadCatalog(workspaceRoot)
+		if err != nil {
+			return DelegateToRoleOutput{}, err
+		}
+		spec, ok := catalog.ByID[targetRole]
+		if !ok {
+			return DelegateToRoleOutput{}, fmt.Errorf("target_role %q is not installed", targetRole)
+		}
+		targetCtx = rolectx.WithSpecialistRoleID(
+			sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent),
+			spec.RoleID,
+		)
+		targetSession, targetHead, createdSession, err = s.store.EnsureSpecialistSession(
+			targetCtx,
+			workspaceRoot,
+			spec.RoleID,
+			sessionrole.SpecialistSystemPrompt(spec),
+			spec.SkillNames,
+		)
+		if err != nil {
+			return DelegateToRoleOutput{}, err
+		}
 	}
 	if strings.TrimSpace(targetSession.ID) == sourceSessionID {
 		return DelegateToRoleOutput{}, fmt.Errorf("target role resolves to the current session; continue in this session instead")
@@ -102,14 +146,14 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-	if err := s.store.InsertTurn(roleCtx, turn); err != nil {
+	if err := s.store.InsertTurn(targetCtx, turn); err != nil {
 		return DelegateToRoleOutput{}, err
 	}
 	if !s.manager.UpdateSession(targetSession) {
 		s.manager.RegisterSession(targetSession)
 	}
-	if _, err := s.manager.SubmitTurn(roleCtx, targetSession.ID, SubmitTurnInput{Turn: turn}); err != nil {
-		deleteErr := s.store.DeleteTurn(context.WithoutCancel(roleCtx), turn.ID)
+	if _, err := s.manager.SubmitTurn(targetCtx, targetSession.ID, SubmitTurnInput{Turn: turn}); err != nil {
+		deleteErr := s.store.DeleteTurn(context.WithoutCancel(targetCtx), turn.ID)
 		if deleteErr != nil {
 			return DelegateToRoleOutput{}, errors.Join(err, deleteErr)
 		}
@@ -123,4 +167,15 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 		Accepted:        true,
 		CreatedSession:  createdSession,
 	}, nil
+}
+
+func validateRoleID(raw string) (string, error) {
+	roleID := strings.TrimSpace(raw)
+	if roleID == "" {
+		return "", fmt.Errorf("target_role is required")
+	}
+	if strings.HasPrefix(roleID, ".") || strings.Contains(roleID, "/") || strings.Contains(roleID, "\\") || strings.Contains(roleID, "..") {
+		return "", fmt.Errorf("invalid target_role %q", roleID)
+	}
+	return roleID, nil
 }

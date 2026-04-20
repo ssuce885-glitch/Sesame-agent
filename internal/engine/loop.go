@@ -13,6 +13,7 @@ import (
 	"go-agent/internal/instructions"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/runtimegraph"
 	"go-agent/internal/sessionrole"
 	"go-agent/internal/skills"
@@ -130,14 +131,31 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		cacheHead = &cacheHeadValue
 	}
 
-	runtimeInstructions, err := buildRuntimeInstructionsWithMaxBytes(in.Session, e.basePrompt, working.MemoryRefs, e.maxWorkspacePromptBytes)
+	roleCatalog, err := rolectx.LoadCatalog(in.Session.WorkspaceRoot)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
 		}
 		return err
 	}
-	catalog, err := skills.LoadCatalog(e.globalConfigRoot, in.Session.WorkspaceRoot)
+	specialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
+	var specialistSpec *rolectx.Spec
+	if specialistRoleID != "" {
+		spec, ok := roleCatalog.ByID[specialistRoleID]
+		if !ok {
+			err := fmt.Errorf("specialist role %q is not installed", specialistRoleID)
+			if emitErr := emitFailed(err.Error()); emitErr != nil {
+				return errors.Join(err, emitErr)
+			}
+			return err
+		}
+		specialistSpec = &spec
+	}
+	runtimeSession := in.Session
+	if specialistSpec != nil {
+		runtimeSession.SystemPrompt = sessionrole.SpecialistSystemPrompt(*specialistSpec)
+	}
+	runtimeInstructions, err := buildRuntimeInstructionsWithMaxBytes(runtimeSession, e.basePrompt, working.MemoryRefs, e.maxWorkspacePromptBytes)
 	if err != nil {
 		if emitErr := emitFailed(err.Error()); emitErr != nil {
 			return errors.Join(err, emitErr)
@@ -145,7 +163,20 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		return err
 	}
 	baseInstructionsText := runtimeInstructions.Text
-	resolution := skills.Resolve(turnMessage, catalog, sessionrole.MergeActivatedSkillNames(in.ActivatedSkillNames, in.SessionRole))
+	if sessionrole.Normalize(string(in.SessionRole)) == types.SessionRoleMainParent && specialistSpec == nil {
+		if registrySummary := strings.TrimSpace(rolectx.RenderRegistrySummary(roleCatalog)); registrySummary != "" {
+			baseInstructionsText = strings.TrimSpace(baseInstructionsText + "\n\n" + registrySummary)
+		}
+	}
+
+	skillCatalog, err := skills.LoadCatalog(e.globalConfigRoot, in.Session.WorkspaceRoot)
+	if err != nil {
+		if emitErr := emitFailed(err.Error()); emitErr != nil {
+			return errors.Join(err, emitErr)
+		}
+		return err
+	}
+	resolution := skills.Resolve(turnMessage, skillCatalog, sessionrole.MergeActivatedSkillNames(in.ActivatedSkillNames, in.SessionRole, specialistSpec))
 	visibleDefs := toolRuntime.VisibleDefinitions(toolExecCtx)
 	activeSkills := append([]skills.ActivatedSkill(nil), resolution.Activated...)
 	toolExecCtx.ActiveSkillNames = activatedSkillNames(activeSkills)
@@ -158,7 +189,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	}
 	instructionBundle := instructions.Compile(instructions.CompileInput{
 		BaseText:     baseInstructionsText,
-		Catalog:      catalog,
+		Catalog:      skillCatalog,
 		Message:      turnMessage,
 		ActiveSkills: activeSkills,
 	})
@@ -507,7 +538,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 					if activatedNames := activatedSkillNamesFromMetadata(output.Metadata); len(activatedNames) > 0 {
 						activeSkills = skills.MergeActivatedSkills(
 							activeSkills,
-							skills.SelectByNames(catalog, activatedNames, skills.ActivationReasonToolUse),
+							skills.SelectByNames(skillCatalog, activatedNames, skills.ActivationReasonToolUse),
 						)
 						toolExecCtx.ActiveSkillNames = activatedSkillNames(activeSkills)
 						toolExecCtx.InjectedEnv, err = loadActivatedSkillEnv(e.globalConfigRoot, activeSkills)
@@ -522,7 +553,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 						req.Tools = buildToolSchemas(visibleDefs)
 						req.Instructions = appendChildReportPromptSection(instructions.Compile(instructions.CompileInput{
 							BaseText:     baseInstructionsText,
-							Catalog:      catalog,
+							Catalog:      skillCatalog,
 							Message:      turnMessage,
 							ActiveSkills: activeSkills,
 						}).Render(), childReports)

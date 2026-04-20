@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"go-agent/internal/session"
-	"go-agent/internal/sessionrole"
-	"go-agent/internal/types"
 )
 
 type delegateToRoleTool struct{}
@@ -33,12 +31,11 @@ func (delegateToRoleTool) IsEnabled(execCtx ExecContext) bool {
 func (delegateToRoleTool) Definition() Definition {
 	return Definition{
 		Name:        "delegate_to_role",
-		Description: "Hand off work to a long-lived role session such as monitoring_parent. Use this instead of task_create when transferring responsibility to another parent-role session.",
+		Description: "Hand off work to a long-lived role session. Use this instead of task_create when transferring ownership to main_parent or an installed specialist role id.",
 		InputSchema: objectSchema(map[string]any{
 			"target_role": map[string]any{
 				"type":        "string",
-				"description": "The long-lived role session that should own the work.",
-				"enum":        []string{string(types.SessionRoleMainParent), string(types.SessionRoleMonitoringParent)},
+				"description": "The role id that should own the work (main_parent or an installed specialist role id).",
 			},
 			"message": map[string]any{
 				"type":        "string",
@@ -62,16 +59,14 @@ func (delegateToRoleTool) Definition() Definition {
 func (delegateToRoleTool) IsConcurrencySafe() bool { return false }
 
 func (delegateToRoleTool) Decode(call Call) (DecodedCall, error) {
+	targetRole, err := validateRoleID(call.StringInput("target_role"))
+	if err != nil {
+		return DecodedCall{}, err
+	}
 	input := DelegateToRoleInput{
-		TargetRole: strings.TrimSpace(call.StringInput("target_role")),
+		TargetRole: targetRole,
 		Message:    strings.TrimSpace(call.StringInput("message")),
 		Reason:     strings.TrimSpace(call.StringInput("reason")),
-	}
-	if input.TargetRole == "" {
-		return DecodedCall{}, fmt.Errorf("target_role is required")
-	}
-	if input.TargetRole != string(types.SessionRoleMainParent) && input.TargetRole != string(types.SessionRoleMonitoringParent) {
-		return DecodedCall{}, fmt.Errorf("invalid target_role %q", input.TargetRole)
 	}
 	if input.Message == "" {
 		return DecodedCall{}, fmt.Errorf("message is required")
@@ -80,7 +75,7 @@ func (delegateToRoleTool) Decode(call Call) (DecodedCall, error) {
 		Call: Call{
 			Name: call.Name,
 			Input: map[string]any{
-				"target_role": string(sessionrole.Normalize(input.TargetRole)),
+				"target_role": input.TargetRole,
 				"message":     input.Message,
 				"reason":      input.Reason,
 			},
@@ -107,7 +102,7 @@ func (delegateToRoleTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 		WorkspaceRoot:   execCtx.WorkspaceRoot,
 		SourceSessionID: currentSessionID(execCtx),
 		SourceTurnID:    currentTurnID(execCtx),
-		TargetRole:      sessionrole.Normalize(input.TargetRole),
+		TargetRole:      input.TargetRole,
 		Message:         input.Message,
 		Reason:          input.Reason,
 	})
@@ -115,7 +110,7 @@ func (delegateToRoleTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 		return ToolExecutionResult{}, err
 	}
 	output := DelegateToRoleOutput{
-		TargetRole:      string(out.TargetRole),
+		TargetRole:      out.TargetRole,
 		TargetSessionID: out.TargetSessionID,
 		TargetTurnID:    out.TargetTurnID,
 		Accepted:        out.Accepted,
@@ -140,4 +135,15 @@ func (delegateToRoleTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 
 func (delegateToRoleTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
 	return defaultStructuredModelResult(output)
+}
+
+func validateRoleID(raw string) (string, error) {
+	roleID := strings.TrimSpace(raw)
+	if roleID == "" {
+		return "", fmt.Errorf("target_role is required")
+	}
+	if strings.HasPrefix(roleID, ".") || strings.Contains(roleID, "/") || strings.Contains(roleID, "\\") || strings.Contains(roleID, "..") {
+		return "", fmt.Errorf("invalid target_role %q", roleID)
+	}
+	return roleID, nil
 }
