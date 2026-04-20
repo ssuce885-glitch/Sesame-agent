@@ -410,8 +410,8 @@ func isTerminalTurnState(state types.TurnState) bool {
 
 func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, role types.SessionRole) (types.Session, types.ContextHead, bool, error) {
 	role = sessionrole.Normalize(string(role))
+	roleCtx := rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, role), "")
 	if role == types.SessionRoleMainParent {
-		roleCtx := sessionrole.WithSessionRole(ctx, role)
 		session, head, created, err := s.EnsureCanonicalSession(roleCtx, workspaceRoot)
 		if err != nil {
 			return types.Session{}, types.ContextHead{}, false, err
@@ -426,7 +426,6 @@ func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, rol
 		return session, head, created, nil
 	}
 
-	roleCtx := sessionrole.WithSessionRole(ctx, role)
 	if sessionID, ok, err := s.GetRoleSessionID(ctx, workspaceRoot, role); err != nil {
 		return types.Session{}, types.ContextHead{}, false, err
 	} else if ok {
