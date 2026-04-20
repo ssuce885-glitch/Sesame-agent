@@ -19,16 +19,6 @@ type queryRowContexter interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-const canonicalSessionMetadataKey = "canonical_session_id"
-
-func (s *Store) GetCanonicalSessionID(ctx context.Context) (string, bool, error) {
-	return getRuntimeMetadataValue(ctx, s.db, canonicalSessionMetadataKey)
-}
-
-func (s *Store) SetCanonicalSessionID(ctx context.Context, sessionID string) error {
-	return setRuntimeMetadataValue(ctx, s.db, canonicalSessionMetadataKey, sessionID)
-}
-
 func (s *Store) GetCurrentContextHeadID(ctx context.Context) (string, bool, error) {
 	binding := sessionbinding.FromContext(ctx)
 	role := sessionrole.FromContext(ctx)

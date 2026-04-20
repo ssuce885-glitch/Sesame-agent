@@ -498,73 +498,19 @@ func (s *Store) EnsureSpecialistSession(ctx context.Context, workspaceRoot, role
 }
 
 func (s *Store) ResolveSpecialistRoleID(ctx context.Context, sessionID, workspaceRoot string) (string, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	workspaceRoot = strings.TrimSpace(workspaceRoot)
-	if sessionID == "" || workspaceRoot == "" {
-		return "", nil
-	}
-
-	session, found, err := s.GetSession(ctx, sessionID)
-	if err != nil {
+	binding, ok, err := s.resolveSessionBindingBySession(ctx, sessionID, workspaceRoot)
+	if err != nil || !ok || binding.BindingKind != workspaceSessionBindingKindSpecialist {
 		return "", err
 	}
-	if !found || session.WorkspaceRoot != workspaceRoot {
-		return "", nil
-	}
-	binding, ok, err := getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
-	if err != nil {
-		return "", err
-	}
-	if ok && binding.BindingKind == workspaceSessionBindingKindSpecialist {
-		return binding.SpecialistRoleID, nil
-	}
-	if _, ok, err := s.backfillSpecialistSessionBindingBySessionFromMetadata(ctx, sessionID, workspaceRoot); err != nil {
-		return "", err
-	} else if ok {
-		binding, ok, err = getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
-		if err != nil {
-			return "", err
-		}
-		if ok && binding.BindingKind == workspaceSessionBindingKindSpecialist {
-			return binding.SpecialistRoleID, nil
-		}
-	}
-	return "", nil
+	return binding.SpecialistRoleID, nil
 }
 
 func (s *Store) ResolveSessionRole(ctx context.Context, sessionID, workspaceRoot string) (types.SessionRole, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	workspaceRoot = strings.TrimSpace(workspaceRoot)
-	if sessionID == "" || workspaceRoot == "" {
-		return "", nil
-	}
-	session, found, err := s.GetSession(ctx, sessionID)
-	if err != nil {
+	binding, ok, err := s.resolveSessionBindingBySession(ctx, sessionID, workspaceRoot)
+	if err != nil || !ok || binding.BindingKind != workspaceSessionBindingKindMainParent {
 		return "", err
 	}
-	if !found || strings.TrimSpace(session.WorkspaceRoot) != workspaceRoot {
-		return "", nil
-	}
-
-	binding, ok, err := getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
-	if err != nil {
-		return "", err
-	}
-	if ok && binding.BindingKind == workspaceSessionBindingKindMainParent {
-		return types.SessionRole(binding.Role), nil
-	}
-	if _, ok, err := s.backfillRoleSessionBindingFromMetadata(ctx, workspaceRoot, types.SessionRoleMainParent); err != nil {
-		return "", err
-	} else if ok {
-		binding, ok, err = getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
-		if err != nil {
-			return "", err
-		}
-		if ok && binding.BindingKind == workspaceSessionBindingKindMainParent {
-			return types.SessionRole(binding.Role), nil
-		}
-	}
-	return "", nil
+	return types.SessionRole(binding.Role), nil
 }
 
 func (s *Store) EnsureCanonicalSession(ctx context.Context, workspaceRoot string) (types.Session, types.ContextHead, bool, error) {
@@ -659,6 +605,38 @@ func (s *Store) resolveOrCreateRoleSession(ctx context.Context, workspaceRoot st
 		return types.Session{}, false, err
 	}
 	return session, true, nil
+}
+
+func (s *Store) resolveSessionBindingBySession(ctx context.Context, sessionID, workspaceRoot string) (workspaceSessionBinding, bool, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if sessionID == "" || workspaceRoot == "" {
+		return workspaceSessionBinding{}, false, nil
+	}
+
+	session, found, err := s.GetSession(ctx, sessionID)
+	if err != nil {
+		return workspaceSessionBinding{}, false, err
+	}
+	if !found || strings.TrimSpace(session.WorkspaceRoot) != workspaceRoot {
+		return workspaceSessionBinding{}, false, nil
+	}
+
+	binding, ok, err := getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
+	if err != nil || ok {
+		return binding, ok, err
+	}
+	if _, ok, err := s.backfillSpecialistSessionBindingBySessionFromMetadata(ctx, sessionID, workspaceRoot); err != nil {
+		return workspaceSessionBinding{}, false, err
+	} else if ok {
+		return getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
+	}
+	if _, ok, err := s.backfillRoleSessionBindingFromMetadata(ctx, workspaceRoot, types.SessionRoleMainParent); err != nil {
+		return workspaceSessionBinding{}, false, err
+	} else if ok {
+		return getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
+	}
+	return workspaceSessionBinding{}, false, nil
 }
 
 func (s *Store) ensureCurrentContextHead(ctx context.Context, session types.Session) (types.ContextHead, bool, error) {
