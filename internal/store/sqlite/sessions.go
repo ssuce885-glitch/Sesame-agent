@@ -623,20 +623,7 @@ func (s *Store) resolveSessionBindingBySession(ctx context.Context, sessionID, w
 	}
 
 	binding, ok, err := getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
-	if err != nil || ok {
-		return binding, ok, err
-	}
-	if _, ok, err := s.backfillSpecialistSessionBindingBySessionFromMetadata(ctx, sessionID, workspaceRoot); err != nil {
-		return workspaceSessionBinding{}, false, err
-	} else if ok {
-		return getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
-	}
-	if _, ok, err := s.backfillRoleSessionBindingFromMetadata(ctx, workspaceRoot, types.SessionRoleMainParent); err != nil {
-		return workspaceSessionBinding{}, false, err
-	} else if ok {
-		return getWorkspaceSessionBindingBySession(ctx, s.db, workspaceRoot, sessionID)
-	}
-	return workspaceSessionBinding{}, false, nil
+	return binding, ok, err
 }
 
 func (s *Store) ensureCurrentContextHead(ctx context.Context, session types.Session) (types.ContextHead, bool, error) {
