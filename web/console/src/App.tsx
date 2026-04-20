@@ -4,6 +4,7 @@ import {
   RouterProvider,
   useNavigate,
   useLocation,
+  Link,
 } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Sidebar } from "./components/Sidebar";
@@ -31,7 +32,7 @@ function RootLayout({ children }: { children: React.ReactNode }) {
 
 // ─── App shell ────────────────────────────────────────────────────────────────
 
-function AppShell() {
+export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -150,8 +151,8 @@ function NavTab({
   children: React.ReactNode;
 }) {
   return (
-    <a
-      href={to}
+    <Link
+      to={to}
       className="px-4 py-1.5 rounded-lg text-sm font-medium transition-colors"
       style={{
         backgroundColor: active ? "var(--color-accent)" : "transparent",
@@ -161,7 +162,7 @@ function NavTab({
       }}
     >
       {children}
-    </a>
+    </Link>
   );
 }
 
