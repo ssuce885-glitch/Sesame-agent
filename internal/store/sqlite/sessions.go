@@ -410,59 +410,22 @@ func isTerminalTurnState(state types.TurnState) bool {
 
 func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, role types.SessionRole) (types.Session, types.ContextHead, bool, error) {
 	role = sessionrole.Normalize(string(role))
+	if role != types.SessionRoleMainParent {
+		return types.Session{}, types.ContextHead{}, false, errors.New("invalid built-in session role")
+	}
 	roleCtx := rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, role), "")
-	if role == types.SessionRoleMainParent {
-		session, head, created, err := s.EnsureCanonicalSession(roleCtx, workspaceRoot)
-		if err != nil {
-			return types.Session{}, types.ContextHead{}, false, err
-		}
-		session, err = s.ensureRoleSystemPrompt(roleCtx, session, role)
-		if err != nil {
-			return types.Session{}, types.ContextHead{}, false, err
-		}
-		if err := s.SetRoleSessionID(ctx, workspaceRoot, role, session.ID); err != nil {
-			return types.Session{}, types.ContextHead{}, false, err
-		}
-		return session, head, created, nil
-	}
-
-	if sessionID, ok, err := s.GetRoleSessionID(ctx, workspaceRoot, role); err != nil {
+	session, head, created, err := s.EnsureCanonicalSession(roleCtx, workspaceRoot)
+	if err != nil {
 		return types.Session{}, types.ContextHead{}, false, err
-	} else if ok {
-		session, found, err := s.GetSession(ctx, sessionID)
-		if err != nil {
-			return types.Session{}, types.ContextHead{}, false, err
-		}
-		if found && session.WorkspaceRoot == workspaceRoot {
-			session, err = s.ensureRoleSystemPrompt(roleCtx, session, role)
-			if err != nil {
-				return types.Session{}, types.ContextHead{}, false, err
-			}
-			head, _, err := s.ensureCurrentContextHead(roleCtx, session)
-			return session, head, false, err
-		}
 	}
-
-	now := time.Now().UTC()
-	session := types.Session{
-		ID:            types.NewID("sess"),
-		WorkspaceRoot: workspaceRoot,
-		SystemPrompt:  sessionrole.DefaultSystemPrompt(role),
-		State:         types.SessionStateIdle,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-	if err := s.InsertSession(ctx, session); err != nil {
+	session, err = s.ensureRoleSystemPrompt(roleCtx, session, role)
+	if err != nil {
 		return types.Session{}, types.ContextHead{}, false, err
 	}
 	if err := s.SetRoleSessionID(ctx, workspaceRoot, role, session.ID); err != nil {
 		return types.Session{}, types.ContextHead{}, false, err
 	}
-	head, _, err := s.ensureCurrentContextHead(roleCtx, session)
-	if err != nil {
-		return types.Session{}, types.ContextHead{}, false, err
-	}
-	return session, head, true, nil
+	return session, head, created, nil
 }
 
 func (s *Store) EnsureSpecialistSession(ctx context.Context, workspaceRoot, roleID, systemPrompt string, skillNames []string) (types.Session, types.ContextHead, bool, error) {
@@ -575,7 +538,7 @@ func (s *Store) ResolveSessionRole(ctx context.Context, sessionID, workspaceRoot
 		return "", nil
 	}
 
-	for _, role := range []types.SessionRole{types.SessionRoleMonitoringParent, types.SessionRoleMainParent} {
+	for _, role := range []types.SessionRole{types.SessionRoleMainParent} {
 		mappedID, ok, err := s.GetRoleSessionID(ctx, workspaceRoot, role)
 		if err != nil {
 			return "", err

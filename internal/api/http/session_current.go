@@ -49,7 +49,11 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 			return
 		}
 
-		role := sessionrole.RequestRole(r, req.SessionRole)
+		role, roleOK := resolveRequestedSessionRole(r, req.SessionRole)
+		if !roleOK {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		r = r.WithContext(sessionrole.WithSessionRole(r.Context(), role))
 		r = r.WithContext(rolectx.WithSpecialistRoleID(r.Context(), req.SpecialistRoleID))
 
@@ -76,7 +80,12 @@ type sessionScopedHandlerFactory func(Dependencies, string) http.HandlerFunc
 func handleCurrentSession(deps Dependencies, next sessionScopedHandlerFactory) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), r.Header.Get(sessionbinding.HeaderName)))
-		r = r.WithContext(sessionrole.WithSessionRole(r.Context(), sessionrole.RequestRole(r, "")))
+		role, roleOK := resolveRequestedSessionRole(r, "")
+		if !roleOK {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		r = r.WithContext(sessionrole.WithSessionRole(r.Context(), role))
 		r = r.WithContext(rolectx.WithSpecialistRoleID(r.Context(), r.URL.Query().Get("specialist_role_id")))
 		sessionID, ok := resolveCurrentSessionID(w, r, deps)
 		if !ok {
@@ -84,6 +93,21 @@ func handleCurrentSession(deps Dependencies, next sessionScopedHandlerFactory) h
 		}
 		next(deps, sessionID)(w, r)
 	}
+}
+
+func resolveRequestedSessionRole(r *http.Request, fallback string) (types.SessionRole, bool) {
+	role := sessionrole.RequestRole(r, fallback)
+	if role != "" {
+		return role, true
+	}
+	headerRole := ""
+	if r != nil {
+		headerRole = strings.TrimSpace(r.Header.Get(sessionrole.HeaderName))
+	}
+	if headerRole != "" || strings.TrimSpace(fallback) != "" {
+		return "", false
+	}
+	return types.SessionRoleMainParent, true
 }
 
 func resolveCurrentSessionID(w http.ResponseWriter, r *http.Request, deps Dependencies) (string, bool) {

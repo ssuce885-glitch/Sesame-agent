@@ -32,7 +32,7 @@ func Normalize(role string) types.SessionRole {
 	case types.SessionRoleMainParent:
 		return types.SessionRoleMainParent
 	default:
-		return types.SessionRoleMainParent
+		return ""
 	}
 }
 

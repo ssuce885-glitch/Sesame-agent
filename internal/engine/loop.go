@@ -163,7 +163,7 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 		return err
 	}
 	baseInstructionsText := runtimeInstructions.Text
-	if sessionrole.Normalize(string(in.SessionRole)) == types.SessionRoleMainParent && specialistSpec == nil {
+	if in.SessionRole == types.SessionRoleMainParent && specialistSpec == nil {
 		if registrySummary := strings.TrimSpace(rolectx.RenderRegistrySummary(roleCatalog)); registrySummary != "" {
 			baseInstructionsText = strings.TrimSpace(baseInstructionsText + "\n\n" + registrySummary)
 		}
