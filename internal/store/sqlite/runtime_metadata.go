@@ -35,14 +35,16 @@ func (s *Store) GetCurrentContextHeadID(ctx context.Context) (string, bool, erro
 	specialistRoleID := rolectx.SpecialistRoleIDFromContext(ctx)
 	workspaceRoot := workspace.WorkspaceRootFromContext(ctx)
 	key := currentHeadMetadataKey(binding, workspaceRoot, role, specialistRoleID)
-	if workspaceRoot != "" {
-		currentHeadID, found, err := getRuntimeMetadataValue(ctx, s.db, key)
-		if err != nil || found {
-			return currentHeadID, found, err
-		}
+	currentHeadID, found, err := getRuntimeMetadataValue(ctx, s.db, key)
+	if err != nil || found {
+		return currentHeadID, found, err
 	}
 	key = legacyCurrentHeadMetadataKey(binding, role, specialistRoleID)
-	return getRuntimeMetadataValue(ctx, s.db, key)
+	currentHeadID, found, err = getRuntimeMetadataValue(ctx, s.db, key)
+	if err != nil || found || workspaceRoot != "" {
+		return currentHeadID, found, err
+	}
+	return getAnyCurrentContextHeadValue(ctx, s.db, binding, role, specialistRoleID)
 }
 
 func (s *Store) SetCurrentContextHeadID(ctx context.Context, headID string) error {
@@ -98,6 +100,14 @@ func legacyCurrentHeadMetadataKey(binding string, role types.SessionRole, specia
 	return sessionbinding.CurrentHeadMetadataKey(binding) + ":role:" + string(sessionrole.Normalize(string(role)))
 }
 
+func currentHeadMetadataScopeSuffix(role types.SessionRole, specialistRoleID string) string {
+	if specialistRoleID = normalizeSpecialistRoleID(specialistRoleID); specialistRoleID != "" {
+		encodedRoleID := base64.RawURLEncoding.EncodeToString([]byte(specialistRoleID))
+		return ":specialist:" + encodedRoleID
+	}
+	return ":role:" + string(sessionrole.Normalize(string(role)))
+}
+
 func roleSessionMetadataKey(workspaceRoot string, role types.SessionRole) string {
 	normalized := strings.TrimSpace(workspaceRoot)
 	encodedRoot := base64.RawURLEncoding.EncodeToString([]byte(normalized))
@@ -135,6 +145,38 @@ func getRuntimeMetadataValue(ctx context.Context, queryer queryRowContexter, key
 		return "", false, err
 	}
 	return value, true, nil
+}
+
+func getAnyCurrentContextHeadValue(ctx context.Context, db *sql.DB, binding string, role types.SessionRole, specialistRoleID string) (string, bool, error) {
+	prefix := sessionbinding.CurrentHeadMetadataKey(binding) + ":"
+	suffix := currentHeadMetadataScopeSuffix(role, specialistRoleID)
+
+	rows, err := db.QueryContext(ctx, `
+		select key, value
+		from runtime_metadata
+		where substr(key, 1, length(?)) = ?
+		order by updated_at desc, key desc
+	`, prefix, prefix)
+	if err != nil {
+		return "", false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var key string
+		var value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return "", false, err
+		}
+		if !strings.HasSuffix(key, suffix) {
+			continue
+		}
+		return value, true, nil
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, err
+	}
+	return "", false, nil
 }
 
 func setRuntimeMetadataValue(ctx context.Context, execer execContexter, key, value string) error {
