@@ -11,6 +11,7 @@ import (
 	rolectx "go-agent/internal/roles"
 	"go-agent/internal/session"
 	"go-agent/internal/types"
+	"go-agent/internal/workspace"
 )
 
 type permissionStore interface {
@@ -273,7 +274,10 @@ func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		resumeCtx := rolectx.WithSpecialistRoleID(r.Context(), specialistRoleID)
+		resumeCtx := workspace.WithWorkspaceRoot(
+			rolectx.WithSpecialistRoleID(r.Context(), specialistRoleID),
+			sessionRow.WorkspaceRoot,
+		)
 		if _, err := deps.Manager.ResumeTurn(resumeCtx, sessionRow.ID, session.ResumeTurnInput{
 			Turn:   turn,
 			Resume: resume,

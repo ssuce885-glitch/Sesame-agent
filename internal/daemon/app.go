@@ -887,7 +887,10 @@ func recoverQueuedCreatedTurns(ctx context.Context, store *sqlite.Store, manager
 		if specialistRoleID != "" {
 			replayRole = types.SessionRoleMainParent
 		}
-		replayCtx := rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, replayRole), specialistRoleID)
+		replayCtx := workspace.WithWorkspaceRoot(
+			rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, replayRole), specialistRoleID),
+			sessionRow.WorkspaceRoot,
+		)
 
 		for _, turn := range createdTurns {
 			if _, err := manager.SubmitTurn(replayCtx, sessionID, session.SubmitTurnInput{Turn: turn}); err != nil {
@@ -1033,7 +1036,10 @@ func resumeResolvedContinuations(ctx context.Context, store *sqlite.Store, manag
 		if err != nil {
 			return nil, err
 		}
-		resumeCtx := rolectx.WithSpecialistRoleID(ctx, specialistRoleID)
+		resumeCtx := workspace.WithWorkspaceRoot(
+			rolectx.WithSpecialistRoleID(ctx, specialistRoleID),
+			sessionRow.WorkspaceRoot,
+		)
 		if _, err := manager.ResumeTurn(resumeCtx, sessionRow.ID, session.ResumeTurnInput{
 			Turn:   turn,
 			Resume: resume,

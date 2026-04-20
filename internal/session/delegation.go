@@ -10,6 +10,7 @@ import (
 	rolectx "go-agent/internal/roles"
 	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
+	"go-agent/internal/workspace"
 )
 
 type DelegateToRoleInput struct {
@@ -112,9 +113,12 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 		createdSession bool
 	)
 	if targetRole == string(types.SessionRoleMainParent) {
-		targetCtx = rolectx.WithSpecialistRoleID(
-			sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent),
-			"",
+		targetCtx = workspace.WithWorkspaceRoot(
+			rolectx.WithSpecialistRoleID(
+				sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent),
+				"",
+			),
+			workspaceRoot,
 		)
 		targetSession, targetHead, createdSession, err = s.store.EnsureRoleSession(targetCtx, workspaceRoot, types.SessionRoleMainParent)
 		if err != nil {
@@ -129,9 +133,12 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 		if !ok {
 			return DelegateToRoleOutput{}, fmt.Errorf("target_role %q is not installed", targetRole)
 		}
-		targetCtx = rolectx.WithSpecialistRoleID(
-			sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent),
-			spec.RoleID,
+		targetCtx = workspace.WithWorkspaceRoot(
+			rolectx.WithSpecialistRoleID(
+				sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent),
+				spec.RoleID,
+			),
+			workspaceRoot,
 		)
 		targetSession, targetHead, createdSession, err = s.store.EnsureSpecialistSession(
 			targetCtx,
