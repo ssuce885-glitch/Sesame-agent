@@ -5,6 +5,7 @@ import type {
   MetricsTimeseries,
   Workspace,
   ContextHistoryResponse,
+  ContextHead,
   WorkspaceMailboxResponse,
   WorkspaceRuntimeGraphResponse,
   RoleListResponse,
@@ -41,6 +42,10 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return JSON.parse(text) as T;
 }
 
+function contextBindingHeaders(sessionId: string): HeadersInit {
+  return { "X-Sesame-Context-Binding": sessionId };
+}
+
 export async function getWorkspace(): Promise<Workspace> {
   return apiFetch<Workspace>("/v1/workspace");
 }
@@ -71,13 +76,29 @@ export function ensureCurrentSession(): Promise<CreateSessionResponse> {
 
 export function getTimeline(sessionId: string): Promise<TimelineResponse> {
   return apiFetch<TimelineResponse>("/v1/session/timeline", {
-    headers: { "X-Sesame-Context-Binding": sessionId },
+    headers: contextBindingHeaders(sessionId),
   });
 }
 
 export function getContextHistory(sessionId: string): Promise<ContextHistoryResponse> {
   return apiFetch<ContextHistoryResponse>("/v1/session/history", {
-    headers: { "X-Sesame-Context-Binding": sessionId },
+    headers: contextBindingHeaders(sessionId),
+  });
+}
+
+export function reopenContext(sessionId: string): Promise<ContextHead> {
+  return apiFetch<ContextHead>("/v1/session/reopen", {
+    method: "POST",
+    headers: contextBindingHeaders(sessionId),
+    body: JSON.stringify({}),
+  });
+}
+
+export function loadContextHistory(sessionId: string, headId: string): Promise<ContextHead> {
+  return apiFetch<ContextHead>("/v1/session/history/load", {
+    method: "POST",
+    headers: contextBindingHeaders(sessionId),
+    body: JSON.stringify({ head_id: headId }),
   });
 }
 
@@ -88,7 +109,7 @@ export function submitMessage(
 ): Promise<{ id: string }> {
   return apiFetch<{ id: string }>("/v1/session/turns", {
     method: "POST",
-    headers: { "X-Sesame-Context-Binding": sessionId },
+    headers: contextBindingHeaders(sessionId),
     body: JSON.stringify({ client_turn_id: clientTurnId, message }),
   });
 }
@@ -100,7 +121,7 @@ export function submitPermission(
 ): Promise<{ request: unknown; turn_id: string; resumed: boolean }> {
   return apiFetch(`/v1/permissions/decide`, {
     method: "POST",
-    headers: { "X-Sesame-Context-Binding": sessionId },
+    headers: contextBindingHeaders(sessionId),
     body: JSON.stringify({ request_id: requestId, decision, session_id: sessionId }),
   });
 }

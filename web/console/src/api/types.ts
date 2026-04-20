@@ -208,6 +208,17 @@ export interface HistoryEntry {
   updated_at: string;
 }
 
+export interface ContextHead {
+  id: string;
+  session_id: string;
+  parent_head_id?: string;
+  source_kind: string;
+  title?: string;
+  preview?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ContextHistoryResponse {
   entries: HistoryEntry[];
   current_head_id?: string;
@@ -248,6 +259,16 @@ export interface RuntimePermissionRequest {
   updated_at: string;
 }
 
+export interface RuntimeDiagnostic {
+  id: string;
+  session_id: string;
+  turn_id: string;
+  event_type: string;
+  reason?: string;
+  summary?: string;
+  created_at: string;
+}
+
 export interface RuntimeGraph {
   runs: Array<{ id: string; session_id: string; turn_id?: string; state: string }>;
   plans: Array<{ id: string; run_id: string; state: string; title?: string }>;
@@ -257,6 +278,7 @@ export interface RuntimeGraph {
   incidents: unknown[];
   dispatch_attempts: unknown[];
   permission_requests: RuntimePermissionRequest[];
+  diagnostics?: RuntimeDiagnostic[];
 }
 
 export interface WorkspaceRuntimeGraphResponse {

@@ -31,12 +31,15 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 		}
 		r = r.WithContext(sessionbinding.WithContextBinding(r.Context(), resolveRequestBinding(r)))
 
-		var req types.EnsureSessionRequest
+		var req struct {
+			types.EnsureSessionRequest
+			SpecialistRoleID string `json:"specialist_role_id,omitempty"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		workspaceRoot := strings.TrimSpace(req.WorkspaceRoot)
+		workspaceRoot := strings.TrimSpace(req.EnsureSessionRequest.WorkspaceRoot)
 		if workspaceRoot == "" {
 			http.Error(w, "workspace_root is required", http.StatusBadRequest)
 			return
@@ -51,7 +54,7 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 			return
 		}
 
-		role, roleOK := resolveRequestedSessionRole(r, req.SessionRole)
+		role, roleOK := resolveRequestedSessionRole(r, req.EnsureSessionRequest.SessionRole)
 		if !roleOK {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return

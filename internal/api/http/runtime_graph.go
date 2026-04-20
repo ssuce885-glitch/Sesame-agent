@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"go-agent/internal/runtime"
@@ -14,6 +15,11 @@ import (
 type runtimeGraphStore interface {
 	ListRuntimeGraph(context.Context) (types.RuntimeGraph, error)
 	ListRuntimeGraphForWorkspace(context.Context, string) (types.RuntimeGraph, error)
+}
+
+type runtimeGraphSessionStore interface {
+	ListSessions(context.Context) ([]types.Session, error)
+	ListSessionEvents(context.Context, string, int64) ([]types.Event, error)
 }
 
 func registerRuntimeGraphRoutes(mux *http.ServeMux, deps Dependencies) {
@@ -41,6 +47,12 @@ func handleGetRuntimeGraph(deps Dependencies) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		diagnostics, err := collectRuntimeDiagnostics(r.Context(), deps.Store, workspaceRoot)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		graph.Diagnostics = diagnostics
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(types.WorkspaceRuntimeGraphResponse{
 			WorkspaceRoot: workspaceRoot,
@@ -93,6 +105,75 @@ func filterRuntimeGraphForSession(graph types.RuntimeGraph, sessionID string) ty
 		}
 	}
 	return filtered
+}
+
+type interruptedReasonPayload struct {
+	Reason string `json:"reason"`
+}
+
+var runtimeDiagnosticReasons = []string{
+	"task_session_replay_unsupported",
+	"unmapped_session",
+}
+
+func collectRuntimeDiagnostics(ctx context.Context, store any, workspaceRoot string) ([]types.RuntimeDiagnostic, error) {
+	sessionStore, ok := store.(runtimeGraphSessionStore)
+	if !ok {
+		return []types.RuntimeDiagnostic{}, nil
+	}
+
+	sessions, err := sessionStore.ListSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	diagnostics := make([]types.RuntimeDiagnostic, 0)
+	for _, sessionRow := range sessions {
+		if strings.TrimSpace(sessionRow.WorkspaceRoot) != workspaceRoot {
+			continue
+		}
+		events, err := sessionStore.ListSessionEvents(ctx, sessionRow.ID, 0)
+		if err != nil {
+			return nil, err
+		}
+		for _, event := range events {
+			if event.Type != types.EventTurnInterrupted {
+				continue
+			}
+			var payload interruptedReasonPayload
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				return nil, err
+			}
+			if !slices.Contains(runtimeDiagnosticReasons, strings.TrimSpace(payload.Reason)) {
+				continue
+			}
+			diagnostics = append(diagnostics, types.RuntimeDiagnostic{
+				ID:        event.ID,
+				SessionID: event.SessionID,
+				TurnID:    event.TurnID,
+				EventType: event.Type,
+				Reason:    payload.Reason,
+				Summary:   runtimeDiagnosticSummary(payload.Reason),
+				CreatedAt: event.Time.UTC(),
+			})
+		}
+	}
+
+	slices.SortFunc(diagnostics, func(a, b types.RuntimeDiagnostic) int {
+		return b.CreatedAt.Compare(a.CreatedAt)
+	})
+	return diagnostics, nil
+}
+
+func runtimeDiagnosticSummary(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "task_session_replay_unsupported":
+		return "Task-session replay was quarantined during daemon recovery."
+	case "unmapped_session":
+		return "A created turn was quarantined because its session binding was no longer canonical."
+	default:
+		return "Runtime quarantine diagnostic."
+	}
 }
 
 func handleGetSessionFileContent(deps Dependencies, sessionID string) http.HandlerFunc {

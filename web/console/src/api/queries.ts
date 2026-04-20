@@ -6,6 +6,8 @@ import {
   getWorkspace,
   getWorkspaceMailbox,
   getWorkspaceRuntimeGraph,
+  loadContextHistory,
+  reopenContext,
   submitMessage,
   submitPermission,
   getMetricsOverview,
@@ -67,6 +69,28 @@ export function useWorkspaceMailbox() {
     queryKey: ["workspace-mailbox"],
     queryFn: getWorkspaceMailbox,
     staleTime: 10_000,
+  });
+}
+
+export function useReopenContext(sessionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => reopenContext(sessionId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["history", sessionId] });
+      qc.invalidateQueries({ queryKey: ["timeline", sessionId] });
+    },
+  });
+}
+
+export function useLoadContextHistory(sessionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (headId: string) => loadContextHistory(sessionId, headId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["history", sessionId] });
+      qc.invalidateQueries({ queryKey: ["timeline", sessionId] });
+    },
   });
 }
 

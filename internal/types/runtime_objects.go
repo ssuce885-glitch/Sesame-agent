@@ -146,6 +146,16 @@ type PermissionRequest struct {
 	UpdatedAt        time.Time               `json:"updated_at"`
 }
 
+type RuntimeDiagnostic struct {
+	ID        string    `json:"id"`
+	SessionID string    `json:"session_id"`
+	TurnID    string    `json:"turn_id,omitempty"`
+	EventType string    `json:"event_type"`
+	Reason    string    `json:"reason,omitempty"`
+	Summary   string    `json:"summary,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type RuntimeGraph struct {
 	Runs               []Run                `json:"runs"`
 	Plans              []Plan               `json:"plans"`
@@ -155,4 +165,5 @@ type RuntimeGraph struct {
 	Incidents          []AutomationIncident `json:"incidents"`
 	DispatchAttempts   []DispatchAttempt    `json:"dispatch_attempts"`
 	PermissionRequests []PermissionRequest  `json:"permission_requests"`
+	Diagnostics        []RuntimeDiagnostic  `json:"diagnostics"`
 }
