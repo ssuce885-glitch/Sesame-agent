@@ -29,8 +29,9 @@ func handleRoles(deps Dependencies) http.HandlerFunc {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(struct {
-				Roles []roleResponse `json:"roles"`
-			}{Roles: toRoleResponseList(catalog.Roles)})
+				Roles       []roleSummaryResponse    `json:"roles"`
+				Diagnostics []roleDiagnosticResponse `json:"diagnostics"`
+			}{Roles: toRoleSummaryResponseList(catalog.Roles), Diagnostics: toRoleDiagnosticResponseList(catalog.Diagnostics)})
 		case http.MethodPost:
 			var input roles.UpsertInput
 			if err := decodeStrictJSONBody(r, &input); err != nil {
@@ -105,6 +106,19 @@ type roleResponse struct {
 	SkillNames  []string `json:"skills"`
 }
 
+type roleSummaryResponse struct {
+	RoleID      string   `json:"role_id"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	SkillNames  []string `json:"skills"`
+}
+
+type roleDiagnosticResponse struct {
+	RoleID string `json:"role_id"`
+	Path   string `json:"path"`
+	Error  string `json:"error"`
+}
+
 func toRoleResponse(spec roles.Spec) roleResponse {
 	return roleResponse{
 		RoleID:      spec.RoleID,
@@ -115,13 +129,33 @@ func toRoleResponse(spec roles.Spec) roleResponse {
 	}
 }
 
-func toRoleResponseList(specs []roles.Spec) []roleResponse {
+func toRoleSummaryResponseList(specs []roles.Spec) []roleSummaryResponse {
 	if len(specs) == 0 {
-		return []roleResponse{}
+		return []roleSummaryResponse{}
 	}
-	out := make([]roleResponse, 0, len(specs))
+	out := make([]roleSummaryResponse, 0, len(specs))
 	for _, spec := range specs {
-		out = append(out, toRoleResponse(spec))
+		out = append(out, roleSummaryResponse{
+			RoleID:      spec.RoleID,
+			DisplayName: spec.DisplayName,
+			Description: spec.Description,
+			SkillNames:  normalizeSkillsForResponse(spec.SkillNames),
+		})
+	}
+	return out
+}
+
+func toRoleDiagnosticResponseList(diagnostics []roles.Diagnostic) []roleDiagnosticResponse {
+	if len(diagnostics) == 0 {
+		return []roleDiagnosticResponse{}
+	}
+	out := make([]roleDiagnosticResponse, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		out = append(out, roleDiagnosticResponse{
+			RoleID: diagnostic.RoleID,
+			Path:   diagnostic.Path,
+			Error:  diagnostic.Error,
+		})
 	}
 	return out
 }

@@ -70,3 +70,5 @@ type RoleService interface {
 	Update(string, roles.UpsertInput) (roles.Spec, error)
 	Delete(string, string) error
 }
+
+var _ RoleService = (*roles.Service)(nil)
