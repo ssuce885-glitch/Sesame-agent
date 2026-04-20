@@ -91,14 +91,20 @@ func RenderRegistrySummary(catalog Catalog) string {
 	}
 	if len(catalog.Roles) == 0 {
 		lines = append(lines, "- Installed specialist roles: none")
-		return strings.Join(lines, "\n")
-	}
-	for _, role := range catalog.Roles {
-		line := fmt.Sprintf("- %s: %s", role.RoleID, firstNonEmpty(role.Description, role.DisplayName, role.RoleID))
-		if len(role.SkillNames) > 0 {
-			line += ". Skills: " + strings.Join(role.SkillNames, ", ")
+	} else {
+		for _, role := range catalog.Roles {
+			line := fmt.Sprintf("- %s: %s", role.RoleID, firstNonEmpty(role.Description, role.DisplayName, role.RoleID))
+			if len(role.SkillNames) > 0 {
+				line += ". Skills: " + strings.Join(role.SkillNames, ", ")
+			}
+			lines = append(lines, line)
 		}
-		lines = append(lines, line)
+	}
+	if len(catalog.Diagnostics) > 0 {
+		lines = append(lines, "# Invalid Specialist Roles")
+		for _, diagnostic := range catalog.Diagnostics {
+			lines = append(lines, fmt.Sprintf("- %s: invalid (%s)", diagnostic.RoleID, diagnostic.Error))
+		}
 	}
 	return strings.Join(lines, "\n")
 }

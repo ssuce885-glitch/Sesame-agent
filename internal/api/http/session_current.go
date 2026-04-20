@@ -61,11 +61,14 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 
 		session, status, err := ensureSession(r.Context(), deps, workspaceRoot, role, req.SpecialistRoleID)
 		if err != nil {
-			if status == http.StatusBadRequest {
+			switch status {
+			case http.StatusBadRequest:
 				http.Error(w, "bad request", http.StatusBadRequest)
-				return
+			case http.StatusConflict:
+				http.Error(w, "conflict", http.StatusConflict)
+			default:
+				http.Error(w, "internal server error", http.StatusInternalServerError)
 			}
-			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		if !deps.Manager.UpdateSession(session) {
@@ -129,11 +132,14 @@ func resolveCurrentSessionID(w http.ResponseWriter, r *http.Request, deps Depend
 	specialistRoleID := rolectx.SpecialistRoleIDFromContext(r.Context())
 	session, status, err := ensureSession(r.Context(), deps, workspaceRoot, role, specialistRoleID)
 	if err != nil {
-		if status == http.StatusBadRequest {
+		switch status {
+		case http.StatusBadRequest:
 			http.Error(w, "bad request", http.StatusBadRequest)
-			return "", false
+		case http.StatusConflict:
+			http.Error(w, "conflict", http.StatusConflict)
+		default:
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 		}
-		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return "", false
 	}
 	if deps.Manager != nil {
@@ -166,6 +172,8 @@ func ensureSession(ctx context.Context, deps Dependencies, workspaceRoot string,
 		switch rolectx.KindOf(err) {
 		case rolectx.ErrorKindInvalidInput, rolectx.ErrorKindNotFound:
 			return types.Session{}, http.StatusBadRequest, err
+		case rolectx.ErrorKindConflict:
+			return types.Session{}, http.StatusConflict, err
 		default:
 			return types.Session{}, http.StatusInternalServerError, err
 		}

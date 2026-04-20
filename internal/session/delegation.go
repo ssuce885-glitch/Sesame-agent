@@ -83,7 +83,7 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 		return DelegateToRoleOutput{}, fmt.Errorf("message is required")
 	}
 
-	targetRole, err := validateRoleID(in.TargetRole)
+	targetRole, err := rolectx.CanonicalRoleID(in.TargetRole)
 	if err != nil {
 		return DelegateToRoleOutput{}, err
 	}
@@ -131,7 +131,7 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 		}
 		spec, ok := catalog.ByID[targetRole]
 		if !ok {
-			return DelegateToRoleOutput{}, fmt.Errorf("target_role %q is not installed", targetRole)
+			return DelegateToRoleOutput{}, fmt.Errorf("target_role %q is currently unavailable", targetRole)
 		}
 		targetCtx = workspace.WithWorkspaceRoot(
 			rolectx.WithSpecialistRoleID(
@@ -190,15 +190,4 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 		Accepted:        true,
 		CreatedSession:  createdSession,
 	}, nil
-}
-
-func validateRoleID(raw string) (string, error) {
-	roleID := strings.TrimSpace(raw)
-	if roleID == "" {
-		return "", fmt.Errorf("target_role is required")
-	}
-	if strings.HasPrefix(roleID, ".") || strings.Contains(roleID, "/") || strings.Contains(roleID, "\\") || strings.Contains(roleID, "..") {
-		return "", fmt.Errorf("invalid target_role %q", roleID)
-	}
-	return roleID, nil
 }
