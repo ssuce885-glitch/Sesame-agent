@@ -42,6 +42,7 @@ claude-code-skill-scrapling/
 
 # Internal implementation plans
 docs/superpowers/plans/
+docs/superpowers/specs/
 
 # Frontend build artifacts
 web/console/dist/
