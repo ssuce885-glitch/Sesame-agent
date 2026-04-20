@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go-agent/internal/config"
+	"go-agent/internal/skills"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,9 +21,15 @@ type UpsertInput struct {
 	SkillNames  []string `json:"skills"`
 }
 
-type Service struct{}
+type Service struct {
+	globalRoot string
+}
 
 func NewService() *Service { return &Service{} }
+
+func NewServiceWithGlobalRoot(globalRoot string) *Service {
+	return &Service{globalRoot: strings.TrimSpace(globalRoot)}
+}
 
 var renameRoleDir = os.Rename
 
@@ -121,6 +130,9 @@ func (s *Service) Create(workspaceRoot string, in UpsertInput) (Spec, error) {
 	if err := validateUpsertInput(normalized); err != nil {
 		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
 	}
+	if err := s.validateSkillNames(workspaceRoot, normalized.SkillNames); err != nil {
+		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+	}
 	rolesRoot := filepath.Join(workspaceRoot, "roles")
 	roleDir := filepath.Join(rolesRoot, normalized.RoleID)
 	if _, err := os.Lstat(roleDir); err == nil {
@@ -128,7 +140,7 @@ func (s *Service) Create(workspaceRoot string, in UpsertInput) (Spec, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Spec{}, newServiceError(ErrorKindInternal, err)
 	}
-	stagingDir, err := prepareRoleStagingDir(rolesRoot, normalized)
+	stagingDir, err := prepareRoleStagingDir(workspaceRoot, rolesRoot, normalized)
 	if err != nil {
 		return Spec{}, err
 	}
@@ -166,6 +178,9 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 	if err := validateUpsertInput(normalized); err != nil {
 		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
 	}
+	if err := s.validateSkillNames(workspaceRoot, normalized.SkillNames); err != nil {
+		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+	}
 	rolesRoot := filepath.Join(workspaceRoot, "roles")
 	roleDir := filepath.Join(rolesRoot, normalized.RoleID)
 	if err := ensureConcreteRoleDir(roleDir); err != nil {
@@ -182,13 +197,13 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 		return Spec{}, newServiceError(ErrorKindInternal, err)
 	}
 
-	stagingDir, err := prepareRoleStagingDir(rolesRoot, normalized)
+	stagingDir, err := prepareRoleStagingDir(workspaceRoot, rolesRoot, normalized)
 	if err != nil {
 		return Spec{}, err
 	}
 	defer func() { _ = os.RemoveAll(stagingDir) }()
 
-	if err := replaceRoleFilesFromStaging(roleDir, stagingDir); err != nil {
+	if err := replaceRoleFilesFromStaging(workspaceRoot, roleDir, stagingDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Spec{}, newServiceError(ErrorKindNotFound, err)
 		}
@@ -224,11 +239,15 @@ func (s *Service) Delete(workspaceRoot, roleID string) error {
 	return nil
 }
 
-func prepareRoleStagingDir(rolesRoot string, in UpsertInput) (string, error) {
+func prepareRoleStagingDir(workspaceRoot, rolesRoot string, in UpsertInput) (string, error) {
 	if err := os.MkdirAll(rolesRoot, 0o755); err != nil {
 		return "", newServiceError(ErrorKindInternal, err)
 	}
-	stagingDir, err := os.MkdirTemp(rolesRoot, ".role-staging-*")
+	scratchRoot, err := roleScratchRoot(workspaceRoot)
+	if err != nil {
+		return "", newServiceError(ErrorKindInternal, err)
+	}
+	stagingDir, err := os.MkdirTemp(scratchRoot, ".role-staging-*")
 	if err != nil {
 		return "", newServiceError(ErrorKindInternal, err)
 	}
@@ -239,69 +258,99 @@ func prepareRoleStagingDir(rolesRoot string, in UpsertInput) (string, error) {
 	return stagingDir, nil
 }
 
-type roleFileBackup struct {
-	dst    string
-	backup string
-}
-
-func replaceRoleFilesFromStaging(roleDir, stagingDir string) error {
-	backupDir, err := os.MkdirTemp(roleDir, ".role-update-backup-*")
+func replaceRoleFilesFromStaging(workspaceRoot, roleDir, stagingDir string) error {
+	if err := validateManagedRoleFiles(roleDir); err != nil {
+		return err
+	}
+	if err := copyPreservedRoleEntries(roleDir, stagingDir); err != nil {
+		return err
+	}
+	scratchRoot, err := roleScratchRoot(workspaceRoot)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.RemoveAll(backupDir) }()
+	backupRoot, err := os.MkdirTemp(scratchRoot, ".role-update-backup-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(backupRoot) }()
+	backupDir := filepath.Join(backupRoot, filepath.Base(roleDir))
 
-	replaced := make([]roleFileBackup, 0, 2)
-
-	for _, name := range []string{"role.yaml", "prompt.md"} {
-		src := filepath.Join(stagingDir, name)
-		dst := filepath.Join(roleDir, name)
-		backup := filepath.Join(backupDir, name)
-
-		if err := moveFileToBackup(dst, backup); err != nil {
-			if rollbackErr := rollbackRoleFiles(replaced); rollbackErr != nil {
-				return errors.Join(err, rollbackErr)
-			}
-			return err
-		}
-
-		if err := os.Rename(src, dst); err != nil {
-			restoreErr := os.Rename(backup, dst)
-			rollbackErr := rollbackRoleFiles(replaced)
-			return errors.Join(err, restoreErr, rollbackErr)
-		}
-
-		replaced = append(replaced, roleFileBackup{
-			dst:    dst,
-			backup: backup,
-		})
+	if err := renameRoleDir(roleDir, backupDir); err != nil {
+		return err
+	}
+	if err := renameRoleDir(stagingDir, roleDir); err != nil {
+		restoreErr := renameRoleDir(backupDir, roleDir)
+		return errors.Join(err, restoreErr)
 	}
 	return nil
 }
 
-func moveFileToBackup(src, backup string) error {
-	info, err := os.Stat(src)
+func validateManagedRoleFiles(roleDir string) error {
+	for _, name := range []string{"role.yaml", "prompt.md"} {
+		path := filepath.Join(roleDir, name)
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return fmt.Errorf("%s is a directory", path)
+		}
+	}
+	return nil
+}
+
+func copyPreservedRoleEntries(srcDir, dstDir string) error {
+	entries, err := os.ReadDir(srcDir)
 	if err != nil {
 		return err
 	}
-	if info.IsDir() {
-		return fmt.Errorf("%s is a directory", src)
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "role.yaml" || name == "prompt.md" {
+			continue
+		}
+		if err := copyRoleEntry(filepath.Join(srcDir, name), filepath.Join(dstDir, name)); err != nil {
+			return err
+		}
 	}
-	return os.Rename(src, backup)
+	return nil
 }
 
-func rollbackRoleFiles(replaced []roleFileBackup) error {
-	var rollbackErr error
-	for i := len(replaced) - 1; i >= 0; i-- {
-		entry := replaced[i]
-		if err := os.Remove(entry.dst); err != nil && !errors.Is(err, os.ErrNotExist) {
-			rollbackErr = errors.Join(rollbackErr, err)
-		}
-		if err := os.Rename(entry.backup, entry.dst); err != nil {
-			rollbackErr = errors.Join(rollbackErr, err)
-		}
+func copyRoleEntry(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
 	}
-	return rollbackErr
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink", src)
+	}
+	if info.IsDir() {
+		if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if err := copyRoleEntry(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", src)
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, info.Mode().Perm())
 }
 
 func writeRoleFilesToDir(roleDir string, in UpsertInput) error {
@@ -335,6 +384,54 @@ func ensureConcreteRoleDir(roleDir string) error {
 
 func dedupeStrings(values []string) []string {
 	return normalizeSkillNames(values)
+}
+
+func (s *Service) validateSkillNames(workspaceRoot string, skillNames []string) error {
+	if len(skillNames) == 0 {
+		return nil
+	}
+	globalRoot, err := s.resolveGlobalRoot(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	catalog, err := skills.LoadCatalog(globalRoot, workspaceRoot)
+	if err != nil {
+		return err
+	}
+	available := make(map[string]struct{}, len(catalog.Skills))
+	for _, name := range catalog.SkillNames() {
+		available[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
+	var unknown []string
+	for _, name := range dedupeStrings(skillNames) {
+		if _, ok := available[strings.ToLower(strings.TrimSpace(name))]; ok {
+			continue
+		}
+		unknown = append(unknown, name)
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("unknown skills: %s", strings.Join(unknown, ", "))
+	}
+	return nil
+}
+
+func (s *Service) resolveGlobalRoot(workspaceRoot string) (string, error) {
+	if trimmed := strings.TrimSpace(s.globalRoot); trimmed != "" {
+		return trimmed, nil
+	}
+	paths, err := config.ResolvePaths(workspaceRoot, "")
+	if err != nil {
+		return "", err
+	}
+	return paths.GlobalRoot, nil
+}
+
+func roleScratchRoot(workspaceRoot string) (string, error) {
+	root := filepath.Join(strings.TrimSpace(workspaceRoot), config.DirName, "tmp", "roles")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", err
+	}
+	return root, nil
 }
 
 func validateWorkspaceRoot(workspaceRoot string) error {

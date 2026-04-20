@@ -4,6 +4,9 @@ import type {
   MetricsOverview,
   MetricsTimeseries,
   Workspace,
+  ContextHistoryResponse,
+  WorkspaceMailboxResponse,
+  WorkspaceRuntimeGraphResponse,
   RoleListResponse,
   RoleSpec,
 } from "./types";
@@ -72,6 +75,12 @@ export function getTimeline(sessionId: string): Promise<TimelineResponse> {
   });
 }
 
+export function getContextHistory(sessionId: string): Promise<ContextHistoryResponse> {
+  return apiFetch<ContextHistoryResponse>("/v1/session/history", {
+    headers: { "X-Sesame-Context-Binding": sessionId },
+  });
+}
+
 export function submitMessage(
   sessionId: string,
   message: string,
@@ -125,6 +134,14 @@ export function getMetricsTimeseries(
   const params = new URLSearchParams({ bucket });
   if (sessionId) params.set("session_id", sessionId);
   return apiFetch<MetricsTimeseries>(`/v1/metrics/timeseries?${params.toString()}`);
+}
+
+export function getWorkspaceRuntimeGraph(): Promise<WorkspaceRuntimeGraphResponse> {
+  return apiFetch<WorkspaceRuntimeGraphResponse>("/v1/runtime_graph");
+}
+
+export function getWorkspaceMailbox(): Promise<WorkspaceMailboxResponse> {
+  return apiFetch<WorkspaceMailboxResponse>("/v1/mailbox");
 }
 
 // ─── Roles ────────────────────────────────────────────────────────────────────

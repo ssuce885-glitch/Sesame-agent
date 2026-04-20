@@ -9,6 +9,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPage } from "./pages/ChatPage";
+import { RuntimePage } from "./pages/RuntimePage";
 import { UsagePage } from "./pages/UsagePage";
 import { RolesPage } from "./pages/RolesPage";
 import { useCurrentSession, useWorkspaceMeta } from "./api/queries";
@@ -47,6 +48,7 @@ export function AppShell() {
   }, [activeSessionId, navigate, location.pathname]);
 
   const isChat = location.pathname === "/chat" || location.pathname === "/";
+  const isRuntime = location.pathname === "/runtime";
   const isUsage = location.pathname === "/usage";
   const isRoles = location.pathname === "/roles";
 
@@ -94,6 +96,12 @@ export function AppShell() {
             Chat
           </NavTab>
           <NavTab
+            to="/runtime"
+            active={isRuntime}
+          >
+            Runtime
+          </NavTab>
+          <NavTab
             to="/usage"
             active={isUsage}
           >
@@ -113,6 +121,7 @@ export function AppShell() {
         <Sidebar workspaceName={workspace?.name} workspaceRoot={workspace?.workspace_root} />
         <main className="flex-1 flex flex-col overflow-hidden">
           {isChat && <ChatPage sessionId={activeSessionId ?? ""} />}
+          {isRuntime && <RuntimePage sessionId={activeSessionId ?? ""} />}
           {isUsage && <UsagePage sessionId={activeSessionId ?? undefined} />}
           {isRoles && <RolesPage />}
         </main>
@@ -156,6 +165,7 @@ const router = createBrowserRouter([
     element: <AppShell />,
     children: [
       { path: "chat", element: null },
+      { path: "runtime", element: null },
       { path: "usage", element: null },
       { path: "roles", element: null },
     ],

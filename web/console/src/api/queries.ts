@@ -2,7 +2,10 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ensureCurrentSession,
   getTimeline,
+  getContextHistory,
   getWorkspace,
+  getWorkspaceMailbox,
+  getWorkspaceRuntimeGraph,
   submitMessage,
   submitPermission,
   getMetricsOverview,
@@ -39,6 +42,31 @@ export function useTimeline(sessionId: string | null) {
     queryFn: () => getTimeline(sessionId!),
     enabled: !!sessionId,
     staleTime: Infinity,
+  });
+}
+
+export function useContextHistory(sessionId: string | null) {
+  return useQuery({
+    queryKey: ["history", sessionId],
+    queryFn: () => getContextHistory(sessionId!),
+    enabled: !!sessionId,
+    staleTime: 10_000,
+  });
+}
+
+export function useWorkspaceRuntimeGraph() {
+  return useQuery({
+    queryKey: ["runtime-graph"],
+    queryFn: getWorkspaceRuntimeGraph,
+    staleTime: 10_000,
+  });
+}
+
+export function useWorkspaceMailbox() {
+  return useQuery({
+    queryKey: ["workspace-mailbox"],
+    queryFn: getWorkspaceMailbox,
+    staleTime: 10_000,
   });
 }
 

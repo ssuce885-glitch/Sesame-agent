@@ -196,6 +196,108 @@ export interface MetricsTurnsResponse {
   total_count: number;
 }
 
+// ─── Runtime ──────────────────────────────────────────────────────────────────
+
+export interface HistoryEntry {
+  id: string;
+  title?: string;
+  preview?: string;
+  source_kind?: string;
+  is_current: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContextHistoryResponse {
+  entries: HistoryEntry[];
+  current_head_id?: string;
+}
+
+export interface RuntimeTask {
+  id: string;
+  run_id: string;
+  plan_id?: string;
+  parent_task_id?: string;
+  state: string;
+  title?: string;
+  description?: string;
+  owner?: string;
+  kind?: string;
+  execution_task_id?: string;
+  worktree_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuntimePermissionRequest {
+  id: string;
+  session_id: string;
+  turn_id: string;
+  run_id?: string;
+  task_id?: string;
+  tool_run_id?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  requested_profile: string;
+  reason?: string;
+  status: string;
+  decision?: string;
+  decision_scope?: string;
+  resolved_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuntimeGraph {
+  runs: Array<{ id: string; session_id: string; turn_id?: string; state: string }>;
+  plans: Array<{ id: string; run_id: string; state: string; title?: string }>;
+  tasks: RuntimeTask[];
+  tool_runs: Array<{ id: string; run_id: string; task_id?: string; state: string; tool_name: string }>;
+  worktrees: Array<{ id: string; run_id: string; task_id?: string; state: string; worktree_path: string }>;
+  incidents: unknown[];
+  dispatch_attempts: unknown[];
+  permission_requests: RuntimePermissionRequest[];
+}
+
+export interface WorkspaceRuntimeGraphResponse {
+  workspace_root: string;
+  graph: RuntimeGraph;
+}
+
+export interface ReportEnvelope {
+  source?: string;
+  status?: string;
+  severity?: string;
+  title?: string;
+  summary?: string;
+}
+
+export interface WorkspaceMailboxItem {
+  id: string;
+  report_id?: string;
+  delivery_id?: string;
+  workspace_root: string;
+  session_id: string;
+  source_session_id?: string;
+  source_role_id?: string;
+  source_kind: string;
+  source_id: string;
+  channel?: string;
+  delivery_state?: string;
+  envelope: ReportEnvelope;
+  observed_at?: string;
+  injected_turn_id?: string;
+  injected_at?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface WorkspaceMailboxResponse {
+  workspace_root: string;
+  items: WorkspaceMailboxItem[];
+  pending_count: number;
+}
+
 // ─── Roles ────────────────────────────────────────────────────────────────────
 
 export interface RoleSpec {
