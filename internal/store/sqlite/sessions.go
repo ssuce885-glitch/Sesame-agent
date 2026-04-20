@@ -540,8 +540,8 @@ func (s *Store) ResolveSpecialistRoleID(ctx context.Context, sessionID, workspac
 	rows, err := s.db.QueryContext(ctx, `
 		select key, value
 		from runtime_metadata
-		where key like ?
-	`, specialistSessionMetadataKey(workspaceRoot, "")+"%")
+		where substr(key, 1, length(?)) = ?
+	`, specialistSessionMetadataKey(workspaceRoot, ""), specialistSessionMetadataKey(workspaceRoot, ""))
 	if err != nil {
 		return "", err
 	}

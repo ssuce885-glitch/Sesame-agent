@@ -39,7 +39,8 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		if req.WorkspaceRoot == "" {
+		workspaceRoot := strings.TrimSpace(req.WorkspaceRoot)
+		if workspaceRoot == "" {
 			http.Error(w, "workspace_root is required", http.StatusBadRequest)
 			return
 		}
@@ -52,7 +53,7 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 		r = r.WithContext(sessionrole.WithSessionRole(r.Context(), role))
 		r = r.WithContext(rolectx.WithSpecialistRoleID(r.Context(), req.SpecialistRoleID))
 
-		session, status, err := ensureSession(r.Context(), deps, req.WorkspaceRoot, role, req.SpecialistRoleID)
+		session, status, err := ensureSession(r.Context(), deps, workspaceRoot, role, req.SpecialistRoleID)
 		if err != nil {
 			if status == http.StatusBadRequest {
 				http.Error(w, "bad request", http.StatusBadRequest)
