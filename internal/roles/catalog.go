@@ -47,9 +47,6 @@ func LoadCatalog(workspaceRoot string) (Catalog, error) {
 
 	out := Catalog{ByID: map[string]Spec{}}
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
 		roleID, err := CanonicalRoleID(entry.Name())
 		if err != nil {
 			out.Diagnostics = append(out.Diagnostics, Diagnostic{
@@ -112,6 +109,9 @@ func loadRoleSpec(root, roleID string) (Spec, error) {
 		return Spec{}, err
 	}
 	rolePath := filepath.Join(root, roleID)
+	if err := ensureConcreteRoleDir(rolePath); err != nil {
+		return Spec{}, err
+	}
 	roleData, err := readConcreteRoleFile(filepath.Join(rolePath, "role.yaml"))
 	if err != nil {
 		return Spec{}, err
