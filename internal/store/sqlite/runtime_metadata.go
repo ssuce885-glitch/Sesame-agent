@@ -55,11 +55,6 @@ func (s *Store) SetCurrentContextHeadID(ctx context.Context, headID string) erro
 
 func (s *Store) GetRoleSessionID(ctx context.Context, workspaceRoot string, role types.SessionRole) (string, bool, error) {
 	role = sessionrole.Normalize(string(role))
-	if role == types.SessionRoleMonitoringParent {
-		if sessionID, ok, err := s.GetSpecialistSessionID(ctx, workspaceRoot, monitoringSpecialistRoleID); err != nil || ok {
-			return sessionID, ok, err
-		}
-	}
 	if role == types.SessionRoleMainParent {
 		if sessionID, ok, err := getRuntimeMetadataValue(ctx, s.db, roleSessionMetadataKey(workspaceRoot, role)); err != nil {
 			return "", false, err
@@ -75,9 +70,6 @@ func (s *Store) GetRoleSessionID(ctx context.Context, workspaceRoot string, role
 
 func (s *Store) SetRoleSessionID(ctx context.Context, workspaceRoot string, role types.SessionRole, sessionID string) error {
 	role = sessionrole.Normalize(string(role))
-	if role == types.SessionRoleMonitoringParent {
-		return s.SetSpecialistSessionID(ctx, workspaceRoot, monitoringSpecialistRoleID, strings.TrimSpace(sessionID))
-	}
 	if err := setRuntimeMetadataValue(ctx, s.db, roleSessionMetadataKey(workspaceRoot, role), strings.TrimSpace(sessionID)); err != nil {
 		return err
 	}
@@ -129,8 +121,6 @@ func normalizeSpecialistRoleID(roleID string) string {
 	switch roleID {
 	case "", string(types.SessionRoleMainParent):
 		return ""
-	case string(types.SessionRoleMonitoringParent), monitoringSpecialistRoleID:
-		return monitoringSpecialistRoleID
 	default:
 		return roleID
 	}

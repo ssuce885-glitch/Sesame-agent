@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -10,6 +12,8 @@ import (
 	"go-agent/internal/sessionrole"
 	"go-agent/internal/types"
 )
+
+var errRoleServiceUnavailable = errors.New("role service is required")
 
 func registerCurrentSessionRoutes(mux *http.ServeMux, deps Dependencies) {
 	mux.HandleFunc("/v1/session/ensure", handleEnsureSession(deps))
@@ -48,8 +52,12 @@ func handleEnsureSession(deps Dependencies) http.HandlerFunc {
 		r = r.WithContext(sessionrole.WithSessionRole(r.Context(), role))
 		r = r.WithContext(rolectx.WithSpecialistRoleID(r.Context(), req.SpecialistRoleID))
 
-		session, _, _, err := deps.Store.EnsureRoleSession(r.Context(), req.WorkspaceRoot, role)
+		session, status, err := ensureSession(r.Context(), deps, req.WorkspaceRoot, role, req.SpecialistRoleID)
 		if err != nil {
+			if status == http.StatusBadRequest {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -88,8 +96,13 @@ func resolveCurrentSessionID(w http.ResponseWriter, r *http.Request, deps Depend
 		return "", false
 	}
 	role := sessionrole.FromContext(r.Context())
-	session, _, _, err := deps.Store.EnsureRoleSession(r.Context(), workspaceRoot, role)
+	specialistRoleID := rolectx.SpecialistRoleIDFromContext(r.Context())
+	session, status, err := ensureSession(r.Context(), deps, workspaceRoot, role, specialistRoleID)
 	if err != nil {
+		if status == http.StatusBadRequest {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return "", false
+		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return "", false
 	}
@@ -99,4 +112,44 @@ func resolveCurrentSessionID(w http.ResponseWriter, r *http.Request, deps Depend
 		}
 	}
 	return session.ID, true
+}
+
+func ensureSession(ctx context.Context, deps Dependencies, workspaceRoot string, role types.SessionRole, specialistRoleID string) (types.Session, int, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	specialistRoleID = strings.TrimSpace(specialistRoleID)
+
+	if specialistRoleID == "" {
+		session, _, _, err := deps.Store.EnsureRoleSession(ctx, workspaceRoot, role)
+		return session, 0, err
+	}
+
+	if deps.RoleService == nil {
+		return types.Session{}, http.StatusInternalServerError, errRoleServiceUnavailable
+	}
+
+	spec, err := deps.RoleService.Get(workspaceRoot, specialistRoleID)
+	if err != nil {
+		switch rolectx.KindOf(err) {
+		case rolectx.ErrorKindInvalidInput, rolectx.ErrorKindNotFound:
+			return types.Session{}, http.StatusBadRequest, err
+		default:
+			return types.Session{}, http.StatusInternalServerError, err
+		}
+	}
+
+	specialistCtx := rolectx.WithSpecialistRoleID(
+		sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent),
+		spec.RoleID,
+	)
+	session, _, _, err := deps.Store.EnsureSpecialistSession(
+		specialistCtx,
+		workspaceRoot,
+		spec.RoleID,
+		spec.Prompt,
+		spec.SkillNames,
+	)
+	if err != nil {
+		return types.Session{}, http.StatusInternalServerError, err
+	}
+	return session, 0, nil
 }

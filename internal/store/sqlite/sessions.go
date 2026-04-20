@@ -14,7 +14,6 @@ import (
 )
 
 const timeLayout = time.RFC3339Nano
-const monitoringSpecialistRoleID = "monitoring_role"
 
 func (s *Store) InsertSession(ctx context.Context, session types.Session) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -411,21 +410,6 @@ func isTerminalTurnState(state types.TurnState) bool {
 
 func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, role types.SessionRole) (types.Session, types.ContextHead, bool, error) {
 	role = sessionrole.Normalize(string(role))
-	if specialistRoleID := normalizeSpecialistRoleID(rolectx.SpecialistRoleIDFromContext(ctx)); specialistRoleID != "" {
-		specialistCtx := rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent), specialistRoleID)
-		return s.EnsureSpecialistSession(specialistCtx, workspaceRoot, specialistRoleID, "", nil)
-	}
-	if role == types.SessionRoleMonitoringParent {
-		specialistCtx := rolectx.WithSpecialistRoleID(sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent), monitoringSpecialistRoleID)
-		return s.EnsureSpecialistSession(
-			specialistCtx,
-			workspaceRoot,
-			monitoringSpecialistRoleID,
-			sessionrole.DefaultSystemPrompt(types.SessionRoleMonitoringParent),
-			sessionrole.DefaultSkillNames(types.SessionRoleMonitoringParent),
-		)
-	}
-
 	if role == types.SessionRoleMainParent {
 		roleCtx := sessionrole.WithSessionRole(ctx, role)
 		session, head, created, err := s.EnsureCanonicalSession(roleCtx, workspaceRoot)
@@ -513,11 +497,8 @@ func (s *Store) EnsureSpecialistSession(ctx context.Context, workspaceRoot, role
 	}
 
 	prompt := strings.TrimSpace(systemPrompt)
-	if prompt == "" && roleID == monitoringSpecialistRoleID {
-		prompt = strings.TrimSpace(sessionrole.DefaultSystemPrompt(types.SessionRoleMonitoringParent))
-	}
 	if prompt == "" {
-		prompt = strings.TrimSpace(sessionrole.DefaultSystemPrompt(types.SessionRoleMainParent))
+		return types.Session{}, types.ContextHead{}, false, errors.New("specialist system prompt is required")
 	}
 
 	now := time.Now().UTC()
@@ -594,10 +575,8 @@ func (s *Store) ResolveSessionRole(ctx context.Context, sessionID, workspaceRoot
 	if sessionID == "" || workspaceRoot == "" {
 		return "", nil
 	}
-	if specialistRoleID, err := s.ResolveSpecialistRoleID(ctx, sessionID, workspaceRoot); err != nil {
+	if _, err := s.ResolveSpecialistRoleID(ctx, sessionID, workspaceRoot); err != nil {
 		return "", err
-	} else if specialistRoleID == monitoringSpecialistRoleID {
-		return types.SessionRoleMonitoringParent, nil
 	}
 
 	for _, role := range []types.SessionRole{types.SessionRoleMonitoringParent, types.SessionRoleMainParent} {
@@ -732,11 +711,8 @@ func (s *Store) ensureRoleSystemPrompt(ctx context.Context, session types.Sessio
 }
 
 func (s *Store) ensureSpecialistSystemPrompt(ctx context.Context, session types.Session, roleID, systemPrompt string) (types.Session, error) {
+	_ = roleID
 	prompt := strings.TrimSpace(systemPrompt)
-	if prompt == "" && normalizeSpecialistRoleID(roleID) == monitoringSpecialistRoleID &&
-		sessionrole.ShouldRefreshDefaultSystemPrompt(types.SessionRoleMonitoringParent, session.SystemPrompt) {
-		prompt = strings.TrimSpace(sessionrole.DefaultSystemPrompt(types.SessionRoleMonitoringParent))
-	}
 	if prompt == "" || strings.TrimSpace(session.SystemPrompt) == prompt {
 		return session, nil
 	}
