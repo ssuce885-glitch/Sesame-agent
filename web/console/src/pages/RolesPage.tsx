@@ -105,12 +105,24 @@ export function RolesPage() {
       />
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <RoleDiagnostics diagnostics={diagnostics} />
+        {errorMessage ? (
+          <section
+            className="shrink-0 border-b px-4 py-3 text-sm md:px-6"
+            role="alert"
+            style={{
+              backgroundColor: "rgba(220, 38, 38, 0.04)",
+              borderColor: "rgba(220, 38, 38, 0.18)",
+              color: "var(--color-error)",
+            }}
+          >
+            {errorMessage}
+          </section>
+        ) : null}
         <RoleEditor
           role={selectedRole}
           resetToken={resetToken}
           isSaving={createRole.isPending || updateRole.isPending}
           isDeleting={deleteRole.isPending}
-          errorMessage={errorMessage}
           onSave={handleSave}
           onDelete={handleDelete}
         />
