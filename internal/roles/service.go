@@ -89,34 +89,34 @@ func (s *Service) List(workspaceRoot string) (Catalog, error) {
 
 func (s *Service) Get(workspaceRoot, roleID string) (Spec, error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
-	roleID = strings.TrimSpace(roleID)
 	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
 		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
 	}
-	if err := validateRoleID(roleID); err != nil {
+	roleID, err := CanonicalRoleID(roleID)
+	if err != nil {
 		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
 	}
-	rolesRoot := filepath.Join(workspaceRoot, "roles")
-	roleDir := filepath.Join(rolesRoot, roleID)
-	if err := ensureConcreteRoleDir(roleDir); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Spec{}, newServiceError(ErrorKindNotFound, err)
-		}
-		return Spec{}, newServiceError(ErrorKindInternal, err)
-	}
-	spec, err := loadRoleSpec(rolesRoot, roleID)
+	catalog, err := LoadCatalog(workspaceRoot)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Spec{}, newServiceError(ErrorKindNotFound, err)
-		}
 		return Spec{}, newServiceError(ErrorKindInternal, err)
 	}
-	return spec, nil
+	if spec, ok := catalog.ByID[roleID]; ok {
+		return spec, nil
+	}
+	for _, diagnostic := range catalog.Diagnostics {
+		if diagnostic.RoleID == roleID {
+			return Spec{}, newServiceError(ErrorKindConflict, fmt.Errorf("%s: %s", diagnostic.Path, diagnostic.Error))
+		}
+	}
+	return Spec{}, newServiceError(ErrorKindNotFound, os.ErrNotExist)
 }
 
 func (s *Service) Create(workspaceRoot string, in UpsertInput) (Spec, error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
-	normalized := normalizeUpsertInput(in)
+	normalized, err := normalizeUpsertInput(in)
+	if err != nil {
+		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+	}
 	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
 		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
 	}
@@ -158,7 +158,10 @@ func isCreateDestinationConflict(roleDir string, renameErr error) bool {
 
 func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
-	normalized := normalizeUpsertInput(in)
+	normalized, err := normalizeUpsertInput(in)
+	if err != nil {
+		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+	}
 	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
 		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
 	}
@@ -196,11 +199,11 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 
 func (s *Service) Delete(workspaceRoot, roleID string) error {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
-	roleID = strings.TrimSpace(roleID)
 	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
 		return newServiceError(ErrorKindInvalidInput, err)
 	}
-	if err := validateRoleID(roleID); err != nil {
+	roleID, err := CanonicalRoleID(roleID)
+	if err != nil {
 		return newServiceError(ErrorKindInvalidInput, err)
 	}
 	roleDir := filepath.Join(workspaceRoot, "roles", roleID)
@@ -334,40 +337,6 @@ func validateWorkspaceRoot(workspaceRoot string) error {
 		return errors.New("workspace root is required")
 	}
 	return nil
-}
-
-func validateRoleID(roleID string) error {
-	roleID = strings.TrimSpace(roleID)
-	if roleID == "" {
-		return errors.New("role_id is required")
-	}
-	if strings.HasPrefix(roleID, ".") {
-		return fmt.Errorf("invalid role_id: %s", roleID)
-	}
-	if strings.Contains(roleID, "/") || strings.Contains(roleID, "\\") || strings.Contains(roleID, "..") {
-		return fmt.Errorf("invalid role_id: %s", roleID)
-	}
-	return nil
-}
-
-func validateUpsertInput(in UpsertInput) error {
-	if err := validateRoleID(in.RoleID); err != nil {
-		return err
-	}
-	if strings.TrimSpace(in.Prompt) == "" {
-		return errors.New("prompt is required")
-	}
-	return nil
-}
-
-func normalizeUpsertInput(in UpsertInput) UpsertInput {
-	return UpsertInput{
-		RoleID:      strings.TrimSpace(in.RoleID),
-		DisplayName: strings.TrimSpace(in.DisplayName),
-		Description: strings.TrimSpace(in.Description),
-		Prompt:      strings.TrimSpace(in.Prompt),
-		SkillNames:  dedupeStrings(in.SkillNames),
-	}
 }
 
 func newServiceError(kind ErrorKind, cause error) error {

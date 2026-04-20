@@ -19,8 +19,9 @@ type Spec struct {
 }
 
 type Catalog struct {
-	Roles []Spec
-	ByID  map[string]Spec
+	Roles       []Spec
+	ByID        map[string]Spec
+	Diagnostics []Diagnostic
 }
 
 type roleConfig struct {
@@ -49,9 +50,23 @@ func LoadCatalog(workspaceRoot string) (Catalog, error) {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		spec, err := loadRoleSpec(root, entry.Name())
+		roleID, err := CanonicalRoleID(entry.Name())
 		if err != nil {
-			return Catalog{}, err
+			out.Diagnostics = append(out.Diagnostics, Diagnostic{
+				RoleID: entry.Name(),
+				Path:   filepath.Join(root, entry.Name()),
+				Error:  err.Error(),
+			})
+			continue
+		}
+		spec, err := loadRoleSpec(root, roleID)
+		if err != nil {
+			out.Diagnostics = append(out.Diagnostics, Diagnostic{
+				RoleID: roleID,
+				Path:   filepath.Join(root, roleID),
+				Error:  err.Error(),
+			})
+			continue
 		}
 		out.Roles = append(out.Roles, spec)
 		out.ByID[spec.RoleID] = spec
@@ -60,14 +75,27 @@ func LoadCatalog(workspaceRoot string) (Catalog, error) {
 	sort.Slice(out.Roles, func(i, j int) bool {
 		return out.Roles[i].RoleID < out.Roles[j].RoleID
 	})
+	sort.Slice(out.Diagnostics, func(i, j int) bool {
+		if out.Diagnostics[i].RoleID != out.Diagnostics[j].RoleID {
+			return out.Diagnostics[i].RoleID < out.Diagnostics[j].RoleID
+		}
+		if out.Diagnostics[i].Path != out.Diagnostics[j].Path {
+			return out.Diagnostics[i].Path < out.Diagnostics[j].Path
+		}
+		return out.Diagnostics[i].Error < out.Diagnostics[j].Error
+	})
 	return out, nil
 }
 
 func RenderRegistrySummary(catalog Catalog) string {
-	if len(catalog.Roles) == 0 {
-		return ""
+	lines := []string{
+		"# Installed Specialist Roles",
+		"- Source: workspace roles/ directory",
 	}
-	lines := []string{"# Installed Specialist Roles"}
+	if len(catalog.Roles) == 0 {
+		lines = append(lines, "- Installed specialist roles: none")
+		return strings.Join(lines, "\n")
+	}
 	for _, role := range catalog.Roles {
 		line := fmt.Sprintf("- %s: %s", role.RoleID, firstNonEmpty(role.Description, role.DisplayName, role.RoleID))
 		if len(role.SkillNames) > 0 {
@@ -79,6 +107,10 @@ func RenderRegistrySummary(catalog Catalog) string {
 }
 
 func loadRoleSpec(root, roleID string) (Spec, error) {
+	roleID, err := CanonicalRoleID(roleID)
+	if err != nil {
+		return Spec{}, err
+	}
 	rolePath := filepath.Join(root, roleID)
 	roleData, err := readConcreteRoleFile(filepath.Join(rolePath, "role.yaml"))
 	if err != nil {
@@ -103,7 +135,7 @@ func loadRoleSpec(root, roleID string) (Spec, error) {
 	}
 
 	return Spec{
-		RoleID:      strings.TrimSpace(roleID),
+		RoleID:      roleID,
 		DisplayName: strings.TrimSpace(cfg.DisplayName),
 		Description: strings.TrimSpace(cfg.Description),
 		Prompt:      strings.TrimSpace(string(promptData)),
