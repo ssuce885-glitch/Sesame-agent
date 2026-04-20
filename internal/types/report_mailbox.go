@@ -20,15 +20,17 @@ const (
 )
 
 type ReportRecord struct {
-	ID            string                  `json:"id"`
-	WorkspaceRoot string                  `json:"workspace_root"`
-	SessionID     string                  `json:"session_id"`
-	SourceKind    ReportMailboxSourceKind `json:"source_kind"`
-	SourceID      string                  `json:"source_id"`
-	Envelope      ReportEnvelope          `json:"envelope"`
-	ObservedAt    time.Time               `json:"observed_at,omitempty"`
-	CreatedAt     time.Time               `json:"created_at,omitempty"`
-	UpdatedAt     time.Time               `json:"updated_at,omitempty"`
+	ID              string                  `json:"id"`
+	WorkspaceRoot   string                  `json:"workspace_root"`
+	SessionID       string                  `json:"session_id"`
+	SourceSessionID string                  `json:"source_session_id,omitempty"`
+	SourceRoleID    string                  `json:"source_role_id,omitempty"`
+	SourceKind      ReportMailboxSourceKind `json:"source_kind"`
+	SourceID        string                  `json:"source_id"`
+	Envelope        ReportEnvelope          `json:"envelope"`
+	ObservedAt      time.Time               `json:"observed_at,omitempty"`
+	CreatedAt       time.Time               `json:"created_at,omitempty"`
+	UpdatedAt       time.Time               `json:"updated_at,omitempty"`
 }
 
 type ReportDelivery struct {
@@ -46,21 +48,23 @@ type ReportDelivery struct {
 }
 
 type ReportMailboxItem struct {
-	ID             string                  `json:"id"`
-	ReportID       string                  `json:"report_id,omitempty"`
-	DeliveryID     string                  `json:"delivery_id,omitempty"`
-	WorkspaceRoot  string                  `json:"workspace_root"`
-	SessionID      string                  `json:"session_id"`
-	SourceKind     ReportMailboxSourceKind `json:"source_kind"`
-	SourceID       string                  `json:"source_id"`
-	Channel        ReportChannel           `json:"channel,omitempty"`
-	DeliveryState  ReportDeliveryState     `json:"delivery_state,omitempty"`
-	Envelope       ReportEnvelope          `json:"envelope"`
-	ObservedAt     time.Time               `json:"observed_at,omitempty"`
-	InjectedTurnID string                  `json:"injected_turn_id,omitempty"`
-	InjectedAt     time.Time               `json:"injected_at,omitempty"`
-	CreatedAt      time.Time               `json:"created_at,omitempty"`
-	UpdatedAt      time.Time               `json:"updated_at,omitempty"`
+	ID              string                  `json:"id"`
+	ReportID        string                  `json:"report_id,omitempty"`
+	DeliveryID      string                  `json:"delivery_id,omitempty"`
+	WorkspaceRoot   string                  `json:"workspace_root"`
+	SessionID       string                  `json:"session_id"`
+	SourceSessionID string                  `json:"source_session_id,omitempty"`
+	SourceRoleID    string                  `json:"source_role_id,omitempty"`
+	SourceKind      ReportMailboxSourceKind `json:"source_kind"`
+	SourceID        string                  `json:"source_id"`
+	Channel         ReportChannel           `json:"channel,omitempty"`
+	DeliveryState   ReportDeliveryState     `json:"delivery_state,omitempty"`
+	Envelope        ReportEnvelope          `json:"envelope"`
+	ObservedAt      time.Time               `json:"observed_at,omitempty"`
+	InjectedTurnID  string                  `json:"injected_turn_id,omitempty"`
+	InjectedAt      time.Time               `json:"injected_at,omitempty"`
+	CreatedAt       time.Time               `json:"created_at,omitempty"`
+	UpdatedAt       time.Time               `json:"updated_at,omitempty"`
 }
 
 type SessionReportMailboxResponse struct {
@@ -84,20 +88,22 @@ func ReportMailboxItemFromRecordDelivery(report ReportRecord, delivery ReportDel
 		itemID = report.ID
 	}
 	return ReportMailboxItem{
-		ID:             itemID,
-		ReportID:       report.ID,
-		DeliveryID:     delivery.ID,
-		WorkspaceRoot:  report.WorkspaceRoot,
-		SessionID:      report.SessionID,
-		SourceKind:     report.SourceKind,
-		SourceID:       report.SourceID,
-		Channel:        delivery.Channel,
-		DeliveryState:  delivery.State,
-		Envelope:       report.Envelope,
-		ObservedAt:     report.ObservedAt,
-		InjectedTurnID: delivery.InjectedTurnID,
-		InjectedAt:     delivery.InjectedAt,
-		CreatedAt:      delivery.CreatedAt,
-		UpdatedAt:      delivery.UpdatedAt,
+		ID:              itemID,
+		ReportID:        report.ID,
+		DeliveryID:      delivery.ID,
+		WorkspaceRoot:   report.WorkspaceRoot,
+		SessionID:       report.SessionID,
+		SourceSessionID: report.SourceSessionID,
+		SourceRoleID:    report.SourceRoleID,
+		SourceKind:      report.SourceKind,
+		SourceID:        report.SourceID,
+		Channel:         delivery.Channel,
+		DeliveryState:   delivery.State,
+		Envelope:        report.Envelope,
+		ObservedAt:      report.ObservedAt,
+		InjectedTurnID:  delivery.InjectedTurnID,
+		InjectedAt:      delivery.InjectedAt,
+		CreatedAt:       delivery.CreatedAt,
+		UpdatedAt:       delivery.UpdatedAt,
 	}
 }

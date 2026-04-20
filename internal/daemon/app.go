@@ -102,15 +102,12 @@ func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus, workspaceRo
 	reportingService := reporting.NewService(store)
 	reportingService.SetWorkspaceRoot(workspaceRoot)
 	reportingService.SetReportReadySink(func(ctx context.Context, sessionID, turnID string, item types.ReportMailboxItem) error {
-		if strings.TrimSpace(workspaceRoot) == "" {
-			return nil
-		}
-		current, _, _, err := store.EnsureCanonicalSession(ctx, workspaceRoot)
-		if err != nil || strings.TrimSpace(current.ID) == "" {
+		sessionID = strings.TrimSpace(sessionID)
+		if sessionID == "" {
 			return nil
 		}
 		eventSink := storeAndBusSink{store: store, bus: bus}
-		event, err := types.NewEvent(current.ID, turnID, types.EventReportReady, item)
+		event, err := types.NewEvent(sessionID, turnID, types.EventReportReady, item)
 		if err != nil {
 			return err
 		}
@@ -354,7 +351,11 @@ func (n taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed 
 			return nil
 		}
 		for _, reportItem := range reportItems {
-			reportEvent, err := types.NewEvent(completed.ParentSessionID, completed.ParentTurnID, types.EventReportReady, reportItem)
+			targetSessionID := strings.TrimSpace(reportItem.SessionID)
+			if targetSessionID == "" {
+				continue
+			}
+			reportEvent, err := types.NewEvent(targetSessionID, completed.ParentTurnID, types.EventReportReady, reportItem)
 			if err != nil {
 				return err
 			}

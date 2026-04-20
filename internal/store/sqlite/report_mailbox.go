@@ -555,6 +555,8 @@ func normalizeReport(report types.ReportRecord) types.ReportRecord {
 	now := time.Now().UTC()
 	report.WorkspaceRoot = strings.TrimSpace(report.WorkspaceRoot)
 	report.SessionID = strings.TrimSpace(report.SessionID)
+	report.SourceSessionID = strings.TrimSpace(report.SourceSessionID)
+	report.SourceRoleID = strings.TrimSpace(report.SourceRoleID)
 	report.SourceKind = types.ReportMailboxSourceKind(strings.TrimSpace(string(report.SourceKind)))
 	report.SourceID = strings.TrimSpace(report.SourceID)
 	report.Envelope.Source = strings.TrimSpace(report.Envelope.Source)
@@ -664,15 +666,17 @@ func applyReportDeliveryTimes(delivery *types.ReportDelivery, observedAtRaw, inj
 
 func mailboxItemToRecordDelivery(item types.ReportMailboxItem) (types.ReportRecord, types.ReportDelivery) {
 	report := normalizeReport(types.ReportRecord{
-		ID:            firstNonEmptyReportString(item.ReportID, item.ID),
-		WorkspaceRoot: strings.TrimSpace(item.WorkspaceRoot),
-		SessionID:     item.SessionID,
-		SourceKind:    item.SourceKind,
-		SourceID:      item.SourceID,
-		Envelope:      item.Envelope,
-		ObservedAt:    item.ObservedAt,
-		CreatedAt:     item.CreatedAt,
-		UpdatedAt:     item.UpdatedAt,
+		ID:              firstNonEmptyReportString(item.ReportID, item.ID),
+		WorkspaceRoot:   strings.TrimSpace(item.WorkspaceRoot),
+		SessionID:       item.SessionID,
+		SourceSessionID: item.SourceSessionID,
+		SourceRoleID:    item.SourceRoleID,
+		SourceKind:      item.SourceKind,
+		SourceID:        item.SourceID,
+		Envelope:        item.Envelope,
+		ObservedAt:      item.ObservedAt,
+		CreatedAt:       item.CreatedAt,
+		UpdatedAt:       item.UpdatedAt,
 	})
 	delivery := normalizeReportDelivery(types.ReportDelivery{
 		ID:             firstNonEmptyReportString(item.DeliveryID, item.ID, report.ID),

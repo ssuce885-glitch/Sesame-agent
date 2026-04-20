@@ -20,6 +20,8 @@ type Store interface {
 	UpsertReportDelivery(context.Context, types.ReportDelivery) error
 	UpsertChildAgentResult(context.Context, types.ChildAgentResult) error
 	GetSession(context.Context, string) (types.Session, bool, error)
+	ResolveSpecialistRoleID(context.Context, string, string) (string, error)
+	EnsureRoleSession(context.Context, string, types.SessionRole) (types.Session, types.ContextHead, bool, error)
 	GetChildAgentSpec(context.Context, string) (types.ChildAgentSpec, bool, error)
 	GetReportGroup(context.Context, string) (types.ReportGroup, bool, error)
 	ListReportGroups(context.Context) ([]types.ReportGroup, error)
@@ -154,6 +156,10 @@ func (s *Service) EnqueueTaskReport(ctx context.Context, completed task.Task, no
 	report, ok := ReportFromTask(workspaceRoot, completed, now)
 	if !ok {
 		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportMailboxItem{}, false, nil
+	}
+	report, err := s.prepareReportForDelivery(ctx, report, completed.ParentSessionID)
+	if err != nil {
+		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportMailboxItem{}, false, err
 	}
 	delivery := MailboxDeliveryFromReport(report, now)
 	item := types.ReportMailboxItemFromRecordDelivery(report, delivery)
@@ -405,7 +411,12 @@ func (s *Service) childAgentSpecForTask(ctx context.Context, completed task.Task
 }
 
 func (s *Service) persistReportMailboxItem(ctx context.Context, report types.ReportRecord, now time.Time) (types.ReportMailboxItem, error) {
-	report.WorkspaceRoot = s.resolveWorkspaceRoot(ctx, report.SessionID, report.WorkspaceRoot)
+	sourceSessionID := firstNonEmptyTrimmed(report.SourceSessionID, report.SessionID)
+	var err error
+	report, err = s.prepareReportForDelivery(ctx, report, sourceSessionID)
+	if err != nil {
+		return types.ReportMailboxItem{}, err
+	}
 	delivery := MailboxDeliveryFromReport(report, now)
 	item := types.ReportMailboxItemFromRecordDelivery(report, delivery)
 	if s == nil || s.store == nil {
@@ -540,6 +551,63 @@ func (s *Service) resolveWorkspaceRoot(ctx context.Context, sessionID, explicit 
 		return ""
 	}
 	return strings.TrimSpace(s.workspaceRoot)
+}
+
+func (s *Service) prepareReportForDelivery(ctx context.Context, report types.ReportRecord, sourceSessionID string) (types.ReportRecord, error) {
+	sourceSessionID = strings.TrimSpace(firstNonEmptyTrimmed(sourceSessionID, report.SourceSessionID, report.SessionID))
+	report.WorkspaceRoot = s.resolveWorkspaceRoot(ctx, sourceSessionID, report.WorkspaceRoot)
+	if sourceSessionID == "" {
+		return report, nil
+	}
+	report.SourceSessionID = sourceSessionID
+
+	roleID, err := s.resolveSpecialistRoleID(ctx, sourceSessionID, report.WorkspaceRoot)
+	if err != nil {
+		return types.ReportRecord{}, err
+	}
+	report.SourceRoleID = roleID
+	if strings.TrimSpace(roleID) == "" {
+		if strings.TrimSpace(report.SessionID) == "" {
+			report.SessionID = sourceSessionID
+		}
+		return report, nil
+	}
+
+	mainParentSessionID, err := s.ensureMainParentSessionID(ctx, report.WorkspaceRoot)
+	if err != nil {
+		return types.ReportRecord{}, err
+	}
+	if strings.TrimSpace(mainParentSessionID) != "" {
+		report.SessionID = mainParentSessionID
+	}
+	return report, nil
+}
+
+func (s *Service) resolveSpecialistRoleID(ctx context.Context, sessionID, workspaceRoot string) (string, error) {
+	if s == nil || s.store == nil {
+		return "", nil
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if sessionID == "" || workspaceRoot == "" {
+		return "", nil
+	}
+	return s.store.ResolveSpecialistRoleID(ctx, sessionID, workspaceRoot)
+}
+
+func (s *Service) ensureMainParentSessionID(ctx context.Context, workspaceRoot string) (string, error) {
+	if s == nil || s.store == nil {
+		return "", nil
+	}
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return "", nil
+	}
+	sessionRow, _, _, err := s.store.EnsureRoleSession(ctx, workspaceRoot, types.SessionRoleMainParent)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(sessionRow.ID), nil
 }
 
 func (s *Service) scheduledDigestForGroup(ctx context.Context, group types.ReportGroup, now time.Time) (types.DigestRecord, bool, error) {
