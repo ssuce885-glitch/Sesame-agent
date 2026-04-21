@@ -9,11 +9,11 @@ import (
 )
 
 type GlobalConfig struct {
-	Enabled              bool
-	BotTokenEnv          string
-	GatewayIntents       []string
-	MessageContentIntent bool
-	LogIgnoredMessages   bool
+	Enabled              bool     `json:"enabled"`
+	BotTokenEnv          string   `json:"bot_token_env"`
+	GatewayIntents       []string `json:"gateway_intents"`
+	MessageContentIntent bool     `json:"message_content_intent"`
+	LogIgnoredMessages   bool     `json:"log_ignored_messages"`
 }
 
 type AttachmentConfig struct {
