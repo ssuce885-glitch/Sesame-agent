@@ -24,7 +24,7 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	userCfg, err := config.LoadUserConfig()
+	userCfg, err := config.LoadUserConfigFromGlobalRoot(cfg.Paths.GlobalRoot)
 	if err != nil {
 		return err
 	}
