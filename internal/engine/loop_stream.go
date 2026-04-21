@@ -161,6 +161,7 @@ func completeAssistantOnlyTurn(
 	orderedAssistantItems []model.ConversationItem,
 	usageTotals loopUsageTotals,
 ) error {
+	nextPositionBeforeFlush := state.nextPosition
 	var err error
 	state.nextPosition, _, err = flushAssistantItems(ctx, e.store, state.sessionID, in.Turn.ContextHeadID, in.Turn.ID, state.nextPosition, orderedAssistantItems, 0, "", &state.req, state.nativeContinuation)
 	if err != nil {
@@ -179,7 +180,11 @@ func completeAssistantOnlyTurn(
 		usageTotals.outputTokens,
 		usageTotals.cachedTokens,
 	)
-	return finalizeTurn(ctx, e, in, usage)
+	parentReplyCommitted, err := buildParentReplyCommittedPayload(ctx, e.store, in.Session, in.Turn, nextPositionBeforeFlush, orderedAssistantItems)
+	if err != nil {
+		return emitter.Fail(ctx, err)
+	}
+	return finalizeTurn(ctx, e, in, usage, parentReplyCommitted)
 }
 
 func executeToolCallBatches(

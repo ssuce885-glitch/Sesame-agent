@@ -418,7 +418,7 @@ func buildTurnUsage(hasUsage bool, turnID, sessionID, provider, modelName string
 	}
 }
 
-func finalizeTurn(ctx context.Context, e *Engine, in Input, usage *types.TurnUsage) error {
+func finalizeTurn(ctx context.Context, e *Engine, in Input, usage *types.TurnUsage, parentReplyCommitted *types.ParentReplyCommittedPayload) error {
 	finalEvents := make([]types.Event, 0, 3)
 
 	assistantCompleted, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventAssistantCompleted, struct{}{})
@@ -448,6 +448,14 @@ func finalizeTurn(ctx context.Context, e *Engine, in Input, usage *types.TurnUsa
 	}
 	finalEvents = append(finalEvents, turnCompleted)
 
+	if parentReplyCommitted != nil {
+		committedEvent, err := types.NewEvent(in.Session.ID, in.Turn.ID, types.EventParentReplyCommitted, *parentReplyCommitted)
+		if err != nil {
+			return err
+		}
+		finalEvents = append(finalEvents, committedEvent)
+	}
+
 	if sink, ok := in.Sink.(TurnFinalizingSink); ok {
 		if err := sink.FinalizeTurn(ctx, usage, finalEvents); err != nil {
 			return err
@@ -475,6 +483,55 @@ func finalizeTurn(ctx context.Context, e *Engine, in Input, usage *types.TurnUsa
 		_ = maybeRefreshHeadMemory(ctx, e, in)
 	}
 	return nil
+}
+
+func buildParentReplyCommittedPayload(
+	ctx context.Context,
+	store ConversationStore,
+	session types.Session,
+	turn types.Turn,
+	nextPositionBeforeFlush int,
+	orderedAssistantItems []model.ConversationItem,
+) (*types.ParentReplyCommittedPayload, error) {
+	if store == nil {
+		return nil, nil
+	}
+
+	var builder strings.Builder
+	lastAssistantTextPosition := 0
+	for i, item := range orderedAssistantItems {
+		if item.Kind != model.ConversationItemAssistantText || strings.TrimSpace(item.Text) == "" {
+			continue
+		}
+		builder.WriteString(item.Text)
+		lastAssistantTextPosition = nextPositionBeforeFlush + i
+	}
+
+	text := builder.String()
+	if strings.TrimSpace(text) == "" || lastAssistantTextPosition == 0 {
+		return nil, nil
+	}
+
+	contextHeadID, err := resolveConversationWriteContextHeadID(ctx, store, turn.ContextHeadID)
+	if err != nil {
+		return nil, nil
+	}
+	itemID, ok, err := store.GetConversationItemIDByContextHeadAndPosition(ctx, session.ID, contextHeadID, lastAssistantTextPosition)
+	if err != nil {
+		return nil, nil
+	}
+	if !ok || itemID == 0 {
+		return nil, nil
+	}
+
+	return &types.ParentReplyCommittedPayload{
+		WorkspaceRoot: session.WorkspaceRoot,
+		SessionID:     session.ID,
+		TurnID:        turn.ID,
+		ItemID:        itemID,
+		Text:          text,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}, nil
 }
 
 func marshalToolArguments(input map[string]any) string {

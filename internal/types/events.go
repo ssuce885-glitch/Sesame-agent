@@ -6,31 +6,32 @@ import (
 )
 
 const (
-	EventTurnStarted         = "turn.started"
-	EventTurnCompleted       = "turn.completed"
-	EventTurnFailed          = "turn.failed"
-	EventTurnInterrupted     = "turn.interrupted"
-	EventTurnUsage           = "turn.usage"
-	EventAssistantStarted    = "assistant.started"
-	EventAssistantDelta      = "assistant.delta"
-	EventAssistantCompleted  = "assistant.completed"
-	EventToolStarted         = "tool.started"
-	EventToolProgress        = "tool.progress"
-	EventToolCompleted       = "tool.completed"
-	EventPermissionRequested = "permission.requested"
-	EventPermissionResolved  = "permission.resolved"
-	EventPlanUpdated         = "plan.updated"
-	EventTaskUpdated         = "task.updated"
-	EventTaskResultReady     = "task.result_ready"
-	EventReportReady         = "report.ready"
-	EventToolRunUpdated      = "tool_run.updated"
-	EventWorktreeUpdated     = "worktree.updated"
-	EventContextCompacted    = "context.compacted"
-	EventHeadMemoryStarted   = "head_memory.started"
-	EventHeadMemoryCompleted = "head_memory.completed"
-	EventHeadMemoryFailed    = "head_memory.failed"
-	EventSessionQueueUpdated = "session.queue_updated"
-	EventSystemNotice        = "system.notice"
+	EventTurnStarted          = "turn.started"
+	EventTurnCompleted        = "turn.completed"
+	EventTurnFailed           = "turn.failed"
+	EventTurnInterrupted      = "turn.interrupted"
+	EventTurnUsage            = "turn.usage"
+	EventAssistantStarted     = "assistant.started"
+	EventAssistantDelta       = "assistant.delta"
+	EventAssistantCompleted   = "assistant.completed"
+	EventToolStarted          = "tool.started"
+	EventToolProgress         = "tool.progress"
+	EventToolCompleted        = "tool.completed"
+	EventPermissionRequested  = "permission.requested"
+	EventPermissionResolved   = "permission.resolved"
+	EventPlanUpdated          = "plan.updated"
+	EventTaskUpdated          = "task.updated"
+	EventTaskResultReady      = "task.result_ready"
+	EventReportReady          = "report.ready"
+	EventToolRunUpdated       = "tool_run.updated"
+	EventWorktreeUpdated      = "worktree.updated"
+	EventParentReplyCommitted = "parent.reply_committed"
+	EventContextCompacted     = "context.compacted"
+	EventHeadMemoryStarted    = "head_memory.started"
+	EventHeadMemoryCompleted  = "head_memory.completed"
+	EventHeadMemoryFailed     = "head_memory.failed"
+	EventSessionQueueUpdated  = "session.queue_updated"
+	EventSystemNotice         = "system.notice"
 )
 
 type Event struct {
@@ -53,6 +54,15 @@ type TurnFailedPayload struct {
 
 type AssistantDeltaPayload struct {
 	Text string `json:"text"`
+}
+
+type ParentReplyCommittedPayload struct {
+	WorkspaceRoot string `json:"workspace_root"`
+	SessionID     string `json:"session_id"`
+	TurnID        string `json:"turn_id"`
+	ItemID        int64  `json:"item_id"`
+	Text          string `json:"text"`
+	CreatedAt     string `json:"created_at"`
 }
 
 type NoticePayload struct {
