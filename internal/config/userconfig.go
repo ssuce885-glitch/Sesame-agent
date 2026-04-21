@@ -23,6 +23,7 @@ type UserConfig struct {
 	Anthropic                  UserConfigAnthropic `json:"anthropic"`
 	OpenAI                     UserConfigOpenAI    `json:"openai"`
 	Skills                     UserConfigSkills    `json:"skills"`
+	Discord                    UserConfigDiscord   `json:"discord"`
 	MaxToolSteps               int                 `json:"max_tool_steps"`
 	MaxRecentItems             int                 `json:"max_recent_items"`
 	CompactionThreshold        int                 `json:"compaction_threshold"`
@@ -49,6 +50,14 @@ type UserConfigOpenAI struct {
 
 type UserConfigSkills struct {
 	Entries map[string]UserConfigSkillEntry `json:"entries"`
+}
+
+type UserConfigDiscord struct {
+	Enabled              bool     `json:"enabled"`
+	BotTokenEnv          string   `json:"bot_token_env"`
+	GatewayIntents       []string `json:"gateway_intents"`
+	MessageContentIntent bool     `json:"message_content_intent"`
+	LogIgnoredMessages   bool     `json:"log_ignored_messages"`
 }
 
 type UserConfigSkillEntry struct {
