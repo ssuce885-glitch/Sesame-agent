@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
 
 const ingressTimeLayout = time.RFC3339Nano
+
+var errDiscordIngressNotFound = errors.New("discord ingress message not found")
 
 type IngressRecord struct {
 	DiscordMessageID string
@@ -104,7 +107,10 @@ func (s *StateStore) UpsertDiscordIngress(ctx context.Context, rec IngressRecord
 			author_id = excluded.author_id,
 			workspace_root = excluded.workspace_root,
 			status = excluded.status,
-			sesame_turn_id = excluded.sesame_turn_id,
+			sesame_turn_id = case
+				when excluded.sesame_turn_id <> '' then excluded.sesame_turn_id
+				else discord_ingress.sesame_turn_id
+			end,
 			error_message = excluded.error_message,
 			updated_at = excluded.updated_at
 	`,
@@ -126,23 +132,35 @@ func (s *StateStore) SetDiscordIngressTurnID(ctx context.Context, discordMessage
 	if s == nil || s.db == nil {
 		return errors.New("discord state store is not configured")
 	}
-	_, err := s.db.ExecContext(ctx, `
+	id := strings.TrimSpace(discordMessageID)
+	res, err := s.db.ExecContext(ctx, `
 		update discord_ingress
 		set sesame_turn_id = ?, updated_at = ?
 		where discord_message_id = ?
 	`,
 		strings.TrimSpace(turnID),
 		time.Now().UTC().Format(ingressTimeLayout),
-		strings.TrimSpace(discordMessageID),
+		id,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: %s", errDiscordIngressNotFound, id)
+	}
+	return nil
 }
 
 func (s *StateStore) SetDiscordIngressStatus(ctx context.Context, discordMessageID, status, errorMessage string) error {
 	if s == nil || s.db == nil {
 		return errors.New("discord state store is not configured")
 	}
-	_, err := s.db.ExecContext(ctx, `
+	id := strings.TrimSpace(discordMessageID)
+	res, err := s.db.ExecContext(ctx, `
 		update discord_ingress
 		set status = ?, error_message = ?, updated_at = ?
 		where discord_message_id = ?
@@ -150,7 +168,17 @@ func (s *StateStore) SetDiscordIngressStatus(ctx context.Context, discordMessage
 		strings.TrimSpace(status),
 		errorMessage,
 		time.Now().UTC().Format(ingressTimeLayout),
-		strings.TrimSpace(discordMessageID),
+		id,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: %s", errDiscordIngressNotFound, id)
+	}
+	return nil
 }
