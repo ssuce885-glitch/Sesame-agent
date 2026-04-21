@@ -1,0 +1,240 @@
+package discord
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"go-agent/internal/session"
+	"go-agent/internal/types"
+)
+
+const (
+	discordIngressStatusAccepted         = "accepted"
+	discordIngressStatusAwaitingReply    = "awaiting_reply"
+	discordIngressStatusFinalPosted      = "final_posted"
+	discordIngressStatusReplyWaitExpired = "reply_wait_expired"
+	discordIngressStatusFinalPostFailed  = "final_post_failed"
+	discordIngressStatusRuntimeFailed    = "runtime_failed_without_parent_reply"
+	discordIngressStatusSubmitFailed     = "submit_failed"
+
+	defaultReplyWaitTimeout = 120 * time.Second
+)
+
+type bridgeRuntimeStore interface {
+	EnsureRoleSession(ctx context.Context, workspaceRoot string, role types.SessionRole) (types.Session, types.ContextHead, bool, error)
+	InsertTurn(ctx context.Context, turn types.Turn) error
+}
+
+type bridgeRuntimeManager interface {
+	RegisterSession(types.Session)
+	UpdateSession(types.Session) bool
+	SubmitTurn(ctx context.Context, sessionID string, in session.SubmitTurnInput) (string, error)
+}
+
+type parentReplyWaiter interface {
+	WaitParentReplyCommitted(ctx context.Context, sessionID, turnID string) (types.ParentReplyCommittedPayload, error)
+}
+
+type AcceptedMessage struct {
+	DiscordMessageID string
+	GuildID          string
+	ChannelID        string
+	AuthorID         string
+	WorkspaceRoot    string
+	CleanedText      string
+}
+
+type Bridge struct {
+	state   *StateStore
+	store   bridgeRuntimeStore
+	manager bridgeRuntimeManager
+	waiter  parentReplyWaiter
+	replies discordReplyPoster
+	cfg     WorkspaceBinding
+
+	replyWaitTimeout time.Duration
+	now              func() time.Time
+}
+
+func (b *Bridge) HandleAcceptedMessage(ctx context.Context, msg AcceptedMessage) error {
+	if err := b.validateDependencies(); err != nil {
+		return err
+	}
+
+	msg = normalizeAcceptedMessage(msg)
+	if err := b.state.UpsertDiscordIngress(ctx, IngressRecord{
+		DiscordMessageID: msg.DiscordMessageID,
+		GuildID:          msg.GuildID,
+		ChannelID:        msg.ChannelID,
+		AuthorID:         msg.AuthorID,
+		WorkspaceRoot:    msg.WorkspaceRoot,
+		Status:           discordIngressStatusAccepted,
+	}); err != nil {
+		return err
+	}
+
+	sessionRow, head, _, err := b.store.EnsureRoleSession(ctx, msg.WorkspaceRoot, types.SessionRoleMainParent)
+	if err != nil {
+		return b.failSubmit(ctx, msg, err)
+	}
+	if !b.manager.UpdateSession(sessionRow) {
+		b.manager.RegisterSession(sessionRow)
+	}
+
+	turn := b.newTurn(sessionRow.ID, head.ID, msg.CleanedText)
+	if err := b.store.InsertTurn(ctx, turn); err != nil {
+		return b.failSubmit(ctx, msg, err)
+	}
+
+	submittedTurnID, err := b.manager.SubmitTurn(ctx, sessionRow.ID, session.SubmitTurnInput{Turn: turn})
+	if err != nil {
+		return b.failSubmit(ctx, msg, err)
+	}
+	turnID := strings.TrimSpace(submittedTurnID)
+	if turnID == "" {
+		turnID = turn.ID
+	}
+
+	if err := b.state.SetDiscordIngressTurnID(ctx, msg.DiscordMessageID, turnID); err != nil {
+		return b.failSubmit(ctx, msg, err)
+	}
+	if err := b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusAwaitingReply, ""); err != nil {
+		return err
+	}
+
+	if b.cfg.PostAcknowledgement {
+		_ = postAcknowledgement(ctx, b.replies, msg.ChannelID, msg.DiscordMessageID)
+	}
+
+	payload, err := b.waitForParentReplyCommitted(ctx, sessionRow.ID, turnID)
+	if err != nil {
+		return b.handleReplyWaitError(ctx, msg, err)
+	}
+	if err := validateCommittedPayload(payload, msg.WorkspaceRoot, sessionRow.ID, turnID); err != nil {
+		return b.handleReplyWaitError(ctx, msg, err)
+	}
+
+	if err := postFinalReply(ctx, b.replies, msg.ChannelID, msg.DiscordMessageID, payload.Text, b.cfg); err != nil {
+		statusErr := b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusFinalPostFailed, err.Error())
+		return joinErrors(err, statusErr)
+	}
+
+	return b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusFinalPosted, "")
+}
+
+func (b *Bridge) failSubmit(ctx context.Context, msg AcceptedMessage, cause error) error {
+	statusErr := b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusSubmitFailed, cause.Error())
+	replyErr := postGenericReply(ctx, b.replies, msg.ChannelID, msg.DiscordMessageID, genericReplySubmitFailed)
+	return joinErrors(cause, statusErr, replyErr)
+}
+
+func (b *Bridge) handleReplyWaitError(ctx context.Context, msg AcceptedMessage, waitErr error) error {
+	if errors.Is(waitErr, context.DeadlineExceeded) {
+		statusErr := b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusReplyWaitExpired, waitErr.Error())
+		replyErr := postGenericReply(ctx, b.replies, msg.ChannelID, msg.DiscordMessageID, genericReplyTimeout)
+		return joinErrors(waitErr, statusErr, replyErr)
+	}
+	statusErr := b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusRuntimeFailed, waitErr.Error())
+	replyErr := postGenericReply(ctx, b.replies, msg.ChannelID, msg.DiscordMessageID, genericReplyRuntime)
+	return joinErrors(waitErr, statusErr, replyErr)
+}
+
+func validateCommittedPayload(payload types.ParentReplyCommittedPayload, workspaceRoot, sessionID, turnID string) error {
+	if strings.TrimSpace(payload.TurnID) == "" {
+		return errors.New("parent reply turn id is empty")
+	}
+	if strings.TrimSpace(payload.TurnID) != strings.TrimSpace(turnID) {
+		return fmt.Errorf("parent reply turn mismatch: got %q, want %q", payload.TurnID, turnID)
+	}
+	if strings.TrimSpace(payload.SessionID) == "" {
+		return errors.New("parent reply session id is empty")
+	}
+	if strings.TrimSpace(payload.SessionID) != strings.TrimSpace(sessionID) {
+		return fmt.Errorf("parent reply session mismatch: got %q, want %q", payload.SessionID, sessionID)
+	}
+	if strings.TrimSpace(payload.WorkspaceRoot) == "" {
+		return errors.New("parent reply workspace root is empty")
+	}
+	if strings.TrimSpace(payload.WorkspaceRoot) != strings.TrimSpace(workspaceRoot) {
+		return fmt.Errorf("parent reply workspace mismatch: got %q, want %q", payload.WorkspaceRoot, workspaceRoot)
+	}
+	return nil
+}
+
+func (b *Bridge) waitForParentReplyCommitted(ctx context.Context, sessionID, turnID string) (types.ParentReplyCommittedPayload, error) {
+	timeout := b.resolveReplyWaitTimeout()
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return b.waiter.WaitParentReplyCommitted(waitCtx, sessionID, turnID)
+}
+
+func (b *Bridge) resolveReplyWaitTimeout() time.Duration {
+	if b.replyWaitTimeout > 0 {
+		return b.replyWaitTimeout
+	}
+	seconds := b.cfg.ReplyWaitTimeoutSeconds
+	if seconds <= 0 {
+		return defaultReplyWaitTimeout
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func (b *Bridge) newTurn(sessionID, contextHeadID, userMessage string) types.Turn {
+	now := time.Now().UTC()
+	if b.now != nil {
+		now = b.now().UTC()
+	}
+	return types.Turn{
+		ID:           types.NewID("turn"),
+		SessionID:    strings.TrimSpace(sessionID),
+		ContextHeadID: strings.TrimSpace(contextHeadID),
+		Kind:         types.TurnKindUserMessage,
+		State:        types.TurnStateCreated,
+		UserMessage:  strings.TrimSpace(userMessage),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+}
+
+func (b *Bridge) validateDependencies() error {
+	switch {
+	case b.state == nil:
+		return errors.New("discord bridge state store is not configured")
+	case b.store == nil:
+		return errors.New("discord bridge runtime store is not configured")
+	case b.manager == nil:
+		return errors.New("discord bridge runtime manager is not configured")
+	case b.waiter == nil:
+		return errors.New("discord bridge parent reply waiter is not configured")
+	case b.replies == nil:
+		return errors.New("discord bridge reply poster is not configured")
+	default:
+		return nil
+	}
+}
+
+func normalizeAcceptedMessage(msg AcceptedMessage) AcceptedMessage {
+	msg.DiscordMessageID = strings.TrimSpace(msg.DiscordMessageID)
+	msg.GuildID = strings.TrimSpace(msg.GuildID)
+	msg.ChannelID = strings.TrimSpace(msg.ChannelID)
+	msg.AuthorID = strings.TrimSpace(msg.AuthorID)
+	msg.WorkspaceRoot = strings.TrimSpace(msg.WorkspaceRoot)
+	msg.CleanedText = strings.TrimSpace(msg.CleanedText)
+	return msg
+}
+
+func joinErrors(errs ...error) error {
+	var nonNil []error
+	for _, err := range errs {
+		if err != nil {
+			nonNil = append(nonNil, err)
+		}
+	}
+	if len(nonNil) == 0 {
+		return nil
+	}
+	return errors.Join(nonNil...)
+}
