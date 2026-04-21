@@ -169,7 +169,6 @@ func completeAssistantOnlyTurn(
 		}
 		writeContextHeadID = resolvedContextHeadID
 	}
-
 	nextPositionBeforeFlush := state.nextPosition
 	var err error
 	state.nextPosition, _, err = flushAssistantItems(ctx, e.store, state.sessionID, writeContextHeadID, in.Turn.ID, state.nextPosition, orderedAssistantItems, 0, "", &state.req, state.nativeContinuation)
