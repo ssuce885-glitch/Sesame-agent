@@ -472,7 +472,7 @@ func minWatcherInterval(signals []compiledWatcherSignal) time.Duration {
 
 func normalizeTriggerOn(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "stdout_contains", "stderr_contains", "output_contains":
+	case "stdout_contains", "stderr_contains", "output_contains", "script_status":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return "nonzero_exit"

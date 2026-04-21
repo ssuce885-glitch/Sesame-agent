@@ -63,6 +63,7 @@ func NormalizeAutomationResponsePlanJSON(raw json.RawMessage) json.RawMessage {
 
 func normalizeAutomationResponsePlanV2(object map[string]any) ResponsePlanV2 {
 	phases, _ := object["phases"].([]any)
+	_, hasPhases := object["phases"]
 	normalized := make([]AutomationPhasePlan, 0, len(phases))
 	for _, rawPhase := range phases {
 		phaseObject, ok := rawPhase.(map[string]any)
@@ -79,6 +80,12 @@ func normalizeAutomationResponsePlanV2(object map[string]any) ResponsePlanV2 {
 			OnSuccess:   normalizeAutomationPhaseTransitionAction(normalizeAutomationAsString(phaseObject["on_success"]), AutomationPhaseTransitionComplete),
 			OnFailure:   normalizeAutomationPhaseTransitionAction(normalizeAutomationAsString(phaseObject["on_failure"]), AutomationPhaseTransitionEscalate),
 		})
+	}
+	if hasPhases && len(phases) == 0 {
+		return ResponsePlanV2{
+			SchemaVersion: ResponsePlanSchemaVersionV2,
+			Phases:        []AutomationPhasePlan{},
+		}
 	}
 	if len(normalized) == 0 {
 		return normalizeAutomationResponsePlanShorthand(object)

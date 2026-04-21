@@ -28,6 +28,8 @@ func NewRegistry() *Registry {
 	r.Register(fileEditTool{})
 	r.Register(applyPatchTool{})
 	r.Register(automationApplyTool{})
+	r.Register(automationConfigureDispatchPolicyTool{})
+	r.Register(automationConfigureIncidentPolicyTool{})
 	r.Register(automationCreateDetectorTool{})
 	r.Register(automationControlTool{})
 	r.Register(automationGetTool{})

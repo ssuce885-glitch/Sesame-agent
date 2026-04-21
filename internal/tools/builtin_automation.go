@@ -94,7 +94,7 @@ func (incidentListTool) IsEnabled(execCtx ExecContext) bool {
 func (automationApplyTool) Definition() Definition {
 	return Definition{
 		Name:        "automation_apply",
-		Description: "Persist an automation spec plus any workspace assets. For script-backed automations, save detector facts in scripts/detect.sh and child-agent strategy in child_agents/<phase>/<agent_id>/{strategy.json,prompt.md,skills.json} before applying.",
+		Description: "Advanced path: persist an explicitly authored low-level automation spec plus workspace assets after user approval. Prefer high-level builder tools such as automation_create_detector for detector-first native flows; use this tool for precise schema control, migration-style edits, or other expert-level overrides. For script-backed automations, save detector facts in scripts/detect.sh and child-agent strategy in child_agents/<phase>/<agent_id>/{strategy.json,prompt.md,skills.json} before applying.",
 		InputSchema: objectSchema(map[string]any{
 			"confirmed": map[string]any{
 				"type":        "boolean",
@@ -104,7 +104,7 @@ func (automationApplyTool) Definition() Definition {
 			"assets": map[string]any{
 				"type":        "array",
 				"items":       automationAssetSchema(),
-				"description": "Workspace files to persist before validation, including scripts/detect.sh and child_agents/<phase>/<agent_id> asset bundles.",
+				"description": "Workspace files to persist before advanced-schema validation, including scripts/detect.sh and child_agents/<phase>/<agent_id> asset bundles.",
 			},
 		}, "confirmed", "spec"),
 		OutputSchema: automationSpecOutputSchema(),
