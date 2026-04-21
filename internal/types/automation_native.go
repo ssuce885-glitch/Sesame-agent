@@ -29,9 +29,9 @@ type NativeDetectorBuilderInput struct {
 	Target       map[string]any     `json:"target,omitempty"`
 	Schedule     map[string]any     `json:"schedule,omitempty"`
 	Condition    map[string]any     `json:"condition,omitempty"`
-	FactsSchema  map[string]any     `json:"facts_schema,omitempty"`
+	FactsSchema  map[string]string  `json:"facts_schema,omitempty"`
 	Dedupe       map[string]any     `json:"dedupe,omitempty"`
-	State        map[string]any     `json:"state,omitempty"`
+	State        string             `json:"state,omitempty"`
 }
 
 type NativeIncidentPolicyInput struct {
