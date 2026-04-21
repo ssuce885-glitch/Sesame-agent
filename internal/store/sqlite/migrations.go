@@ -993,24 +993,37 @@ func (s *Store) backfillLegacyChildAgentSpecs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	type legacyChildAgentSpecRow struct {
+		id        string
+		payload   string
+		createdAt string
+		updatedAt string
+	}
+	loaded := make([]legacyChildAgentSpecRow, 0)
 
 	for rows.Next() {
-		var (
-			id        string
-			payload   string
-			createdAt string
-			updatedAt string
-		)
-		if err := rows.Scan(&id, &payload, &createdAt, &updatedAt); err != nil {
+		var row legacyChildAgentSpecRow
+		if err := rows.Scan(&row.id, &row.payload, &row.createdAt, &row.updatedAt); err != nil {
+			rows.Close()
 			return err
 		}
+		loaded = append(loaded, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, row := range loaded {
 		var spec types.ChildAgentSpec
-		if err := json.Unmarshal([]byte(payload), &spec); err != nil {
+		if err := json.Unmarshal([]byte(row.payload), &spec); err != nil {
 			return err
 		}
-		spec.AgentID = firstNonEmptyReportingString(spec.AgentID, id)
-		applyLegacyReportingTimestamps(&spec, createdAt, updatedAt)
+		spec.AgentID = firstNonEmptyReportingString(spec.AgentID, row.id)
+		applyLegacyReportingTimestamps(&spec, row.createdAt, row.updatedAt)
 		if strings.TrimSpace(spec.SessionID) == "" {
 			spec.SessionID = s.scheduledJobOwnerSession(ctx, spec.AgentID)
 		}
@@ -1021,7 +1034,7 @@ func (s *Store) backfillLegacyChildAgentSpecs(ctx context.Context) error {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *Store) backfillLegacyReportGroups(ctx context.Context) error {
@@ -1033,24 +1046,37 @@ func (s *Store) backfillLegacyReportGroups(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	type legacyReportGroupRow struct {
+		id        string
+		payload   string
+		createdAt string
+		updatedAt string
+	}
+	loaded := make([]legacyReportGroupRow, 0)
 
 	for rows.Next() {
-		var (
-			id        string
-			payload   string
-			createdAt string
-			updatedAt string
-		)
-		if err := rows.Scan(&id, &payload, &createdAt, &updatedAt); err != nil {
+		var row legacyReportGroupRow
+		if err := rows.Scan(&row.id, &row.payload, &row.createdAt, &row.updatedAt); err != nil {
+			rows.Close()
 			return err
 		}
+		loaded = append(loaded, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, row := range loaded {
 		var group types.ReportGroup
-		if err := json.Unmarshal([]byte(payload), &group); err != nil {
+		if err := json.Unmarshal([]byte(row.payload), &group); err != nil {
 			return err
 		}
-		group.GroupID = firstNonEmptyReportingString(group.GroupID, id)
-		applyLegacyReportingTimestamps(&group, createdAt, updatedAt)
+		group.GroupID = firstNonEmptyReportingString(group.GroupID, row.id)
+		applyLegacyReportingTimestamps(&group, row.createdAt, row.updatedAt)
 		if strings.TrimSpace(group.SessionID) == "" {
 			for _, source := range group.Sources {
 				group.SessionID = s.scheduledJobOwnerSession(ctx, source)
@@ -1066,7 +1092,7 @@ func (s *Store) backfillLegacyReportGroups(ctx context.Context) error {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *Store) backfillLegacyChildAgentResults(ctx context.Context) error {
@@ -1078,24 +1104,37 @@ func (s *Store) backfillLegacyChildAgentResults(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	type legacyChildAgentResultRow struct {
+		id        string
+		payload   string
+		createdAt string
+		updatedAt string
+	}
+	loaded := make([]legacyChildAgentResultRow, 0)
 
 	for rows.Next() {
-		var (
-			id        string
-			payload   string
-			createdAt string
-			updatedAt string
-		)
-		if err := rows.Scan(&id, &payload, &createdAt, &updatedAt); err != nil {
+		var row legacyChildAgentResultRow
+		if err := rows.Scan(&row.id, &row.payload, &row.createdAt, &row.updatedAt); err != nil {
+			rows.Close()
 			return err
 		}
+		loaded = append(loaded, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, row := range loaded {
 		var result types.ChildAgentResult
-		if err := json.Unmarshal([]byte(payload), &result); err != nil {
+		if err := json.Unmarshal([]byte(row.payload), &result); err != nil {
 			return err
 		}
-		result.ResultID = firstNonEmptyReportingString(result.ResultID, id)
-		applyLegacyReportingTimestamps(&result, createdAt, updatedAt)
+		result.ResultID = firstNonEmptyReportingString(result.ResultID, row.id)
+		applyLegacyReportingTimestamps(&result, row.createdAt, row.updatedAt)
 		if strings.TrimSpace(result.SessionID) == "" {
 			result.SessionID = s.scheduledJobOwnerSession(ctx, result.AgentID)
 		}
@@ -1118,7 +1157,7 @@ func (s *Store) backfillLegacyChildAgentResults(ctx context.Context) error {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *Store) backfillLegacyDigestRecords(ctx context.Context) error {
@@ -1130,24 +1169,37 @@ func (s *Store) backfillLegacyDigestRecords(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	type legacyDigestRecordRow struct {
+		id        string
+		payload   string
+		createdAt string
+		updatedAt string
+	}
+	loaded := make([]legacyDigestRecordRow, 0)
 
 	for rows.Next() {
-		var (
-			id        string
-			payload   string
-			createdAt string
-			updatedAt string
-		)
-		if err := rows.Scan(&id, &payload, &createdAt, &updatedAt); err != nil {
+		var row legacyDigestRecordRow
+		if err := rows.Scan(&row.id, &row.payload, &row.createdAt, &row.updatedAt); err != nil {
+			rows.Close()
 			return err
 		}
+		loaded = append(loaded, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, row := range loaded {
 		var digest types.DigestRecord
-		if err := json.Unmarshal([]byte(payload), &digest); err != nil {
+		if err := json.Unmarshal([]byte(row.payload), &digest); err != nil {
 			return err
 		}
-		digest.DigestID = firstNonEmptyReportingString(digest.DigestID, id)
-		applyLegacyReportingTimestamps(&digest, createdAt, updatedAt)
+		digest.DigestID = firstNonEmptyReportingString(digest.DigestID, row.id)
+		applyLegacyReportingTimestamps(&digest, row.createdAt, row.updatedAt)
 		if strings.TrimSpace(digest.SessionID) == "" && strings.TrimSpace(digest.GroupID) != "" {
 			group, ok, err := s.GetReportGroup(ctx, digest.GroupID)
 			if err != nil {
@@ -1164,7 +1216,7 @@ func (s *Store) backfillLegacyDigestRecords(ctx context.Context) error {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *Store) backfillLegacyReportMailboxItems(ctx context.Context) error {
@@ -1175,25 +1227,38 @@ func (s *Store) backfillLegacyReportMailboxItems(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	type legacyReportMailboxRow struct {
+		payload        string
+		observedAt     string
+		injectedTurnID string
+		injectedAt     string
+		createdAt      string
+		updatedAt      string
+	}
+	loaded := make([]legacyReportMailboxRow, 0)
 
 	for rows.Next() {
-		var (
-			payload        string
-			observedAt     string
-			injectedTurnID string
-			injectedAt     string
-			createdAt      string
-			updatedAt      string
-		)
-		if err := rows.Scan(&payload, &observedAt, &injectedTurnID, &injectedAt, &createdAt, &updatedAt); err != nil {
+		var row legacyReportMailboxRow
+		if err := rows.Scan(&row.payload, &row.observedAt, &row.injectedTurnID, &row.injectedAt, &row.createdAt, &row.updatedAt); err != nil {
+			rows.Close()
 			return err
 		}
+		loaded = append(loaded, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, row := range loaded {
 		var item types.ReportMailboxItem
-		if err := json.Unmarshal([]byte(payload), &item); err != nil {
+		if err := json.Unmarshal([]byte(row.payload), &item); err != nil {
 			return err
 		}
-		applyLegacyReportMailboxTimes(&item, observedAt, injectedTurnID, injectedAt, createdAt, updatedAt)
+		applyLegacyReportMailboxTimes(&item, row.observedAt, row.injectedTurnID, row.injectedAt, row.createdAt, row.updatedAt)
 		if strings.TrimSpace(item.WorkspaceRoot) == "" && strings.TrimSpace(item.SessionID) != "" {
 			item.WorkspaceRoot = s.workspaceRootForSession(ctx, item.SessionID)
 		}
@@ -1205,7 +1270,7 @@ func (s *Store) backfillLegacyReportMailboxItems(ctx context.Context) error {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *Store) backfillLegacyReportWorkspaceRoots(ctx context.Context) error {
