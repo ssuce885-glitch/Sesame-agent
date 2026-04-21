@@ -28,10 +28,10 @@ type daemonDiscordConnector interface {
 }
 
 type discordBindingLoader func(workspaceRoot string) (discord.WorkspaceBinding, error)
-type discordConnectorFactory func(global discord.GlobalConfig, binding discord.WorkspaceBinding) (daemonDiscordConnector, error)
+type discordConnectorFactory func(cfg discord.ServiceConfig) (daemonDiscordConnector, error)
 
-func startDiscordConnectorIfConfigured(ctx context.Context, cfg config.Config, userCfg config.UserConfig, loadBinding discordBindingLoader, factory discordConnectorFactory) (daemonDiscordConnector, error) {
-	connector, err := buildDiscordConnector(cfg, userCfg, loadBinding, factory)
+func startDiscordConnectorIfConfigured(ctx context.Context, cfg config.Config, userCfg config.UserConfig, runtime *Runtime, loadBinding discordBindingLoader, factory discordConnectorFactory) (daemonDiscordConnector, error) {
+	connector, err := buildDiscordConnector(cfg, userCfg, runtime, loadBinding, factory)
 	if err != nil || connector == nil {
 		return connector, err
 	}
@@ -43,8 +43,11 @@ func startDiscordConnectorIfConfigured(ctx context.Context, cfg config.Config, u
 	return connector, nil
 }
 
-func buildDiscordConnector(cfg config.Config, userCfg config.UserConfig, loadBinding discordBindingLoader, factory discordConnectorFactory) (daemonDiscordConnector, error) {
+func buildDiscordConnector(cfg config.Config, userCfg config.UserConfig, runtime *Runtime, loadBinding discordBindingLoader, factory discordConnectorFactory) (daemonDiscordConnector, error) {
 	if !userCfg.Discord.Enabled {
+		return nil, nil
+	}
+	if runtime == nil || runtime.Store == nil || runtime.SessionManager == nil || runtime.Bus == nil {
 		return nil, nil
 	}
 
@@ -52,11 +55,8 @@ func buildDiscordConnector(cfg config.Config, userCfg config.UserConfig, loadBin
 		loadBinding = discord.LoadWorkspaceBinding
 	}
 	if factory == nil {
-		factory = func(global discord.GlobalConfig, binding discord.WorkspaceBinding) (daemonDiscordConnector, error) {
-			return discord.NewService(discord.ServiceConfig{
-				Global:  global,
-				Binding: binding,
-			})
+		factory = func(cfg discord.ServiceConfig) (daemonDiscordConnector, error) {
+			return discord.NewService(cfg)
 		}
 	}
 
@@ -68,13 +68,22 @@ func buildDiscordConnector(cfg config.Config, userCfg config.UserConfig, loadBin
 		return nil, nil
 	}
 
-	return factory(discord.GlobalConfig{
-		Enabled:              userCfg.Discord.Enabled,
-		BotTokenEnv:          userCfg.Discord.BotTokenEnv,
-		GatewayIntents:       append([]string(nil), userCfg.Discord.GatewayIntents...),
-		MessageContentIntent: userCfg.Discord.MessageContentIntent,
-		LogIgnoredMessages:   userCfg.Discord.LogIgnoredMessages,
-	}, binding)
+	return factory(discord.ServiceConfig{
+		Global: discord.GlobalConfig{
+			Enabled:              userCfg.Discord.Enabled,
+			BotTokenEnv:          userCfg.Discord.BotTokenEnv,
+			GatewayIntents:       append([]string(nil), userCfg.Discord.GatewayIntents...),
+			MessageContentIntent: userCfg.Discord.MessageContentIntent,
+			LogIgnoredMessages:   userCfg.Discord.LogIgnoredMessages,
+		},
+		Binding:       binding,
+		WorkspaceRoot: cfg.Paths.WorkspaceRoot,
+		DB:            runtime.Store.DB(),
+		RuntimeStore:  runtime.Store,
+		Manager:       runtime.SessionManager,
+		EventStore:    runtime.Store,
+		Bus:           runtime.Bus,
+	})
 }
 
 func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, modelClient model.StreamingClient) (*Runtime, error) {

@@ -77,7 +77,7 @@ func Run(ctx context.Context) error {
 		return err
 	}
 
-	discordConnector, err := startDiscordConnectorIfConfigured(ctx, cfg, userCfg, nil, nil)
+	discordConnector, err := startDiscordConnectorIfConfigured(ctx, cfg, userCfg, runtime, nil, nil)
 	if err != nil {
 		return err
 	}

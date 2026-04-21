@@ -4,6 +4,8 @@ go 1.24.0
 
 require modernc.org/sqlite v1.35.0
 
+require github.com/coder/websocket v1.8.12
+
 require (
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect

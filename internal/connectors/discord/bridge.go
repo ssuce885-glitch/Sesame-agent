@@ -57,6 +57,7 @@ type Bridge struct {
 
 	replyWaitTimeout time.Duration
 	now              func() time.Time
+	backgroundCtx    context.Context
 }
 
 func (b *Bridge) HandleAcceptedMessage(ctx context.Context, msg AcceptedMessage) error {
@@ -111,10 +112,10 @@ func (b *Bridge) HandleAcceptedMessage(ctx context.Context, msg AcceptedMessage)
 
 	payload, err := b.waitForParentReplyCommitted(ctx, sessionRow.ID, turnID)
 	if err != nil {
-		return b.handleReplyWaitError(ctx, msg, err)
+		return b.handleReplyWaitError(ctx, msg, sessionRow.ID, turnID, err)
 	}
 	if err := validateCommittedPayload(payload, msg.WorkspaceRoot, sessionRow.ID, turnID); err != nil {
-		return b.handleReplyWaitError(ctx, msg, err)
+		return b.handleReplyWaitError(ctx, msg, sessionRow.ID, turnID, err)
 	}
 
 	if err := postFinalReply(ctx, b.replies, msg.ChannelID, msg.DiscordMessageID, payload.Text, b.cfg); err != nil {
@@ -131,15 +132,40 @@ func (b *Bridge) failSubmit(ctx context.Context, msg AcceptedMessage, cause erro
 	return joinErrors(cause, statusErr, replyErr)
 }
 
-func (b *Bridge) handleReplyWaitError(ctx context.Context, msg AcceptedMessage, waitErr error) error {
+func (b *Bridge) handleReplyWaitError(ctx context.Context, msg AcceptedMessage, sessionID, turnID string, waitErr error) error {
 	if errors.Is(waitErr, context.DeadlineExceeded) {
 		statusErr := b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusReplyWaitExpired, waitErr.Error())
 		replyErr := postGenericReply(ctx, b.replies, msg.ChannelID, msg.DiscordMessageID, genericReplyTimeout)
+		b.watchLateParentReply(msg, sessionID, turnID)
 		return joinErrors(waitErr, statusErr, replyErr)
 	}
 	statusErr := b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusRuntimeFailed, waitErr.Error())
 	replyErr := postGenericReply(ctx, b.replies, msg.ChannelID, msg.DiscordMessageID, genericReplyRuntime)
 	return joinErrors(waitErr, statusErr, replyErr)
+}
+
+func (b *Bridge) watchLateParentReply(msg AcceptedMessage, sessionID, turnID string) {
+	if b.waiter == nil || b.state == nil || b.replies == nil {
+		return
+	}
+	waitCtx := b.backgroundCtx
+	if waitCtx == nil {
+		waitCtx = context.Background()
+	}
+	go func() {
+		payload, err := b.waiter.WaitParentReplyCommitted(waitCtx, sessionID, turnID)
+		if err != nil {
+			return
+		}
+		if err := validateCommittedPayload(payload, msg.WorkspaceRoot, sessionID, turnID); err != nil {
+			return
+		}
+		if err := postFinalReply(waitCtx, b.replies, msg.ChannelID, msg.DiscordMessageID, payload.Text, b.cfg); err != nil {
+			_ = b.state.SetDiscordIngressStatus(waitCtx, msg.DiscordMessageID, discordIngressStatusFinalPostFailed, err.Error())
+			return
+		}
+		_ = b.state.SetDiscordIngressStatus(waitCtx, msg.DiscordMessageID, discordIngressStatusFinalPosted, "")
+	}()
 }
 
 func validateCommittedPayload(payload types.ParentReplyCommittedPayload, workspaceRoot, sessionID, turnID string) error {
@@ -188,14 +214,14 @@ func (b *Bridge) newTurn(sessionID, contextHeadID, userMessage string) types.Tur
 		now = b.now().UTC()
 	}
 	return types.Turn{
-		ID:           types.NewID("turn"),
-		SessionID:    strings.TrimSpace(sessionID),
+		ID:            types.NewID("turn"),
+		SessionID:     strings.TrimSpace(sessionID),
 		ContextHeadID: strings.TrimSpace(contextHeadID),
-		Kind:         types.TurnKindUserMessage,
-		State:        types.TurnStateCreated,
-		UserMessage:  strings.TrimSpace(userMessage),
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		Kind:          types.TurnKindUserMessage,
+		State:         types.TurnStateCreated,
+		UserMessage:   strings.TrimSpace(userMessage),
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 }
 

@@ -14,6 +14,13 @@ type Store struct {
 	db *sql.DB
 }
 
+func (s *Store) DB() *sql.DB {
+	if s == nil {
+		return nil
+	}
+	return s.db
+}
+
 const sqliteBusyTimeoutMillis = 5000
 
 func Open(path string) (*Store, error) {
