@@ -7,6 +7,7 @@ import (
 
 	"go-agent/internal/automation"
 	"go-agent/internal/config"
+	"go-agent/internal/connectors/discord"
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/engine"
 	"go-agent/internal/model"
@@ -20,6 +21,61 @@ import (
 	"go-agent/internal/task"
 	"go-agent/internal/tools"
 )
+
+type daemonDiscordConnector interface {
+	Start(context.Context) error
+	Close() error
+}
+
+type discordBindingLoader func(workspaceRoot string) (discord.WorkspaceBinding, error)
+type discordConnectorFactory func(global discord.GlobalConfig, binding discord.WorkspaceBinding) (daemonDiscordConnector, error)
+
+func startDiscordConnectorIfConfigured(ctx context.Context, cfg config.Config, userCfg config.UserConfig, loadBinding discordBindingLoader, factory discordConnectorFactory) (daemonDiscordConnector, error) {
+	connector, err := buildDiscordConnector(cfg, userCfg, loadBinding, factory)
+	if err != nil || connector == nil {
+		return connector, err
+	}
+
+	if err := connector.Start(ctx); err != nil {
+		_ = connector.Close()
+		return nil, err
+	}
+	return connector, nil
+}
+
+func buildDiscordConnector(cfg config.Config, userCfg config.UserConfig, loadBinding discordBindingLoader, factory discordConnectorFactory) (daemonDiscordConnector, error) {
+	if !userCfg.Discord.Enabled {
+		return nil, nil
+	}
+
+	if loadBinding == nil {
+		loadBinding = discord.LoadWorkspaceBinding
+	}
+	if factory == nil {
+		factory = func(global discord.GlobalConfig, binding discord.WorkspaceBinding) (daemonDiscordConnector, error) {
+			return discord.NewService(discord.ServiceConfig{
+				Global:  global,
+				Binding: binding,
+			})
+		}
+	}
+
+	binding, err := loadBinding(cfg.Paths.WorkspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	if !binding.Enabled {
+		return nil, nil
+	}
+
+	return factory(discord.GlobalConfig{
+		Enabled:              userCfg.Discord.Enabled,
+		BotTokenEnv:          userCfg.Discord.BotTokenEnv,
+		GatewayIntents:       append([]string(nil), userCfg.Discord.GatewayIntents...),
+		MessageContentIntent: userCfg.Discord.MessageContentIntent,
+		LogIgnoredMessages:   userCfg.Discord.LogIgnoredMessages,
+	}, binding)
+}
 
 func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, modelClient model.StreamingClient) (*Runtime, error) {
 	bus := stream.NewBus()

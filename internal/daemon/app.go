@@ -24,6 +24,10 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	userCfg, err := config.LoadUserConfig()
+	if err != nil {
+		return err
+	}
 	if missing := config.MissingSetupFields(cfg); len(missing) > 0 {
 		configPath, _ := config.GlobalConfigPath()
 		return fmt.Errorf("sesame daemon is not configured: missing %s in %s", strings.Join(missing, ", "), configPath)
@@ -72,6 +76,19 @@ func Run(ctx context.Context) error {
 	if err := recoverRuntimeState(ctx, runtime.Store, runtime.SessionManager); err != nil {
 		return err
 	}
+
+	discordConnector, err := startDiscordConnectorIfConfigured(ctx, cfg, userCfg, nil, nil)
+	if err != nil {
+		return err
+	}
+	if discordConnector != nil {
+		defer func() {
+			if closeErr := discordConnector.Close(); closeErr != nil {
+				slog.Error("discord connector close failed", "error", closeErr)
+			}
+		}()
+	}
+
 	dispatcher := automation.NewDispatcher(runtime.Store, automationTaskLauncher{
 		store:   runtime.Store,
 		manager: runtime.TaskManager,
