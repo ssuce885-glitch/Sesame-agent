@@ -24,19 +24,30 @@ const (
 
 type NativeDetectorBuilderInput struct {
 	AutomationID string             `json:"automation_id"`
-	Kind         NativeDetectorKind `json:"kind"`
-	Args         map[string]any     `json:"args,omitempty"`
+	Title        string             `json:"title"`
+	DetectorKind NativeDetectorKind `json:"detector_kind"`
+	Target       map[string]any     `json:"target,omitempty"`
+	Schedule     map[string]any     `json:"schedule,omitempty"`
+	Condition    map[string]any     `json:"condition,omitempty"`
+	FactsSchema  map[string]any     `json:"facts_schema,omitempty"`
+	Dedupe       map[string]any     `json:"dedupe,omitempty"`
+	State        map[string]any     `json:"state,omitempty"`
 }
 
 type NativeIncidentPolicyInput struct {
-	AutomationID string             `json:"automation_id"`
-	DispatchMode NativeDispatchMode `json:"dispatch_mode"`
-	Args         map[string]any     `json:"args,omitempty"`
+	AutomationID     string         `json:"automation_id"`
+	CreateIncidentOn string         `json:"create_incident_on"`
+	SummaryTemplate  string         `json:"summary_template,omitempty"`
+	DedupePolicy     map[string]any `json:"dedupe_policy,omitempty"`
+	Severity         string         `json:"severity,omitempty"`
+	AutoCloseMinutes int            `json:"auto_close_minutes,omitempty"`
 }
 
 type NativeDispatchPolicyInput struct {
 	AutomationID string             `json:"automation_id"`
-	Mode         NativeDispatchMode `json:"mode"`
+	DispatchMode NativeDispatchMode `json:"dispatch_mode"`
 	ActionKind   NativeActionKind   `json:"action_kind"`
-	ActionArgs   map[string]any     `json:"action_args,omitempty"`
+	ActionArgs   map[string]string  `json:"action_args,omitempty"`
+	Verification map[string]any     `json:"verification,omitempty"`
+	Reporting    map[string]any     `json:"reporting,omitempty"`
 }
