@@ -243,6 +243,20 @@ func (s *Store) migrate(ctx context.Context) error {
 			payload text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists discord_ingress (
+			discord_message_id text primary key,
+			guild_id text not null,
+			channel_id text not null,
+			author_id text not null,
+			workspace_root text not null,
+			status text not null,
+			sesame_turn_id text not null default '',
+			error_message text not null default '',
+			created_at text not null,
+			updated_at text not null
+		);`,
+		`create index if not exists discord_ingress_workspace_status_idx
+			on discord_ingress(workspace_root, status, updated_at);`,
 		`create table if not exists child_agent_specs (
 			id text primary key,
 			session_id text not null default '',
