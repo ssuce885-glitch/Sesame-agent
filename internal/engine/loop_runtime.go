@@ -490,6 +490,7 @@ func buildParentReplyCommittedPayload(
 	store ConversationStore,
 	session types.Session,
 	turn types.Turn,
+	contextHeadID string,
 	nextPositionBeforeFlush int,
 	orderedAssistantItems []model.ConversationItem,
 ) (*types.ParentReplyCommittedPayload, error) {
@@ -512,16 +513,16 @@ func buildParentReplyCommittedPayload(
 		return nil, nil
 	}
 
-	contextHeadID, err := resolveConversationWriteContextHeadID(ctx, store, turn.ContextHeadID)
-	if err != nil {
-		return nil, nil
+	if strings.TrimSpace(contextHeadID) == "" {
+		return nil, fmt.Errorf("resolve committed parent reply item id: context head id is empty")
 	}
+
 	itemID, ok, err := store.GetConversationItemIDByContextHeadAndPosition(ctx, session.ID, contextHeadID, lastAssistantTextPosition)
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("resolve committed parent reply item id: %w", err)
 	}
 	if !ok || itemID == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("resolve committed parent reply item id: position %d not found", lastAssistantTextPosition)
 	}
 
 	return &types.ParentReplyCommittedPayload{

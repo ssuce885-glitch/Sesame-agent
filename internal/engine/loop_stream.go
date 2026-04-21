@@ -161,9 +161,18 @@ func completeAssistantOnlyTurn(
 	orderedAssistantItems []model.ConversationItem,
 	usageTotals loopUsageTotals,
 ) error {
+	writeContextHeadID := in.Turn.ContextHeadID
+	if e.store != nil {
+		resolvedContextHeadID, err := resolveConversationWriteContextHeadID(ctx, e.store, in.Turn.ContextHeadID)
+		if err != nil {
+			return emitter.Fail(ctx, err)
+		}
+		writeContextHeadID = resolvedContextHeadID
+	}
+
 	nextPositionBeforeFlush := state.nextPosition
 	var err error
-	state.nextPosition, _, err = flushAssistantItems(ctx, e.store, state.sessionID, in.Turn.ContextHeadID, in.Turn.ID, state.nextPosition, orderedAssistantItems, 0, "", &state.req, state.nativeContinuation)
+	state.nextPosition, _, err = flushAssistantItems(ctx, e.store, state.sessionID, writeContextHeadID, in.Turn.ID, state.nextPosition, orderedAssistantItems, 0, "", &state.req, state.nativeContinuation)
 	if err != nil {
 		return emitter.Fail(ctx, err)
 	}
@@ -180,7 +189,7 @@ func completeAssistantOnlyTurn(
 		usageTotals.outputTokens,
 		usageTotals.cachedTokens,
 	)
-	parentReplyCommitted, err := buildParentReplyCommittedPayload(ctx, e.store, in.Session, in.Turn, nextPositionBeforeFlush, orderedAssistantItems)
+	parentReplyCommitted, err := buildParentReplyCommittedPayload(ctx, e.store, in.Session, in.Turn, writeContextHeadID, nextPositionBeforeFlush, orderedAssistantItems)
 	if err != nil {
 		return emitter.Fail(ctx, err)
 	}
