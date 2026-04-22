@@ -355,7 +355,7 @@ func (a App) runSetup(ctx context.Context, cfg config.Config, action string) err
 	if a.RunSetup != nil {
 		return a.RunSetup(ctx, a.Stdin, a.Stdout, cfg, action)
 	}
-	return ensureRuntimeConfigured(a.Stdin, a.Stdout, cfg)
+	return ensureRuntimeConfiguredAction(a.Stdin, a.Stdout, cfg, action)
 }
 
 func (a App) newClient(cfg config.Config) RuntimeClient {
