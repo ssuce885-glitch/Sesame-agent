@@ -67,6 +67,12 @@ To reopen provider configuration later:
 sesame configure
 ```
 
+`configure` opens a shared configuration home page with two entries:
+- `Model Setup` (required)
+- `Third-Party Integrations` (optional)
+
+Discord setup is under `Third-Party Integrations`. Startup only requires completing `Model Setup`; Discord can be configured later.
+
 When configuration is missing, normal `sesame` startup automatically enters setup.
 
 Or check daemon/runtime status:
@@ -103,6 +109,8 @@ Your model provider configuration lives in:
 ```text
 ~/.sesame/config.json
 ```
+
+Use `sesame configure` any time to return to the shared configuration home page (`Model Setup` and `Third-Party Integrations`).
 
 ## How It Works
 
