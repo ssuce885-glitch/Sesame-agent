@@ -3,31 +3,31 @@ package discord
 import "strings"
 
 type GatewayMessage struct {
-	ID          string
-	GuildID     string
-	ChannelID   string
-	Author      GatewayAuthor
-	Mentions    []GatewayMention
-	Content     string
-	Attachments []GatewayAttachment
-	Embeds      []GatewayEmbed
-	Stickers    []GatewaySticker
-	Poll        *GatewayPoll
-	Components  []GatewayComponent
+	ID          string              `json:"id"`
+	GuildID     string              `json:"guild_id"`
+	ChannelID   string              `json:"channel_id"`
+	Author      GatewayAuthor       `json:"author"`
+	Mentions    []GatewayMention    `json:"mentions"`
+	Content     string              `json:"content"`
+	Attachments []GatewayAttachment `json:"attachments"`
+	Embeds      []GatewayEmbed      `json:"embeds"`
+	Stickers    []GatewaySticker    `json:"sticker_items"`
+	Poll        *GatewayPoll        `json:"poll"`
+	Components  []GatewayComponent  `json:"components"`
 }
 
 type GatewayAuthor struct {
-	ID  string
-	Bot bool
+	ID  string `json:"id"`
+	Bot bool   `json:"bot"`
 }
 
 type GatewayMention struct {
-	ID string
+	ID string `json:"id"`
 }
 
 type GatewayAttachment struct {
-	ID       string
-	Filename string
+	ID       string `json:"id"`
+	Filename string `json:"filename"`
 }
 
 type GatewayEmbed struct{}
