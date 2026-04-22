@@ -155,6 +155,45 @@ func WriteUserConfig(cfg UserConfig) error {
 	return os.WriteFile(paths.GlobalConfigFile, data, 0o600)
 }
 
+func MergeAndWriteUserConfig(patch UserConfig) error {
+	current, err := LoadUserConfig()
+	if err != nil {
+		return err
+	}
+	merged := current
+	if strings.TrimSpace(patch.Provider) != "" {
+		merged.Provider = patch.Provider
+	}
+	if strings.TrimSpace(patch.Model) != "" {
+		merged.Model = patch.Model
+	}
+	if strings.TrimSpace(patch.PermissionProfile) != "" {
+		merged.PermissionProfile = patch.PermissionProfile
+	}
+	if strings.TrimSpace(patch.Listen.Addr) != "" {
+		merged.Listen.Addr = patch.Listen.Addr
+	}
+	if strings.TrimSpace(patch.OpenAI.APIKey) != "" {
+		merged.OpenAI.APIKey = patch.OpenAI.APIKey
+	}
+	if strings.TrimSpace(patch.OpenAI.BaseURL) != "" {
+		merged.OpenAI.BaseURL = patch.OpenAI.BaseURL
+	}
+	if strings.TrimSpace(patch.OpenAI.Model) != "" {
+		merged.OpenAI.Model = patch.OpenAI.Model
+	}
+	if strings.TrimSpace(patch.Anthropic.APIKey) != "" {
+		merged.Anthropic.APIKey = patch.Anthropic.APIKey
+	}
+	if strings.TrimSpace(patch.Anthropic.BaseURL) != "" {
+		merged.Anthropic.BaseURL = patch.Anthropic.BaseURL
+	}
+	if strings.TrimSpace(patch.Anthropic.Model) != "" {
+		merged.Anthropic.Model = patch.Anthropic.Model
+	}
+	return WriteUserConfig(merged)
+}
+
 func EnsureUserConfigFile() (string, bool, error) {
 	paths, err := ResolvePaths("", "")
 	if err != nil {
