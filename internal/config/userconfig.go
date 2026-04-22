@@ -219,8 +219,9 @@ func MergeAndWriteUserConfig(patch UserConfig) error {
 	if err := json.Unmarshal(mergedData, &mergedRoot); err != nil {
 		return err
 	}
-	for key, value := range mergedRoot {
-		existingRoot[key] = value
+	existingRoot, err = mergeRawJSONObjects(existingRoot, mergedRoot)
+	if err != nil {
+		return err
 	}
 
 	out, err := json.MarshalIndent(existingRoot, "", "  ")
@@ -229,6 +230,50 @@ func MergeAndWriteUserConfig(patch UserConfig) error {
 	}
 	out = append(out, '\n')
 	return os.WriteFile(paths.GlobalConfigFile, out, 0o600)
+}
+
+func mergeRawJSONObjects(existing, patch map[string]json.RawMessage) (map[string]json.RawMessage, error) {
+	if existing == nil {
+		existing = map[string]json.RawMessage{}
+	}
+	for key, patchValue := range patch {
+		existingValue, ok := existing[key]
+		if !ok {
+			existing[key] = patchValue
+			continue
+		}
+
+		mergedValue, merged, err := mergeRawJSONValue(existingValue, patchValue)
+		if err != nil {
+			return nil, err
+		}
+		if merged {
+			existing[key] = mergedValue
+			continue
+		}
+		existing[key] = patchValue
+	}
+	return existing, nil
+}
+
+func mergeRawJSONValue(existing, patch json.RawMessage) (json.RawMessage, bool, error) {
+	var existingObj map[string]json.RawMessage
+	if err := json.Unmarshal(existing, &existingObj); err != nil {
+		return nil, false, nil
+	}
+	var patchObj map[string]json.RawMessage
+	if err := json.Unmarshal(patch, &patchObj); err != nil {
+		return nil, false, nil
+	}
+	mergedObj, err := mergeRawJSONObjects(existingObj, patchObj)
+	if err != nil {
+		return nil, false, err
+	}
+	merged, err := json.Marshal(mergedObj)
+	if err != nil {
+		return nil, false, err
+	}
+	return json.RawMessage(merged), true, nil
 }
 
 func EnsureUserConfigFile() (string, bool, error) {
