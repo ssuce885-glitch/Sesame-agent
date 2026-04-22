@@ -191,7 +191,44 @@ func MergeAndWriteUserConfig(patch UserConfig) error {
 	if strings.TrimSpace(patch.Anthropic.Model) != "" {
 		merged.Anthropic.Model = patch.Anthropic.Model
 	}
-	return WriteUserConfig(merged)
+
+	paths, err := ResolvePaths("", "")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(paths.GlobalRoot, 0o755); err != nil {
+		return err
+	}
+
+	existingRoot := map[string]json.RawMessage{}
+	existingData, err := os.ReadFile(paths.GlobalConfigFile)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if err := json.Unmarshal(existingData, &existingRoot); err != nil {
+			return fmt.Errorf("%s: %w", paths.GlobalConfigFile, err)
+		}
+	}
+
+	mergedData, err := json.Marshal(merged)
+	if err != nil {
+		return err
+	}
+	var mergedRoot map[string]json.RawMessage
+	if err := json.Unmarshal(mergedData, &mergedRoot); err != nil {
+		return err
+	}
+	for key, value := range mergedRoot {
+		existingRoot[key] = value
+	}
+
+	out, err := json.MarshalIndent(existingRoot, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+	return os.WriteFile(paths.GlobalConfigFile, out, 0o600)
 }
 
 func EnsureUserConfigFile() (string, bool, error) {
