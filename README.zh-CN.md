@@ -67,6 +67,12 @@ go run ./cmd/sesame setup
 sesame configure
 ```
 
+`configure` 会打开一个共享配置主页，包含两个入口：
+- `Model Setup`（必需）
+- `Third-Party Integrations`（可选）
+
+Discord 配置位于 `Third-Party Integrations` 下。启动时只要求完成 `Model Setup`，Discord 可稍后再配置。
+
 当配置缺失时，直接执行 `sesame` 启动会自动进入 setup。
 
 或者查看 daemon / runtime 状态：
@@ -103,6 +109,8 @@ Sesame 主要使用两个存储位置：
 ```text
 ~/.sesame/config.json
 ```
+
+你也可以随时通过 `sesame configure` 回到共享配置主页（`Model Setup` 与 `Third-Party Integrations`）。
 
 ## 工作原理
 

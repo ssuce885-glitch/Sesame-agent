@@ -582,9 +582,12 @@ func (g *discordGateway) clearInFlight(messageID string) {
 }
 
 func resolveBotToken(global GlobalConfig) (string, error) {
+	if token := strings.TrimSpace(global.BotToken); token != "" {
+		return token, nil
+	}
 	name := strings.TrimSpace(global.BotTokenEnv)
 	if name == "" {
-		return "", errors.New("discord bot_token_env is required")
+		return "", errors.New("discord bot_token or bot_token_env is required")
 	}
 	token := strings.TrimSpace(os.Getenv(name))
 	if token == "" {

@@ -10,6 +10,7 @@ import (
 
 type GlobalConfig struct {
 	Enabled              bool     `json:"enabled"`
+	BotToken             string   `json:"bot_token"`
 	BotTokenEnv          string   `json:"bot_token_env"`
 	GatewayIntents       []string `json:"gateway_intents"`
 	MessageContentIntent bool     `json:"message_content_intent"`
@@ -52,6 +53,20 @@ func LoadWorkspaceBinding(workspace string) (WorkspaceBinding, error) {
 	}
 	applyWorkspaceBindingDefaults(&cfg)
 	return cfg, nil
+}
+
+func WriteWorkspaceBinding(workspace string, cfg WorkspaceBinding) error {
+	applyWorkspaceBindingDefaults(&cfg)
+	path := filepath.Join(workspace, ".sesame", "connectors", "discord.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o600)
 }
 
 func applyWorkspaceBindingDefaults(cfg *WorkspaceBinding) {

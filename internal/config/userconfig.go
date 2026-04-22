@@ -9,29 +9,34 @@ import (
 )
 
 type UserConfig struct {
-	Listen                     UserConfigListen    `json:"listen"`
-	Provider                   string              `json:"provider"`
-	CompatMode                 string              `json:"compat_mode"`
-	Model                      string              `json:"model"`
-	BaseURL                    string              `json:"base_url"`
-	APIKey                     string              `json:"api_key"`
-	DataDir                    string              `json:"data_dir"`
-	PermissionProfile          string              `json:"permission_profile"`
-	ProviderCacheProfile       string              `json:"provider_cache_profile"`
-	SystemPrompt               string              `json:"system_prompt"`
-	SystemPromptFile           string              `json:"system_prompt_file"`
-	Anthropic                  UserConfigAnthropic `json:"anthropic"`
-	OpenAI                     UserConfigOpenAI    `json:"openai"`
-	Skills                     UserConfigSkills    `json:"skills"`
-	Discord                    UserConfigDiscord   `json:"discord"`
-	MaxToolSteps               int                 `json:"max_tool_steps"`
-	MaxRecentItems             int                 `json:"max_recent_items"`
-	CompactionThreshold        int                 `json:"compaction_threshold"`
-	MaxEstimatedTokens         int                 `json:"max_estimated_tokens"`
-	MicrocompactBytesThreshold int                 `json:"microcompact_bytes_threshold"`
-	MaxCompactionPasses        int                 `json:"max_compaction_passes"`
-	ResetAnthropic             bool                `json:"-"`
-	ResetOpenAI                bool                `json:"-"`
+	Listen                         UserConfigListen    `json:"listen"`
+	Provider                       string              `json:"provider"`
+	CompatMode                     string              `json:"compat_mode"`
+	Model                          string              `json:"model"`
+	BaseURL                        string              `json:"base_url"`
+	APIKey                         string              `json:"api_key"`
+	DataDir                        string              `json:"data_dir"`
+	PermissionProfile              string              `json:"permission_profile"`
+	ProviderCacheProfile           string              `json:"provider_cache_profile"`
+	SystemPrompt                   string              `json:"system_prompt"`
+	SystemPromptFile               string              `json:"system_prompt_file"`
+	Anthropic                      UserConfigAnthropic `json:"anthropic"`
+	OpenAI                         UserConfigOpenAI    `json:"openai"`
+	Skills                         UserConfigSkills    `json:"skills"`
+	Discord                        UserConfigDiscord   `json:"discord"`
+	MaxToolSteps                   int                 `json:"max_tool_steps"`
+	MaxRecentItems                 int                 `json:"max_recent_items"`
+	CompactionThreshold            int                 `json:"compaction_threshold"`
+	MaxEstimatedTokens             int                 `json:"max_estimated_tokens"`
+	MicrocompactBytesThreshold     int                 `json:"microcompact_bytes_threshold"`
+	MaxCompactionPasses            int                 `json:"max_compaction_passes"`
+	ResetAnthropic                 bool                `json:"-"`
+	ResetOpenAI                    bool                `json:"-"`
+	SetDiscordEnabled              bool                `json:"-"`
+	SetDiscordMessageContentIntent bool                `json:"-"`
+	SetDiscordLogIgnoredMessages   bool                `json:"-"`
+	ClearDiscordBotToken           bool                `json:"-"`
+	ClearDiscordBotTokenEnv        bool                `json:"-"`
 }
 
 type UserConfigListen struct {
@@ -56,6 +61,7 @@ type UserConfigSkills struct {
 
 type UserConfigDiscord struct {
 	Enabled              bool     `json:"enabled"`
+	BotToken             string   `json:"bot_token"`
 	BotTokenEnv          string   `json:"bot_token_env"`
 	GatewayIntents       []string `json:"gateway_intents"`
 	MessageContentIntent bool     `json:"message_content_intent"`
@@ -229,6 +235,53 @@ func userConfigPatchRoot(patch UserConfig) (map[string]json.RawMessage, error) {
 		}
 	}
 
+	discordPatch := map[string]json.RawMessage{}
+	if patch.SetDiscordEnabled || patch.Discord.Enabled {
+		if err := putJSONBool(discordPatch, "enabled", patch.Discord.Enabled); err != nil {
+			return nil, err
+		}
+	}
+	if patch.ClearDiscordBotToken {
+		if err := putJSONString(discordPatch, "bot_token", ""); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.Discord.BotToken) != "" {
+		if err := putJSONString(discordPatch, "bot_token", patch.Discord.BotToken); err != nil {
+			return nil, err
+		}
+	}
+	if patch.ClearDiscordBotTokenEnv {
+		if err := putJSONString(discordPatch, "bot_token_env", ""); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.Discord.BotTokenEnv) != "" {
+		if err := putJSONString(discordPatch, "bot_token_env", patch.Discord.BotTokenEnv); err != nil {
+			return nil, err
+		}
+	}
+	if len(patch.Discord.GatewayIntents) > 0 {
+		if err := putJSONStringArray(discordPatch, "gateway_intents", patch.Discord.GatewayIntents); err != nil {
+			return nil, err
+		}
+	}
+	if patch.SetDiscordMessageContentIntent || patch.Discord.MessageContentIntent {
+		if err := putJSONBool(discordPatch, "message_content_intent", patch.Discord.MessageContentIntent); err != nil {
+			return nil, err
+		}
+	}
+	if patch.SetDiscordLogIgnoredMessages || patch.Discord.LogIgnoredMessages {
+		if err := putJSONBool(discordPatch, "log_ignored_messages", patch.Discord.LogIgnoredMessages); err != nil {
+			return nil, err
+		}
+	}
+	if len(discordPatch) > 0 {
+		if err := putJSONObject(out, "discord", discordPatch); err != nil {
+			return nil, err
+		}
+	}
+
 	openAIPatch := map[string]json.RawMessage{}
 	if patch.ResetOpenAI {
 		if err := putJSONString(openAIPatch, "api_key", ""); err != nil {
@@ -300,6 +353,24 @@ func userConfigPatchRoot(patch UserConfig) (map[string]json.RawMessage, error) {
 
 func putJSONString(dst map[string]json.RawMessage, key, value string) error {
 	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	dst[key] = data
+	return nil
+}
+
+func putJSONBool(dst map[string]json.RawMessage, key string, value bool) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	dst[key] = data
+	return nil
+}
+
+func putJSONStringArray(dst map[string]json.RawMessage, key string, values []string) error {
+	data, err := json.Marshal(values)
 	if err != nil {
 		return err
 	}
