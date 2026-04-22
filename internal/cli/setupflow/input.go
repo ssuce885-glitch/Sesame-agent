@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -94,4 +95,48 @@ func readLineInput(reader *bufio.Reader, w io.Writer, label, displayValue, defau
 			return "", io.EOF
 		}
 	}
+}
+
+func readBoolChoice(reader *bufio.Reader, w io.Writer, label, trueLabel, falseLabel string, defaultValue bool) (bool, error) {
+	options := []string{strings.TrimSpace(trueLabel), strings.TrimSpace(falseLabel)}
+	defaultIndex := 0
+	if !defaultValue {
+		defaultIndex = 1
+	}
+	idx, err := chooseArrowOption(reader, w, label, options, defaultIndex)
+	if err != nil {
+		return false, err
+	}
+	return idx == 0, nil
+}
+
+func readIntInput(reader *bufio.Reader, w io.Writer, label string, defaultValue int) (int, error) {
+	display := ""
+	if defaultValue > 0 {
+		display = strconv.Itoa(defaultValue)
+	}
+	for {
+		value, err := readLineInput(reader, w, label, display, display)
+		if err != nil {
+			return 0, err
+		}
+		n, convErr := strconv.Atoi(strings.TrimSpace(value))
+		if convErr == nil {
+			return n, nil
+		}
+		fmt.Fprintf(w, "Invalid number for %s: %s\n", label, value)
+	}
+}
+
+func parseCommaSeparatedList(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
 }

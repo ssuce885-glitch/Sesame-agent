@@ -19,6 +19,7 @@ type homeChoice string
 const (
 	homeModelSetup   homeChoice = "model_setup"
 	homeIntegrations homeChoice = "integrations"
+	homeContinue     homeChoice = "continue"
 )
 
 type integrationChoice string

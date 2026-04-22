@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"go-agent/internal/config"
+	discordcfg "go-agent/internal/connectors/discord"
 )
 
 // Run executes the lightweight setup wizard for startup/setup/configure flows.
@@ -53,8 +54,11 @@ func Run(r io.Reader, w io.Writer, cfg config.Config, action string) error {
 			return err
 		}
 
-		choice, err := chooseHomeSection(reader, w, cfg, missing, configPath)
+		choice, err := chooseHomeSection(reader, w, cfg, fileCfg, missing, configPath, action)
 		if err != nil {
+			if err == io.EOF && modelConfigured(cfg) {
+				return nil
+			}
 			return err
 		}
 
@@ -96,8 +100,17 @@ func Run(r io.Reader, w io.Writer, cfg config.Config, action string) error {
 			}
 			fmt.Fprintln(w, "\nSaved config. Returning to configuration home...")
 		case homeIntegrations:
-			fmt.Fprintln(w, "Third-Party Integrations")
-			fmt.Fprintln(w, "Discord setup is not available yet in this step.")
+			if err := runIntegrationsMenu(reader, w, cfg, fileCfg); err != nil {
+				if err == io.EOF && modelConfigured(cfg) {
+					return nil
+				}
+				return err
+			}
+		case homeContinue:
+			if modelConfigured(cfg) || isSetupAction(action) {
+				return nil
+			}
+			fmt.Fprintln(w, "Continue Startup is disabled until Model Setup is complete.")
 		default:
 			return fmt.Errorf("unknown configuration section: %q", choice)
 		}
@@ -113,21 +126,27 @@ func Run(r io.Reader, w io.Writer, cfg config.Config, action string) error {
 			cfg = nextCfg
 		}
 		missing = config.MissingSetupFields(cfg)
-		if modelConfigured(cfg) {
-			return nil
-		}
 	}
 }
 
-func chooseHomeSection(reader *bufio.Reader, w io.Writer, cfg config.Config, missing []string, configPath string) (homeChoice, error) {
+func chooseHomeSection(reader *bufio.Reader, w io.Writer, cfg config.Config, fileCfg config.UserConfig, missing []string, configPath, action string) (homeChoice, error) {
 	fmt.Fprintln(w, "Configuration")
 	fmt.Fprintf(w, "Config file: %s\n", configPath)
+	fmt.Fprintf(w, "Model Setup: %s\n", modelSetupStatus(cfg))
+	fmt.Fprintf(w, "Third-Party Integrations: %s\n", integrationsStatus(cfg, fileCfg))
 	if len(missing) > 0 {
 		fmt.Fprintf(w, "Missing fields: %s\n", strings.Join(missing, ", "))
 	}
 	choices := []string{
 		"Model Setup (Required)",
 		"Third-Party Integrations",
+	}
+	if isSetupAction(action) {
+		choices = append(choices, "Save and Exit")
+	} else if modelConfigured(cfg) {
+		choices = append(choices, "Continue Startup")
+	} else {
+		choices = append(choices, "Continue Startup (disabled until Model Setup is complete)")
 	}
 	for _, choice := range choices {
 		fmt.Fprintf(w, "- %s\n", choice)
@@ -141,9 +160,64 @@ func chooseHomeSection(reader *bufio.Reader, w io.Writer, cfg config.Config, mis
 		return homeModelSetup, nil
 	case 1:
 		return homeIntegrations, nil
+	case 2:
+		return homeContinue, nil
 	default:
 		return "", fmt.Errorf("unknown home selection index: %d", idx)
 	}
+}
+
+func runIntegrationsMenu(reader *bufio.Reader, w io.Writer, cfg config.Config, fileCfg config.UserConfig) error {
+	fmt.Fprintln(w, "Third-Party Integrations")
+	choices := []string{"Discord", "Back"}
+	idx, err := chooseArrowOption(reader, w, "Select integration", choices, 0)
+	if err != nil {
+		return err
+	}
+	switch idx {
+	case 0:
+		return runDiscordSetup(reader, w, cfg, fileCfg)
+	case 1:
+		return nil
+	default:
+		return fmt.Errorf("unknown integration selection index: %d", idx)
+	}
+}
+
+func modelSetupStatus(cfg config.Config) string {
+	if modelConfigured(cfg) {
+		return "Configured"
+	}
+	return "Not Configured"
+}
+
+func integrationsStatus(cfg config.Config, fileCfg config.UserConfig) string {
+	if !fileCfg.Discord.Enabled {
+		return "Not Configured"
+	}
+	workspaceRoot := strings.TrimSpace(cfg.Paths.WorkspaceRoot)
+	if workspaceRoot == "" {
+		return "Discord Enabled"
+	}
+	binding, err := loadWorkspaceBinding(workspaceRoot)
+	if err != nil {
+		return "Discord Config Error"
+	}
+	if strings.TrimSpace(binding.GuildID) != "" && strings.TrimSpace(binding.ChannelID) != "" {
+		return "Discord Configured"
+	}
+	return "Discord Partially Configured"
+}
+
+func loadWorkspaceBinding(workspaceRoot string) (struct{ GuildID, ChannelID string }, error) {
+	binding, err := discordcfg.LoadWorkspaceBinding(workspaceRoot)
+	if err != nil {
+		return struct{ GuildID, ChannelID string }{}, err
+	}
+	return struct{ GuildID, ChannelID string }{
+		GuildID:   binding.GuildID,
+		ChannelID: binding.ChannelID,
+	}, nil
 }
 
 func collectModelSetupFlowState(reader *bufio.Reader, w io.Writer, cfg config.Config, fileCfg config.UserConfig, action string, missing []string, configPath string) (flowState, error) {
