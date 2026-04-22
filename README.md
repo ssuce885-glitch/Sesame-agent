@@ -38,33 +38,26 @@ It keeps chat, tool execution, approvals, background tasks, automation, reports,
 git clone <your-fork-or-repo-url>
 cd Sesame-agent
 mkdir -p /path/to/workspace
-cd /path/to/workspace
 ```
 
 ### 2. Start Sesame
 
-From the repository root:
+Run Sesame from the repository root and point it at the workspace you want to use:
 
 ```bash
-go run ./cmd/sesame
+go run ./cmd/sesame --workspace-root /path/to/workspace
 ```
 
 If this is your first run, complete setup first:
 
 ```bash
-sesame setup
-```
-
-If you are running from source instead of an installed `sesame` binary:
-
-```bash
-go run ./cmd/sesame setup
+go run ./cmd/sesame setup --workspace-root /path/to/workspace
 ```
 
 To reopen provider configuration later:
 
 ```bash
-sesame configure
+go run ./cmd/sesame configure --workspace-root /path/to/workspace
 ```
 
 `configure` opens a shared configuration home page with two entries:
@@ -78,7 +71,7 @@ When configuration is missing, normal `sesame` startup automatically enters setu
 Or check daemon/runtime status:
 
 ```bash
-go run ./cmd/sesame --status
+go run ./cmd/sesame --workspace-root /path/to/workspace --status
 ```
 
 ### 3. Open the console
@@ -184,19 +177,20 @@ The project is already usable for local operational workflows, but the architect
 
 ## Development
 
-Run the main test suite:
+Build the CLI from source:
 
 ```bash
-go test ./...
+go build ./cmd/sesame
 ```
 
-Run console tests:
+Build the console:
 
 ```bash
 cd web/console
-npm test
 npm run build
 ```
+
+The public repository currently does not ship test source files. The published tree is trimmed to runtime, CLI, daemon, connector, and console code needed to build and run Sesame.
 
 ## License
 
