@@ -122,6 +122,13 @@ func (a App) Run(ctx context.Context, args []string) error {
 	if opts.Skill != nil {
 		return runSkillCommand(a.Stdout, *opts.Skill)
 	}
+	if opts.Setup != nil {
+		cfg, err := a.loadConfig(opts)
+		if err != nil {
+			return err
+		}
+		return a.runSetup(ctx, cfg, opts.Setup.Action)
+	}
 
 	workspaceRoot, err := resolveWorkspaceRoot(opts.WorkspaceRoot)
 	if err != nil {
@@ -143,9 +150,6 @@ func (a App) Run(ctx context.Context, args []string) error {
 			return newScriptCommandError(err, nil)
 		}
 		return err
-	}
-	if opts.Setup != nil {
-		return a.runSetup(ctx, cfg, opts.Setup.Action)
 	}
 	if opts.ShowStatus {
 		return a.runStatus(ctx, cfg)

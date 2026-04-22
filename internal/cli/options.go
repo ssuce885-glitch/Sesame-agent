@@ -79,9 +79,9 @@ func ParseOptions(args []string) (Options, error) {
 	if len(args) > 0 {
 		switch args[0] {
 		case "setup":
-			return Options{Setup: &SetupCommand{Action: "setup"}}, nil
+			return parseSetupOptions("setup", args[1:])
 		case "configure":
-			return Options{Setup: &SetupCommand{Action: "configure"}}, nil
+			return parseSetupOptions("configure", args[1:])
 		case "skill":
 			return parseSkillOptions(args[1:])
 		case "automation":
@@ -113,6 +113,13 @@ func ParseOptions(args []string) (Options, error) {
 
 	opts.InitialPrompt = strings.TrimSpace(strings.Join(fs.Args(), " "))
 	return opts, nil
+}
+
+func parseSetupOptions(action string, args []string) (Options, error) {
+	if len(args) != 0 {
+		return Options{}, fmt.Errorf("usage: sesame %s", action)
+	}
+	return Options{Setup: &SetupCommand{Action: action}}, nil
 }
 
 func parseSkillOptions(args []string) (Options, error) {
