@@ -123,6 +123,9 @@ func promptValue(reader *bufio.Reader, stdout io.Writer, label, displayValue, ac
 			return "", err
 		}
 		value := strings.TrimSpace(line)
+		if value == "" && err == io.EOF && len(line) == 0 {
+			return "", io.EOF
+		}
 		if value == "" {
 			value = strings.TrimSpace(actualDefault)
 		}
