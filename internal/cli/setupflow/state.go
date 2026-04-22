@@ -1,6 +1,10 @@
 package setupflow
 
-import "strings"
+import (
+	"strings"
+
+	"go-agent/internal/config"
+)
 
 type vendorOption struct {
 	key            string
@@ -9,6 +13,19 @@ type vendorOption struct {
 	defaultModel   string
 	defaultBaseURL string
 }
+
+type homeChoice string
+
+const (
+	homeModelSetup   homeChoice = "model_setup"
+	homeIntegrations homeChoice = "integrations"
+)
+
+type integrationChoice string
+
+const (
+	integrationDiscord integrationChoice = "discord"
+)
 
 type flowState struct {
 	action            string
@@ -38,6 +55,10 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func modelConfigured(cfg config.Config) bool {
+	return len(config.MissingSetupFields(cfg)) == 0
 }
 
 func defaultVendors() []vendorOption {

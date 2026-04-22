@@ -36,45 +36,117 @@ func Run(r io.Reader, w io.Writer, cfg config.Config, action string) error {
 		return err
 	}
 
-	state, err := collectFlowState(bufio.NewReader(r), w, cfg, fileCfg, action, missing, configPath)
-	if err != nil {
-		return err
-	}
-
-	patch := config.UserConfig{
-		Provider:          state.provider,
-		Model:             state.model,
-		PermissionProfile: state.permissionProfile,
-		Listen: config.UserConfigListen{
-			Addr: state.listenAddr,
-		},
-	}
-	switch state.provider {
-	case "openai_compatible":
-		patch.OpenAI = config.UserConfigOpenAI{
-			APIKey:  state.apiKey,
-			BaseURL: state.baseURL,
-			Model:   state.model,
+	reader := bufio.NewReader(r)
+	for {
+		nextCfg, err := config.ResolveCLIStartupConfig(config.CLIStartupOverrides{
+			DataDir:        cfg.DataDir,
+			Addr:           cfg.Addr,
+			Model:          cfg.Model,
+			PermissionMode: cfg.PermissionProfile,
+			WorkspaceRoot:  cfg.Paths.WorkspaceRoot,
+		})
+		if err == nil {
+			cfg = nextCfg
 		}
-	case "anthropic":
-		patch.Anthropic = config.UserConfigAnthropic{
-			APIKey:  state.apiKey,
-			BaseURL: state.baseURL,
-			Model:   state.model,
+		fileCfg, err = config.LoadUserConfig()
+		if err != nil {
+			return err
 		}
-	case "fake":
-		patch.ResetOpenAI = true
-		patch.ResetAnthropic = true
-	}
 
-	if err := config.MergeAndWriteUserConfig(patch); err != nil {
-		return err
+		choice, err := chooseHomeSection(reader, w, cfg, missing, configPath)
+		if err != nil {
+			return err
+		}
+
+		switch choice {
+		case homeModelSetup:
+			state, err := collectModelSetupFlowState(reader, w, cfg, fileCfg, action, missing, configPath)
+			if err != nil {
+				return err
+			}
+
+			patch := config.UserConfig{
+				Provider:          state.provider,
+				Model:             state.model,
+				PermissionProfile: state.permissionProfile,
+				Listen: config.UserConfigListen{
+					Addr: state.listenAddr,
+				},
+			}
+			switch state.provider {
+			case "openai_compatible":
+				patch.OpenAI = config.UserConfigOpenAI{
+					APIKey:  state.apiKey,
+					BaseURL: state.baseURL,
+					Model:   state.model,
+				}
+			case "anthropic":
+				patch.Anthropic = config.UserConfigAnthropic{
+					APIKey:  state.apiKey,
+					BaseURL: state.baseURL,
+					Model:   state.model,
+				}
+			case "fake":
+				patch.ResetOpenAI = true
+				patch.ResetAnthropic = true
+			}
+
+			if err := config.MergeAndWriteUserConfig(patch); err != nil {
+				return err
+			}
+			fmt.Fprintln(w, "\nSaved config. Returning to configuration home...")
+		case homeIntegrations:
+			fmt.Fprintln(w, "Third-Party Integrations")
+			fmt.Fprintln(w, "Discord setup is not available yet in this step.")
+		default:
+			return fmt.Errorf("unknown configuration section: %q", choice)
+		}
+
+		nextCfg, err = config.ResolveCLIStartupConfig(config.CLIStartupOverrides{
+			DataDir:        cfg.DataDir,
+			Addr:           cfg.Addr,
+			Model:          cfg.Model,
+			PermissionMode: cfg.PermissionProfile,
+			WorkspaceRoot:  cfg.Paths.WorkspaceRoot,
+		})
+		if err == nil {
+			cfg = nextCfg
+		}
+		missing = config.MissingSetupFields(cfg)
+		if modelConfigured(cfg) {
+			return nil
+		}
 	}
-	fmt.Fprintln(w, "\nSaved config. Continuing startup...")
-	return nil
 }
 
-func collectFlowState(reader *bufio.Reader, w io.Writer, cfg config.Config, fileCfg config.UserConfig, action string, missing []string, configPath string) (flowState, error) {
+func chooseHomeSection(reader *bufio.Reader, w io.Writer, cfg config.Config, missing []string, configPath string) (homeChoice, error) {
+	fmt.Fprintln(w, "Configuration")
+	fmt.Fprintf(w, "Config file: %s\n", configPath)
+	if len(missing) > 0 {
+		fmt.Fprintf(w, "Missing fields: %s\n", strings.Join(missing, ", "))
+	}
+	choices := []string{
+		"Model Setup (Required)",
+		"Third-Party Integrations",
+	}
+	for _, choice := range choices {
+		fmt.Fprintf(w, "- %s\n", choice)
+	}
+	idx, err := chooseArrowOption(reader, w, "Select section", choices, 0)
+	if err != nil {
+		return "", err
+	}
+	switch idx {
+	case 0:
+		return homeModelSetup, nil
+	case 1:
+		return homeIntegrations, nil
+	default:
+		return "", fmt.Errorf("unknown home selection index: %d", idx)
+	}
+}
+
+func collectModelSetupFlowState(reader *bufio.Reader, w io.Writer, cfg config.Config, fileCfg config.UserConfig, action string, missing []string, configPath string) (flowState, error) {
 	state := flowState{
 		action:        strings.TrimSpace(action),
 		missingFields: missing,
