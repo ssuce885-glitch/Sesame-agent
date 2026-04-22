@@ -15,6 +15,7 @@ import (
 	daemoncli "go-agent/internal/cli/daemon"
 	"go-agent/internal/cli/repl"
 	"go-agent/internal/config"
+	daemonapp "go-agent/internal/daemon"
 	"go-agent/internal/extensions"
 	"go-agent/internal/types"
 	"go-agent/internal/workspace"
@@ -41,6 +42,7 @@ type App struct {
 	EnsureDaemon func(context.Context, config.Config) error
 	StopDaemon   func(context.Context, config.Config) error
 	RunSetup     func(context.Context, io.Reader, io.Writer, config.Config, string) error
+	RunDaemon    func(context.Context) error
 	NewClient    func(config.Config) RuntimeClient
 	NewREPL      func(repl.Options) REPLRunner
 }
@@ -86,6 +88,7 @@ func New() App {
 			})
 			return manager.Stop(ctx)
 		},
+		RunDaemon: daemonapp.Run,
 		NewClient: func(cfg config.Config) RuntimeClient {
 			return client.New(baseURLFromAddr(cfg.Addr), &http.Client{})
 		},
@@ -128,6 +131,16 @@ func (a App) Run(ctx context.Context, args []string) error {
 			return err
 		}
 		return a.runSetup(ctx, cfg, opts.Setup.Action)
+	}
+	if opts.Daemon != nil {
+		cfg, err := a.loadConfig(opts)
+		if err != nil {
+			return err
+		}
+		if err := a.runSetup(ctx, cfg, ""); err != nil {
+			return err
+		}
+		return a.runDaemon(ctx)
 	}
 
 	workspaceRoot, err := resolveWorkspaceRoot(opts.WorkspaceRoot)
@@ -356,6 +369,13 @@ func (a App) runSetup(ctx context.Context, cfg config.Config, action string) err
 		return a.RunSetup(ctx, a.Stdin, a.Stdout, cfg, action)
 	}
 	return ensureRuntimeConfiguredAction(a.Stdin, a.Stdout, cfg, action)
+}
+
+func (a App) runDaemon(ctx context.Context) error {
+	if a.RunDaemon != nil {
+		return a.RunDaemon(ctx)
+	}
+	return daemonapp.Run(ctx)
 }
 
 func (a App) newClient(cfg config.Config) RuntimeClient {
