@@ -49,6 +49,26 @@ From the repository root:
 go run ./cmd/sesame
 ```
 
+If this is your first run, complete setup first:
+
+```bash
+sesame setup
+```
+
+If you are running from source instead of an installed `sesame` binary:
+
+```bash
+go run ./cmd/sesame setup
+```
+
+To reopen provider configuration later:
+
+```bash
+sesame configure
+```
+
+When configuration is missing, normal `sesame` startup automatically enters setup.
+
 Or check daemon/runtime status:
 
 ```bash

@@ -43,6 +43,13 @@ type PermissionCommand struct {
 	RequestID string
 }
 
+type SetupCommand struct {
+	Action string
+	Scope  string
+}
+
+type DaemonCommand struct{}
+
 type IncidentCommand struct {
 	Action        string
 	ID            string
@@ -67,11 +74,19 @@ type Options struct {
 	Trigger        *TriggerCommand
 	Incident       *IncidentCommand
 	Permissions    *PermissionCommand
+	Setup          *SetupCommand
+	Daemon         *DaemonCommand
 }
 
 func ParseOptions(args []string) (Options, error) {
 	if len(args) > 0 {
 		switch args[0] {
+		case "daemon":
+			return parseDaemonOptions(args[1:])
+		case "setup":
+			return parseSetupOptions("setup", args[1:])
+		case "configure":
+			return parseSetupOptions("configure", args[1:])
 		case "skill":
 			return parseSkillOptions(args[1:])
 		case "automation":
@@ -103,6 +118,20 @@ func ParseOptions(args []string) (Options, error) {
 
 	opts.InitialPrompt = strings.TrimSpace(strings.Join(fs.Args(), " "))
 	return opts, nil
+}
+
+func parseSetupOptions(action string, args []string) (Options, error) {
+	if len(args) != 0 {
+		return Options{}, fmt.Errorf("usage: sesame %s", action)
+	}
+	return Options{Setup: &SetupCommand{Action: action}}, nil
+}
+
+func parseDaemonOptions(args []string) (Options, error) {
+	if len(args) != 0 {
+		return Options{}, fmt.Errorf("usage: sesame daemon")
+	}
+	return Options{Daemon: &DaemonCommand{}}, nil
 }
 
 func parseSkillOptions(args []string) (Options, error) {

@@ -49,6 +49,26 @@ cd /path/to/workspace
 go run ./cmd/sesame
 ```
 
+首次使用请先完成 setup：
+
+```bash
+sesame setup
+```
+
+如果你是以源码方式运行，而不是使用已安装的 `sesame` 可执行文件：
+
+```bash
+go run ./cmd/sesame setup
+```
+
+后续如果需要重新打开配置向导：
+
+```bash
+sesame configure
+```
+
+当配置缺失时，直接执行 `sesame` 启动会自动进入 setup。
+
 或者查看 daemon / runtime 状态：
 
 ```bash
