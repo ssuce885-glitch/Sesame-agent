@@ -156,42 +156,6 @@ func WriteUserConfig(cfg UserConfig) error {
 }
 
 func MergeAndWriteUserConfig(patch UserConfig) error {
-	current, err := LoadUserConfig()
-	if err != nil {
-		return err
-	}
-	merged := current
-	if strings.TrimSpace(patch.Provider) != "" {
-		merged.Provider = patch.Provider
-	}
-	if strings.TrimSpace(patch.Model) != "" {
-		merged.Model = patch.Model
-	}
-	if strings.TrimSpace(patch.PermissionProfile) != "" {
-		merged.PermissionProfile = patch.PermissionProfile
-	}
-	if strings.TrimSpace(patch.Listen.Addr) != "" {
-		merged.Listen.Addr = patch.Listen.Addr
-	}
-	if strings.TrimSpace(patch.OpenAI.APIKey) != "" {
-		merged.OpenAI.APIKey = patch.OpenAI.APIKey
-	}
-	if strings.TrimSpace(patch.OpenAI.BaseURL) != "" {
-		merged.OpenAI.BaseURL = patch.OpenAI.BaseURL
-	}
-	if strings.TrimSpace(patch.OpenAI.Model) != "" {
-		merged.OpenAI.Model = patch.OpenAI.Model
-	}
-	if strings.TrimSpace(patch.Anthropic.APIKey) != "" {
-		merged.Anthropic.APIKey = patch.Anthropic.APIKey
-	}
-	if strings.TrimSpace(patch.Anthropic.BaseURL) != "" {
-		merged.Anthropic.BaseURL = patch.Anthropic.BaseURL
-	}
-	if strings.TrimSpace(patch.Anthropic.Model) != "" {
-		merged.Anthropic.Model = patch.Anthropic.Model
-	}
-
 	paths, err := ResolvePaths("", "")
 	if err != nil {
 		return err
@@ -211,15 +175,15 @@ func MergeAndWriteUserConfig(patch UserConfig) error {
 		}
 	}
 
-	mergedData, err := json.Marshal(merged)
+	patchRoot, err := userConfigPatchRoot(patch)
 	if err != nil {
 		return err
 	}
-	var mergedRoot map[string]json.RawMessage
-	if err := json.Unmarshal(mergedData, &mergedRoot); err != nil {
-		return err
+	if len(patchRoot) == 0 {
+		return nil
 	}
-	existingRoot, err = mergeRawJSONObjects(existingRoot, mergedRoot)
+
+	existingRoot, err = mergeRawJSONObjects(existingRoot, patchRoot)
 	if err != nil {
 		return err
 	}
@@ -230,6 +194,102 @@ func MergeAndWriteUserConfig(patch UserConfig) error {
 	}
 	out = append(out, '\n')
 	return os.WriteFile(paths.GlobalConfigFile, out, 0o600)
+}
+
+func userConfigPatchRoot(patch UserConfig) (map[string]json.RawMessage, error) {
+	out := map[string]json.RawMessage{}
+
+	if strings.TrimSpace(patch.Provider) != "" {
+		if err := putJSONString(out, "provider", patch.Provider); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.Model) != "" {
+		if err := putJSONString(out, "model", patch.Model); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.PermissionProfile) != "" {
+		if err := putJSONString(out, "permission_profile", patch.PermissionProfile); err != nil {
+			return nil, err
+		}
+	}
+
+	listenPatch := map[string]json.RawMessage{}
+	if strings.TrimSpace(patch.Listen.Addr) != "" {
+		if err := putJSONString(listenPatch, "addr", patch.Listen.Addr); err != nil {
+			return nil, err
+		}
+	}
+	if len(listenPatch) > 0 {
+		if err := putJSONObject(out, "listen", listenPatch); err != nil {
+			return nil, err
+		}
+	}
+
+	openAIPatch := map[string]json.RawMessage{}
+	if strings.TrimSpace(patch.OpenAI.APIKey) != "" {
+		if err := putJSONString(openAIPatch, "api_key", patch.OpenAI.APIKey); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.OpenAI.BaseURL) != "" {
+		if err := putJSONString(openAIPatch, "base_url", patch.OpenAI.BaseURL); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.OpenAI.Model) != "" {
+		if err := putJSONString(openAIPatch, "model", patch.OpenAI.Model); err != nil {
+			return nil, err
+		}
+	}
+	if len(openAIPatch) > 0 {
+		if err := putJSONObject(out, "openai", openAIPatch); err != nil {
+			return nil, err
+		}
+	}
+
+	anthropicPatch := map[string]json.RawMessage{}
+	if strings.TrimSpace(patch.Anthropic.APIKey) != "" {
+		if err := putJSONString(anthropicPatch, "api_key", patch.Anthropic.APIKey); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.Anthropic.BaseURL) != "" {
+		if err := putJSONString(anthropicPatch, "base_url", patch.Anthropic.BaseURL); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.Anthropic.Model) != "" {
+		if err := putJSONString(anthropicPatch, "model", patch.Anthropic.Model); err != nil {
+			return nil, err
+		}
+	}
+	if len(anthropicPatch) > 0 {
+		if err := putJSONObject(out, "anthropic", anthropicPatch); err != nil {
+			return nil, err
+		}
+	}
+
+	return out, nil
+}
+
+func putJSONString(dst map[string]json.RawMessage, key, value string) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	dst[key] = data
+	return nil
+}
+
+func putJSONObject(dst map[string]json.RawMessage, key string, value map[string]json.RawMessage) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	dst[key] = data
+	return nil
 }
 
 func mergeRawJSONObjects(existing, patch map[string]json.RawMessage) (map[string]json.RawMessage, error) {
