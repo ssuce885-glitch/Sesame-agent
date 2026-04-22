@@ -144,11 +144,11 @@ func (a App) Run(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	if opts.ShowStatus {
-		return a.runStatus(ctx, cfg)
-	}
 	if opts.Setup != nil {
 		return a.runSetup(ctx, cfg, opts.Setup.Action)
+	}
+	if opts.ShowStatus {
+		return a.runStatus(ctx, cfg)
 	}
 	if opts.Automation != nil || opts.Trigger != nil || opts.Incident != nil {
 		return a.runScriptCommand(ctx, opts, cfg)
