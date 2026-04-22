@@ -30,6 +30,8 @@ type UserConfig struct {
 	MaxEstimatedTokens         int                 `json:"max_estimated_tokens"`
 	MicrocompactBytesThreshold int                 `json:"microcompact_bytes_threshold"`
 	MaxCompactionPasses        int                 `json:"max_compaction_passes"`
+	ResetAnthropic             bool                `json:"-"`
+	ResetOpenAI                bool                `json:"-"`
 }
 
 type UserConfigListen struct {
@@ -228,6 +230,17 @@ func userConfigPatchRoot(patch UserConfig) (map[string]json.RawMessage, error) {
 	}
 
 	openAIPatch := map[string]json.RawMessage{}
+	if patch.ResetOpenAI {
+		if err := putJSONString(openAIPatch, "api_key", ""); err != nil {
+			return nil, err
+		}
+		if err := putJSONString(openAIPatch, "base_url", ""); err != nil {
+			return nil, err
+		}
+		if err := putJSONString(openAIPatch, "model", ""); err != nil {
+			return nil, err
+		}
+	}
 	if strings.TrimSpace(patch.OpenAI.APIKey) != "" {
 		if err := putJSONString(openAIPatch, "api_key", patch.OpenAI.APIKey); err != nil {
 			return nil, err
@@ -250,6 +263,17 @@ func userConfigPatchRoot(patch UserConfig) (map[string]json.RawMessage, error) {
 	}
 
 	anthropicPatch := map[string]json.RawMessage{}
+	if patch.ResetAnthropic {
+		if err := putJSONString(anthropicPatch, "api_key", ""); err != nil {
+			return nil, err
+		}
+		if err := putJSONString(anthropicPatch, "base_url", ""); err != nil {
+			return nil, err
+		}
+		if err := putJSONString(anthropicPatch, "model", ""); err != nil {
+			return nil, err
+		}
+	}
 	if strings.TrimSpace(patch.Anthropic.APIKey) != "" {
 		if err := putJSONString(anthropicPatch, "api_key", patch.Anthropic.APIKey); err != nil {
 			return nil, err

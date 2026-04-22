@@ -26,7 +26,7 @@ func Run(r io.Reader, w io.Writer, cfg config.Config, action string) error {
 	}
 	if r == nil {
 		if len(missing) > 0 {
-			return fmt.Errorf("missing required configuration in %s: %s", configPath, strings.Join(missing, ", "))
+			return fmt.Errorf("Sesame is not configured. Run 'sesame setup' in an interactive terminal.")
 		}
 		return fmt.Errorf("interactive input required for %s", strings.TrimSpace(action))
 	}
@@ -62,6 +62,9 @@ func Run(r io.Reader, w io.Writer, cfg config.Config, action string) error {
 			BaseURL: state.baseURL,
 			Model:   state.model,
 		}
+	case "fake":
+		patch.ResetOpenAI = true
+		patch.ResetAnthropic = true
 	}
 
 	if err := config.MergeAndWriteUserConfig(patch); err != nil {
@@ -81,7 +84,7 @@ func collectFlowState(reader *bufio.Reader, w io.Writer, cfg config.Config, file
 	if len(missing) > 0 {
 		fmt.Fprintf(w, "Missing fields: %s\n", strings.Join(missing, ", "))
 	}
-	fmt.Fprintln(w, "Provider [anthropic/openai_compatible/fake]")
+	fmt.Fprintln(w, "Choose a vendor to configure.")
 
 	vendors := defaultVendors()
 	labels := make([]string, 0, len(vendors))
