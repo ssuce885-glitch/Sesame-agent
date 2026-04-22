@@ -71,6 +71,7 @@ func buildDiscordConnector(cfg config.Config, userCfg config.UserConfig, runtime
 	return factory(discord.ServiceConfig{
 		Global: discord.GlobalConfig{
 			Enabled:              userCfg.Discord.Enabled,
+			BotToken:             userCfg.Discord.BotToken,
 			BotTokenEnv:          userCfg.Discord.BotTokenEnv,
 			GatewayIntents:       append([]string(nil), userCfg.Discord.GatewayIntents...),
 			MessageContentIntent: userCfg.Discord.MessageContentIntent,
