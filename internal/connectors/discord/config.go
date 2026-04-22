@@ -55,6 +55,20 @@ func LoadWorkspaceBinding(workspace string) (WorkspaceBinding, error) {
 	return cfg, nil
 }
 
+func WriteWorkspaceBinding(workspace string, cfg WorkspaceBinding) error {
+	applyWorkspaceBindingDefaults(&cfg)
+	path := filepath.Join(workspace, ".sesame", "connectors", "discord.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o600)
+}
+
 func applyWorkspaceBindingDefaults(cfg *WorkspaceBinding) {
 	if cfg.ReplyWaitTimeoutSeconds <= 0 {
 		cfg.ReplyWaitTimeoutSeconds = 120
