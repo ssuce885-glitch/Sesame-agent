@@ -43,6 +43,11 @@ type PermissionCommand struct {
 	RequestID string
 }
 
+type SetupCommand struct {
+	Action string
+	Scope  string
+}
+
 type IncidentCommand struct {
 	Action        string
 	ID            string
@@ -67,11 +72,16 @@ type Options struct {
 	Trigger        *TriggerCommand
 	Incident       *IncidentCommand
 	Permissions    *PermissionCommand
+	Setup          *SetupCommand
 }
 
 func ParseOptions(args []string) (Options, error) {
 	if len(args) > 0 {
 		switch args[0] {
+		case "setup":
+			return Options{Setup: &SetupCommand{Action: "setup"}}, nil
+		case "configure":
+			return Options{Setup: &SetupCommand{Action: "configure"}}, nil
 		case "skill":
 			return parseSkillOptions(args[1:])
 		case "automation":

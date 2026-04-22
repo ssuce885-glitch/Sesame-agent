@@ -40,6 +40,7 @@ type App struct {
 	LoadConfig   func(Options) (config.Config, error)
 	EnsureDaemon func(context.Context, config.Config) error
 	StopDaemon   func(context.Context, config.Config) error
+	RunSetup     func(context.Context, io.Reader, io.Writer, config.Config, string) error
 	NewClient    func(config.Config) RuntimeClient
 	NewREPL      func(repl.Options) REPLRunner
 }
@@ -145,6 +146,9 @@ func (a App) Run(ctx context.Context, args []string) error {
 	}
 	if opts.ShowStatus {
 		return a.runStatus(ctx, cfg)
+	}
+	if opts.Setup != nil {
+		return a.runSetup(ctx, cfg, opts.Setup.Action)
 	}
 	if opts.Automation != nil || opts.Trigger != nil || opts.Incident != nil {
 		return a.runScriptCommand(ctx, opts, cfg)
@@ -341,6 +345,13 @@ func (a App) shouldStopDaemonAfterRun(_ Options) bool {
 	// running after CLI/TUI/script completion. Startup-failure cleanup stays
 	// handled at the ensureDaemon call sites.
 	return false
+}
+
+func (a App) runSetup(ctx context.Context, cfg config.Config, action string) error {
+	if a.RunSetup != nil {
+		return a.RunSetup(ctx, a.Stdin, a.Stdout, cfg, action)
+	}
+	return ensureRuntimeConfigured(a.Stdin, a.Stdout, cfg)
 }
 
 func (a App) newClient(cfg config.Config) RuntimeClient {
