@@ -27,6 +27,12 @@ tmp/
 *.db-wal
 *.log
 coverage.out
+*_test.go
+*.test.ts
+*.test.tsx
+*.test.js
+*.test.jsx
+/web/console/src/test/
 
 # Local Sesame state
 .sesame/
