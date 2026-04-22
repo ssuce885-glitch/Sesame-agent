@@ -56,6 +56,7 @@ type UserConfigSkills struct {
 
 type UserConfigDiscord struct {
 	Enabled              bool     `json:"enabled"`
+	BotToken             string   `json:"bot_token"`
 	BotTokenEnv          string   `json:"bot_token_env"`
 	GatewayIntents       []string `json:"gateway_intents"`
 	MessageContentIntent bool     `json:"message_content_intent"`
@@ -229,6 +230,43 @@ func userConfigPatchRoot(patch UserConfig) (map[string]json.RawMessage, error) {
 		}
 	}
 
+	discordPatch := map[string]json.RawMessage{}
+	if patch.Discord.Enabled {
+		if err := putJSONBool(discordPatch, "enabled", patch.Discord.Enabled); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.Discord.BotToken) != "" {
+		if err := putJSONString(discordPatch, "bot_token", patch.Discord.BotToken); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.Discord.BotTokenEnv) != "" {
+		if err := putJSONString(discordPatch, "bot_token_env", patch.Discord.BotTokenEnv); err != nil {
+			return nil, err
+		}
+	}
+	if len(patch.Discord.GatewayIntents) > 0 {
+		if err := putJSONStringArray(discordPatch, "gateway_intents", patch.Discord.GatewayIntents); err != nil {
+			return nil, err
+		}
+	}
+	if patch.Discord.MessageContentIntent {
+		if err := putJSONBool(discordPatch, "message_content_intent", true); err != nil {
+			return nil, err
+		}
+	}
+	if patch.Discord.LogIgnoredMessages {
+		if err := putJSONBool(discordPatch, "log_ignored_messages", true); err != nil {
+			return nil, err
+		}
+	}
+	if len(discordPatch) > 0 {
+		if err := putJSONObject(out, "discord", discordPatch); err != nil {
+			return nil, err
+		}
+	}
+
 	openAIPatch := map[string]json.RawMessage{}
 	if patch.ResetOpenAI {
 		if err := putJSONString(openAIPatch, "api_key", ""); err != nil {
@@ -300,6 +338,24 @@ func userConfigPatchRoot(patch UserConfig) (map[string]json.RawMessage, error) {
 
 func putJSONString(dst map[string]json.RawMessage, key, value string) error {
 	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	dst[key] = data
+	return nil
+}
+
+func putJSONBool(dst map[string]json.RawMessage, key string, value bool) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	dst[key] = data
+	return nil
+}
+
+func putJSONStringArray(dst map[string]json.RawMessage, key string, values []string) error {
+	data, err := json.Marshal(values)
 	if err != nil {
 		return err
 	}

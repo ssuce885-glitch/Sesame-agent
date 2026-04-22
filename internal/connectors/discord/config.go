@@ -10,6 +10,7 @@ import (
 
 type GlobalConfig struct {
 	Enabled              bool     `json:"enabled"`
+	BotToken             string   `json:"bot_token"`
 	BotTokenEnv          string   `json:"bot_token_env"`
 	GatewayIntents       []string `json:"gateway_intents"`
 	MessageContentIntent bool     `json:"message_content_intent"`
