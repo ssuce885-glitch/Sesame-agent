@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 
 	"go-agent/internal/cli/setupflow"
@@ -11,7 +12,11 @@ import (
 )
 
 func ensureRuntimeConfigured(stdin io.Reader, stdout io.Writer, cfg config.Config) error {
-	return setupflow.Run(stdin, stdout, cfg, "setup")
+	action := ""
+	if calledFromRunSetup() {
+		action = "setup"
+	}
+	return setupflow.Run(stdin, stdout, cfg, action)
 }
 
 func promptRequired(reader *bufio.Reader, stdout io.Writer, label, defaultValue string) (string, error) {
@@ -60,4 +65,23 @@ func firstNonEmptyLocal(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func calledFromRunSetup() bool {
+	pcs := make([]uintptr, 8)
+	n := runtime.Callers(2, pcs)
+	if n == 0 {
+		return false
+	}
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		frame, more := frames.Next()
+		if strings.HasSuffix(frame.Function, ".runSetup") {
+			return true
+		}
+		if !more {
+			break
+		}
+	}
+	return false
 }
