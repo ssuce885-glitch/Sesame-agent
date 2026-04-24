@@ -261,7 +261,7 @@ func buildLoopSkillsAndInstructions(
 	if err != nil {
 		return skills.Catalog{}, nil, nil, nil, "", nil, err
 	}
-	resolution := skills.Resolve(turnMessage, skillCatalog, sessionrole.MergeActivatedSkillNames(in.ActivatedSkillNames, in.SessionRole, specialistSpec))
+	resolution := skills.Resolve(turnMessage, skillCatalog, in.ActivatedSkillNames)
 	activeSkills := append([]skills.ActivatedSkill(nil), resolution.Activated...)
 	toolExecCtx.ActiveSkillNames = activatedSkillNames(activeSkills)
 	visibleDefs := toolRuntime.VisibleDefinitions(toolExecCtx)

@@ -30,12 +30,24 @@ func Compile(input CompileInput) Bundle {
 	activated := append([]skills.ActivatedSkill(nil), input.ActiveSkills...)
 	notices := skills.ActivationNotices(activated)
 	sections := make([]Section, 0, 3)
-	injection := skills.BuildPromptInjection(activated)
+	injection := skills.BuildPromptInjection(input.Catalog, activated)
 
+	if installedSkills := strings.TrimSpace(injection.InstalledSkills); installedSkills != "" {
+		sections = append(sections, Section{
+			Title: "Installed skills",
+			Body:  installedSkills,
+		})
+	}
 	if activeContext := strings.TrimSpace(injection.ActiveContext); activeContext != "" {
 		sections = append(sections, Section{
 			Title: "Active context",
 			Body:  activeContext,
+		})
+	}
+	if guidance := strings.TrimSpace(injection.ActiveSkillGuidance); guidance != "" {
+		sections = append(sections, Section{
+			Title: "Active skill instructions",
+			Body:  guidance,
 		})
 	}
 	if catalogSnapshot := renderCatalogSnapshotIfRequested(input.Catalog, input.Message); strings.TrimSpace(catalogSnapshot) != "" {

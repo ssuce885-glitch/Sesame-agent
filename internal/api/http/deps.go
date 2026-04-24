@@ -53,11 +53,8 @@ type AutomationService interface {
 	ReinstallWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
 	GetWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
 	Delete(context.Context, string) (bool, error)
-	EmitTrigger(context.Context, types.AutomationTriggerRequest) (types.AutomationIncident, error)
+	EmitTrigger(context.Context, types.AutomationTriggerRequest) (types.TriggerEvent, error)
 	RecordHeartbeat(context.Context, types.AutomationHeartbeatRequest) (types.AutomationHeartbeat, error)
-	ListIncidents(context.Context, types.AutomationIncidentFilter) ([]types.AutomationIncident, error)
-	GetIncident(context.Context, string) (types.AutomationIncident, bool, error)
-	ControlIncident(context.Context, string, types.IncidentControlAction) (types.AutomationIncident, bool, error)
 }
 
 var _ AutomationService = (*automation.Service)(nil)

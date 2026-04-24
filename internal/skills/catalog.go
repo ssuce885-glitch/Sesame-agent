@@ -2,14 +2,11 @@ package skills
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
 	"go-agent/internal/extensions"
 )
-
-var skillRefPattern = regexp.MustCompile(`\$([A-Za-z0-9._-]+)`)
 
 type SkillSpec struct {
 	Name         string
@@ -72,11 +69,6 @@ func (c Catalog) SkillNames() []string {
 type ActivationReason string
 
 const (
-	ActivationReasonExplicit  ActivationReason = "explicit"
-	ActivationReasonName      ActivationReason = "name_match"
-	ActivationReasonTrigger   ActivationReason = "trigger_match"
-	ActivationReasonRetrieved ActivationReason = "retrieved"
-	ActivationReasonProfile   ActivationReason = "profile_selected"
 	ActivationReasonToolUse   ActivationReason = "tool_use"
 	ActivationReasonInherited ActivationReason = "inherited"
 )
@@ -139,131 +131,15 @@ func FromExtensionsCatalog(src extensions.Catalog) Catalog {
 	return out
 }
 
-func Activate(catalog Catalog, userMessage string) []ActivatedSkill {
-	if len(catalog.Skills) == 0 || strings.TrimSpace(userMessage) == "" {
-		return nil
-	}
-
-	names := make(map[string]SkillSpec, len(catalog.Skills))
-	for _, skill := range catalog.Skills {
-		names[strings.ToLower(strings.TrimSpace(skill.Name))] = skill
-	}
-
-	seen := make(map[string]struct{})
-	out := make([]ActivatedSkill, 0, 4)
-	normalizedMessage := normalizeSkillMatchText(userMessage)
-
-	for _, match := range skillRefPattern.FindAllStringSubmatch(userMessage, -1) {
-		if len(match) < 2 {
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(match[1]))
-		if key == "" {
-			continue
-		}
-		skill, ok := names[key]
-		if !ok {
-			continue
-		}
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, ActivatedSkill{
-			Skill:       skill,
-			Reason:      ActivationReasonExplicit,
-			MatchedText: "$" + strings.TrimSpace(match[1]),
-		})
-	}
-
-	for _, skill := range catalog.Skills {
-		key := strings.ToLower(strings.TrimSpace(skill.Name))
-		if key == "" {
-			continue
-		}
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		if normalizedName := normalizeSkillMatchText(skill.Name); normalizedName != "" &&
-			strings.Contains(normalizedMessage, normalizedName) {
-			seen[key] = struct{}{}
-			out = append(out, ActivatedSkill{
-				Skill:       skill,
-				Reason:      ActivationReasonName,
-				MatchedText: skill.Name,
-			})
-			continue
-		}
-		for _, trigger := range skill.Triggers {
-			if !skill.Policy.AllowImplicitActivation {
-				continue
-			}
-			normalizedTrigger := normalizeSkillMatchText(trigger)
-			if normalizedTrigger == "" || !strings.Contains(normalizedMessage, normalizedTrigger) {
-				continue
-			}
-			seen[key] = struct{}{}
-			out = append(out, ActivatedSkill{
-				Skill:       skill,
-				Reason:      ActivationReasonTrigger,
-				MatchedText: trigger,
-			})
-			break
-		}
-	}
-
-	return out
-}
-
 func ActivationNotices(activated []ActivatedSkill) []string {
 	if len(activated) == 0 {
 		return nil
 	}
 	notices := make([]string, 0, len(activated))
 	for _, skill := range activated {
-		if skill.Reason == ActivationReasonProfile {
-			continue
-		}
 		notices = append(notices, fmt.Sprintf("Activated local skill: %s", skill.Skill.Name))
 	}
 	return notices
-}
-
-func PreferredTools(activated []ActivatedSkill) []string {
-	if len(activated) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{})
-	out := make([]string, 0, 8)
-	for _, item := range activated {
-		for _, name := range append(
-			append(
-				append([]string(nil), item.Skill.Policy.PreferredTools...),
-				item.Skill.AllowedTools...,
-			),
-			item.Skill.Agent.Tools...,
-		) {
-			trimmed := strings.TrimSpace(name)
-			if trimmed == "" {
-				continue
-			}
-			key := strings.ToLower(trimmed)
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			out = append(out, trimmed)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		left := strings.ToLower(out[i])
-		right := strings.ToLower(out[j])
-		if left == right {
-			return out[i] < out[j]
-		}
-		return left < right
-	})
-	return out
 }
 
 func GrantedTools(activated []ActivatedSkill) []string {
@@ -306,63 +182,11 @@ func GrantedTools(activated []ActivatedSkill) []string {
 
 func shouldGrantLegacyExecutionTool(item ActivatedSkill) bool {
 	switch item.Reason {
-	case ActivationReasonExplicit, ActivationReasonRetrieved, ActivationReasonToolUse, ActivationReasonInherited:
+	case ActivationReasonToolUse, ActivationReasonInherited:
 		return true
 	default:
 		return false
 	}
-}
-
-func normalizeSkillMatchText(text string) string {
-	return strings.ToLower(strings.TrimSpace(text))
-}
-
-func ImplicitHintSkills(catalog Catalog) []SkillSpec {
-	if len(catalog.Skills) == 0 {
-		return nil
-	}
-	out := make([]SkillSpec, 0, len(catalog.Skills))
-	for _, skill := range catalog.Skills {
-		if !skill.Policy.AllowImplicitActivation {
-			continue
-		}
-		out = append(out, skill)
-	}
-	return out
-}
-
-func SelectByCapabilityTags(catalog Catalog, tags []string) []ActivatedSkill {
-	if len(catalog.Skills) == 0 || len(tags) == 0 {
-		return nil
-	}
-	normalizedTags := make(map[string]string, len(tags))
-	for _, tag := range tags {
-		trimmed := strings.TrimSpace(tag)
-		if trimmed == "" {
-			continue
-		}
-		normalizedTags[strings.ToLower(trimmed)] = trimmed
-	}
-	if len(normalizedTags) == 0 {
-		return nil
-	}
-	out := make([]ActivatedSkill, 0, len(catalog.Skills))
-	for _, skill := range catalog.Skills {
-		for _, tag := range skill.Policy.CapabilityTags {
-			normalized := strings.ToLower(strings.TrimSpace(tag))
-			matchedTag, ok := normalizedTags[normalized]
-			if !ok {
-				continue
-			}
-			out = append(out, ActivatedSkill{
-				Skill:       skill,
-				Reason:      ActivationReasonProfile,
-				MatchedText: matchedTag,
-			})
-			break
-		}
-	}
-	return out
 }
 
 func SelectByNames(catalog Catalog, names []string, reason ActivationReason) []ActivatedSkill {

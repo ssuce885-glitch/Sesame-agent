@@ -24,13 +24,6 @@ func registerAutomationRoutes(mux *http.ServeMux, deps Dependencies) {
 
 	mux.HandleFunc("POST /v1/triggers/emit", handleEmitTrigger(deps))
 	mux.HandleFunc("POST /v1/triggers/heartbeat", handleRecordHeartbeat(deps))
-
-	mux.HandleFunc("GET /v1/incidents", handleListIncidents(deps))
-	mux.HandleFunc("GET /v1/incidents/{incident_id}", handleGetIncident(deps))
-	mux.HandleFunc("POST /v1/incidents/{incident_id}/ack", handleIncidentControl(deps, types.IncidentControlActionAck))
-	mux.HandleFunc("POST /v1/incidents/{incident_id}/close", handleIncidentControl(deps, types.IncidentControlActionClose))
-	mux.HandleFunc("POST /v1/incidents/{incident_id}/reopen", handleIncidentControl(deps, types.IncidentControlActionReopen))
-	mux.HandleFunc("POST /v1/incidents/{incident_id}/escalate", handleIncidentControl(deps, types.IncidentControlActionEscalate))
 }
 
 func handleListAutomations(deps Dependencies) http.HandlerFunc {
@@ -249,12 +242,12 @@ func handleEmitTrigger(deps Dependencies) http.HandlerFunc {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		incident, err := deps.Automation.EmitTrigger(r.Context(), types.AutomationTriggerRequest(req))
+		trigger, err := deps.Automation.EmitTrigger(r.Context(), types.AutomationTriggerRequest(req))
 		if err != nil {
 			writeAutomationError(w, err)
 			return
 		}
-		writeJSON(w, incident)
+		writeJSON(w, trigger)
 	}
 }
 
@@ -275,79 +268,6 @@ func handleRecordHeartbeat(deps Dependencies) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, heartbeat)
-	}
-}
-
-func handleListIncidents(deps Dependencies) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if deps.Automation == nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		filter := types.AutomationIncidentFilter{
-			WorkspaceRoot: strings.TrimSpace(r.URL.Query().Get("workspace_root")),
-			AutomationID:  strings.TrimSpace(r.URL.Query().Get("automation_id")),
-			Status:        types.AutomationIncidentStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
-		}
-		if limitStr := strings.TrimSpace(r.URL.Query().Get("limit")); limitStr != "" {
-			if parsed, err := strconv.Atoi(limitStr); err == nil {
-				filter.Limit = parsed
-			}
-		}
-		items, err := deps.Automation.ListIncidents(r.Context(), filter)
-		if err != nil {
-			writeAutomationError(w, err)
-			return
-		}
-		writeJSON(w, types.ListAutomationIncidentsResponse{Incidents: items})
-	}
-}
-
-func handleGetIncident(deps Dependencies) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if deps.Automation == nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		id := strings.TrimSpace(r.PathValue("incident_id"))
-		if id == "" {
-			http.NotFound(w, r)
-			return
-		}
-		incident, ok, err := deps.Automation.GetIncident(r.Context(), id)
-		if err != nil {
-			writeAutomationError(w, err)
-			return
-		}
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		writeJSON(w, incident)
-	}
-}
-
-func handleIncidentControl(deps Dependencies, action types.IncidentControlAction) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if deps.Automation == nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		id := strings.TrimSpace(r.PathValue("incident_id"))
-		if id == "" {
-			http.NotFound(w, r)
-			return
-		}
-		incident, ok, err := deps.Automation.ControlIncident(r.Context(), id, action)
-		if err != nil {
-			writeAutomationError(w, err)
-			return
-		}
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		writeJSON(w, incident)
 	}
 }
 

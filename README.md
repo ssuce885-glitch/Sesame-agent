@@ -10,7 +10,7 @@ It keeps chat, tool execution, approvals, background tasks, automation, reports,
 
 - Local-first by default. Workspace state lives on your machine instead of in a remote SaaS control plane.
 - One runtime spine. Interactive turns, background execution, approvals, reports, and automations share the same runtime model.
-- Workspace-scoped state. Context history, tasks, incidents, reports, roles, and runtime data stay attached to a workspace.
+- Workspace-scoped state. Context history, tasks, reports, roles, and runtime data stay attached to a workspace.
 - Terminal-native workflow. Use the CLI/TUI for day-to-day work and the web console when you need broader runtime visibility.
 - File-backed roles. Specialist roles live under `roles/<role_id>/` and can be managed as part of the workspace.
 
@@ -21,8 +21,10 @@ It keeps chat, tool execution, approvals, background tasks, automation, reports,
 - Context history with load, reopen, and branch-style workflows
 - Built-in tools for shell, file work, patching, search, task delegation, and approvals
 - Task-backed specialist delegation with child reports returned to the main conversation
-- Workspace automations, incidents, mailbox reports, and runtime inspection
+- Skill-gated workspace automations with a simple watcher -> owner task -> report -> policy loop
+- Role-owned automation source files, watcher contract validation, and runtime inspection
 - Web console for chat, runtime state, roles, and usage
+- Optional Discord ingress for remote workspace interaction
 
 ## Quick Start
 
@@ -65,6 +67,8 @@ go run ./cmd/sesame configure --workspace-root /path/to/workspace
 - `Third-Party Integrations` (optional)
 
 Discord setup is under `Third-Party Integrations`. Startup only requires completing `Model Setup`; Discord can be configured later.
+
+Discord `Allowed User IDs` is required when Discord is enabled. Leaving it empty is rejected in the setup flow so a bot cannot accidentally accept messages from everyone or silently reject all users.
 
 When configuration is missing, normal `sesame` startup automatically enters setup.
 
@@ -129,6 +133,29 @@ user request
 
 Specialist roles may use internal sessions or context handles as implementation details, but the intended public model is workspace runtime orchestration rather than multi-agent chat rooms.
 
+## Automation Model
+
+Simple automations use one explicit runtime chain:
+
+```text
+watcher script
+  -> runtime dispatch lock
+  -> owner task
+  -> child report
+  -> policy-driven resume / pause / escalation
+```
+
+The watcher is only responsible for detection. When it reports `needs_agent`, Sesame pauses that watcher run, dispatches exactly one owner task for the matching signal, waits for the task result, then resumes or pauses according to the automation policy.
+
+Automation creation is intentionally gated:
+
+- Automation-definition work must activate `automation-standard-behavior` and `automation-normalizer` before using the simple automation builder.
+- Role-owned automations must be created from the owning specialist role session.
+- Owner tasks cannot create, modify, pause, or resume automations; they execute the `automation_goal` and report the result.
+- Watcher scripts must emit the supported `script_status` JSON contract. Legacy `{"trigger": ...}` style payloads are rejected.
+
+This keeps creation, runtime execution, and status/report turns separated so a watcher match does not drift into automation reconfiguration or duplicate owner-task dispatch.
+
 ## Repository Layout
 
 - `cmd/sesame`
@@ -146,7 +173,7 @@ Specialist roles may use internal sessions or context handles as implementation 
 - `internal/tools`
   Built-in tools, tool runtime, approvals, and execution control
 - `internal/automation`
-  Watchers, dispatch, incidents, and automation lifecycle
+  Watchers, simple owner-task automation, and automation lifecycle
 - `internal/reporting`
   Mailbox/report delivery
 - `internal/roles`
@@ -164,6 +191,8 @@ Sesame is actively evolving toward a more explicit workspace runtime model:
 - task as the primary background execution primitive
 - role as a file-backed execution profile, not a second public chat line
 - runtime diagnostics, reports, approvals, and automations exposed in the console
+- automation skills and tool-layer checks working together to enforce mode boundaries
+- TUI and Discord flows sharing the same daemon/session runtime
 
 The project is already usable for local operational workflows, but the architecture is still being tightened and simplified.
 
@@ -183,6 +212,12 @@ Build the CLI from source:
 go build ./cmd/sesame
 ```
 
+Run the Go test suite:
+
+```bash
+go test ./...
+```
+
 Build the console:
 
 ```bash
@@ -190,7 +225,12 @@ cd web/console
 npm run build
 ```
 
-The public repository currently does not ship test source files. The published tree is trimmed to runtime, CLI, daemon, connector, and console code needed to build and run Sesame.
+Run console tests when changing Web Console behavior:
+
+```bash
+cd web/console
+npm run test
+```
 
 ## License
 

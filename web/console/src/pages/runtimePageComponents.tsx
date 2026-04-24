@@ -1,9 +1,7 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type {
   HistoryEntry,
   RuntimeDiagnostic,
-  RuntimeDispatchAttempt,
-  RuntimeIncident,
   RuntimePermissionRequest,
   RuntimeTask,
   RuntimeToolRun,
@@ -38,7 +36,7 @@ export function SummaryCard({ label, value, detail }: { label: string; value: st
       <div className="text-xs font-medium uppercase tracking-wide" style={{ color: "var(--color-text-muted)" }}>
         {label}
       </div>
-      <div className="mt-3 text-3xl font-semibold" style={{ color: "var(--color-text)" }}>
+      <div className="mt-3 text-4xl font-semibold" style={{ color: "var(--color-text)" }}>
         {value}
       </div>
       <div className="mt-2 text-sm" style={{ color: "var(--color-text-muted)" }}>
@@ -66,7 +64,7 @@ export function Panel({
       className="rounded-2xl p-5"
       style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border)" }}
     >
-      <div className="mb-4">
+      <div className="mb-4" style={{ borderBottom: "1px solid var(--color-border)", paddingBottom: 12 }}>
         <h2 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--color-text)" }}>
           {title}
         </h2>
@@ -105,11 +103,9 @@ export function ContextHeadRow({
       onClick={onSelect}
       aria-pressed={selected}
       className="rounded-xl px-4 py-3"
-      style={{
-        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
-        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
-        textAlign: "left",
-      }}
+      style={rowBaseStyle(selected)}
+      onMouseEnter={(e) => rowHoverIn(e, selected)}
+      onMouseLeave={(e) => rowHoverOut(e, selected)}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -140,11 +136,9 @@ export function TaskRow({ task, selected, onSelect }: { task: RuntimeTask; selec
       onClick={onSelect}
       aria-pressed={selected}
       className="rounded-xl px-4 py-3"
-      style={{
-        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
-        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
-        textAlign: "left",
-      }}
+      style={rowBaseStyle(selected)}
+      onMouseEnter={(e) => rowHoverIn(e, selected)}
+      onMouseLeave={(e) => rowHoverOut(e, selected)}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -168,90 +162,6 @@ export function TaskRow({ task, selected, onSelect }: { task: RuntimeTask; selec
   );
 }
 
-export function IncidentRow({
-  incident,
-  selected,
-  onSelect,
-}: {
-  incident: RuntimeIncident;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className="rounded-xl px-4 py-3"
-      style={{
-        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
-        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
-        textAlign: "left",
-      }}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
-            {incident.summary || incident.id}
-          </div>
-          {incident.signal_kind && (
-            <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
-              Signal: {incident.signal_kind}
-            </div>
-          )}
-        </div>
-        <StatusBadge tone={toneFromState(incident.status)}>{incident.status}</StatusBadge>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-        <span>Automation: {incident.automation_id}</span>
-        <span>Source: {incident.source || "runtime"}</span>
-        <span>Updated {formatTimestamp(incident.updated_at || incident.created_at)}</span>
-      </div>
-    </button>
-  );
-}
-
-export function DispatchAttemptRow({
-  attempt,
-  selected,
-  onSelect,
-}: {
-  attempt: RuntimeDispatchAttempt;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className="rounded-xl px-4 py-3"
-      style={{
-        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
-        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
-        textAlign: "left",
-      }}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
-            {attempt.outcome_summary || attempt.dispatch_id}
-          </div>
-          <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
-            Dispatch {attempt.dispatch_id}
-          </div>
-        </div>
-        <StatusBadge tone={toneFromState(attempt.status)}>{attempt.status}</StatusBadge>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-        <span>Phase: {attempt.phase}</span>
-        <span>Task: {attempt.task_id || "none"}</span>
-        <span>Updated {formatTimestamp(attempt.updated_at || attempt.created_at)}</span>
-      </div>
-    </button>
-  );
-}
-
 export function ToolRunRow({
   toolRun,
   selected,
@@ -267,11 +177,9 @@ export function ToolRunRow({
       onClick={onSelect}
       aria-pressed={selected}
       className="rounded-xl px-4 py-3"
-      style={{
-        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
-        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
-        textAlign: "left",
-      }}
+      style={rowBaseStyle(selected)}
+      onMouseEnter={(e) => rowHoverIn(e, selected)}
+      onMouseLeave={(e) => rowHoverOut(e, selected)}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -310,11 +218,9 @@ export function WorktreeRow({
       onClick={onSelect}
       aria-pressed={selected}
       className="rounded-xl px-4 py-3"
-      style={{
-        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
-        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
-        textAlign: "left",
-      }}
+      style={rowBaseStyle(selected)}
+      onMouseEnter={(e) => rowHoverIn(e, selected)}
+      onMouseLeave={(e) => rowHoverOut(e, selected)}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -350,11 +256,9 @@ export function ReportRow({
       onClick={onSelect}
       aria-pressed={selected}
       className="rounded-xl px-4 py-3"
-      style={{
-        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
-        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
-        textAlign: "left",
-      }}
+      style={rowBaseStyle(selected)}
+      onMouseEnter={(e) => rowHoverIn(e, selected)}
+      onMouseLeave={(e) => rowHoverOut(e, selected)}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -393,11 +297,9 @@ export function DiagnosticRow({
       onClick={onSelect}
       aria-pressed={selected}
       className="rounded-xl px-4 py-3"
-      style={{
-        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
-        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
-        textAlign: "left",
-      }}
+      style={rowBaseStyle(selected)}
+      onMouseEnter={(e) => rowHoverIn(e, selected)}
+      onMouseLeave={(e) => rowHoverOut(e, selected)}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -436,11 +338,9 @@ export function ApprovalRow({
       onClick={onSelect}
       aria-pressed={selected}
       className="rounded-xl px-4 py-3"
-      style={{
-        backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
-        border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
-        textAlign: "left",
-      }}
+      style={rowBaseStyle(selected)}
+      onMouseEnter={(e) => rowHoverIn(e, selected)}
+      onMouseLeave={(e) => rowHoverOut(e, selected)}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -598,6 +498,28 @@ function toneFromDiagnosticEvent(eventType: string): "accent" | "success" | "war
     default:
       return "neutral";
   }
+}
+
+function rowBaseStyle(selected: boolean): CSSProperties {
+  return {
+    backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
+    border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
+    textAlign: "left",
+    transition: "background-color 0.15s, border-color 0.15s",
+    cursor: "pointer",
+  };
+}
+
+function rowHoverIn(e: React.MouseEvent<HTMLButtonElement>, selected: boolean) {
+  if (selected) return;
+  e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.03)";
+  e.currentTarget.style.borderColor = "var(--color-text-muted)";
+}
+
+function rowHoverOut(e: React.MouseEvent<HTMLButtonElement>, selected: boolean) {
+  if (selected) return;
+  e.currentTarget.style.backgroundColor = "var(--color-surface-2)";
+  e.currentTarget.style.borderColor = "var(--color-border)";
 }
 
 export function sortByUpdatedAtDesc<T extends { updated_at?: string; created_at?: string }>(a: T, b: T) {

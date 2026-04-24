@@ -6,182 +6,101 @@ import (
 	"strings"
 
 	"go-agent/internal/automation"
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/types"
 )
 
-type automationCreateDetectorTool struct{}
-type automationConfigureIncidentPolicyTool struct{}
-type automationConfigureDispatchPolicyTool struct{}
+type automationCreateSimpleTool struct{}
 
-func (automationCreateDetectorTool) IsEnabled(execCtx ExecContext) bool {
-	return execCtx.AutomationService != nil
-}
-func (automationConfigureIncidentPolicyTool) IsEnabled(execCtx ExecContext) bool {
-	return execCtx.AutomationService != nil
-}
-func (automationConfigureDispatchPolicyTool) IsEnabled(execCtx ExecContext) bool {
-	return execCtx.AutomationService != nil
+func (automationCreateSimpleTool) IsEnabled(execCtx ExecContext) bool {
+	return execCtx.AutomationService != nil &&
+		!isAutomationOwnerTaskMode(execCtx) &&
+		hasActiveSkills(execCtx, "automation-standard-behavior", "automation-normalizer")
 }
 
-func (automationCreateDetectorTool) IsConcurrencySafe() bool          { return false }
-func (automationConfigureIncidentPolicyTool) IsConcurrencySafe() bool { return false }
-func (automationConfigureDispatchPolicyTool) IsConcurrencySafe() bool { return false }
+func (automationCreateSimpleTool) IsConcurrencySafe() bool { return false }
 
-func (automationCreateDetectorTool) Definition() Definition {
+func (automationCreateSimpleTool) Definition() Definition {
 	return Definition{
-		Name:        "automation_create_detector",
-		Description: "Preferred high-level builder for detector-first native automation. Compile and persist watcher-native detector automation from high-level intent so validation runs through the native detector/incident pipeline instead of shell-loop substitutes.",
+		Name:        "automation_create_simple",
+		Description: "Preferred high-level builder for watcher-driven simple automation: watcher script -> pause watcher after dispatch -> owner task -> owner report -> policy-driven watcher resume. Compiles and persists a valid simple-mode automation spec.",
 		InputSchema: objectSchema(map[string]any{
 			"automation_id": map[string]any{
 				"type":        "string",
 				"description": "Automation identifier to persist.",
 			},
+			"owner": map[string]any{
+				"type":        "string",
+				"description": "Owner target for simple runtime task dispatch. Must be main_agent or role:<role_id>. If owner is role:<role_id>, this tool must be called from that owning specialist role session.",
+			},
+			"watch_script": map[string]any{
+				"type":        "string",
+				"description": "Shell command/script that emits one detector JSON object for trigger_on=script_status. The runtime pauses the watcher after a needs_agent dispatch and resumes it after the owner task according to simple_policy. No match example: {\"status\":\"healthy\",\"summary\":\"no files found\",\"facts\":{\"count\":0}}. Match example: {\"status\":\"needs_agent\",\"summary\":\"found files to clean\",\"facts\":{\"count\":2}}. Do not output triggered/found/NO_MATCH or wrap inside script_status.",
+			},
+			"interval_seconds": map[string]any{
+				"type":        "integer",
+				"description": "Watcher poll interval in seconds.",
+			},
 			"title": map[string]any{
+				"type": "string",
+			},
+			"goal": map[string]any{
+				"type": "string",
+			},
+			"timeout_seconds": map[string]any{
+				"type":        "integer",
+				"description": "Optional watcher command timeout in seconds (default 30).",
+			},
+			"report_target": map[string]any{
 				"type":        "string",
-				"description": "Optional automation title.",
+				"description": "Optional report delivery target. Defaults to owner.",
 			},
-			"detector_kind": map[string]any{
+			"escalation_target": map[string]any{
 				"type":        "string",
-				"enum":        []string{string(types.NativeDetectorKindFile), string(types.NativeDetectorKindCommand), string(types.NativeDetectorKindHealth)},
-				"description": "Detector kind to compile.",
+				"description": "Optional escalation target. Defaults to main_agent.",
 			},
-			"target": map[string]any{
-				"type":                 "object",
-				"additionalProperties": true,
-			},
-			"schedule": map[string]any{
-				"type":                 "object",
-				"additionalProperties": true,
-			},
-			"condition": map[string]any{
-				"type":                 "object",
-				"additionalProperties": true,
-			},
-			"facts_schema": map[string]any{
-				"type":                 "object",
-				"additionalProperties": map[string]any{"type": "string"},
-				"description":          "Fact keys and value types emitted by the cheap detector.",
-			},
-			"dedupe": map[string]any{
-				"type":                 "object",
-				"additionalProperties": true,
-			},
-			"state": map[string]any{
-				"type":        "string",
-				"description": "Optional detector state hint.",
-			},
-		}, "automation_id", "facts_schema"),
-		OutputSchema: automationSpecOutputSchema(),
-	}
-}
-
-func (automationConfigureIncidentPolicyTool) Definition() Definition {
-	return Definition{
-		Name:        "automation_configure_incident_policy",
-		Description: "Configure incident policy from detector-native facts schema and persist runtime-consumed dedupe settings.",
-		InputSchema: objectSchema(map[string]any{
-			"automation_id": map[string]any{
-				"type": "string",
-			},
-			"create_incident_on": map[string]any{
-				"type": "string",
-			},
-			"summary_template": map[string]any{
-				"type": "string",
-			},
-			"dedupe_policy": map[string]any{
-				"type":                 "object",
-				"additionalProperties": true,
-			},
-			"severity": map[string]any{
-				"type": "string",
-			},
-			"auto_close_minutes": map[string]any{
-				"type": "integer",
-			},
-		}, "automation_id", "create_incident_on"),
-		OutputSchema: automationSpecOutputSchema(),
-	}
-}
-
-func (automationConfigureDispatchPolicyTool) Definition() Definition {
-	return Definition{
-		Name:        "automation_configure_dispatch_policy",
-		Description: "Configure dispatch policy from detector-native facts schema and compile runnable notify/run_task execution paths.",
-		InputSchema: objectSchema(map[string]any{
-			"automation_id": map[string]any{
-				"type": "string",
-			},
-			"dispatch_mode": map[string]any{
-				"type": "string",
-				"enum": []string{
-					string(types.NativeDispatchModeNotifyOnly),
-					string(types.NativeDispatchModeRunTask),
+			"simple_policy": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"on_success": map[string]any{
+						"type": "string",
+						"enum": []string{"continue", "pause", "escalate"},
+					},
+					"on_failure": map[string]any{
+						"type": "string",
+						"enum": []string{"continue", "pause", "escalate"},
+					},
+					"on_blocked": map[string]any{
+						"type": "string",
+						"enum": []string{"continue", "pause", "escalate"},
+					},
 				},
+				"additionalProperties": false,
 			},
-			"action_kind": map[string]any{
-				"type": "string",
-				"enum": []string{
-					string(types.NativeActionKindDeleteFile),
-					string(types.NativeActionKindRunScript),
-					string(types.NativeActionKindSendEmail),
-					string(types.NativeActionKindNotifyOnly),
-				},
-			},
-			"action_args": map[string]any{
-				"type":                 "object",
-				"additionalProperties": map[string]any{"type": "string"},
-			},
-			"verification": map[string]any{
-				"type":                 "object",
-				"additionalProperties": true,
-			},
-			"reporting": map[string]any{
-				"type":                 "object",
-				"additionalProperties": true,
-			},
-		}, "automation_id", "dispatch_mode", "action_kind"),
+		}, "automation_id", "owner", "watch_script", "interval_seconds"),
 		OutputSchema: automationSpecOutputSchema(),
 	}
 }
 
-func (automationCreateDetectorTool) Decode(call Call) (DecodedCall, error) {
-	var input types.NativeDetectorBuilderInput
+func (automationCreateSimpleTool) Decode(call Call) (DecodedCall, error) {
+	var input types.SimpleAutomationBuilderInput
 	if err := decodeAutomationJSON(call.Input, &input); err != nil {
-		return DecodedCall{}, fmt.Errorf("input must be a valid detector builder payload: %w", err)
+		return DecodedCall{}, fmt.Errorf("input must be a valid simple automation builder payload: %w", err)
 	}
 	input.AutomationID = strings.TrimSpace(input.AutomationID)
+	input.Owner = strings.TrimSpace(input.Owner)
+	input.WatchScript = strings.TrimSpace(input.WatchScript)
+	input.ReportTarget = strings.TrimSpace(input.ReportTarget)
+	input.EscalationTarget = strings.TrimSpace(input.EscalationTarget)
+	input.Title = strings.TrimSpace(input.Title)
+	input.Goal = strings.TrimSpace(input.Goal)
 	return DecodedCall{
 		Call:  call,
 		Input: input,
 	}, nil
 }
 
-func (automationConfigureIncidentPolicyTool) Decode(call Call) (DecodedCall, error) {
-	var input types.NativeIncidentPolicyInput
-	if err := decodeAutomationJSON(call.Input, &input); err != nil {
-		return DecodedCall{}, fmt.Errorf("input must be a valid incident policy payload: %w", err)
-	}
-	input.AutomationID = strings.TrimSpace(input.AutomationID)
-	return DecodedCall{
-		Call:  call,
-		Input: input,
-	}, nil
-}
-
-func (automationConfigureDispatchPolicyTool) Decode(call Call) (DecodedCall, error) {
-	var input types.NativeDispatchPolicyInput
-	if err := decodeAutomationJSON(call.Input, &input); err != nil {
-		return DecodedCall{}, fmt.Errorf("input must be a valid dispatch policy payload: %w", err)
-	}
-	input.AutomationID = strings.TrimSpace(input.AutomationID)
-	return DecodedCall{
-		Call:  call,
-		Input: input,
-	}, nil
-}
-
-func (t automationCreateDetectorTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
+func (t automationCreateSimpleTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
 	decoded, err := t.Decode(call)
 	if err != nil {
 		return Result{}, err
@@ -190,31 +109,33 @@ func (t automationCreateDetectorTool) Execute(ctx context.Context, call Call, ex
 	return output.Result, err
 }
 
-func (t automationConfigureIncidentPolicyTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
-	decoded, err := t.Decode(call)
-	if err != nil {
-		return Result{}, err
-	}
-	output, err := t.ExecuteDecoded(ctx, decoded, execCtx)
-	return output.Result, err
-}
-
-func (t automationConfigureDispatchPolicyTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
-	decoded, err := t.Decode(call)
-	if err != nil {
-		return Result{}, err
-	}
-	output, err := t.ExecuteDecoded(ctx, decoded, execCtx)
-	return output.Result, err
-}
-
-func (automationCreateDetectorTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
+func (automationCreateSimpleTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
 	service, err := requireAutomationService(execCtx)
 	if err != nil {
 		return ToolExecutionResult{}, err
 	}
-	input, _ := decoded.Input.(types.NativeDetectorBuilderInput)
-	spec, err := automation.CompileNativeDetectorBuilder(input, execCtx.WorkspaceRoot)
+	if err := rejectAutomationDefinitionMutationFromOwnerTask(execCtx); err != nil {
+		return ToolExecutionResult{}, err
+	}
+	if err := requireActiveSkills(execCtx, "automation-standard-behavior", "automation-normalizer"); err != nil {
+		return ToolExecutionResult{}, err
+	}
+	input, _ := decoded.Input.(types.SimpleAutomationBuilderInput)
+	if err := requireOwningRoleAutomationContext(ctx, input.Owner); err != nil {
+		return ToolExecutionResult{}, err
+	}
+	// Validate the user-provided watcher before writing role-bound source files.
+	if err := automation.ValidateWatcherContract(ctx, input.WatchScript, execCtx.WorkspaceRoot); err != nil {
+		return ToolExecutionResult{}, err
+	}
+	if strings.HasPrefix(types.NormalizeAutomationOwner(input.Owner), "role:") {
+		layout, err := automation.MaterializeRoleBoundSimpleAutomationSource(execCtx.WorkspaceRoot, input)
+		if err != nil {
+			return ToolExecutionResult{}, err
+		}
+		input.WatchScript = layout.Selector
+	}
+	spec, err := automation.CompileSimpleAutomationBuilder(input, execCtx.WorkspaceRoot)
 	if err != nil {
 		return ToolExecutionResult{}, err
 	}
@@ -231,78 +152,47 @@ func (automationCreateDetectorTool) ExecuteDecoded(ctx context.Context, decoded 
 	}, nil
 }
 
-func (automationConfigureIncidentPolicyTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
-	service, err := requireAutomationService(execCtx)
-	if err != nil {
-		return ToolExecutionResult{}, err
+func rejectAutomationDefinitionMutationFromOwnerTask(execCtx ExecContext) error {
+	if !isAutomationOwnerTaskMode(execCtx) {
+		return nil
 	}
-	input, _ := decoded.Input.(types.NativeIncidentPolicyInput)
-	spec, ok, err := service.Get(ctx, input.AutomationID)
-	if err != nil {
-		return ToolExecutionResult{}, err
-	}
-	if !ok {
-		return ToolExecutionResult{}, fmt.Errorf("automation %q not found", input.AutomationID)
-	}
-	spec, err = automation.CompileNativeIncidentPolicy(spec, input)
-	if err != nil {
-		return ToolExecutionResult{}, err
-	}
-	spec, err = service.Apply(ctx, spec)
-	if err != nil {
-		return ToolExecutionResult{}, err
-	}
-	return ToolExecutionResult{
-		Result: Result{
-			Text:      mustJSON(spec),
-			ModelText: mustJSON(spec),
-		},
-		Data: spec,
-	}, nil
+	return fmt.Errorf("automation_create_simple is not allowed in Owner Task Mode; execute the automation_goal and report the result instead of creating or modifying automation definitions")
 }
 
-func (automationConfigureDispatchPolicyTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
-	service, err := requireAutomationService(execCtx)
+func isAutomationOwnerTaskMode(execCtx ExecContext) bool {
+	if execCtx.TaskManager == nil || execCtx.TurnContext == nil {
+		return false
+	}
+	taskID := strings.TrimSpace(execCtx.TurnContext.CurrentTaskID)
+	if taskID == "" {
+		return false
+	}
+	currentTask, err := getTaskForWorkspace(execCtx.TaskManager, taskID, execCtx.WorkspaceRoot)
 	if err != nil {
-		return ToolExecutionResult{}, err
+		return false
 	}
-	input, _ := decoded.Input.(types.NativeDispatchPolicyInput)
-	spec, ok, err := service.Get(ctx, input.AutomationID)
-	if err != nil {
-		return ToolExecutionResult{}, err
+	if !strings.EqualFold(strings.TrimSpace(currentTask.Kind), "automation_simple") {
+		return false
 	}
-	if !ok {
-		return ToolExecutionResult{}, fmt.Errorf("automation %q not found", input.AutomationID)
-	}
-	spec, assets, err := automation.CompileNativeDispatchPolicy(spec, input)
-	if err != nil {
-		return ToolExecutionResult{}, err
-	}
-	spec, err = service.ApplyRequest(ctx, types.ApplyAutomationRequest{
-		Confirmed: true,
-		Spec:      spec,
-		Assets:    assets,
-	})
-	if err != nil {
-		return ToolExecutionResult{}, err
-	}
-	return ToolExecutionResult{
-		Result: Result{
-			Text:      mustJSON(spec),
-			ModelText: mustJSON(spec),
-		},
-		Data: spec,
-	}, nil
+	return true
 }
 
-func (automationCreateDetectorTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
-	return defaultStructuredModelResult(output)
+func requireOwningRoleAutomationContext(ctx context.Context, owner string) error {
+	normalizedOwner := types.NormalizeAutomationOwner(owner)
+	if !strings.HasPrefix(normalizedOwner, "role:") {
+		return nil
+	}
+	ownerRoleID := strings.TrimSpace(strings.TrimPrefix(normalizedOwner, "role:"))
+	currentRoleID := strings.TrimSpace(rolectx.SpecialistRoleIDFromContext(ctx))
+	if currentRoleID == ownerRoleID {
+		return nil
+	}
+	if currentRoleID == "" {
+		return fmt.Errorf("role-owned automation must be created from the owning specialist role session %q; delegate_to_role to that role and have it call automation_create_simple", ownerRoleID)
+	}
+	return fmt.Errorf("role-owned automation for %q cannot be created from specialist role %q", ownerRoleID, currentRoleID)
 }
 
-func (automationConfigureIncidentPolicyTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
-	return defaultStructuredModelResult(output)
-}
-
-func (automationConfigureDispatchPolicyTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
+func (automationCreateSimpleTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
 	return defaultStructuredModelResult(output)
 }

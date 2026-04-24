@@ -8,18 +8,10 @@ import (
 
 type AutomationState string
 type AutomationControlAction string
-type IncidentControlAction string
-type AutomationIncidentStatus string
 type AutomationWatcherState string
 type AutomationWatcherHoldKind string
-type AutomationPhaseName string
-type AutomationPhaseTransitionAction string
-type IncidentPhaseReduction string
-type IncidentPhaseStatus string
 type AutomationAssumptionSource string
-type DispatchAttemptStatus string
 type ChildAgentOutcome string
-type DeliveryChannelStatus string
 type AutomationDetectorStatus string
 
 const (
@@ -38,26 +30,6 @@ const (
 )
 
 const (
-	IncidentControlActionAck      IncidentControlAction = "ack"
-	IncidentControlActionClose    IncidentControlAction = "close"
-	IncidentControlActionReopen   IncidentControlAction = "reopen"
-	IncidentControlActionEscalate IncidentControlAction = "escalate"
-)
-
-const (
-	AutomationIncidentStatusOpen       AutomationIncidentStatus = "open"
-	AutomationIncidentStatusSuppressed AutomationIncidentStatus = "suppressed"
-	AutomationIncidentStatusQueued     AutomationIncidentStatus = "queued"
-	AutomationIncidentStatusActive     AutomationIncidentStatus = "active"
-	AutomationIncidentStatusMonitoring AutomationIncidentStatus = "monitoring"
-	AutomationIncidentStatusResolved   AutomationIncidentStatus = "resolved"
-	AutomationIncidentStatusEscalated  AutomationIncidentStatus = "escalated"
-	AutomationIncidentStatusFailed     AutomationIncidentStatus = "failed"
-	AutomationIncidentStatusCanceled   AutomationIncidentStatus = "canceled"
-	AutomationIncidentStatusClosed     AutomationIncidentStatus = "closed"
-)
-
-const (
 	AutomationWatcherStatePending AutomationWatcherState = "pending"
 	AutomationWatcherStateRunning AutomationWatcherState = "running"
 	AutomationWatcherStatePaused  AutomationWatcherState = "paused"
@@ -66,40 +38,7 @@ const (
 )
 
 const (
-	AutomationWatcherHoldKindManual   AutomationWatcherHoldKind = "manual"
-	AutomationWatcherHoldKindDispatch AutomationWatcherHoldKind = "dispatch"
-	AutomationWatcherHoldKindApproval AutomationWatcherHoldKind = "approval"
-)
-
-const ResponsePlanSchemaVersionV2 = "sesame.response_plan/v2"
-
-const (
-	AutomationPhaseDiagnose  AutomationPhaseName = "diagnose"
-	AutomationPhaseRemediate AutomationPhaseName = "remediate"
-	AutomationPhaseVerify    AutomationPhaseName = "verify"
-	AutomationPhaseEscalate  AutomationPhaseName = "escalate"
-)
-
-const (
-	AutomationPhaseTransitionNextPhase AutomationPhaseTransitionAction = "next_phase"
-	AutomationPhaseTransitionComplete  AutomationPhaseTransitionAction = "complete"
-	AutomationPhaseTransitionEscalate  AutomationPhaseTransitionAction = "escalate"
-	AutomationPhaseTransitionCancel    AutomationPhaseTransitionAction = "cancel"
-)
-
-const (
-	IncidentPhaseReductionAllMustSucceed IncidentPhaseReduction = "all_must_succeed"
-	IncidentPhaseReductionAnySuccess     IncidentPhaseReduction = "any_success"
-	IncidentPhaseReductionBestEffort     IncidentPhaseReduction = "best_effort"
-)
-
-const (
-	IncidentPhaseStatusPending          IncidentPhaseStatus = "pending"
-	IncidentPhaseStatusRunning          IncidentPhaseStatus = "running"
-	IncidentPhaseStatusAwaitingApproval IncidentPhaseStatus = "awaiting_approval"
-	IncidentPhaseStatusCompleted        IncidentPhaseStatus = "completed"
-	IncidentPhaseStatusFailed           IncidentPhaseStatus = "failed"
-	IncidentPhaseStatusCanceled         IncidentPhaseStatus = "canceled"
+	AutomationWatcherHoldKindManual AutomationWatcherHoldKind = "manual"
 )
 
 const (
@@ -109,31 +48,9 @@ const (
 )
 
 const (
-	DispatchAttemptStatusPlanned          DispatchAttemptStatus = "planned"
-	DispatchAttemptStatusAwaitingApproval DispatchAttemptStatus = "awaiting_approval"
-	DispatchAttemptStatusRunning          DispatchAttemptStatus = "running"
-	DispatchAttemptStatusInterrupted      DispatchAttemptStatus = "interrupted"
-	DispatchAttemptStatusCompleted        DispatchAttemptStatus = "completed"
-	DispatchAttemptStatusFailed           DispatchAttemptStatus = "failed"
-	DispatchAttemptStatusTimedOut         DispatchAttemptStatus = "timed_out"
-	DispatchAttemptStatusCanceled         DispatchAttemptStatus = "canceled"
-)
-
-const (
 	ChildAgentOutcomeSuccess ChildAgentOutcome = "success"
 	ChildAgentOutcomeFailure ChildAgentOutcome = "failure"
 	ChildAgentOutcomeBlocked ChildAgentOutcome = "blocked"
-)
-
-const (
-	DeliveryChannelStatusPending  DeliveryChannelStatus = "pending"
-	DeliveryChannelStatusEmitted  DeliveryChannelStatus = "emitted"
-	DeliveryChannelStatusReady    DeliveryChannelStatus = "ready"
-	DeliveryChannelStatusQueued   DeliveryChannelStatus = "queued"
-	DeliveryChannelStatusInjected DeliveryChannelStatus = "injected"
-	DeliveryChannelStatusDisabled DeliveryChannelStatus = "disabled"
-	DeliveryChannelStatusSkipped  DeliveryChannelStatus = "skipped"
-	DeliveryChannelStatusFailed   DeliveryChannelStatus = "failed"
 )
 
 const (
@@ -180,91 +97,24 @@ type AutomationAssumption struct {
 	Source AutomationAssumptionSource `json:"source,omitempty"`
 }
 
-type ChildAgentTemplate struct {
-	AgentID             string   `json:"agent_id"`
-	Purpose             string   `json:"purpose,omitempty"`
-	PromptTemplate      string   `json:"prompt_template,omitempty"`
-	ActivatedSkillNames []string `json:"activated_skill_names,omitempty"`
-	OutputContractRef   string   `json:"output_contract_ref,omitempty"`
-	TimeoutSeconds      int      `json:"timeout_seconds,omitempty"`
-	MaxAttempts         int      `json:"max_attempts,omitempty"`
-	Concurrency         int      `json:"concurrency,omitempty"`
-	AllowElevation      bool     `json:"allow_elevation,omitempty"`
-}
-
-type ChildAgentStrategyEscalationCondition struct {
-	WhenStatus []string `json:"when_status"`
-}
-
-type ChildAgentStrategyCompletionPolicy struct {
-	ResumeWatcherOnSuccess *bool `json:"resume_watcher_on_success"`
-	ResumeWatcherOnFailure *bool `json:"resume_watcher_on_failure"`
-}
-
-type ChildAgentStrategyFailurePolicy struct {
-	HandoffToHuman         *bool `json:"handoff_to_human"`
-	KeepPaused             *bool `json:"keep_paused"`
-	NotifyViaExternalSkill *bool `json:"notify_via_external_skill"`
-}
-
-type ChildAgentTemplateStrategy struct {
-	Goal                string                                `json:"goal"`
-	EscalationCondition ChildAgentStrategyEscalationCondition `json:"escalation_condition"`
-	CompletionPolicy    ChildAgentStrategyCompletionPolicy    `json:"completion_policy"`
-	FailurePolicy       ChildAgentStrategyFailurePolicy       `json:"failure_policy"`
-}
-
-type ChildAgentTemplateSkills struct {
-	Required []string `json:"required"`
-	Optional []string `json:"optional"`
-}
-
-type AutomationPhasePlan struct {
-	Phase       AutomationPhaseName             `json:"phase"`
-	ChildAgents []ChildAgentTemplate            `json:"child_agents,omitempty"`
-	OnSuccess   AutomationPhaseTransitionAction `json:"on_success,omitempty"`
-	OnFailure   AutomationPhaseTransitionAction `json:"on_failure,omitempty"`
-}
-
-type ResponsePlanV2 struct {
-	SchemaVersion string                `json:"schema_version"`
-	Phases        []AutomationPhasePlan `json:"phases"`
-}
-
 type AutomationSpec struct {
 	ID               string                 `json:"id"`
 	Title            string                 `json:"title"`
 	WorkspaceRoot    string                 `json:"workspace_root"`
 	Goal             string                 `json:"goal"`
 	State            AutomationState        `json:"state"`
+	Mode             AutomationMode         `json:"mode,omitempty"`
+	Owner            string                 `json:"owner,omitempty"`
+	ReportTarget     string                 `json:"report_target,omitempty"`
+	EscalationTarget string                 `json:"escalation_target,omitempty"`
+	SimplePolicy     SimpleAutomationPolicy `json:"simple_policy,omitempty"`
 	Context          AutomationContext      `json:"context"`
 	Signals          []AutomationSignal     `json:"signals"`
-	IncidentPolicy   json.RawMessage        `json:"incident_policy"`
-	ResponsePlan     json.RawMessage        `json:"response_plan"`
-	VerificationPlan json.RawMessage        `json:"verification_plan"`
-	EscalationPolicy json.RawMessage        `json:"escalation_policy"`
-	DeliveryPolicy   json.RawMessage        `json:"delivery_policy"`
-	RuntimePolicy    json.RawMessage        `json:"runtime_policy"`
 	WatcherLifecycle json.RawMessage        `json:"watcher_lifecycle"`
 	RetriggerPolicy  json.RawMessage        `json:"retrigger_policy"`
-	RunPolicy        json.RawMessage        `json:"run_policy"`
 	Assumptions      []AutomationAssumption `json:"assumptions"`
 	CreatedAt        time.Time              `json:"created_at,omitempty"`
 	UpdatedAt        time.Time              `json:"updated_at,omitempty"`
-}
-
-type AutomationIncident struct {
-	ID            string                   `json:"id"`
-	AutomationID  string                   `json:"automation_id"`
-	WorkspaceRoot string                   `json:"workspace_root"`
-	Status        AutomationIncidentStatus `json:"status"`
-	SignalKind    string                   `json:"signal_kind,omitempty"`
-	Source        string                   `json:"source,omitempty"`
-	Summary       string                   `json:"summary,omitempty"`
-	Payload       json.RawMessage          `json:"payload,omitempty"`
-	ObservedAt    time.Time                `json:"observed_at,omitempty"`
-	CreatedAt     time.Time                `json:"created_at,omitempty"`
-	UpdatedAt     time.Time                `json:"updated_at,omitempty"`
 }
 
 type AutomationHeartbeat struct {
@@ -310,7 +160,6 @@ type TriggerEvent struct {
 	EventID       string          `json:"event_id"`
 	AutomationID  string          `json:"automation_id"`
 	WorkspaceRoot string          `json:"workspace_root"`
-	IncidentID    string          `json:"incident_id,omitempty"`
 	SignalKind    string          `json:"signal_kind,omitempty"`
 	Source        string          `json:"source,omitempty"`
 	Summary       string          `json:"summary,omitempty"`
@@ -319,69 +168,6 @@ type TriggerEvent struct {
 	ObservedAt    time.Time       `json:"observed_at,omitempty"`
 	CreatedAt     time.Time       `json:"created_at,omitempty"`
 	UpdatedAt     time.Time       `json:"updated_at,omitempty"`
-}
-
-type IncidentPhaseState struct {
-	IncidentID             string                 `json:"incident_id"`
-	AutomationID           string                 `json:"automation_id"`
-	WorkspaceRoot          string                 `json:"workspace_root"`
-	Phase                  AutomationPhaseName    `json:"phase"`
-	Reduction              IncidentPhaseReduction `json:"reduction"`
-	Status                 IncidentPhaseStatus    `json:"status"`
-	DispatchIDs            []string               `json:"dispatch_ids"`
-	ActiveDispatchCount    int                    `json:"active_dispatch_count"`
-	CompletedDispatchCount int                    `json:"completed_dispatch_count"`
-	FailedDispatchCount    int                    `json:"failed_dispatch_count"`
-	CreatedAt              time.Time              `json:"created_at,omitempty"`
-	UpdatedAt              time.Time              `json:"updated_at,omitempty"`
-}
-
-type DispatchAttempt struct {
-	DispatchID          string                `json:"dispatch_id"`
-	IncidentID          string                `json:"incident_id"`
-	AutomationID        string                `json:"automation_id"`
-	WorkspaceRoot       string                `json:"workspace_root"`
-	Phase               AutomationPhaseName   `json:"phase"`
-	Attempt             int                   `json:"attempt"`
-	Status              DispatchAttemptStatus `json:"status"`
-	Outcome             ChildAgentOutcome     `json:"outcome,omitempty"`
-	OutcomeSummary      string                `json:"outcome_summary,omitempty"`
-	TaskID              string                `json:"task_id,omitempty"`
-	ChildAgentID        string                `json:"child_agent_id,omitempty"`
-	PromptHash          string                `json:"prompt_hash,omitempty"`
-	ActivatedSkillNames []string              `json:"activated_skill_names,omitempty"`
-	OutputContractRef   string                `json:"output_contract_ref,omitempty"`
-	ContinuationID      string                `json:"continuation_id,omitempty"`
-	PermissionRequestID string                `json:"permission_request_id,omitempty"`
-	ApprovalQueueKey    string                `json:"approval_queue_key,omitempty"`
-	PreferredSessionID  string                `json:"preferred_session_id,omitempty"`
-	StartedAt           time.Time             `json:"started_at,omitempty"`
-	FinishedAt          time.Time             `json:"finished_at,omitempty"`
-	Error               string                `json:"error,omitempty"`
-	CreatedAt           time.Time             `json:"created_at,omitempty"`
-	UpdatedAt           time.Time             `json:"updated_at,omitempty"`
-}
-
-type DeliveryChannelStatusRecord struct {
-	Status DeliveryChannelStatus `json:"status"`
-}
-
-type DeliveryChannelSet struct {
-	Notice    DeliveryChannelStatusRecord `json:"notice"`
-	Mailbox   DeliveryChannelStatusRecord `json:"mailbox"`
-	Injection DeliveryChannelStatusRecord `json:"injection"`
-}
-
-type DeliveryRecord struct {
-	DeliveryID    string             `json:"delivery_id"`
-	WorkspaceRoot string             `json:"workspace_root"`
-	AutomationID  string             `json:"automation_id"`
-	IncidentID    string             `json:"incident_id"`
-	DispatchID    string             `json:"dispatch_id"`
-	SummaryRef    string             `json:"summary_ref,omitempty"`
-	Channels      DeliveryChannelSet `json:"channels"`
-	CreatedAt     time.Time          `json:"created_at,omitempty"`
-	UpdatedAt     time.Time          `json:"updated_at,omitempty"`
 }
 
 type AutomationAsset struct {
@@ -396,13 +182,6 @@ type AutomationListFilter struct {
 	Limit         int             `json:"limit,omitempty"`
 }
 
-type AutomationIncidentFilter struct {
-	WorkspaceRoot string                   `json:"workspace_root,omitempty"`
-	AutomationID  string                   `json:"automation_id,omitempty"`
-	Status        AutomationIncidentStatus `json:"status,omitempty"`
-	Limit         int                      `json:"limit,omitempty"`
-}
-
 type AutomationWatcherFilter struct {
 	WorkspaceRoot string                 `json:"workspace_root,omitempty"`
 	AutomationID  string                 `json:"automation_id,omitempty"`
@@ -413,37 +192,15 @@ type AutomationWatcherFilter struct {
 type TriggerEventFilter struct {
 	WorkspaceRoot string `json:"workspace_root,omitempty"`
 	AutomationID  string `json:"automation_id,omitempty"`
-	IncidentID    string `json:"incident_id,omitempty"`
 	DedupeKey     string `json:"dedupe_key,omitempty"`
-	Limit         int    `json:"limit,omitempty"`
-}
-
-type DispatchAttemptFilter struct {
-	WorkspaceRoot string                `json:"workspace_root,omitempty"`
-	AutomationID  string                `json:"automation_id,omitempty"`
-	IncidentID    string                `json:"incident_id,omitempty"`
-	Status        DispatchAttemptStatus `json:"status,omitempty"`
-	Limit         int                   `json:"limit,omitempty"`
-}
-
-type DeliveryRecordFilter struct {
-	WorkspaceRoot string `json:"workspace_root,omitempty"`
-	AutomationID  string `json:"automation_id,omitempty"`
-	IncidentID    string `json:"incident_id,omitempty"`
-	DispatchID    string `json:"dispatch_id,omitempty"`
 	Limit         int    `json:"limit,omitempty"`
 }
 
 type PendingAutomationPermission struct {
 	RequestID          string `json:"request_id"`
 	WorkspaceRoot      string `json:"workspace_root"`
-	AutomationID       string `json:"automation_id"`
-	IncidentID         string `json:"incident_id"`
-	DispatchID         string `json:"dispatch_id"`
 	PreferredSessionID string `json:"preferred_session_id,omitempty"`
 }
-
-type IncidentListFilter = AutomationIncidentFilter
 
 type AutomationTriggerRequest struct {
 	AutomationID string          `json:"automation_id"`
@@ -489,15 +246,11 @@ type ControlAutomationResponse struct {
 }
 
 type EmitAutomationTriggerResponse struct {
-	Incident AutomationIncident `json:"incident"`
+	Trigger TriggerEvent `json:"trigger"`
 }
 
 type RecordAutomationHeartbeatResponse struct {
 	Heartbeat AutomationHeartbeat `json:"heartbeat"`
-}
-
-type ListAutomationIncidentsResponse struct {
-	Incidents []AutomationIncident `json:"incidents"`
 }
 
 type GetAutomationWatcherResponse struct {

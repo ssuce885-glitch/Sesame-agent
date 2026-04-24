@@ -1,6 +1,6 @@
 ---
 name: automation-standard-behavior
-description: Use when a user is defining or managing a long-running automation that needs a script-backed AutomationSpec and confirmation before apply.
+description: Use when a user is defining or managing a long-running simple-chain automation.
 policy:
   allow_implicit_activation: false
   allow_full_injection: true
@@ -10,32 +10,72 @@ policy:
 
 # Automation Standard Behavior
 
-Treat this turn as automation compilation or automation management, not as a one-shot execution turn.
+Treat this turn as simple-chain automation creation or management, not as a one-shot execution turn.
+
+Keep the simple chain explicit:
+
+`watcher signal -> pause watcher -> owner task -> report -> policy-driven watcher resume`
 
 ## Workflow
 
-1. Draft the script-backed automation first.
-2. Keep detector logic in `scripts/detect.sh` and keep child-agent strategy assets in `child_agents/<phase>/<agent_id>/strategy.json`, `prompt.md`, and `skills.json`.
-3. Normalize the `AutomationSpec` so the watcher signal, response plan, delivery policy, runtime policy, and assumptions are explicit.
-4. Treat `response_plan.child_agents[].prompt_template` and `activated_skill_names` as preview/cache fields; runtime execution reads the workspace asset bundle as the canonical source.
-5. Summarize trigger, interval, remediation path, escalation path, selected external skills, and assumptions in user language.
-6. Wait for explicit user confirmation.
-7. Call `automation_apply` only with `confirmed=true`.
+1. Identify the current mode before taking action.
+2. Stay inside that mode's boundary.
+3. Gather only the inputs needed for the simple chain.
+4. Create or update using `automation_create_simple` when the turn is actually an automation-definition turn.
+5. Summarize trigger signal, owner routing, report target, escalation target, and simple policy in user language.
+6. Verify runtime-visible state using `automation_query` when stored spec, watcher state, or recent heartbeats matter.
+
+## Modes
+
+### 1. Create Automation Mode
+
+Use this mode when the user is defining, updating, replacing, or explicitly asking for automation creation.
+
+- Gather only fields that affect simple-chain behavior.
+- Prefer `automation_create_simple` for user-facing simple automations.
+- Keep detector logic in the watcher script or watcher command contract, not in improvised shell prose.
+- If the user wants the automation to start immediately, require a runnable watcher command and interval now.
+- If a role is meant to own the automation, delegate to that owning role and have that role create it. Do not create role-owned automations from `main_agent`.
+
+### 2. Owner Task Mode
+
+Use this mode when the role or owner is executing after a watcher match.
+
+- Execute the business action defined by `automation_goal`.
+- Report the result in the requested format.
+- Stay on the execution path; do not turn owner-task execution into automation-definition work.
+- Do not call `automation_create_simple`, edit watcher scripts, or update role configuration from Owner Task Mode.
+
+### 3. Status/Report Mode
+
+Use this mode when the user asks for current status, progress, explanation, or diagnosis.
+
+- Read current state.
+- Summarize what exists now.
+- Identify blockers or mismatches clearly.
+- Do not mutate automation state just because a problem was discovered.
 
 ## Hard Rules
 
+- Treat automation work as automation work, not as a normal one-shot repair turn.
 - Prefer script-backed watcher signals over ad hoc shell loops or unmanaged background processes.
-- Use automation tools for apply, lookup, control, and incident inspection.
+- Use automation tools for simple create, lookup, control, and read-only query.
 - Do not substitute `schedule_report`, `task_create`, or direct background shells for automation creation.
-- If the automation should start immediately, the draft must already contain a runnable watcher signal and any referenced script assets.
-- Detector scripts emit facts, attempted fixed actions, and escalation status; they do not contain the full child-agent prompt.
-- Persist child-agent template assets under `child_agents/<phase>/<agent_id>/strategy.json`, `prompt.md`, and `skills.json`.
-- `skills.json.required` is the runtime contract for the external capabilities the child agent must receive.
-- Use `signals[].payload.trigger_on = "script_status"` for script-backed detector assets.
-- Child agents are one-shot responders after a trigger or incident, not long-lived workers.
-- Persist `response_plan` in the versioned `schema_version = "sesame.response_plan/v2"` shape.
-- Structure `assumptions` as `{field,value,reason}` objects rather than free-form strings.
-- Manual testing must emit a synthetic trigger through the normal ingest path; never propose or rely on `automation run`.
-- Approval-capable child-agent templates require `runtime_policy.approval_binding.workspace_binding` and `owner_key`.
-- Notification is never a built-in runtime channel here; if the user asks for email or Feishu, choose the matching external skill and persist it in `skills.json`.
-- Final results return through mailbox/reporting. Runtime may emit auxiliary notice events for queue or state signaling, but those notices are not the canonical result-delivery channel. Next-turn injection is currently disabled.
+- Keep owner-task flow explicit; do not route through managed incident/dispatch planning.
+- Do not recommend `automation_apply` or managed detector/incident/dispatch builder tools.
+- Do not propose `while true`, infinite polling shells, or background shell hacks as the automation implementation.
+- Simple watchers pause after a dispatch; owner task completion resumes the watcher only when `simple_policy` says to continue.
+
+## Cross-Mode Prohibitions
+
+- Do not let `main_agent` create an automation that should be created by the owning role.
+- Do not let owner-task execution drift into editing automation definitions, watcher scripts, or role configuration.
+- Do not let a status/report turn drift into "fixing" the automation unless the user explicitly asked for a repair.
+- Do not conflate "report the current situation" with "repair the current situation."
+- Do not delegate away from owner-task execution unless the `automation_goal` explicitly requires delegation.
+
+## Output Expectations
+
+- Be explicit about the current mode.
+- Keep owner-task flow and reporting flow easy to audit.
+- When something is wrong, state the mismatch first, then state the next safe action.

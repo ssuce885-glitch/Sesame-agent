@@ -111,28 +111,6 @@ func (s *Store) listRuntimeGraph(ctx context.Context, workspaceRoot string) (typ
 		return types.RuntimeGraph{}, err
 	}
 
-	var incidents []types.AutomationIncident
-	var dispatchAttempts []types.DispatchAttempt
-	if workspaceRoot == "" {
-		incidents, err = listAutomationIncidentsWithQueryer(ctx, tx, types.AutomationIncidentFilter{})
-		if err != nil {
-			return types.RuntimeGraph{}, err
-		}
-		dispatchAttempts, err = listDispatchAttemptsWithQueryer(ctx, tx, types.DispatchAttemptFilter{})
-		if err != nil {
-			return types.RuntimeGraph{}, err
-		}
-	} else {
-		incidents, err = listAutomationIncidentsWithQueryer(ctx, tx, types.AutomationIncidentFilter{WorkspaceRoot: workspaceRoot})
-		if err != nil {
-			return types.RuntimeGraph{}, err
-		}
-		dispatchAttempts, err = listDispatchAttemptsWithQueryer(ctx, tx, types.DispatchAttemptFilter{WorkspaceRoot: workspaceRoot})
-		if err != nil {
-			return types.RuntimeGraph{}, err
-		}
-	}
-
 	var permissionRequests []types.PermissionRequest
 	if workspaceRoot == "" {
 		permissionRequests, err = listRuntimeObjects[types.PermissionRequest](ctx, tx, `select payload, created_at, updated_at from permission_requests order by created_at asc, id asc`)
@@ -160,8 +138,6 @@ func (s *Store) listRuntimeGraph(ctx context.Context, workspaceRoot string) (typ
 		Tasks:              tasks,
 		ToolRuns:           toolRuns,
 		Worktrees:          worktrees,
-		Incidents:          incidents,
-		DispatchAttempts:   dispatchAttempts,
 		PermissionRequests: permissionRequests,
 	}, nil
 }

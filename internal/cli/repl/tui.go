@@ -1617,7 +1617,7 @@ func (m tuiModel) renderSubagentsContent(width int) string {
 	parts := []string{
 		renderSectionHeading(
 			"Subagents",
-			fmt.Sprintf("%d runs · %d incidents · %d dispatches · %d tasks · %d workers · %d groups · %d agent results · %d digests · %d tool runs · %d worktrees · %d permissions", len(graph.Runs), len(graph.Incidents), len(graph.DispatchAttempts), len(graph.Tasks), len(m.reportingOverview.ChildAgents), len(m.reportingOverview.ReportGroups), len(m.reportingOverview.ChildResults), len(m.reportingOverview.Digests), len(graph.ToolRuns), len(graph.Worktrees), len(graph.PermissionRequests)),
+			fmt.Sprintf("%d runs · %d diagnostics · %d tasks · %d workers · %d groups · %d agent results · %d digests · %d tool runs · %d worktrees · %d permissions", len(graph.Runs), len(graph.Diagnostics), len(graph.Tasks), len(m.reportingOverview.ChildAgents), len(m.reportingOverview.ReportGroups), len(m.reportingOverview.ChildResults), len(m.reportingOverview.Digests), len(graph.ToolRuns), len(graph.Worktrees), len(graph.PermissionRequests)),
 			width,
 		),
 	}
@@ -1641,13 +1641,9 @@ func (m tuiModel) renderSubagentsContent(width int) string {
 	for _, run := range graph.Runs {
 		runLines = append(runLines, formatRunLine(run))
 	}
-	incidentLines := make([]string, 0, len(graph.Incidents))
-	for _, incident := range graph.Incidents {
-		incidentLines = append(incidentLines, formatIncidentLine(incident))
-	}
-	dispatchLines := make([]string, 0, len(graph.DispatchAttempts))
-	for _, attempt := range graph.DispatchAttempts {
-		dispatchLines = append(dispatchLines, formatDispatchAttemptLine(attempt))
+	diagnosticLines := make([]string, 0, len(graph.Diagnostics))
+	for _, diagnostic := range graph.Diagnostics {
+		diagnosticLines = append(diagnosticLines, formatDiagnosticLine(diagnostic))
 	}
 	taskLines := make([]string, 0, len(graph.Tasks))
 	for _, task := range graph.Tasks {
@@ -1684,8 +1680,7 @@ func (m tuiModel) renderSubagentsContent(width int) string {
 
 	parts = append(parts,
 		renderLineSection("Runs", runLines, "No runs recorded for this workspace.", width),
-		renderLineSection("Incidents", incidentLines, "No automation incidents.", width),
-		renderLineSection("Dispatch Attempts", dispatchLines, "No dispatch attempts.", width),
+		renderLineSection("Diagnostics", diagnosticLines, "No runtime diagnostics.", width),
 		renderLineSection("Tasks", taskLines, "No runtime tasks.", width),
 		renderLineSection("Background Workers", workerLines, "No background workers registered.", width),
 		renderLineSection("Report Groups", groupLines, "No report groups configured.", width),
@@ -1918,6 +1913,20 @@ func formatRunLine(run types.Run) string {
 	return strings.Join(parts, " · ")
 }
 
+func formatDiagnosticLine(diagnostic types.RuntimeDiagnostic) string {
+	parts := []string{firstNonEmpty(diagnostic.Severity, diagnostic.EventType)}
+	if label := clampText(firstNonEmpty(diagnostic.Summary, diagnostic.Reason, diagnostic.ID), 120); label != "" {
+		parts = append(parts, label)
+	}
+	if category := strings.TrimSpace(diagnostic.Category); category != "" {
+		parts = append(parts, category)
+	}
+	if asset := firstNonEmpty(strings.TrimSpace(diagnostic.AssetKind), strings.TrimSpace(diagnostic.AssetID)); asset != "" {
+		parts = append(parts, asset)
+	}
+	return strings.Join(parts, " · ")
+}
+
 func formatTaskLine(task types.Task) string {
 	parts := []string{string(task.State), firstNonEmpty(task.Title, task.ID)}
 	if owner := strings.TrimSpace(task.Owner); owner != "" {
@@ -2040,25 +2049,6 @@ func formatWorktreeLine(worktree types.Worktree) string {
 	parts := []string{string(worktree.State), firstNonEmpty(worktree.WorktreeBranch, shortID(worktree.ID))}
 	if path := strings.TrimSpace(worktree.WorktreePath); path != "" {
 		parts = append(parts, path)
-	}
-	return strings.Join(parts, " · ")
-}
-
-func formatIncidentLine(incident types.AutomationIncident) string {
-	parts := []string{string(incident.Status), firstNonEmpty(incident.Summary, incident.AutomationID, incident.ID)}
-	if incidentID := strings.TrimSpace(incident.ID); incidentID != "" {
-		parts = append(parts, shortID(incidentID))
-	}
-	return strings.Join(parts, " · ")
-}
-
-func formatDispatchAttemptLine(attempt types.DispatchAttempt) string {
-	parts := []string{string(attempt.Status), firstNonEmpty(attempt.OutcomeSummary, attempt.AutomationID, attempt.DispatchID)}
-	if dispatchID := strings.TrimSpace(attempt.DispatchID); dispatchID != "" {
-		parts = append(parts, shortID(dispatchID))
-	}
-	if taskID := strings.TrimSpace(attempt.TaskID); taskID != "" {
-		parts = append(parts, shortID(taskID))
 	}
 	return strings.Join(parts, " · ")
 }

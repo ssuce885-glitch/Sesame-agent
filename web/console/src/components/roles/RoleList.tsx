@@ -77,6 +77,13 @@ export function RoleList({
                   : "3px solid transparent",
                 borderBottom: "1px solid var(--color-border)",
                 cursor: "pointer",
+                transition: "background-color 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                if (!selected) e.currentTarget.style.backgroundColor = "var(--color-surface)";
+              }}
+              onMouseLeave={(e) => {
+                if (!selected) e.currentTarget.style.backgroundColor = "transparent";
               }}
             >
               <div className="flex items-center justify-between gap-2">

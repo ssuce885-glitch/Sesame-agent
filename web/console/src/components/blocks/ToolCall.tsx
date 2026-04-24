@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { Check, X, Circle, ChevronDown, ChevronUp, Play } from "../Icon";
 
 export function ToolCall({
   toolName,
@@ -20,31 +21,28 @@ export function ToolCall({
   const isCompleted = status === "completed";
   const isFailed = isError || status === "failed";
 
-  function StatusDot() {
+  function StatusIcon() {
     if (isRunning) {
       return (
-        <span
-          className="inline-block w-2 h-2 rounded-full animate-pulse-amber"
-          style={{ backgroundColor: "var(--color-running)" }}
+        <Play
+          size={14}
+          color="var(--color-running)"
+          className="animate-pulse-amber"
         />
       );
     }
     if (isFailed) {
-      return (
-        <span style={{ color: "var(--color-error)", fontSize: 12 }}>✗</span>
-      );
+      return <X size={14} color="var(--color-error)" />;
     }
     if (isCompleted) {
-      return (
-        <span style={{ color: "var(--color-success)", fontSize: 12 }}>✓</span>
-      );
+      return <Check size={14} color="var(--color-success)" />;
     }
-    return <span style={{ color: "var(--color-text-muted)", fontSize: 12 }}>○</span>;
+    return <Circle size={14} color="var(--color-text-muted)" />;
   }
 
   return (
     <div
-      className="mb-1 rounded-lg px-3 py-2 text-sm"
+      className="rounded-lg px-3 py-2 text-sm"
       style={{
         backgroundColor: "var(--color-surface)",
         border: "1px solid var(--color-border)",
@@ -55,6 +53,13 @@ export function ToolCall({
             ? "var(--color-running)"
             : "var(--color-tool)"
         }`,
+        transition: "border-color 0.15s",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = "var(--color-text-muted)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = "var(--color-border)";
       }}
     >
       {/* Inline header */}
@@ -68,7 +73,7 @@ export function ToolCall({
         style={{ backgroundColor: "transparent", border: "none" }}
       >
         <div className="flex items-center gap-2">
-          <StatusDot />
+          <StatusIcon />
           <span
             className="font-medium"
             style={{ color: "var(--color-tool)" }}
@@ -87,7 +92,7 @@ export function ToolCall({
             className="text-xs"
             style={{ color: "var(--color-text-muted)" }}
           >
-            {expanded ? "▲" : "▼"}
+            {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
           </span>
         </div>
 

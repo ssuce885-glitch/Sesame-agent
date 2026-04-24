@@ -65,27 +65,3 @@ func automationControlActionEnum() []string {
 		string(types.AutomationControlActionResume),
 	}
 }
-
-func incidentControlActionEnum() []string {
-	return []string{
-		string(types.IncidentControlActionAck),
-		string(types.IncidentControlActionClose),
-		string(types.IncidentControlActionReopen),
-		string(types.IncidentControlActionEscalate),
-	}
-}
-
-func automationIncidentStatusEnum() []string {
-	return []string{
-		string(types.AutomationIncidentStatusOpen),
-		string(types.AutomationIncidentStatusSuppressed),
-		string(types.AutomationIncidentStatusQueued),
-		string(types.AutomationIncidentStatusActive),
-		string(types.AutomationIncidentStatusMonitoring),
-		string(types.AutomationIncidentStatusResolved),
-		string(types.AutomationIncidentStatusEscalated),
-		string(types.AutomationIncidentStatusFailed),
-		string(types.AutomationIncidentStatusCanceled),
-		string(types.AutomationIncidentStatusClosed),
-	}
-}

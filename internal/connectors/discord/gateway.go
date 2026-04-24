@@ -419,7 +419,7 @@ func (g *discordGateway) handleDispatch(ctx context.Context, env gatewayEnvelope
 			return nil
 		}
 		go func() {
-			if err := g.handleMessageCreate(context.WithoutCancel(ctx), msg); err != nil {
+			if err := g.handleMessageCreate(ctx, msg); err != nil {
 				g.logger.Error("discord message handling failed", "discord_message_id", msg.ID, "error", err)
 			}
 		}()

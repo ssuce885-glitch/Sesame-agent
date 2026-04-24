@@ -294,8 +294,7 @@ func adaptTUIMailbox(resp types.WorkspaceReportMailboxResponse) tuiv2.MailboxRes
 func adaptTUIRuntimeGraph(resp types.WorkspaceRuntimeGraphResponse) tuiv2.RuntimeGraphResponse {
 	graph := tuiv2.RuntimeGraph{
 		Runs:               make([]tuiv2.Run, 0, len(resp.Graph.Runs)),
-		Incidents:          make([]tuiv2.Incident, 0, len(resp.Graph.Incidents)),
-		DispatchAttempts:   make([]tuiv2.DispatchAttempt, 0, len(resp.Graph.DispatchAttempts)),
+		Diagnostics:        make([]tuiv2.RuntimeDiagnostic, 0, len(resp.Graph.Diagnostics)),
 		Tasks:              make([]tuiv2.Task, 0, len(resp.Graph.Tasks)),
 		ToolRuns:           make([]tuiv2.ToolRun, 0, len(resp.Graph.ToolRuns)),
 		Worktrees:          make([]tuiv2.Worktree, 0, len(resp.Graph.Worktrees)),
@@ -310,21 +309,16 @@ func adaptTUIRuntimeGraph(resp types.WorkspaceRuntimeGraphResponse) tuiv2.Runtim
 			Error:     run.Error,
 		})
 	}
-	for _, incident := range resp.Graph.Incidents {
-		graph.Incidents = append(graph.Incidents, tuiv2.Incident{
-			ID:           incident.ID,
-			Status:       string(incident.Status),
-			Summary:      incident.Summary,
-			AutomationID: incident.AutomationID,
-		})
-	}
-	for _, attempt := range resp.Graph.DispatchAttempts {
-		graph.DispatchAttempts = append(graph.DispatchAttempts, tuiv2.DispatchAttempt{
-			Status:         string(attempt.Status),
-			OutcomeSummary: attempt.OutcomeSummary,
-			AutomationID:   attempt.AutomationID,
-			DispatchID:     attempt.DispatchID,
-			TaskID:         attempt.TaskID,
+	for _, diagnostic := range resp.Graph.Diagnostics {
+		graph.Diagnostics = append(graph.Diagnostics, tuiv2.RuntimeDiagnostic{
+			ID:        diagnostic.ID,
+			EventType: diagnostic.EventType,
+			Summary:   diagnostic.Summary,
+			Reason:    diagnostic.Reason,
+			Severity:  diagnostic.Severity,
+			Category:  diagnostic.Category,
+			AssetKind: diagnostic.AssetKind,
+			AssetID:   diagnostic.AssetID,
 		})
 	}
 	for _, task := range resp.Graph.Tasks {

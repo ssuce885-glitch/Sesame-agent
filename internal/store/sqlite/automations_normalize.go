@@ -17,6 +17,17 @@ func normalizeAutomationSpecForStore(spec types.AutomationSpec) types.Automation
 	spec.WorkspaceRoot = strings.TrimSpace(spec.WorkspaceRoot)
 	spec.Goal = strings.TrimSpace(spec.Goal)
 	spec.State = normalizeAutomationStateForStore(spec.State)
+	if strings.TrimSpace(string(spec.Mode)) == "" {
+		spec.Mode = types.AutomationModeSimple
+	} else {
+		spec.Mode = types.AutomationMode(strings.ToLower(strings.TrimSpace(string(spec.Mode))))
+	}
+	spec.Owner = strings.TrimSpace(spec.Owner)
+	spec.ReportTarget = strings.TrimSpace(spec.ReportTarget)
+	spec.EscalationTarget = strings.TrimSpace(spec.EscalationTarget)
+	spec.SimplePolicy.OnSuccess = strings.ToLower(strings.TrimSpace(spec.SimplePolicy.OnSuccess))
+	spec.SimplePolicy.OnFailure = strings.ToLower(strings.TrimSpace(spec.SimplePolicy.OnFailure))
+	spec.SimplePolicy.OnBlocked = strings.ToLower(strings.TrimSpace(spec.SimplePolicy.OnBlocked))
 	spec.Assumptions = types.NormalizeAutomationAssumptions(spec.Assumptions)
 
 	spec.Context.Owner = strings.TrimSpace(spec.Context.Owner)
@@ -44,15 +55,8 @@ func normalizeAutomationSpecForStore(spec types.AutomationSpec) types.Automation
 		signals = append(signals, signal)
 	}
 	spec.Signals = signals
-	spec.IncidentPolicy = normalizeAutomationObjectJSON(spec.IncidentPolicy)
-	spec.ResponsePlan = normalizeAutomationResponsePlanForStore(spec.ResponsePlan)
-	spec.VerificationPlan = normalizeAutomationObjectJSON(spec.VerificationPlan)
-	spec.EscalationPolicy = normalizeAutomationObjectJSON(spec.EscalationPolicy)
-	spec.DeliveryPolicy = normalizeAutomationRawJSON(spec.DeliveryPolicy)
-	spec.RuntimePolicy = normalizeAutomationRawJSON(spec.RuntimePolicy)
 	spec.WatcherLifecycle = normalizeAutomationObjectJSON(spec.WatcherLifecycle)
 	spec.RetriggerPolicy = normalizeAutomationObjectJSON(spec.RetriggerPolicy)
-	spec.RunPolicy = normalizeAutomationObjectJSON(spec.RunPolicy)
 
 	if spec.CreatedAt.IsZero() {
 		spec.CreatedAt = now
@@ -68,41 +72,4 @@ func normalizeAutomationSpecForStore(spec types.AutomationSpec) types.Automation
 		spec.UpdatedAt = spec.CreatedAt
 	}
 	return spec
-}
-
-func normalizeAutomationIncidentForStore(incident types.AutomationIncident) types.AutomationIncident {
-	now := time.Now().UTC()
-	incident.ID = strings.TrimSpace(incident.ID)
-	if incident.ID == "" {
-		incident.ID = types.NewID("incident")
-	}
-	incident.AutomationID = strings.TrimSpace(incident.AutomationID)
-	incident.WorkspaceRoot = strings.TrimSpace(incident.WorkspaceRoot)
-	incident.Status = types.AutomationIncidentStatus(strings.ToLower(strings.TrimSpace(string(incident.Status))))
-	if incident.Status == "" {
-		incident.Status = types.AutomationIncidentStatusOpen
-	}
-	incident.SignalKind = strings.TrimSpace(incident.SignalKind)
-	incident.Source = strings.TrimSpace(incident.Source)
-	incident.Summary = strings.TrimSpace(incident.Summary)
-	incident.Payload = normalizeAutomationRawJSON(incident.Payload)
-	if incident.ObservedAt.IsZero() {
-		incident.ObservedAt = now
-	} else {
-		incident.ObservedAt = incident.ObservedAt.UTC()
-	}
-	if incident.CreatedAt.IsZero() {
-		incident.CreatedAt = now
-	} else {
-		incident.CreatedAt = incident.CreatedAt.UTC()
-	}
-	if incident.UpdatedAt.IsZero() {
-		incident.UpdatedAt = incident.CreatedAt
-	} else {
-		incident.UpdatedAt = incident.UpdatedAt.UTC()
-	}
-	if incident.UpdatedAt.Before(incident.CreatedAt) {
-		incident.UpdatedAt = incident.CreatedAt
-	}
-	return incident
 }

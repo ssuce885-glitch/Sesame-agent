@@ -9,8 +9,6 @@ import {
 import type {
   HistoryEntry,
   RuntimeDiagnostic,
-  RuntimeDispatchAttempt,
-  RuntimeIncident,
   RuntimePermissionRequest,
   RuntimeTask,
   RuntimeToolRun,
@@ -22,9 +20,7 @@ import {
   ApprovalRow,
   ContextHeadRow,
   DiagnosticRow,
-  DispatchAttemptRow,
   formatTimestamp,
-  IncidentRow,
   Panel,
   ReportRow,
   SelectionDetailCard,
@@ -52,8 +48,6 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
   const tasks = [...(runtimeGraph.data?.graph.tasks ?? [])].sort(sortByUpdatedAtDesc);
   const toolRuns = [...(runtimeGraph.data?.graph.tool_runs ?? [])].sort(sortByUpdatedAtDesc);
   const worktrees = [...(runtimeGraph.data?.graph.worktrees ?? [])].sort(sortByUpdatedAtDesc);
-  const incidents = [...(runtimeGraph.data?.graph.incidents ?? [])].sort(sortByUpdatedAtDesc);
-  const dispatchAttempts = [...(runtimeGraph.data?.graph.dispatch_attempts ?? [])].sort(sortByUpdatedAtDesc);
   const diagnostics = [...(runtimeGraph.data?.graph.diagnostics ?? [])].sort(sortByCreatedAtDesc);
   const pendingApprovals = (runtimeGraph.data?.graph.permission_requests ?? []).filter(
     (request) => request.status === "requested",
@@ -72,10 +66,8 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
         diagnostics,
         toolRuns,
         worktrees,
-        incidents,
-        dispatchAttempts,
       ),
-    [selection, contextEntries, tasks, mailboxItems, pendingApprovals, diagnostics, toolRuns, worktrees, incidents, dispatchAttempts],
+    [selection, contextEntries, tasks, mailboxItems, pendingApprovals, diagnostics, toolRuns, worktrees],
   );
 
   const isInitialLoading =
@@ -94,7 +86,7 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
   return (
     <div className="flex flex-col gap-6 overflow-y-auto p-4 md:p-6" style={{ backgroundColor: "var(--color-bg)" }}>
       <div className="flex flex-col gap-2">
-        <h1 className="text-lg font-semibold" style={{ color: "var(--color-text)" }}>
+        <h1 className="text-xl font-bold" style={{ color: "var(--color-text)", borderBottom: "2px solid var(--color-accent)", paddingBottom: 8, display: "inline-block", alignSelf: "flex-start" }}>
           {t("runtime.title")}
         </h1>
         <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
@@ -199,38 +191,6 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1fr]">
         <Panel
-          title={t("runtime.panels.incidentsTitle")}
-          subtitle={t("runtime.panels.incidentsSubtitle")}
-          emptyText={t("runtime.panels.incidentsEmpty")}
-        >
-          {incidents.map((incident) => (
-            <IncidentRow
-              key={incident.id}
-              incident={incident}
-              selected={selection?.kind === "incident" && selection.id === incident.id}
-              onSelect={() => setSelection({ kind: "incident", id: incident.id })}
-            />
-          ))}
-        </Panel>
-
-        <Panel
-          title={t("runtime.panels.dispatchTitle")}
-          subtitle={t("runtime.panels.dispatchSubtitle")}
-          emptyText={t("runtime.panels.dispatchEmpty")}
-        >
-          {dispatchAttempts.map((attempt) => (
-            <DispatchAttemptRow
-              key={attempt.dispatch_id}
-              attempt={attempt}
-              selected={selection?.kind === "dispatch" && selection.id === attempt.dispatch_id}
-              onSelect={() => setSelection({ kind: "dispatch", id: attempt.dispatch_id })}
-            />
-          ))}
-        </Panel>
-      </div>
-
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1fr]">
-        <Panel
           title={t("runtime.panels.toolRunsTitle")}
           subtitle={t("runtime.panels.toolRunsSubtitle")}
           emptyText={t("runtime.panels.toolRunsEmpty")}
@@ -276,8 +236,6 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
               mailboxItems,
               toolRuns,
               worktrees,
-              incidents,
-              dispatchAttempts,
               pendingApprovals,
               reopenContext,
               loadContextHistory,
@@ -296,8 +254,6 @@ type RuntimeSelection =
   | { kind: "report"; id: string }
   | { kind: "diagnostic"; id: string }
   | { kind: "approval"; id: string }
-  | { kind: "incident"; id: string }
-  | { kind: "dispatch"; id: string }
   | { kind: "tool_run"; id: string }
   | { kind: "worktree"; id: string };
 
@@ -328,8 +284,6 @@ function buildSelectionDetail(
   diagnostics: RuntimeDiagnostic[],
   toolRuns: RuntimeToolRun[],
   worktrees: RuntimeWorktree[],
-  incidents: RuntimeIncident[],
-  dispatchAttempts: RuntimeDispatchAttempt[],
 ): SelectionDetail | null {
   if (!selection) {
     return null;
@@ -438,49 +392,6 @@ function buildSelectionDetail(
         ]),
       };
     }
-    case "incident": {
-      const incident = incidents.find((item) => item.id === selection.id);
-      if (!incident) {
-        return null;
-      }
-      return {
-        title: incident.summary || incident.id,
-        kindLabel: "incident",
-        summary: incident.source,
-        items: compactDetailItems([
-          { label: "Incident ID", value: incident.id },
-          { label: "Automation", value: incident.automation_id },
-          { label: "Status", value: incident.status },
-          { label: "Signal", value: incident.signal_kind },
-          { label: "Source", value: incident.source },
-          { label: "Observed", value: formatTimestamp(incident.observed_at) },
-          { label: "Updated", value: formatTimestamp(incident.updated_at || incident.created_at) },
-        ]),
-      };
-    }
-    case "dispatch": {
-      const attempt = dispatchAttempts.find((item) => item.dispatch_id === selection.id);
-      if (!attempt) {
-        return null;
-      }
-      return {
-        title: attempt.outcome_summary || attempt.dispatch_id,
-        kindLabel: "dispatch",
-        summary: attempt.child_agent_id,
-        items: compactDetailItems([
-          { label: "Dispatch ID", value: attempt.dispatch_id },
-          { label: "Incident ID", value: attempt.incident_id },
-          { label: "Automation", value: attempt.automation_id },
-          { label: "Phase", value: attempt.phase },
-          { label: "Attempt", value: String(attempt.attempt) },
-          { label: "Status", value: attempt.status },
-          { label: "Task ID", value: attempt.task_id },
-          { label: "Permission Request", value: attempt.permission_request_id },
-          { label: "Skills", value: attempt.activated_skill_names?.join(", ") },
-          { label: "Updated", value: formatTimestamp(attempt.updated_at || attempt.created_at) },
-        ]),
-      };
-    }
     case "tool_run": {
       const toolRun = toolRuns.find((item) => item.id === selection.id);
       if (!toolRun) {
@@ -533,8 +444,6 @@ function buildSelectionActions({
   mailboxItems,
   toolRuns,
   worktrees,
-  incidents,
-  dispatchAttempts,
   pendingApprovals,
   reopenContext,
   loadContextHistory,
@@ -546,8 +455,6 @@ function buildSelectionActions({
   mailboxItems: WorkspaceMailboxItem[];
   toolRuns: RuntimeToolRun[];
   worktrees: RuntimeWorktree[];
-  incidents: RuntimeIncident[];
-  dispatchAttempts: RuntimeDispatchAttempt[];
   pendingApprovals: RuntimePermissionRequest[];
   reopenContext: ReturnType<typeof useReopenContext>;
   loadContextHistory: ReturnType<typeof useLoadContextHistory>;
@@ -588,7 +495,6 @@ function buildSelectionActions({
     case "task": {
       const task = tasks.find((item) => item.id === selection.id);
       const relatedReport = mailboxItems.find((item) => item.source_id === task?.id);
-      const relatedDispatch = dispatchAttempts.find((item) => item.task_id === task?.id);
       const relatedToolRun = toolRuns.find((item) => item.task_id === task?.id);
       const relatedWorktree = worktrees.find((item) => item.task_id === task?.id || item.id === task?.worktree_id);
       const actions: SelectionAction[] = [];
@@ -596,12 +502,6 @@ function buildSelectionActions({
         actions.push({
           label: "Open related report",
           onClick: () => setSelection({ kind: "report", id: relatedReport.id }),
-        });
-      }
-      if (relatedDispatch) {
-        actions.push({
-          label: "Open dispatch",
-          onClick: () => setSelection({ kind: "dispatch", id: relatedDispatch.dispatch_id }),
         });
       }
       if (relatedToolRun) {
@@ -630,45 +530,6 @@ function buildSelectionActions({
           onClick: () => setSelection({ kind: "task", id: relatedTask.id }),
         },
       ];
-    }
-    case "incident": {
-      const incident = incidents.find((item) => item.id === selection.id);
-      const latestDispatch = dispatchAttempts.find((item) => item.incident_id === incident?.id);
-      if (!latestDispatch) {
-        return [];
-      }
-      return [
-        {
-          label: "Open latest dispatch",
-          onClick: () => setSelection({ kind: "dispatch", id: latestDispatch.dispatch_id }),
-        },
-      ];
-    }
-    case "dispatch": {
-      const attempt = dispatchAttempts.find((item) => item.dispatch_id === selection.id);
-      const relatedIncident = incidents.find((item) => item.id === attempt?.incident_id);
-      const relatedTask = tasks.find((item) => item.id === attempt?.task_id);
-      const relatedApproval = pendingApprovals.find((item) => item.id === attempt?.permission_request_id);
-      const actions: SelectionAction[] = [];
-      if (relatedIncident) {
-        actions.push({
-          label: "Open incident",
-          onClick: () => setSelection({ kind: "incident", id: relatedIncident.id }),
-        });
-      }
-      if (relatedTask) {
-        actions.push({
-          label: "Open related task",
-          onClick: () => setSelection({ kind: "task", id: relatedTask.id }),
-        });
-      }
-      if (relatedApproval) {
-        actions.push({
-          label: "Open approval request",
-          onClick: () => setSelection({ kind: "approval", id: relatedApproval.id }),
-        });
-      }
-      return actions;
     }
     case "tool_run": {
       const toolRun = toolRuns.find((item) => item.id === selection.id);

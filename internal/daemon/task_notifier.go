@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"go-agent/internal/automation"
 	"go-agent/internal/reporting"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
@@ -25,12 +24,15 @@ type storeAndBusSink struct {
 type taskTerminalNotifier struct {
 	store     *sqlite.Store
 	bus       *stream.Bus
+	watcher   simpleAutomationWatcherInstaller
 	scheduler *scheduler.Service
 	reporting *reporting.Service
-	delivery  *automation.DeliveryService
-	watcher   automation.DispatchWatcherSyncer
 	manager   *session.Manager
 	now       func() time.Time
+}
+
+type simpleAutomationWatcherInstaller interface {
+	Reinstall(context.Context, types.AutomationSpec) (types.AutomationWatcherRuntime, error)
 }
 
 func (s storeAndBusSink) Emit(ctx context.Context, event types.Event) error {
@@ -106,7 +108,7 @@ func (n taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed 
 			return err
 		}
 	}
-	if err := n.reconcileAutomationDispatchTask(ctx, completed); err != nil {
+	if err := n.reconcileSimpleAutomationTask(ctx, completed); err != nil {
 		return err
 	}
 
@@ -196,6 +198,194 @@ func (n taskTerminalNotifier) currentTime() time.Time {
 		return n.now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (n taskTerminalNotifier) reconcileSimpleAutomationTask(ctx context.Context, completed task.Task) error {
+	if n.store == nil || strings.TrimSpace(completed.ID) == "" {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(completed.Kind), "automation_simple") {
+		return nil
+	}
+
+	run, ok, err := n.store.GetSimpleAutomationRunByTaskID(ctx, completed.ID)
+	if err != nil || !ok {
+		return err
+	}
+
+	now := n.currentTime()
+	run.LastStatus = string(childReportStatusFromTask(completed))
+	run.LastSummary = simpleAutomationTaskOutcomeSummary(completed, run.LastSummary)
+	if strings.TrimSpace(run.TaskID) == "" {
+		run.TaskID = strings.TrimSpace(completed.ID)
+	}
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = now
+	}
+	run.UpdatedAt = now
+	if run.UpdatedAt.Before(run.CreatedAt) {
+		run.UpdatedAt = run.CreatedAt
+	}
+	if err := n.store.UpsertSimpleAutomationRun(ctx, run); err != nil {
+		return err
+	}
+
+	spec, ok, err := n.store.GetAutomation(ctx, run.AutomationID)
+	if err != nil || !ok {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(string(spec.Mode)), string(types.AutomationModeSimple)) {
+		return nil
+	}
+	if shouldResumeSimpleAutomationWatcher(spec, run.LastStatus) {
+		if err := n.resumeSimpleAutomationWatcher(ctx, spec); err != nil {
+			return err
+		}
+	}
+
+	workspaceRoot := firstNonEmptyTrimmed(spec.WorkspaceRoot, completed.WorkspaceRoot)
+	primaryTarget := resolveSimpleAutomationPrimaryTarget(spec)
+	if err := n.deliverSimpleAutomationChildReport(ctx, completed, workspaceRoot, primaryTarget, "owner", now); err != nil {
+		return err
+	}
+
+	if !shouldEscalateSimpleAutomationOutcome(spec, run.LastStatus) {
+		return nil
+	}
+	escalationTarget := resolveSimpleAutomationEscalationTarget(spec)
+	if escalationTarget == primaryTarget {
+		return nil
+	}
+	return n.deliverSimpleAutomationChildReport(ctx, completed, workspaceRoot, escalationTarget, "escalation", now)
+}
+
+func (n taskTerminalNotifier) resumeSimpleAutomationWatcher(ctx context.Context, spec types.AutomationSpec) error {
+	if n.watcher == nil {
+		return nil
+	}
+	_, err := n.watcher.Reinstall(ctx, spec)
+	return err
+}
+
+func shouldResumeSimpleAutomationWatcher(spec types.AutomationSpec, status string) bool {
+	if spec.State != types.AutomationStateActive {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case string(types.ChildReportStatusSuccess):
+		return strings.EqualFold(strings.TrimSpace(spec.SimplePolicy.OnSuccess), "continue")
+	case string(types.ChildReportStatusFailure):
+		return strings.EqualFold(strings.TrimSpace(spec.SimplePolicy.OnFailure), "continue")
+	case string(types.ChildReportStatusBlocked):
+		return strings.EqualFold(strings.TrimSpace(spec.SimplePolicy.OnBlocked), "continue")
+	default:
+		return false
+	}
+}
+
+func (n taskTerminalNotifier) deliverSimpleAutomationChildReport(ctx context.Context, completed task.Task, workspaceRoot, ownerTarget, suffix string, now time.Time) error {
+	if n.store == nil {
+		return nil
+	}
+	sessionID, err := n.resolveSimpleAutomationTargetSession(ctx, workspaceRoot, ownerTarget)
+	if err != nil || strings.TrimSpace(sessionID) == "" {
+		return err
+	}
+	report, ok := childReportFromTask(completed, now)
+	if !ok {
+		return nil
+	}
+	report.ID = simpleAutomationChildReportID(completed.ID, suffix, ownerTarget)
+	report.SessionID = sessionID
+	report.Source = types.ChildReportSourceAutomation
+	report.ParentTurnID = ""
+	if err := n.store.UpsertPendingChildReport(ctx, report); err != nil {
+		return err
+	}
+	return n.enqueueSyntheticChildReportTurn(ctx, sessionID)
+}
+
+func (n taskTerminalNotifier) resolveSimpleAutomationTargetSession(ctx context.Context, workspaceRoot, target string) (string, error) {
+	if n.store == nil {
+		return "", nil
+	}
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return "", nil
+	}
+	target = types.NormalizeAutomationOwner(target)
+	if target == "" {
+		target = "main_agent"
+	}
+	if target == "main_agent" {
+		sessionRow, _, _, err := n.store.EnsureRoleSession(ctx, workspaceRoot, types.SessionRoleMainParent)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(sessionRow.ID), nil
+	}
+	roleID := strings.TrimSpace(strings.TrimPrefix(target, "role:"))
+	if roleID == "" {
+		return "", nil
+	}
+	sessionRow, _, _, err := n.store.EnsureSpecialistSession(ctx, workspaceRoot, roleID, "", nil)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(sessionRow.ID), nil
+}
+
+func resolveSimpleAutomationPrimaryTarget(spec types.AutomationSpec) string {
+	if target := types.NormalizeAutomationOwner(spec.ReportTarget); target != "" {
+		return target
+	}
+	if target := types.NormalizeAutomationOwner(spec.Owner); target != "" {
+		return target
+	}
+	return "main_agent"
+}
+
+func resolveSimpleAutomationEscalationTarget(spec types.AutomationSpec) string {
+	if target := types.NormalizeAutomationOwner(spec.EscalationTarget); target != "" {
+		return target
+	}
+	return "main_agent"
+}
+
+func shouldEscalateSimpleAutomationOutcome(spec types.AutomationSpec, status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case string(types.ChildReportStatusFailure):
+		return strings.EqualFold(strings.TrimSpace(spec.SimplePolicy.OnFailure), "escalate")
+	case string(types.ChildReportStatusBlocked):
+		return strings.EqualFold(strings.TrimSpace(spec.SimplePolicy.OnBlocked), "escalate")
+	default:
+		return false
+	}
+}
+
+func simpleAutomationTaskOutcomeSummary(completed task.Task, fallback string) string {
+	result, ready := completed.FinalResult()
+	resultSummary := ""
+	if ready {
+		resultSummary = clampTaskResultPreview(result.Text)
+	}
+	return firstNonEmptyTrimmed(completed.OutcomeSummary, resultSummary, completed.Error, fallback)
+}
+
+func simpleAutomationChildReportID(taskID, suffix, ownerTarget string) string {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		taskID = types.NewID("child_report")
+	}
+	suffix = strings.TrimSpace(suffix)
+	if suffix == "" {
+		suffix = "owner"
+	}
+	ownerTarget = strings.TrimSpace(ownerTarget)
+	if ownerTarget == "" {
+		ownerTarget = "main_agent"
+	}
+	return taskID + ":" + suffix + ":" + ownerTarget
 }
 
 func timelineBlockFromCompletedTask(completed task.Task, runtimeTask types.Task, hasRuntimeTask bool) types.TimelineBlock {

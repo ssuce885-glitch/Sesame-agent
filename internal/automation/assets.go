@@ -19,6 +19,9 @@ func automationAssetBaseDir(workspaceRoot, automationID string) (string, error) 
 	if automationID == "" {
 		return "", fmt.Errorf("automation id is required")
 	}
+	if types.NormalizeAutomationID(automationID) == "" {
+		return "", fmt.Errorf("automation id must match ^[a-z][a-z0-9_-]{0,127}$")
+	}
 	return filepath.Join(workspaceRoot, "automations", automationID), nil
 }
 

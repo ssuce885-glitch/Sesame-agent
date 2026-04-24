@@ -17,22 +17,25 @@ func normalizeAutomationSpec(spec types.AutomationSpec, now time.Time) types.Aut
 	spec.WorkspaceRoot = strings.TrimSpace(spec.WorkspaceRoot)
 	spec.Goal = strings.TrimSpace(spec.Goal)
 	spec.State = normalizeAutomationState(spec.State)
+	if strings.TrimSpace(string(spec.Mode)) == "" {
+		spec.Mode = types.AutomationModeSimple
+	} else {
+		spec.Mode = types.AutomationMode(strings.ToLower(strings.TrimSpace(string(spec.Mode))))
+	}
+	spec.Owner = strings.TrimSpace(spec.Owner)
+	spec.ReportTarget = strings.TrimSpace(spec.ReportTarget)
+	spec.EscalationTarget = strings.TrimSpace(spec.EscalationTarget)
+	spec.SimplePolicy.OnSuccess = strings.ToLower(strings.TrimSpace(spec.SimplePolicy.OnSuccess))
+	spec.SimplePolicy.OnFailure = strings.ToLower(strings.TrimSpace(spec.SimplePolicy.OnFailure))
+	spec.SimplePolicy.OnBlocked = strings.ToLower(strings.TrimSpace(spec.SimplePolicy.OnBlocked))
 
 	spec.Context.Owner = strings.TrimSpace(spec.Context.Owner)
 	spec.Context.Environment = strings.TrimSpace(spec.Context.Environment)
 	spec.Context.Targets = normalizeStringList(spec.Context.Targets)
 	spec.Context.Labels = normalizeLabels(spec.Context.Labels)
 	spec.Signals = normalizeSignals(spec.Signals)
-	spec.IncidentPolicy = normalizeObjectJSON(spec.IncidentPolicy)
-	spec.ResponsePlan = normalizeRawJSON(spec.ResponsePlan)
-	spec.VerificationPlan = normalizeObjectJSON(spec.VerificationPlan)
-	spec.EscalationPolicy = normalizeObjectJSON(spec.EscalationPolicy)
-	spec.DeliveryPolicy = normalizeRawJSON(spec.DeliveryPolicy)
-	spec.RuntimePolicy = normalizeRawJSON(spec.RuntimePolicy)
 	spec.WatcherLifecycle = normalizeObjectJSON(spec.WatcherLifecycle)
 	spec.RetriggerPolicy = normalizeObjectJSON(spec.RetriggerPolicy)
-	spec.RunPolicy = normalizeObjectJSON(spec.RunPolicy)
-	spec.ResponsePlan = types.NormalizeAutomationResponsePlanJSON(spec.ResponsePlan)
 	spec.Assumptions = types.NormalizeAutomationAssumptions(spec.Assumptions)
 
 	if spec.CreatedAt.IsZero() {
@@ -60,10 +63,10 @@ func normalizeAutomationListFilter(filter types.AutomationListFilter) types.Auto
 	return filter
 }
 
-func normalizeIncidentFilter(filter types.AutomationIncidentFilter) types.AutomationIncidentFilter {
+func normalizeHeartbeatFilter(filter types.AutomationHeartbeatFilter) types.AutomationHeartbeatFilter {
 	filter.WorkspaceRoot = strings.TrimSpace(filter.WorkspaceRoot)
 	filter.AutomationID = strings.TrimSpace(filter.AutomationID)
-	filter.Status = types.AutomationIncidentStatus(strings.ToLower(strings.TrimSpace(string(filter.Status))))
+	filter.WatcherID = strings.TrimSpace(filter.WatcherID)
 	if filter.Limit < 0 {
 		filter.Limit = 0
 	}
@@ -106,10 +109,6 @@ func isValidAutomationState(state types.AutomationState) bool {
 
 func normalizeControlAction(action types.AutomationControlAction) types.AutomationControlAction {
 	return types.AutomationControlAction(strings.ToLower(strings.TrimSpace(string(action))))
-}
-
-func normalizeIncidentControlAction(action types.IncidentControlAction) types.IncidentControlAction {
-	return types.IncidentControlAction(strings.ToLower(strings.TrimSpace(string(action))))
 }
 
 func normalizeSignals(signals []types.AutomationSignal) []types.AutomationSignal {
@@ -242,81 +241,6 @@ func buildTriggerEvent(spec types.AutomationSpec, req types.AutomationTriggerReq
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-}
-
-func loadResponsePlanV2(raw json.RawMessage) types.ResponsePlanV2 {
-	raw = normalizeRawJSON(raw)
-	if len(raw) == 0 {
-		return types.ResponsePlanV2{}
-	}
-	var plan types.ResponsePlanV2
-	if err := json.Unmarshal(raw, &plan); err != nil {
-		return types.ResponsePlanV2{}
-	}
-	return plan
-}
-
-func buildIncidentPhaseStates(spec types.AutomationSpec, incident types.AutomationIncident, now time.Time) []types.IncidentPhaseState {
-	plan := loadResponsePlanV2(spec.ResponsePlan)
-	if len(plan.Phases) == 0 {
-		return []types.IncidentPhaseState{}
-	}
-	states := make([]types.IncidentPhaseState, 0, len(plan.Phases))
-	for _, phase := range plan.Phases {
-		if phase.Phase == "" {
-			continue
-		}
-		states = append(states, types.IncidentPhaseState{
-			IncidentID:             incident.ID,
-			AutomationID:           incident.AutomationID,
-			WorkspaceRoot:          incident.WorkspaceRoot,
-			Phase:                  phase.Phase,
-			Reduction:              types.IncidentPhaseReductionAllMustSucceed,
-			Status:                 types.IncidentPhaseStatusPending,
-			DispatchIDs:            []string{},
-			ActiveDispatchCount:    0,
-			CompletedDispatchCount: 0,
-			FailedDispatchCount:    0,
-			CreatedAt:              now,
-			UpdatedAt:              now,
-		})
-	}
-	return states
-}
-
-func dedupeWindowForSpec(spec types.AutomationSpec) time.Duration {
-	cfg := struct {
-		DedupeWindowSeconds int `json:"dedupe_window_seconds"`
-	}{}
-	_ = json.Unmarshal(spec.RetriggerPolicy, &cfg)
-	if cfg.DedupeWindowSeconds <= 0 {
-		cfg.DedupeWindowSeconds = 600
-	}
-	return time.Duration(cfg.DedupeWindowSeconds) * time.Second
-}
-
-func incidentMatchesTriggerDedupe(incident types.AutomationIncident, dedupeKey string, observedAt time.Time, window time.Duration) bool {
-	if strings.TrimSpace(dedupeKey) == "" {
-		return false
-	}
-	if strings.TrimSpace(incidentDedupeKey(incident)) != strings.TrimSpace(dedupeKey) {
-		return false
-	}
-	if observedAt.IsZero() || incident.ObservedAt.IsZero() || window <= 0 {
-		return true
-	}
-	delta := observedAt.Sub(incident.ObservedAt)
-	if delta < 0 {
-		delta = -delta
-	}
-	return delta <= window
-}
-
-func incidentDedupeKey(incident types.AutomationIncident) string {
-	if dedupeKey := incidentPayloadDedupeKey(incident.Payload); dedupeKey != "" {
-		return dedupeKey
-	}
-	return extractTriggerDedupeKey(nil, incident.SignalKind, incident.Source, incident.Summary)
 }
 
 func incidentPayloadDedupeKey(raw json.RawMessage) string {
@@ -502,19 +426,6 @@ func normalizeDetectorStatus(value string) (string, bool) {
 	}
 }
 
-func detectorStatusAllowed(whenStatus []string, status types.AutomationDetectorStatus) bool {
-	for _, candidate := range whenStatus {
-		normalized, ok := normalizeDetectorStatus(candidate)
-		if !ok {
-			continue
-		}
-		if types.AutomationDetectorStatus(normalized) == status {
-			return true
-		}
-	}
-	return false
-}
-
 func invalidSignalOutput(message string) error {
 	return &types.AutomationValidationError{
 		Code:    "invalid_signal_output",
@@ -522,33 +433,14 @@ func invalidSignalOutput(message string) error {
 	}
 }
 
-func validateResponsePlanDraftMode(raw json.RawMessage) error {
-	raw = normalizeRawJSON(raw)
-	if len(raw) == 0 || !json.Valid(raw) {
-		return nil
+func decodeStrictJSON(raw []byte, out any) error {
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return err
 	}
-
-	var object map[string]any
-	if err := json.Unmarshal(raw, &object); err != nil {
-		return nil
+	if decoder.More() {
+		return invalidSignalOutput("detector signal payload must be a single JSON value")
 	}
-	if strings.EqualFold(strings.TrimSpace(asStringForDraftValidation(object["schema_version"])), types.ResponsePlanSchemaVersionV2) {
-		return nil
-	}
-
-	mode := strings.TrimSpace(asStringForDraftValidation(object["mode"]))
-	switch mode {
-	case "", "notify", "investigate", "investigate_then_act", "act_only":
-		return nil
-	default:
-		return &types.AutomationValidationError{
-			Code:    "invalid_automation_spec",
-			Message: "response_plan.mode must be one of notify, investigate, investigate_then_act, act_only",
-		}
-	}
-}
-
-func asStringForDraftValidation(value any) string {
-	text, _ := value.(string)
-	return text
+	return nil
 }

@@ -2,17 +2,27 @@ import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../api/events";
 import { UserMessage } from "./blocks/UserMessage";
 import { AssistantMessage } from "./blocks/AssistantMessage";
-import { ToolCall } from "./blocks/ToolCall";
+import { ToolCallGroup } from "./blocks/ToolCallGroup";
 import { NoticeBlock } from "./blocks/NoticeBlock";
 import { ErrorBlock } from "./blocks/ErrorBlock";
 import { PermissionBlock } from "./blocks/PermissionBlock";
+import { ArrowDown } from "./Icon";
+import { useI18n } from "../i18n";
 
 interface MessageListProps {
   messages: ChatMessage[];
   connection: "idle" | "connecting" | "open" | "reconnecting" | "error";
+  onSuggestionClick?: (text: string) => void;
+  suggestionsDisabled?: boolean;
 }
 
-export function MessageList({ messages, connection }: MessageListProps) {
+export function MessageList({ messages, connection, onSuggestionClick, suggestionsDisabled }: MessageListProps) {
+  const { t } = useI18n();
+  const suggestions = [
+    t("chat.suggestions.explainCodebase"),
+    t("chat.suggestions.runTests"),
+    t("chat.suggestions.checkGitStatus"),
+  ];
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -25,7 +35,7 @@ export function MessageList({ messages, connection }: MessageListProps) {
     } else {
       setNewMsg(true);
     }
-  }, [messages.length, autoScroll]);
+  }, [messages, autoScroll]);
 
   function handleScroll() {
     const el = containerRef.current;
@@ -41,8 +51,12 @@ export function MessageList({ messages, connection }: MessageListProps) {
     setNewMsg(false);
   }
 
-  // Group messages by turn, separating user messages from assistant+tool blocks
-  const turns: { user?: ChatMessage; blocks: ChatMessage[] }[] = [];
+  // Group messages by turn; collect consecutive tool_calls into ToolCallGroup
+  type BlockItem =
+    | { kind: "single"; msg: ChatMessage }
+    | { kind: "tool_group"; msgs: ChatMessage[] };
+
+  const turns: { user?: ChatMessage; blocks: BlockItem[] }[] = [];
   for (const msg of messages) {
     if (msg.kind === "user_message") {
       turns.push({ user: msg, blocks: [] });
@@ -50,7 +64,18 @@ export function MessageList({ messages, connection }: MessageListProps) {
       if (turns.length === 0) {
         turns.push({ blocks: [] });
       }
-      turns[turns.length - 1].blocks.push(msg);
+
+      if (msg.kind === "tool_call") {
+        const blocks = turns[turns.length - 1].blocks;
+        const last = blocks[blocks.length - 1];
+        if (last && last.kind === "tool_group") {
+          last.msgs.push(msg);
+        } else {
+          blocks.push({ kind: "tool_group", msgs: [msg] });
+        }
+      } else {
+        turns[turns.length - 1].blocks.push({ kind: "single", msg });
+      }
     }
   }
 
@@ -63,11 +88,55 @@ export function MessageList({ messages, connection }: MessageListProps) {
         style={{ backgroundColor: "var(--color-bg)" }}
       >
         {messages.length === 0 && (
-          <div
-            className="flex flex-col items-center justify-center h-full text-sm"
-            style={{ color: "var(--color-text-muted)" }}
-          >
-            <p>Send a message to start the conversation.</p>
+          <div className="flex flex-col items-center justify-center h-full select-none">
+            {/* Decorative ring */}
+            <div
+              className="w-16 h-16 rounded-full mb-6"
+              style={{
+                background: "conic-gradient(from 0deg, var(--color-accent), var(--color-assistant), var(--color-tool), var(--color-accent))",
+                opacity: 0.15,
+                filter: "blur(1px)",
+              }}
+            />
+            <p
+              className="text-base mb-4"
+              style={{ color: "var(--color-text-muted)" }}
+            >
+              {t("chat.emptyPrompt")}
+            </p>
+            {onSuggestionClick && (
+              <div className="flex flex-wrap gap-2 justify-center">
+                {suggestions.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => onSuggestionClick(s)}
+                    disabled={suggestionsDisabled}
+                    className="rounded-full px-4 py-1.5 text-sm"
+                    style={{
+                      backgroundColor: "var(--color-surface)",
+                      border: "1px solid var(--color-border)",
+                      color: "var(--color-text-muted)",
+                      cursor: suggestionsDisabled ? "not-allowed" : "pointer",
+                      opacity: suggestionsDisabled ? 0.4 : 1,
+                      transition: "border-color 0.15s, color 0.15s, opacity 0.15s",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (suggestionsDisabled) return;
+                      e.currentTarget.style.borderColor = "var(--color-accent)";
+                      e.currentTarget.style.color = "var(--color-text)";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (suggestionsDisabled) return;
+                      e.currentTarget.style.borderColor = "var(--color-border)";
+                      e.currentTarget.style.color = "var(--color-text-muted)";
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -78,7 +147,11 @@ export function MessageList({ messages, connection }: MessageListProps) {
                 text={turn.user.text ?? ""}
               />
             )}
-            {turn.blocks.map((msg) => {
+            {turn.blocks.map((block, bi) => {
+              if (block.kind === "tool_group") {
+                return <ToolCallGroup key={`tg-${ti}-${bi}`} messages={block.msgs} />;
+              }
+              const msg = block.msg;
               switch (msg.kind) {
                 case "assistant_message":
                   return (
@@ -87,17 +160,6 @@ export function MessageList({ messages, connection }: MessageListProps) {
                       text={msg.text ?? ""}
                       streaming={msg.streaming ?? false}
                       usage={msg.usage}
-                    />
-                  );
-                case "tool_call":
-                  return (
-                    <ToolCall
-                      key={msg.id}
-                      toolName={msg.toolName ?? "tool"}
-                      argsPreview={msg.argsPreview}
-                      resultPreview={msg.resultPreview}
-                      status={msg.status ?? "running"}
-                      isError={msg.isError ?? false}
                     />
                   );
                 case "notice":
@@ -129,16 +191,17 @@ export function MessageList({ messages, connection }: MessageListProps) {
       {newMsg && !autoScroll && (
         <button
           onClick={scrollToBottom}
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-sm"
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-4 py-2 rounded-full text-sm"
           style={{
             backgroundColor: "var(--color-accent)",
             color: "#fff",
             border: "none",
             cursor: "pointer",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
           }}
         >
-          ↓ New messages
+          <ArrowDown size={14} color="#fff" />
+          {t("chat.newMessages")}
         </button>
       )}
 
@@ -160,11 +223,11 @@ export function MessageList({ messages, connection }: MessageListProps) {
                 : "var(--color-border)",
           }}
         />
-        {connection === "connecting" && "Connecting..."}
-        {connection === "reconnecting" && "Reconnecting..."}
-        {connection === "open" && "Connected"}
-        {connection === "error" && "Error"}
-        {connection === "idle" && "Idle"}
+        {connection === "connecting" && t("chat.connecting")}
+        {connection === "reconnecting" && t("chat.reconnecting")}
+        {connection === "open" && t("chat.connected")}
+        {connection === "error" && t("chat.error")}
+        {connection === "idle" && t("chat.idle")}
       </div>
     </div>
   );

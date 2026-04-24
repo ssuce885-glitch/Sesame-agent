@@ -123,11 +123,11 @@ func collectDiscordSetupState(reader *bufio.Reader, w io.Writer, cfg config.Conf
 	if err != nil {
 		return discordSetupState{}, err
 	}
-	allowedUserIDs, err := readTextInput(reader, w, "Allowed User IDs (comma-separated)", strings.Join(state.AllowedUserIDs, ", "))
+	allowedUserIDs, err := readRequiredCommaSeparatedList(reader, w, "Allowed User IDs (comma-separated)", strings.Join(state.AllowedUserIDs, ", "))
 	if err != nil {
 		return discordSetupState{}, err
 	}
-	state.AllowedUserIDs = parseCommaSeparatedList(allowedUserIDs)
+	state.AllowedUserIDs = allowedUserIDs
 	state.RequireMention, err = readBoolChoice(reader, w, "Require Mention", "Enabled", "Disabled", state.RequireMention)
 	if err != nil {
 		return discordSetupState{}, err
@@ -154,6 +154,36 @@ func collectDiscordSetupState(reader *bufio.Reader, w io.Writer, cfg config.Conf
 	}
 
 	return state, nil
+}
+
+func readRequiredCommaSeparatedList(reader *bufio.Reader, w io.Writer, label, defaultValue string) ([]string, error) {
+	defaultValue = strings.TrimSpace(defaultValue)
+	for {
+		if defaultValue != "" {
+			fmt.Fprintf(w, "%s [%s]: ", label, defaultValue)
+		} else {
+			fmt.Fprintf(w, "%s: ", label)
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+		value := strings.TrimSpace(line)
+		if value == "" && err == io.EOF && len(line) == 0 {
+			return nil, io.EOF
+		}
+		if value == "" {
+			value = defaultValue
+		}
+		entries := parseCommaSeparatedList(value)
+		if len(entries) > 0 {
+			return entries, nil
+		}
+		fmt.Fprintf(w, "%s is required; enter at least one value.\n", strings.TrimSuffix(label, " (comma-separated)"))
+		if err == io.EOF {
+			return nil, io.EOF
+		}
+	}
 }
 
 func defaultDiscordSetupState(cfg config.Config, fileCfg config.UserConfig) (discordSetupState, error) {
@@ -250,6 +280,9 @@ func validateDiscordSetupState(state discordSetupState) error {
 	}
 	if strings.TrimSpace(state.ChannelID) == "" {
 		return errors.New("discord channel_id is required")
+	}
+	if len(state.AllowedUserIDs) == 0 {
+		return errors.New("discord allowed_user_ids requires at least one user id")
 	}
 	return nil
 }

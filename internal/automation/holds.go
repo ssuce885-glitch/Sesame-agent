@@ -14,12 +14,6 @@ type watcherHoldStore interface {
 	ReplaceAutomationWatcherHolds(context.Context, string, string, []types.AutomationWatcherHold) error
 }
 
-type dispatchApprovalResumeStore interface {
-	watcherHoldStore
-	FindDispatchAttemptByTaskID(context.Context, string) (types.DispatchAttempt, bool, error)
-	UpsertDispatchAttempt(context.Context, types.DispatchAttempt) error
-}
-
 func EffectiveWatcherState(current types.AutomationWatcherState, holds []types.AutomationWatcherHold) types.AutomationWatcherState {
 	if len(holds) > 0 {
 		return types.AutomationWatcherStatePaused
@@ -87,58 +81,6 @@ func AcquireWatcherHoldByOwner(ctx context.Context, store watcherHoldStore, auto
 	}
 	updated := AcquireWatcherHold(holds, kind, ownerID, reason, now)
 	return store.ReplaceAutomationWatcherHolds(ctx, automationID, watcherID, updated)
-}
-
-func ReplaceDispatchHoldWithApprovalHold(ctx context.Context, store watcherHoldStore, automationID, dispatchID, requestID string, now time.Time) error {
-	if store == nil {
-		return nil
-	}
-	runtime, watcherID, holds, err := watcherHoldContext(ctx, store, automationID)
-	if err != nil {
-		return err
-	}
-	if runtime.AutomationID == "" {
-		return nil
-	}
-	updated := SwapWatcherHold(holds, types.AutomationWatcherHoldKindDispatch, dispatchID, types.AutomationWatcherHoldKindApproval, requestID, "permission requested", now)
-	return store.ReplaceAutomationWatcherHolds(ctx, automationID, watcherID, updated)
-}
-
-func ReplaceApprovalHoldWithDispatchHold(ctx context.Context, store watcherHoldStore, automationID, requestID, dispatchID string, now time.Time) error {
-	if store == nil {
-		return nil
-	}
-	runtime, watcherID, holds, err := watcherHoldContext(ctx, store, automationID)
-	if err != nil {
-		return err
-	}
-	if runtime.AutomationID == "" {
-		return nil
-	}
-	updated := SwapWatcherHold(holds, types.AutomationWatcherHoldKindApproval, requestID, types.AutomationWatcherHoldKindDispatch, dispatchID, "dispatch resumed", now)
-	return store.ReplaceAutomationWatcherHolds(ctx, automationID, watcherID, updated)
-}
-
-func RestoreDispatchAfterApprovalResume(ctx context.Context, store dispatchApprovalResumeStore, taskID, requestID string, now time.Time) error {
-	if store == nil {
-		return nil
-	}
-	attempt, ok, err := store.FindDispatchAttemptByTaskID(ctx, taskID)
-	if err != nil || !ok {
-		return err
-	}
-	if attempt.Status != types.DispatchAttemptStatusAwaitingApproval {
-		return nil
-	}
-	if strings.TrimSpace(attempt.PermissionRequestID) != strings.TrimSpace(requestID) {
-		return nil
-	}
-	if err := ReplaceApprovalHoldWithDispatchHold(ctx, store, attempt.AutomationID, requestID, attempt.DispatchID, now); err != nil {
-		return err
-	}
-	attempt.Status = types.DispatchAttemptStatusRunning
-	attempt.UpdatedAt = now.UTC()
-	return store.UpsertDispatchAttempt(ctx, attempt)
 }
 
 func watcherHoldContext(ctx context.Context, store watcherHoldStore, automationID string) (types.AutomationWatcherRuntime, string, []types.AutomationWatcherHold, error) {

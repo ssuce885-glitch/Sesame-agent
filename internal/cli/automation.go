@@ -23,11 +23,8 @@ type automationClient interface {
 	ReinstallAutomation(context.Context, string) (types.AutomationWatcherRuntime, error)
 	GetAutomationWatcher(context.Context, string) (types.AutomationWatcherRuntime, error)
 	DeleteAutomation(context.Context, string) error
-	EmitTrigger(context.Context, types.TriggerEmitRequest) (types.AutomationIncident, error)
+	EmitTrigger(context.Context, types.TriggerEmitRequest) (types.TriggerEvent, error)
 	RecordHeartbeat(context.Context, types.TriggerHeartbeatRequest) (types.AutomationHeartbeat, error)
-	ListIncidents(context.Context, types.IncidentListFilter) (types.ListAutomationIncidentsResponse, error)
-	GetIncident(context.Context, string) (types.AutomationIncident, error)
-	ControlIncident(context.Context, string, types.IncidentControlAction) (types.AutomationIncident, error)
 	ListPendingAutomationPermissions(context.Context) (types.ListPendingAutomationPermissionsResponse, error)
 	GetPendingAutomationPermission(context.Context, string) (types.PendingAutomationPermission, error)
 }
@@ -162,11 +159,11 @@ func runTriggerCommand(ctx context.Context, stdout io.Writer, client automationC
 				Summary:      strings.TrimSpace(cmd.Summary),
 			}
 		}
-		incident, err := client.EmitTrigger(ctx, req)
+		trigger, err := client.EmitTrigger(ctx, req)
 		if err != nil {
 			return err
 		}
-		return writeJSON(stdout, incident)
+		return writeJSON(stdout, trigger)
 	case "heartbeat":
 		req := types.TriggerHeartbeatRequest{}
 		if strings.TrimSpace(cmd.File) != "" {
@@ -190,36 +187,6 @@ func runTriggerCommand(ctx context.Context, stdout io.Writer, client automationC
 		return runner.Run(ctx, cmd.AutomationID, cmd.WatcherID, cmd.StateFile)
 	default:
 		return fmt.Errorf("unknown trigger command %q", cmd.Action)
-	}
-}
-
-func runIncidentCommand(ctx context.Context, stdout io.Writer, client automationClient, cmd IncidentCommand) error {
-	switch cmd.Action {
-	case "list":
-		resp, err := client.ListIncidents(ctx, types.IncidentListFilter{
-			AutomationID:  strings.TrimSpace(cmd.AutomationID),
-			WorkspaceRoot: strings.TrimSpace(cmd.WorkspaceRoot),
-			Status:        types.AutomationIncidentStatus(strings.TrimSpace(cmd.Status)),
-			Limit:         cmd.Limit,
-		})
-		if err != nil {
-			return err
-		}
-		return writeJSON(stdout, resp)
-	case "get":
-		incident, err := client.GetIncident(ctx, cmd.ID)
-		if err != nil {
-			return err
-		}
-		return writeJSON(stdout, incident)
-	case "ack", "close", "reopen", "escalate":
-		incident, err := client.ControlIncident(ctx, cmd.ID, types.IncidentControlAction(strings.TrimSpace(cmd.Action)))
-		if err != nil {
-			return err
-		}
-		return writeJSON(stdout, incident)
-	default:
-		return fmt.Errorf("unknown incident command %q", cmd.Action)
 	}
 }
 

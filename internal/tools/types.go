@@ -89,11 +89,10 @@ type AutomationService interface {
 	List(context.Context, types.AutomationListFilter) ([]types.AutomationSpec, error)
 	Control(context.Context, string, types.AutomationControlAction) (types.AutomationSpec, bool, error)
 	Delete(context.Context, string) (bool, error)
-	EmitTrigger(context.Context, types.AutomationTriggerRequest) (types.AutomationIncident, error)
+	EmitTrigger(context.Context, types.AutomationTriggerRequest) (types.TriggerEvent, error)
 	RecordHeartbeat(context.Context, types.AutomationHeartbeatRequest) (types.AutomationHeartbeat, error)
-	ListIncidents(context.Context, types.AutomationIncidentFilter) ([]types.AutomationIncident, error)
-	GetIncident(context.Context, string) (types.AutomationIncident, bool, error)
-	ControlIncident(context.Context, string, types.IncidentControlAction) (types.AutomationIncident, bool, error)
+	GetWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
+	ListHeartbeats(context.Context, types.AutomationHeartbeatFilter) ([]types.AutomationHeartbeat, error)
 }
 
 type RoleService interface {

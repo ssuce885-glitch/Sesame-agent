@@ -44,6 +44,28 @@ func automationSpecProperties() map[string]any {
 			"type": "string",
 			"enum": automationStateEnum(),
 		},
+		"mode": map[string]any{
+			"type": "string",
+			"enum": []string{"simple"},
+		},
+		"owner": map[string]any{
+			"type": "string",
+		},
+		"report_target": map[string]any{
+			"type": "string",
+		},
+		"escalation_target": map[string]any{
+			"type": "string",
+		},
+		"simple_policy": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"on_success": map[string]any{"type": "string"},
+				"on_failure": map[string]any{"type": "string"},
+				"on_blocked": map[string]any{"type": "string"},
+			},
+			"additionalProperties": false,
+		},
 		"context": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -83,30 +105,6 @@ func automationSpecProperties() map[string]any {
 				"additionalProperties": false,
 			},
 		},
-		"incident_policy": map[string]any{
-			"type":                 "object",
-			"additionalProperties": true,
-		},
-		"response_plan": map[string]any{
-			"type":                 "object",
-			"additionalProperties": true,
-		},
-		"verification_plan": map[string]any{
-			"type":                 "object",
-			"additionalProperties": true,
-		},
-		"escalation_policy": map[string]any{
-			"type":                 "object",
-			"additionalProperties": true,
-		},
-		"delivery_policy": map[string]any{
-			"type":                 "object",
-			"additionalProperties": true,
-		},
-		"runtime_policy": map[string]any{
-			"type":                 "object",
-			"additionalProperties": true,
-		},
 		"watcher_lifecycle": map[string]any{
 			"type":                 "object",
 			"additionalProperties": true,
@@ -115,13 +113,19 @@ func automationSpecProperties() map[string]any {
 			"type":                 "object",
 			"additionalProperties": true,
 		},
-		"run_policy": map[string]any{
-			"type":                 "object",
-			"additionalProperties": true,
-		},
 		"assumptions": map[string]any{
-			"type":  "array",
-			"items": map[string]any{"type": "string"},
+			"type": "array",
+			"items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"key":    map[string]any{"type": "string"},
+					"field":  map[string]any{"type": "string"},
+					"value":  map[string]any{},
+					"reason": map[string]any{"type": "string"},
+					"source": map[string]any{"type": "string"},
+				},
+				"additionalProperties": false,
+			},
 		},
 		"created_at": map[string]any{
 			"type": "string",
@@ -130,41 +134,4 @@ func automationSpecProperties() map[string]any {
 			"type": "string",
 		},
 	}
-}
-
-func automationIncidentOutputSchema() map[string]any {
-	return objectSchema(map[string]any{
-		"id": map[string]any{
-			"type": "string",
-		},
-		"automation_id": map[string]any{
-			"type": "string",
-		},
-		"workspace_root": map[string]any{
-			"type": "string",
-		},
-		"status": map[string]any{
-			"type": "string",
-			"enum": automationIncidentStatusEnum(),
-		},
-		"signal_kind": map[string]any{
-			"type": "string",
-		},
-		"source": map[string]any{
-			"type": "string",
-		},
-		"summary": map[string]any{
-			"type": "string",
-		},
-		"payload": map[string]any{},
-		"observed_at": map[string]any{
-			"type": "string",
-		},
-		"created_at": map[string]any{
-			"type": "string",
-		},
-		"updated_at": map[string]any{
-			"type": "string",
-		},
-	}, "id", "automation_id", "workspace_root", "status")
 }

@@ -13,9 +13,10 @@ import {
 
 interface ChatPageProps {
   sessionId: string;
+  onConnectionChange?: (connection: ChatState["connection"]) => void;
 }
 
-export function ChatPage({ sessionId }: ChatPageProps) {
+export function ChatPage({ sessionId, onConnectionChange }: ChatPageProps) {
   const [state, dispatch] = useReducer(reduceChat, initialState);
   const { data: timeline, isLoading } = useTimeline(sessionId);
   const submitMessage = useSubmitMessage(sessionId);
@@ -39,8 +40,9 @@ export function ChatPage({ sessionId }: ChatPageProps) {
   const handleConnectionChange = useCallback(
     (value: ChatState["connection"]) => {
       dispatch({ type: "connection", value });
+      onConnectionChange?.(value);
     },
-    [],
+    [onConnectionChange],
   );
 
   const { reconnect } = useSessionEvents(
@@ -51,6 +53,7 @@ export function ChatPage({ sessionId }: ChatPageProps) {
   );
 
   async function handleSend(message: string) {
+    if (submitMessage.isPending) return;
     // Optimistically mark user message
     dispatch({
       type: "event",
@@ -68,12 +71,13 @@ export function ChatPage({ sessionId }: ChatPageProps) {
       await submitMessage.mutateAsync(message);
     } catch (err) {
       console.error("Failed to send message:", err);
+      throw err;
     }
   }
 
   return (
     <div className="flex flex-col h-full">
-      <MessageList messages={state.messages} connection={state.connection} />
+      <MessageList messages={state.messages} connection={state.connection} onSuggestionClick={handleSend} suggestionsDisabled={submitMessage.isPending} />
       <Composer onSend={handleSend} disabled={submitMessage.isPending} />
     </div>
   );

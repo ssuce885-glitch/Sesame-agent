@@ -167,8 +167,6 @@ type RuntimeGraph struct {
 	Tasks              []Task               `json:"tasks"`
 	ToolRuns           []ToolRun            `json:"tool_runs"`
 	Worktrees          []Worktree           `json:"worktrees"`
-	Incidents          []AutomationIncident `json:"incidents"`
-	DispatchAttempts   []DispatchAttempt    `json:"dispatch_attempts"`
 	PermissionRequests []PermissionRequest  `json:"permission_requests"`
 	Diagnostics        []RuntimeDiagnostic  `json:"diagnostics"`
 }

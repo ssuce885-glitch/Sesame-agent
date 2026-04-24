@@ -1,6 +1,7 @@
 package roles
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"go-agent/internal/config"
 	"go-agent/internal/skills"
+	"go-agent/internal/types"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,14 +25,26 @@ type UpsertInput struct {
 	Policy      map[string]any `json:"policy"`
 }
 
+type AutomationCleanupService interface {
+	List(context.Context, types.AutomationListFilter) ([]types.AutomationSpec, error)
+	Delete(context.Context, string) (bool, error)
+}
+
 type Service struct {
-	globalRoot string
+	globalRoot        string
+	automationCleanup AutomationCleanupService
 }
 
 func NewService() *Service { return &Service{} }
 
 func NewServiceWithGlobalRoot(globalRoot string) *Service {
 	return &Service{globalRoot: strings.TrimSpace(globalRoot)}
+}
+
+func (s *Service) SetAutomationCleanupService(cleanup AutomationCleanupService) {
+	if s != nil {
+		s.automationCleanup = cleanup
+	}
 }
 
 var renameRoleDir = os.Rename
@@ -297,8 +311,31 @@ func (s *Service) Delete(workspaceRoot, roleID string) error {
 		}
 		return newServiceError(ErrorKindInternal, err)
 	}
+	if err := s.deleteOwnedAutomations(context.Background(), workspaceRoot, roleID); err != nil {
+		return newServiceError(ErrorKindInternal, err)
+	}
 	if err := os.RemoveAll(roleDir); err != nil {
 		return newServiceError(ErrorKindInternal, err)
+	}
+	return nil
+}
+
+func (s *Service) deleteOwnedAutomations(ctx context.Context, workspaceRoot, roleID string) error {
+	if s == nil || s.automationCleanup == nil {
+		return nil
+	}
+	specs, err := s.automationCleanup.List(ctx, types.AutomationListFilter{WorkspaceRoot: workspaceRoot})
+	if err != nil {
+		return err
+	}
+	wantOwner := "role:" + strings.TrimSpace(roleID)
+	for _, spec := range specs {
+		if types.NormalizeAutomationOwner(spec.Owner) != wantOwner {
+			continue
+		}
+		if _, err := s.automationCleanup.Delete(ctx, spec.ID); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"go-agent/internal/instructions"
@@ -441,7 +442,9 @@ func updateLoopSkillsFromToolMetadata(e *Engine, state *preparedLoopState, metad
 		return err
 	}
 	state.toolExecCtx.InjectedEnv = injectedEnv
+	previousDefs := state.visibleDefs
 	state.visibleDefs = state.toolRuntime.VisibleDefinitions(state.toolExecCtx)
+	clearPreviousResponseWhenVisibleToolsChange(&state.req, previousDefs, state.visibleDefs)
 	state.req.Tools = buildToolSchemas(state.visibleDefs)
 	state.req.Instructions = appendChildReportPromptSection(instructions.Compile(instructions.CompileInput{
 		BaseText:     state.baseInstructions,
@@ -450,6 +453,44 @@ func updateLoopSkillsFromToolMetadata(e *Engine, state *preparedLoopState, metad
 		ActiveSkills: state.activeSkills,
 	}).Render(), state.childReports)
 	return nil
+}
+
+func clearPreviousResponseWhenVisibleToolsChange(req *model.Request, before, after []tools.Definition) {
+	if req == nil || req.Cache == nil || req.Cache.PreviousResponseID == "" {
+		return
+	}
+	if sameVisibleToolNames(before, after) {
+		return
+	}
+	req.Cache.PreviousResponseID = ""
+}
+
+func sameVisibleToolNames(left, right []tools.Definition) bool {
+	leftNames := visibleToolNames(left)
+	rightNames := visibleToolNames(right)
+	if len(leftNames) != len(rightNames) {
+		return false
+	}
+	for i := range leftNames {
+		if leftNames[i] != rightNames[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func visibleToolNames(defs []tools.Definition) []string {
+	if len(defs) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(defs))
+	for _, def := range defs {
+		if name := strings.TrimSpace(def.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func emitToolInterrupt(

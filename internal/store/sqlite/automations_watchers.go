@@ -48,6 +48,50 @@ func upsertAutomationHeartbeatWithExec(ctx context.Context, execer execContexter
 	return err
 }
 
+func (s *Store) ListAutomationHeartbeats(ctx context.Context, filter types.AutomationHeartbeatFilter) ([]types.AutomationHeartbeat, error) {
+	return listAutomationHeartbeatsWithQueryer(ctx, s.db, filter)
+}
+
+func (t runtimeTx) ListAutomationHeartbeats(ctx context.Context, filter types.AutomationHeartbeatFilter) ([]types.AutomationHeartbeat, error) {
+	return listAutomationHeartbeatsWithQueryer(ctx, t.tx, filter)
+}
+
+func listAutomationHeartbeatsWithQueryer(ctx context.Context, queryer queryContexter, filter types.AutomationHeartbeatFilter) ([]types.AutomationHeartbeat, error) {
+	filter = normalizeAutomationHeartbeatFilterForStore(filter)
+	query := `
+		select payload, created_at, updated_at
+		from automation_heartbeats
+	`
+	args := make([]any, 0, 4)
+	conditions := make([]string, 0, 3)
+	if filter.WorkspaceRoot != "" {
+		appendAutomationWorkspaceRootCondition(&conditions, &args, "workspace_root", filter.WorkspaceRoot)
+	}
+	if filter.AutomationID != "" {
+		conditions = append(conditions, "automation_id = ?")
+		args = append(args, filter.AutomationID)
+	}
+	if filter.WatcherID != "" {
+		conditions = append(conditions, "watcher_id = ?")
+		args = append(args, filter.WatcherID)
+	}
+	if len(conditions) > 0 {
+		query += " where " + strings.Join(conditions, " and ")
+	}
+	query += " order by observed_at desc, updated_at desc, watcher_id asc"
+	if filter.Limit > 0 {
+		query += " limit ?"
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := queryer.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAutomationHeartbeats(rows)
+}
+
 func (s *Store) UpsertAutomationWatcher(ctx context.Context, watcher types.AutomationWatcherRuntime) error {
 	return upsertAutomationWatcherWithExec(ctx, s.db, watcher)
 }
@@ -316,6 +360,35 @@ func scanAutomationWatchers(rows *sql.Rows) ([]types.AutomationWatcherRuntime, e
 			watcher.UpdatedAt = parsed
 		}
 		out = append(out, normalizeAutomationWatcherForStore(watcher))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func scanAutomationHeartbeats(rows *sql.Rows) ([]types.AutomationHeartbeat, error) {
+	out := make([]types.AutomationHeartbeat, 0)
+	for rows.Next() {
+		var (
+			payload   string
+			createdAt string
+			updatedAt string
+		)
+		if err := rows.Scan(&payload, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		var heartbeat types.AutomationHeartbeat
+		if err := json.Unmarshal([]byte(payload), &heartbeat); err != nil {
+			return nil, err
+		}
+		if parsed, err := parsePendingOptionalTime(createdAt); err == nil && !parsed.IsZero() {
+			heartbeat.CreatedAt = parsed
+		}
+		if parsed, err := parsePendingOptionalTime(updatedAt); err == nil && !parsed.IsZero() {
+			heartbeat.UpdatedAt = parsed
+		}
+		out = append(out, normalizeAutomationHeartbeatForStore(heartbeat))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

@@ -2,10 +2,10 @@
 
 @theme {
   /* Backgrounds */
-  --color-bg: #000000;
-  --color-surface: #09090b;
-  --color-surface-2: #12131a;
-  --color-border: #272a33;
+  --color-bg: #06070b;
+  --color-surface: #0d0f16;
+  --color-surface-2: #161922;
+  --color-border: #252830;
 
   /* Text */
   --color-text: #f5f7fb;

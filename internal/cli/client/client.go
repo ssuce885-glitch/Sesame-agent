@@ -271,10 +271,10 @@ func (c *Client) GetAutomationWatcher(ctx context.Context, automationID string) 
 	return out, nil
 }
 
-func (c *Client) EmitTrigger(ctx context.Context, req types.TriggerEmitRequest) (types.AutomationIncident, error) {
-	var out types.AutomationIncident
+func (c *Client) EmitTrigger(ctx context.Context, req types.TriggerEmitRequest) (types.TriggerEvent, error) {
+	var out types.TriggerEvent
 	if err := c.doJSON(ctx, http.MethodPost, "/v1/triggers/emit", req, &out); err != nil {
-		return types.AutomationIncident{}, err
+		return types.TriggerEvent{}, err
 	}
 	return out, nil
 }
@@ -283,47 +283,6 @@ func (c *Client) RecordHeartbeat(ctx context.Context, req types.TriggerHeartbeat
 	var out types.AutomationHeartbeat
 	if err := c.doJSON(ctx, http.MethodPost, "/v1/triggers/heartbeat", req, &out); err != nil {
 		return types.AutomationHeartbeat{}, err
-	}
-	return out, nil
-}
-
-func (c *Client) ListIncidents(ctx context.Context, filter types.IncidentListFilter) (types.ListAutomationIncidentsResponse, error) {
-	var out types.ListAutomationIncidentsResponse
-	path := "/v1/incidents"
-	q := url.Values{}
-	if trimmed := strings.TrimSpace(filter.WorkspaceRoot); trimmed != "" {
-		q.Set("workspace_root", trimmed)
-	}
-	if trimmed := strings.TrimSpace(filter.AutomationID); trimmed != "" {
-		q.Set("automation_id", trimmed)
-	}
-	if trimmed := strings.TrimSpace(string(filter.Status)); trimmed != "" {
-		q.Set("status", trimmed)
-	}
-	if filter.Limit > 0 {
-		q.Set("limit", strconv.Itoa(filter.Limit))
-	}
-	if encoded := q.Encode(); encoded != "" {
-		path += "?" + encoded
-	}
-	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
-		return types.ListAutomationIncidentsResponse{}, err
-	}
-	return out, nil
-}
-
-func (c *Client) GetIncident(ctx context.Context, incidentID string) (types.AutomationIncident, error) {
-	var out types.AutomationIncident
-	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/incidents/%s", incidentID), nil, &out); err != nil {
-		return types.AutomationIncident{}, err
-	}
-	return out, nil
-}
-
-func (c *Client) ControlIncident(ctx context.Context, incidentID string, action types.IncidentControlAction) (types.AutomationIncident, error) {
-	var out types.AutomationIncident
-	if err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/incidents/%s/%s", incidentID, action), map[string]any{}, &out); err != nil {
-		return types.AutomationIncident{}, err
 	}
 	return out, nil
 }

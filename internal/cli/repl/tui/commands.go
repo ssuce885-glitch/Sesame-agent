@@ -78,7 +78,7 @@ func (m *Model) handleCommand(line string) (tea.Model, tea.Cmd) {
 
 func commandHelpText() string {
 	return strings.Join([]string{
-		"/help /clear /exit /status /skills /tools /history [/load <head_id>]",
+		"/help /clear /exit /status /skills /tools /history [list|load <head_id>]",
 		"/reopen /approve [<request_id>] [once|run|session] /deny [<request_id>]",
 		"/mailbox /cron list [--all] /cron inspect <id> /cron pause <id>",
 		"/cron resume <id> /cron remove <id>",

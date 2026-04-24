@@ -112,15 +112,11 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
 	runner.SetRuntimeService(runtimeService)
 	runner.SetAutomationService(automationService)
-	runner.SetRoleService(rolectx.NewServiceWithGlobalRoot(cfg.Paths.GlobalRoot))
+	roleService := rolectx.NewServiceWithGlobalRoot(cfg.Paths.GlobalRoot)
+	roleService.SetAutomationCleanupService(automationService)
+	runner.SetRoleService(roleService)
 
 	taskNotifier := buildTaskTerminalNotifier(store, bus, cfg.Paths.WorkspaceRoot)
-	var deliveryService *automation.DeliveryService
-	if taskNotifier != nil {
-		deliveryService = automation.NewDeliveryService(store, taskNotifier.reporting, nil)
-	} else {
-		deliveryService = automation.NewDeliveryService(store, nil, nil)
-	}
 	agentExecutor := buildAgentTaskExecutor(runner, store)
 	taskManager := task.NewManager(task.Config{
 		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
@@ -128,6 +124,7 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 		TerminalNotifier:   taskNotifier,
 		WorkspaceStore:     store,
 	}, nil, agentExecutor)
+	automationService.SetSimpleRuntime(automation.NewSimpleRuntime(store, taskManager, automation.SimpleRuntimeConfig{}))
 	executablePath, _ := os.Executable()
 	watcherService := automation.NewWatcherService(store, taskManager, automation.WatcherConfig{
 		DataRoot:       filepath.Join(cfg.DataDir, "automation"),
@@ -144,7 +141,6 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	})
 	if taskNotifier != nil {
 		taskNotifier.scheduler = schedulerService
-		taskNotifier.delivery = deliveryService
 		taskNotifier.watcher = watcherService
 	}
 	runner.SetTaskManager(taskManager)
@@ -153,8 +149,6 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	sessionManager := session.NewManager(sessionRunnerAdapter{
 		engine:   runner,
 		store:    store,
-		delivery: deliveryService,
-		watcher:  watcherService,
 		tasker:   taskManager,
 		notifier: taskNotifier,
 		sink: storeAndBusSink{

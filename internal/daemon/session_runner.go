@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"go-agent/internal/automation"
 	"go-agent/internal/engine"
 	rolectx "go-agent/internal/roles"
 	"go-agent/internal/session"
@@ -24,8 +23,6 @@ type sessionRunnerAdapter struct {
 	engine   *engine.Engine
 	sink     storeAndBusSink
 	store    *sqlite.Store
-	delivery *automation.DeliveryService
-	watcher  automation.DispatchWatcherSyncer
 	tasker   *task.Manager
 	notifier *taskTerminalNotifier
 	now      func() time.Time
@@ -54,19 +51,10 @@ type multiTaskObserver struct {
 func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) error {
 	sink := engine.EventSink(a.sink)
 	var observerSink *taskEventSink
-	var dispatchObserver task.AgentTaskObserver
 	var taskObserver task.AgentTaskObserver
 	var observers []task.AgentTaskObserver
-	var finalDispatchText string
+	var finalObserverText string
 	var taskCompleted bool
-
-	dispatchAttempt, hasDispatchAttempt, err := a.dispatchAttemptForTask(ctx, taskIDFromResume(in.Resume))
-	if err != nil {
-		return err
-	}
-	if hasDispatchAttempt {
-		in.Session.PermissionProfile = firstNonEmptyTrimmed(in.Session.PermissionProfile, "read_only")
-	}
 	role, err := a.store.ResolveSessionRole(ctx, in.Session.ID, in.Session.WorkspaceRoot)
 	if err != nil {
 		return err
@@ -105,14 +93,6 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 		taskObserver = resumeTaskObserver
 		observers = append(observers, taskObserver)
 	}
-	if taskObserver == nil {
-		if currentDispatchObserver, ok, err := a.dispatchObserverForRun(ctx, dispatchAttempt, hasDispatchAttempt); err != nil {
-			return err
-		} else if ok {
-			dispatchObserver = currentDispatchObserver
-			observers = append(observers, dispatchObserver)
-		}
-	}
 	if len(observers) > 0 {
 		observer := task.AgentTaskObserver(multiTaskObserver{observers: observers})
 		observerSink = &taskEventSink{observer: observer}
@@ -124,17 +104,16 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	}
 
 	err = a.engine.RunTurn(runCtx, engine.Input{
-		Session:             in.Session,
-		SessionRole:         sessionrole.Normalize(string(role)),
-		Turn:                in.Turn,
-		TaskID:              firstNonEmptyTrimmed(taskIDFromResume(in.Resume)),
-		Sink:                sink,
-		Resume:              in.Resume,
-		ActivatedSkillNames: append([]string(nil), dispatchAttempt.ActivatedSkillNames...),
+		Session:     in.Session,
+		SessionRole: sessionrole.Normalize(string(role)),
+		Turn:        in.Turn,
+		TaskID:      firstNonEmptyTrimmed(taskIDFromResume(in.Resume)),
+		Sink:        sink,
+		Resume:      in.Resume,
 	})
 	if observerSink != nil && len(observers) > 0 && err == nil {
-		finalDispatchText = strings.TrimSpace(observerSink.FinalText())
-		if in.Resume != nil && finalDispatchText != "" {
+		finalObserverText = strings.TrimSpace(observerSink.FinalText())
+		if in.Resume != nil && finalObserverText != "" {
 			taskCompleted = true
 		} else if turn, ok, turnErr := a.store.GetTurn(runCtx, in.Turn.ID); turnErr != nil {
 			return turnErr
@@ -152,13 +131,8 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 			return err
 		}
 	}
-	if taskObserver != nil && finalDispatchText != "" {
-		if err := taskObserver.SetFinalText(finalDispatchText); err != nil {
-			return err
-		}
-	}
-	if dispatchObserver != nil && finalDispatchText != "" {
-		if err := dispatchObserver.SetFinalText(finalDispatchText); err != nil {
+	if taskObserver != nil && finalObserverText != "" {
+		if err := taskObserver.SetFinalText(finalObserverText); err != nil {
 			return err
 		}
 	}
@@ -313,20 +287,6 @@ func (o multiTaskObserver) SetRunContext(sessionID, turnID string) error {
 	return nil
 }
 
-func (a sessionRunnerAdapter) dispatchAttemptForTask(ctx context.Context, taskID string) (types.DispatchAttempt, bool, error) {
-	if a.store == nil || strings.TrimSpace(taskID) == "" {
-		return types.DispatchAttempt{}, false, nil
-	}
-	return a.store.FindDispatchAttemptByTaskID(ctx, taskID)
-}
-
-func (a sessionRunnerAdapter) dispatchObserverForRun(_ context.Context, attempt types.DispatchAttempt, ok bool) (task.AgentTaskObserver, bool, error) {
-	if a.store == nil || !ok {
-		return nil, false, nil
-	}
-	return automation.NewDispatchTaskObserverWithDelivery(a.store, a.delivery, attempt.DispatchID, a.currentTime), true, nil
-}
-
 func (a sessionRunnerAdapter) taskObserverForResume(resume *types.TurnResume) (task.AgentTaskObserver, bool, error) {
 	taskID := taskIDFromResume(resume)
 	if a.tasker == nil || taskID == "" {
@@ -355,192 +315,6 @@ func taskIDFromResume(resume *types.TurnResume) string {
 		return ""
 	}
 	return strings.TrimSpace(resume.TaskID)
-}
-
-func (a sessionRunnerAdapter) releaseWatcherHoldForDispatchOutcome(ctx context.Context, attempt types.DispatchAttempt, succeeded bool) error {
-	if a.store == nil {
-		return nil
-	}
-	spec, ok, err := a.store.GetAutomation(ctx, attempt.AutomationID)
-	if err != nil || !ok {
-		return err
-	}
-	bundle, err := automation.LoadChildAgentRuntimeBundle(spec.WorkspaceRoot, spec.ID, attempt.Phase, attempt.ChildAgentID)
-	if err != nil {
-		return err
-	}
-
-	kind, ownerID, err := a.activeWatcherHoldForAttempt(ctx, attempt)
-	if err != nil {
-		return err
-	}
-
-	if succeeded {
-		if bundle.Strategy.CompletionPolicy.ResumeWatcherOnSuccess == nil || !*bundle.Strategy.CompletionPolicy.ResumeWatcherOnSuccess {
-			return nil
-		}
-		if err := automation.ReleaseWatcherHoldByOwner(ctx, a.store, attempt.AutomationID, kind, ownerID); err != nil {
-			return err
-		}
-		return a.syncWatcher(ctx, attempt.AutomationID)
-	}
-	if bundle.Strategy.CompletionPolicy.ResumeWatcherOnFailure == nil || !*bundle.Strategy.CompletionPolicy.ResumeWatcherOnFailure {
-		return nil
-	}
-	if err := automation.ReleaseWatcherHoldByOwner(ctx, a.store, attempt.AutomationID, kind, ownerID); err != nil {
-		return err
-	}
-	return a.syncWatcher(ctx, attempt.AutomationID)
-}
-
-func (a sessionRunnerAdapter) activeWatcherHoldForAttempt(ctx context.Context, attempt types.DispatchAttempt) (types.AutomationWatcherHoldKind, string, error) {
-	if a.store == nil {
-		return types.AutomationWatcherHoldKindDispatch, attempt.DispatchID, nil
-	}
-	holds, err := a.store.ListAutomationWatcherHolds(ctx, attempt.AutomationID)
-	if err != nil {
-		return "", "", err
-	}
-	requestID := strings.TrimSpace(attempt.PermissionRequestID)
-	if requestID != "" {
-		for _, hold := range holds {
-			if hold.Kind == types.AutomationWatcherHoldKindApproval && strings.TrimSpace(hold.OwnerID) == requestID {
-				return types.AutomationWatcherHoldKindApproval, requestID, nil
-			}
-		}
-	}
-	return types.AutomationWatcherHoldKindDispatch, attempt.DispatchID, nil
-}
-
-func (a sessionRunnerAdapter) syncWatcher(ctx context.Context, automationID string) error {
-	if a.watcher == nil {
-		return nil
-	}
-	return a.watcher.SyncAutomation(ctx, automationID)
-}
-
-type dispatchOutcome string
-
-const (
-	dispatchOutcomeCompleted dispatchOutcome = "completed"
-	dispatchOutcomeFailed    dispatchOutcome = "failed"
-)
-
-func (a sessionRunnerAdapter) applyDispatchOutcome(ctx context.Context, attempt types.DispatchAttempt, outcome dispatchOutcome, now time.Time) error {
-	phaseStatus, incidentStatus, err := a.resolveDispatchOutcome(ctx, attempt, outcome)
-	if err != nil {
-		return err
-	}
-	if err := updateIncidentPhaseState(ctx, a.store, attempt.IncidentID, attempt.Phase, now, func(phase *types.IncidentPhaseState) {
-		if phase.ActiveDispatchCount > 0 {
-			phase.ActiveDispatchCount--
-		}
-		phase.Status = phaseStatus
-		switch outcome {
-		case dispatchOutcomeCompleted:
-			phase.CompletedDispatchCount++
-		case dispatchOutcomeFailed:
-			phase.FailedDispatchCount++
-		}
-	}); err != nil {
-		return err
-	}
-	return updateAutomationIncidentStatus(ctx, a.store, attempt.IncidentID, incidentStatus, now)
-}
-
-func (a sessionRunnerAdapter) resolveDispatchOutcome(ctx context.Context, attempt types.DispatchAttempt, outcome dispatchOutcome) (types.IncidentPhaseStatus, types.AutomationIncidentStatus, error) {
-	action := types.AutomationPhaseTransitionComplete
-	phaseStatus := types.IncidentPhaseStatusCompleted
-	if outcome == dispatchOutcomeFailed {
-		action = types.AutomationPhaseTransitionEscalate
-		phaseStatus = types.IncidentPhaseStatusFailed
-	}
-
-	spec, ok, err := a.store.GetAutomation(ctx, attempt.AutomationID)
-	if err != nil {
-		return "", "", err
-	}
-	if ok {
-		if planPhase, found := findResponsePlanPhase(spec.ResponsePlan, attempt.Phase); found {
-			switch outcome {
-			case dispatchOutcomeCompleted:
-				if planPhase.OnSuccess != "" {
-					action = planPhase.OnSuccess
-				}
-			case dispatchOutcomeFailed:
-				if planPhase.OnFailure != "" {
-					action = planPhase.OnFailure
-				}
-			}
-		}
-	}
-
-	return phaseStatus, incidentStatusForPhaseTransition(action), nil
-}
-
-func findResponsePlanPhase(raw json.RawMessage, phaseName types.AutomationPhaseName) (types.AutomationPhasePlan, bool) {
-	normalized := types.NormalizeAutomationResponsePlanJSON(raw)
-	if len(normalized) == 0 {
-		return types.AutomationPhasePlan{}, false
-	}
-
-	var plan types.ResponsePlanV2
-	if err := json.Unmarshal(normalized, &plan); err != nil {
-		return types.AutomationPhasePlan{}, false
-	}
-	for _, phase := range plan.Phases {
-		if phase.Phase == phaseName {
-			return phase, true
-		}
-	}
-	return types.AutomationPhasePlan{}, false
-}
-
-func incidentStatusForPhaseTransition(action types.AutomationPhaseTransitionAction) types.AutomationIncidentStatus {
-	switch action {
-	case types.AutomationPhaseTransitionNextPhase:
-		return types.AutomationIncidentStatusQueued
-	case types.AutomationPhaseTransitionEscalate:
-		return types.AutomationIncidentStatusEscalated
-	case types.AutomationPhaseTransitionCancel:
-		return types.AutomationIncidentStatusCanceled
-	case types.AutomationPhaseTransitionComplete:
-		fallthrough
-	default:
-		return types.AutomationIncidentStatusResolved
-	}
-}
-
-func updateIncidentPhaseState(ctx context.Context, store *sqlite.Store, incidentID string, phaseName types.AutomationPhaseName, now time.Time, apply func(*types.IncidentPhaseState)) error {
-	if store == nil || strings.TrimSpace(incidentID) == "" {
-		return nil
-	}
-	phases, err := store.ListIncidentPhaseStates(ctx, incidentID)
-	if err != nil {
-		return err
-	}
-	for _, phase := range phases {
-		if phase.Phase != phaseName {
-			continue
-		}
-		apply(&phase)
-		phase.UpdatedAt = now
-		return store.UpsertIncidentPhaseState(ctx, phase)
-	}
-	return nil
-}
-
-func updateAutomationIncidentStatus(ctx context.Context, store *sqlite.Store, incidentID string, status types.AutomationIncidentStatus, now time.Time) error {
-	if store == nil || strings.TrimSpace(incidentID) == "" {
-		return nil
-	}
-	incident, ok, err := store.GetAutomationIncident(ctx, incidentID)
-	if err != nil || !ok {
-		return err
-	}
-	incident.Status = status
-	incident.UpdatedAt = now
-	return store.UpsertAutomationIncident(ctx, incident)
 }
 
 func (a sessionRunnerAdapter) currentTime() time.Time {

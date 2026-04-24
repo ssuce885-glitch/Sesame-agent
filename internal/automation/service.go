@@ -6,19 +6,16 @@ import (
 	"strings"
 	"time"
 
-	"go-agent/internal/skills"
 	"go-agent/internal/types"
 )
 
 var (
-	errServiceNotConfigured         = errors.New("automation service is not configured")
-	errMissingDispatchPlan          = &types.AutomationValidationError{Code: "missing_dispatch_plan", Message: "response_plan and delivery_policy are required"}
-	errMissingRuntimePolicy         = &types.AutomationValidationError{Code: "missing_runtime_policy", Message: "runtime_policy is required"}
-	errMissingAutomationID          = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "automation_id is required"}
-	errMissingConfirmation          = &types.AutomationValidationError{Code: "missing_confirmation", Message: "automation_apply requires confirmed=true after user review"}
-	errAutomationNotFound           = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "automation not found"}
-	errInvalidControlAction         = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "action must be pause or resume"}
-	errInvalidIncidentControlAction = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "action must be ack, close, reopen, or escalate"}
+	errServiceNotConfigured      = errors.New("automation service is not configured")
+	errMissingAutomationID       = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "automation_id is required"}
+	errMissingConfirmation       = &types.AutomationValidationError{Code: "missing_confirmation", Message: "automation_apply requires confirmed=true after user review"}
+	errAutomationNotFound        = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "automation not found"}
+	errInvalidControlAction      = &types.AutomationValidationError{Code: "invalid_automation_spec", Message: "action must be pause or resume"}
+	errManagedRuntimeUnsupported = &types.AutomationValidationError{Code: "unsupported_automation_mode", Message: "managed automation runtime is removed; only simple mode automations are supported"}
 )
 
 type Store interface {
@@ -27,18 +24,20 @@ type Store interface {
 	ListAutomations(context.Context, types.AutomationListFilter) ([]types.AutomationSpec, error)
 	DeleteAutomation(context.Context, string) (bool, error)
 	UpsertTriggerEvent(context.Context, types.TriggerEvent) error
-	UpsertAutomationIncident(context.Context, types.AutomationIncident) error
-	GetAutomationIncident(context.Context, string) (types.AutomationIncident, bool, error)
-	ListAutomationIncidents(context.Context, types.AutomationIncidentFilter) ([]types.AutomationIncident, error)
-	UpsertIncidentPhaseState(context.Context, types.IncidentPhaseState) error
 	UpsertAutomationHeartbeat(context.Context, types.AutomationHeartbeat) error
+	UpsertSimpleAutomationRun(context.Context, types.SimpleAutomationRun) error
+	GetSimpleAutomationRun(context.Context, string, string) (types.SimpleAutomationRun, bool, error)
 }
 
 type Service struct {
-	store              Store
-	watcher            watcherRuntimeManager
-	now                func() time.Time
-	skillCatalogLoader func(string) (skills.Catalog, error)
+	store         Store
+	watcher       watcherRuntimeManager
+	simpleRuntime *SimpleRuntime
+	now           func() time.Time
+}
+
+type automationHeartbeatStore interface {
+	ListAutomationHeartbeats(context.Context, types.AutomationHeartbeatFilter) ([]types.AutomationHeartbeat, error)
 }
 
 type watcherRuntimeManager interface {
@@ -69,18 +68,15 @@ func (s *Service) SetWatcherService(watcher watcherRuntimeManager) {
 	}
 }
 
-func (s *Service) SetSkillCatalogLoader(loader func(string) (skills.Catalog, error)) {
+func (s *Service) SetSimpleRuntime(runtime *SimpleRuntime) {
 	if s != nil {
-		s.skillCatalogLoader = loader
+		s.simpleRuntime = runtime
 	}
 }
 
 func (s *Service) Apply(ctx context.Context, spec types.AutomationSpec) (types.AutomationSpec, error) {
 	if s == nil || s.store == nil {
 		return types.AutomationSpec{}, errServiceNotConfigured
-	}
-	if err := validateResponsePlanDraftMode(spec.ResponsePlan); err != nil {
-		return types.AutomationSpec{}, err
 	}
 	spec = normalizeAutomationSpec(spec, s.currentTime())
 	if err := validateAutomationSpec(spec); err != nil {
@@ -113,10 +109,6 @@ func (s *Service) ApplyRequest(ctx context.Context, req types.ApplyAutomationReq
 	if s == nil || s.store == nil {
 		return types.AutomationSpec{}, errServiceNotConfigured
 	}
-	if err := validateResponsePlanDraftMode(req.Spec.ResponsePlan); err != nil {
-		return types.AutomationSpec{}, err
-	}
-	explicitChildAgentTemplateRefs := collectExplicitChildAgentTemplateReferences(req.Spec.ResponsePlan)
 	spec := normalizeAutomationSpec(req.Spec, s.currentTime())
 	if err := validateAutomationSpec(spec); err != nil {
 		return types.AutomationSpec{}, err
@@ -125,23 +117,6 @@ func (s *Service) ApplyRequest(ctx context.Context, req types.ApplyAutomationReq
 		return types.AutomationSpec{}, err
 	}
 	if err := ValidateAutomationScriptAssets(spec); err != nil {
-		return types.AutomationSpec{}, err
-	}
-	childAgentBundles, err := loadChildAgentTemplateBundles(spec, explicitChildAgentTemplateRefs)
-	if err != nil {
-		return types.AutomationSpec{}, err
-	}
-	if s.skillCatalogLoader != nil {
-		catalog, err := s.skillCatalogLoader(spec.WorkspaceRoot)
-		if err != nil {
-			return types.AutomationSpec{}, err
-		}
-		if err := validateChildAgentTemplateBundleRequiredSkills(childAgentBundles, catalog); err != nil {
-			return types.AutomationSpec{}, err
-		}
-	}
-	spec, err = backfillResponsePlanChildAgentTemplateCache(spec, childAgentBundles)
-	if err != nil {
 		return types.AutomationSpec{}, err
 	}
 	return s.Apply(ctx, spec)
@@ -214,149 +189,68 @@ func (s *Service) Delete(ctx context.Context, id string) (bool, error) {
 	if id == "" {
 		return false, nil
 	}
+	spec, ok, err := s.store.GetAutomation(ctx, id)
+	if err != nil || !ok {
+		return false, err
+	}
 	if s.watcher != nil {
 		if err := s.watcher.Delete(ctx, id); err != nil {
 			return false, err
 		}
 	}
-	return s.store.DeleteAutomation(ctx, id)
+	deleted, err := s.store.DeleteAutomation(ctx, id)
+	if err != nil || !deleted {
+		return deleted, err
+	}
+	if err := RemoveRoleBoundAutomationSource(spec.WorkspaceRoot, spec.Owner, spec.ID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-func (s *Service) ControlIncident(ctx context.Context, id string, action types.IncidentControlAction) (types.AutomationIncident, bool, error) {
+func (s *Service) EmitTrigger(ctx context.Context, req types.AutomationTriggerRequest) (types.TriggerEvent, error) {
 	if s == nil || s.store == nil {
-		return types.AutomationIncident{}, false, errServiceNotConfigured
-	}
-
-	action = normalizeIncidentControlAction(action)
-	switch action {
-	case types.IncidentControlActionAck, types.IncidentControlActionClose, types.IncidentControlActionReopen, types.IncidentControlActionEscalate:
-	default:
-		return types.AutomationIncident{}, false, errInvalidIncidentControlAction
-	}
-
-	incident, ok, err := s.store.GetAutomationIncident(ctx, strings.TrimSpace(id))
-	if err != nil || !ok {
-		return types.AutomationIncident{}, ok, err
-	}
-
-	switch action {
-	case types.IncidentControlActionAck:
-		switch incident.Status {
-		case types.AutomationIncidentStatusOpen, types.AutomationIncidentStatusSuppressed:
-			incident.Status = types.AutomationIncidentStatusQueued
-		}
-	case types.IncidentControlActionClose:
-		incident.Status = types.AutomationIncidentStatusClosed
-	case types.IncidentControlActionReopen:
-		incident.Status = types.AutomationIncidentStatusOpen
-	case types.IncidentControlActionEscalate:
-		incident.Status = types.AutomationIncidentStatusEscalated
-	}
-	incident.UpdatedAt = s.currentTime()
-	if err := s.store.UpsertAutomationIncident(ctx, incident); err != nil {
-		return types.AutomationIncident{}, false, err
-	}
-	return incident, true, nil
-}
-
-func (s *Service) EmitTrigger(ctx context.Context, req types.AutomationTriggerRequest) (types.AutomationIncident, error) {
-	if s == nil || s.store == nil {
-		return types.AutomationIncident{}, errServiceNotConfigured
+		return types.TriggerEvent{}, errServiceNotConfigured
 	}
 	req = normalizeTriggerRequest(req)
 	if req.AutomationID == "" {
-		return types.AutomationIncident{}, errMissingAutomationID
+		return types.TriggerEvent{}, errMissingAutomationID
 	}
 	spec, ok, err := s.store.GetAutomation(ctx, req.AutomationID)
 	if err != nil {
-		return types.AutomationIncident{}, err
+		return types.TriggerEvent{}, err
 	}
 	if !ok {
-		return types.AutomationIncident{}, errAutomationNotFound
+		return types.TriggerEvent{}, errAutomationNotFound
+	}
+	if !strings.EqualFold(strings.TrimSpace(string(spec.Mode)), string(types.AutomationModeSimple)) {
+		return types.TriggerEvent{}, errManagedRuntimeUnsupported
 	}
 
 	now := s.currentTime()
 	trigger := buildTriggerEvent(spec, req, now)
 	if trigger.SignalKind == "" {
-		return types.AutomationIncident{}, &types.AutomationValidationError{
+		return types.TriggerEvent{}, &types.AutomationValidationError{
 			Code:    "invalid_automation_spec",
 			Message: "signal_kind is required",
 		}
 	}
 	if len(trigger.Payload) > 0 && !isValidJSONValue(trigger.Payload) {
-		return types.AutomationIncident{}, &types.AutomationValidationError{
+		return types.TriggerEvent{}, &types.AutomationValidationError{
 			Code:    "invalid_automation_spec",
 			Message: "payload must be valid JSON",
 		}
 	}
 	if err := s.store.UpsertTriggerEvent(ctx, trigger); err != nil {
-		return types.AutomationIncident{}, err
+		return types.TriggerEvent{}, err
 	}
-
-	dedupeWindow := dedupeWindowForSpec(spec)
-	if strings.TrimSpace(trigger.DedupeKey) != "" {
-		incidents, err := s.store.ListAutomationIncidents(ctx, types.AutomationIncidentFilter{
-			AutomationID: spec.ID,
-			Status:       types.AutomationIncidentStatusOpen,
-		})
-		if err != nil {
-			return types.AutomationIncident{}, err
-		}
-		for _, incident := range incidents {
-			if !incidentMatchesTriggerDedupe(incident, trigger.DedupeKey, trigger.ObservedAt, dedupeWindow) {
-				continue
-			}
-			incident.SignalKind = trigger.SignalKind
-			incident.Source = trigger.Source
-			if trigger.Summary != "" {
-				incident.Summary = trigger.Summary
-			}
-			if len(trigger.Payload) > 0 {
-				incident.Payload = trigger.Payload
-			}
-			incident.ObservedAt = trigger.ObservedAt
-			incident.UpdatedAt = now
-			if err := s.store.UpsertAutomationIncident(ctx, incident); err != nil {
-				return types.AutomationIncident{}, err
-			}
-			trigger.IncidentID = incident.ID
-			trigger.UpdatedAt = now
-			if err := s.store.UpsertTriggerEvent(ctx, trigger); err != nil {
-				return types.AutomationIncident{}, err
-			}
-			return incident, nil
-		}
+	if s.simpleRuntime == nil {
+		return types.TriggerEvent{}, errServiceNotConfigured
 	}
-
-	incident := types.AutomationIncident{
-		ID:            types.NewID("incident"),
-		AutomationID:  spec.ID,
-		WorkspaceRoot: spec.WorkspaceRoot,
-		Status:        types.AutomationIncidentStatusOpen,
-		SignalKind:    trigger.SignalKind,
-		Source:        trigger.Source,
-		Summary:       trigger.Summary,
-		Payload:       trigger.Payload,
-		ObservedAt:    trigger.ObservedAt,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+	if err := s.simpleRuntime.HandleMatch(ctx, spec, trigger); err != nil {
+		return types.TriggerEvent{}, err
 	}
-	if err := s.store.UpsertAutomationIncident(ctx, incident); err != nil {
-		return types.AutomationIncident{}, err
-	}
-
-	for _, phase := range buildIncidentPhaseStates(spec, incident, now) {
-		if err := s.store.UpsertIncidentPhaseState(ctx, phase); err != nil {
-			return types.AutomationIncident{}, err
-		}
-	}
-
-	trigger.IncidentID = incident.ID
-	trigger.UpdatedAt = now
-	if err := s.store.UpsertTriggerEvent(ctx, trigger); err != nil {
-		return types.AutomationIncident{}, err
-	}
-	return incident, nil
+	return trigger, nil
 }
 
 func (s *Service) RecordHeartbeat(ctx context.Context, req types.AutomationHeartbeatRequest) (types.AutomationHeartbeat, error) {
@@ -410,29 +304,22 @@ func (s *Service) RecordHeartbeat(ctx context.Context, req types.AutomationHeart
 	return heartbeat, nil
 }
 
-func (s *Service) GetIncident(ctx context.Context, id string) (types.AutomationIncident, bool, error) {
-	if s == nil || s.store == nil {
-		return types.AutomationIncident{}, false, errServiceNotConfigured
-	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return types.AutomationIncident{}, false, nil
-	}
-	return s.store.GetAutomationIncident(ctx, id)
-}
-
-func (s *Service) ListIncidents(ctx context.Context, filter types.AutomationIncidentFilter) ([]types.AutomationIncident, error) {
-	if s == nil || s.store == nil {
-		return nil, errServiceNotConfigured
-	}
-	return s.store.ListAutomationIncidents(ctx, normalizeIncidentFilter(filter))
-}
-
 func (s *Service) GetWatcher(ctx context.Context, id string) (types.AutomationWatcherRuntime, bool, error) {
 	if s == nil || s.watcher == nil {
 		return types.AutomationWatcherRuntime{}, false, nil
 	}
 	return s.watcher.Get(ctx, strings.TrimSpace(id))
+}
+
+func (s *Service) ListHeartbeats(ctx context.Context, filter types.AutomationHeartbeatFilter) ([]types.AutomationHeartbeat, error) {
+	if s == nil || s.store == nil {
+		return nil, errServiceNotConfigured
+	}
+	heartbeatStore, ok := s.store.(automationHeartbeatStore)
+	if !ok {
+		return nil, errServiceNotConfigured
+	}
+	return heartbeatStore.ListAutomationHeartbeats(ctx, normalizeHeartbeatFilter(filter))
 }
 
 func (s *Service) ReinstallWatcher(ctx context.Context, id string) (types.AutomationWatcherRuntime, bool, error) {
@@ -462,6 +349,12 @@ func (s *Service) currentTime() time.Time {
 }
 
 func validateAutomationSpec(spec types.AutomationSpec) error {
+	if types.NormalizeAutomationID(spec.ID) == "" {
+		return &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: "automation_id must match ^[a-z][a-z0-9_-]{0,127}$",
+		}
+	}
 	if strings.TrimSpace(spec.Title) == "" {
 		return &types.AutomationValidationError{
 			Code:    "invalid_automation_spec",
@@ -486,22 +379,19 @@ func validateAutomationSpec(spec types.AutomationSpec) error {
 			Message: "state must be active or paused",
 		}
 	}
-	if !isPresentJSON(spec.ResponsePlan) || !isPresentJSON(spec.DeliveryPolicy) {
-		return errMissingDispatchPlan
+	if !strings.EqualFold(strings.TrimSpace(string(spec.Mode)), string(types.AutomationModeSimple)) {
+		return errManagedRuntimeUnsupported
 	}
-	if !isPresentJSON(spec.RuntimePolicy) {
-		return errMissingRuntimePolicy
-	}
-	if !isJSONObject(spec.ResponsePlan) || !isJSONObject(spec.DeliveryPolicy) || !isJSONObject(spec.RuntimePolicy) {
+	if types.NormalizeAutomationOwner(spec.Owner) == "" {
 		return &types.AutomationValidationError{
 			Code:    "invalid_automation_spec",
-			Message: "response_plan, delivery_policy, and runtime_policy must be JSON objects",
+			Message: "owner must be main_agent or role:<role_id> for simple mode automations",
 		}
 	}
-	if !isJSONObject(spec.IncidentPolicy) || !isJSONObject(spec.VerificationPlan) || !isJSONObject(spec.EscalationPolicy) || !isJSONObject(spec.WatcherLifecycle) || !isJSONObject(spec.RetriggerPolicy) || !isJSONObject(spec.RunPolicy) {
+	if !isJSONObject(spec.WatcherLifecycle) || !isJSONObject(spec.RetriggerPolicy) {
 		return &types.AutomationValidationError{
 			Code:    "invalid_automation_spec",
-			Message: "incident_policy, verification_plan, escalation_policy, watcher_lifecycle, retrigger_policy, and run_policy must be JSON objects",
+			Message: "watcher_lifecycle and retrigger_policy must be JSON objects",
 		}
 	}
 	for _, signal := range spec.Signals {
@@ -510,6 +400,12 @@ func validateAutomationSpec(spec types.AutomationSpec) error {
 				Code:    "invalid_automation_spec",
 				Message: "signals payloads must be valid JSON",
 			}
+		}
+	}
+	if err := ValidateRoleBoundAutomationSpec(spec); err != nil {
+		return &types.AutomationValidationError{
+			Code:    "invalid_automation_spec",
+			Message: err.Error(),
 		}
 	}
 	return nil

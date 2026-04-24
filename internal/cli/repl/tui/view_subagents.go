@@ -29,8 +29,7 @@ func (m *Model) renderSubagentsContent(width int) string {
 
 	parts = append(parts,
 		renderLineSection("Runs", formatRuns(graph.Runs), "No runs recorded for this workspace.", width),
-		renderLineSection("Incidents", formatIncidents(graph.Incidents), "No automation incidents.", width),
-		renderLineSection("Dispatch Attempts", formatDispatches(graph.DispatchAttempts), "No dispatch attempts.", width),
+		renderLineSection("Diagnostics", formatDiagnostics(graph.Diagnostics), "No runtime diagnostics.", width),
 		renderLineSection("Tasks", formatTasks(graph.Tasks), "No runtime tasks.", width),
 		renderLineSection("Background Workers", formatChildAgents(m.reportingOverview.ChildAgents), "No background workers registered.", width),
 		renderLineSection("Report Groups", formatReportGroups(m.reportingOverview.ReportGroups), "No report groups configured.", width),
@@ -44,8 +43,8 @@ func (m *Model) renderSubagentsContent(width int) string {
 }
 
 func subagentsMeta(graph RuntimeGraph, overview ReportingOverview) string {
-	return fmt.Sprintf("%d runs · %d incidents · %d dispatches · %d tasks · %d workers · %d groups · %d agent results · %d digests · %d tool runs · %d worktrees · %d permissions",
-		len(graph.Runs), len(graph.Incidents), len(graph.DispatchAttempts), len(graph.Tasks),
+	return fmt.Sprintf("%d runs · %d diagnostics · %d tasks · %d workers · %d groups · %d agent results · %d digests · %d tool runs · %d worktrees · %d permissions",
+		len(graph.Runs), len(graph.Diagnostics), len(graph.Tasks),
 		len(overview.ChildAgents), len(overview.ReportGroups), len(overview.ChildResults),
 		len(overview.Digests), len(graph.ToolRuns), len(graph.Worktrees), len(graph.PermissionRequests))
 }
@@ -84,6 +83,24 @@ func formatRuns(runs []Run) []string {
 		}
 		if err := clampText(r.Error, 120); err != "" {
 			parts = append(parts, "error: "+err)
+		}
+		lines = append(lines, strings.Join(parts, " · "))
+	}
+	return lines
+}
+
+func formatDiagnostics(diagnostics []RuntimeDiagnostic) []string {
+	lines := make([]string, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		parts := []string{firstNonEmpty(diagnostic.Severity, diagnostic.EventType)}
+		if label := clampText(firstNonEmpty(diagnostic.Summary, diagnostic.Reason, diagnostic.ID), 120); label != "" {
+			parts = append(parts, label)
+		}
+		if category := trim(diagnostic.Category); category != "" {
+			parts = append(parts, category)
+		}
+		if asset := firstNonEmpty(trim(diagnostic.AssetKind), trim(diagnostic.AssetID)); asset != "" {
+			parts = append(parts, asset)
 		}
 		lines = append(lines, strings.Join(parts, " · "))
 	}
@@ -213,33 +230,6 @@ func formatWorktrees(worktrees []Worktree) []string {
 		parts := []string{w.State, firstNonEmpty(w.WorktreeBranch, shortID(w.ID))}
 		if path := trim(w.WorktreePath); path != "" {
 			parts = append(parts, path)
-		}
-		lines = append(lines, strings.Join(parts, " · "))
-	}
-	return lines
-}
-
-func formatIncidents(incidents []Incident) []string {
-	lines := make([]string, 0, len(incidents))
-	for _, i := range incidents {
-		parts := []string{i.Status, firstNonEmpty(i.Summary, i.AutomationID, i.ID)}
-		if id := trim(i.ID); id != "" {
-			parts = append(parts, shortID(id))
-		}
-		lines = append(lines, strings.Join(parts, " · "))
-	}
-	return lines
-}
-
-func formatDispatches(dispatches []DispatchAttempt) []string {
-	lines := make([]string, 0, len(dispatches))
-	for _, d := range dispatches {
-		parts := []string{d.Status, firstNonEmpty(d.OutcomeSummary, d.AutomationID, d.DispatchID)}
-		if id := trim(d.DispatchID); id != "" {
-			parts = append(parts, shortID(id))
-		}
-		if tid := trim(d.TaskID); tid != "" {
-			parts = append(parts, shortID(tid))
 		}
 		lines = append(lines, strings.Join(parts, " · "))
 	}

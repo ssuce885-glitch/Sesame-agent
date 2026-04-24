@@ -178,6 +178,7 @@ func (roleCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		return ToolExecutionResult{}, err
 	}
 	input := decoded.Input.(RoleUpsertInput)
+	input.Prompt = appendRolePromptBaseline(input.Prompt)
 	spec, err := service.Create(execCtx.WorkspaceRoot, roles.UpsertInput{
 		RoleID:      input.RoleID,
 		DisplayName: input.DisplayName,
@@ -258,6 +259,7 @@ func (roleUpdateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		return ToolExecutionResult{}, err
 	}
 	input := decoded.Input.(RoleUpsertInput)
+	input.Prompt = appendRolePromptBaseline(input.Prompt)
 	spec, err := service.Update(execCtx.WorkspaceRoot, roles.UpsertInput{
 		RoleID:      input.RoleID,
 		DisplayName: input.DisplayName,
@@ -278,6 +280,32 @@ func (roleUpdateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		Data:        output,
 		PreviewText: fmt.Sprintf("Updated role %s", output.RoleID),
 	}, nil
+}
+
+func appendRolePromptBaseline(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	sections := []string{prompt}
+	if !strings.Contains(prompt, "Specialist boundaries") {
+		sections = append(sections, strings.TrimSpace(`# Specialist boundaries
+- Work only within your described specialist scope.
+- Do not create test data in the workspace unless explicitly asked.
+- Report outcomes concisely back to main_parent.`))
+	}
+	if !strings.Contains(prompt, "Automation boundaries") {
+		sections = append(sections, strings.TrimSpace(`# Automation boundaries
+- Create Automation Mode: when explicitly asked to define or change an automation owned by this role, activate automation-standard-behavior and automation-normalizer before using automation_create_simple.
+- Automation Control Mode: when explicitly asked to pause or resume an automation, activate automation-standard-behavior before using automation_control.
+- Owner Task Mode: when running after a watcher match, execute the assigned automation_goal and report the result; do not call automation_create_simple, automation_control, edit automation definitions, watcher scripts, or role configuration.
+- Status/Report Mode: when asked for status or diagnosis, use read-only inspection such as automation_query and do not repair or mutate state unless explicitly asked.`))
+	}
+	out := make([]string, 0, len(sections))
+	for _, section := range sections {
+		section = strings.TrimSpace(section)
+		if section != "" {
+			out = append(out, section)
+		}
+	}
+	return strings.Join(out, "\n\n")
 }
 
 func (roleCreateTool) MapModelResult(output ToolExecutionResult) ModelToolResult {

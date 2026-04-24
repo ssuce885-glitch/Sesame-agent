@@ -50,15 +50,6 @@ type SetupCommand struct {
 
 type DaemonCommand struct{}
 
-type IncidentCommand struct {
-	Action        string
-	ID            string
-	AutomationID  string
-	WorkspaceRoot string
-	Status        string
-	Limit         int
-}
-
 type Options struct {
 	ShowStatus     bool
 	PrintOnly      bool
@@ -72,7 +63,6 @@ type Options struct {
 	Skill          *SkillCommand
 	Automation     *AutomationCommand
 	Trigger        *TriggerCommand
-	Incident       *IncidentCommand
 	Permissions    *PermissionCommand
 	Setup          *SetupCommand
 	Daemon         *DaemonCommand
@@ -94,7 +84,7 @@ func ParseOptions(args []string) (Options, error) {
 		case "trigger":
 			return parseTriggerOptions(args[1:])
 		case "incident":
-			return parseIncidentOptions(args[1:])
+			return Options{}, fmt.Errorf("incident commands are removed in hard cutover")
 		case "permissions":
 			return parsePermissionOptions(args[1:])
 		}
@@ -298,47 +288,6 @@ func parseTriggerOptions(args []string) (Options, error) {
 	}
 
 	return Options{Trigger: cmd}, nil
-}
-
-func parseIncidentOptions(args []string) (Options, error) {
-	if len(args) == 0 {
-		return Options{}, fmt.Errorf("usage: sesame incident <list|get|ack|close|reopen|escalate> ...")
-	}
-
-	cmd := &IncidentCommand{Action: strings.ToLower(strings.TrimSpace(args[0]))}
-	fs := flag.NewFlagSet("sesame incident "+cmd.Action, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	switch cmd.Action {
-	case "list":
-		fs.StringVar(&cmd.AutomationID, "automation-id", "", "optional automation filter")
-		fs.StringVar(&cmd.WorkspaceRoot, "workspace-root", "", "optional workspace root filter")
-		fs.StringVar(&cmd.Status, "status", "", "optional incident status filter")
-		fs.IntVar(&cmd.Limit, "limit", 0, "optional limit")
-	case "get", "ack", "close", "reopen", "escalate":
-	default:
-		return Options{}, fmt.Errorf("unknown incident command %q", cmd.Action)
-	}
-	if err := fs.Parse(reorderInterspersedArgs(args[1:])); err != nil {
-		return Options{}, err
-	}
-
-	rest := fs.Args()
-	switch cmd.Action {
-	case "list":
-		if len(rest) != 0 {
-			return Options{}, fmt.Errorf("usage: sesame incident list [--automation-id <id>] [--workspace-root <path>] [--status <status>] [--limit <n>]")
-		}
-		if cmd.Limit < 0 {
-			return Options{}, fmt.Errorf("usage: sesame incident list [--automation-id <id>] [--workspace-root <path>] [--status <status>] [--limit <n>]")
-		}
-	case "get", "ack", "close", "reopen", "escalate":
-		if len(rest) != 1 {
-			return Options{}, fmt.Errorf("usage: sesame incident %s <id>", cmd.Action)
-		}
-		cmd.ID = strings.TrimSpace(rest[0])
-	}
-
-	return Options{Incident: cmd}, nil
 }
 
 func parsePermissionOptions(args []string) (Options, error) {

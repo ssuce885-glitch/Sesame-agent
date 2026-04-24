@@ -16,6 +16,7 @@ import type {
 
 export interface ChatMessage {
   id: string;
+  seq?: number;
   turnId?: string;
   kind:
     | "user_message"
@@ -72,8 +73,19 @@ export const initialState: ChatState = {
 
 export function reduceChat(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
-    case "init":
-      return { ...state, messages: action.messages, latestSeq: action.latestSeq };
+    case "init": {
+      // Merge: use timeline as the base, but preserve any SSE messages
+      // that arrived after the timeline's latestSeq (they aren't in the
+      // timeline snapshot yet, so dropping them would lose live data).
+      const tlLatestSeq = action.latestSeq;
+      const liveAfterInit = state.messages.filter((m) =>
+        shouldKeepLiveMessage(m, action.messages, tlLatestSeq),
+      );
+      const merged = liveAfterInit.length > 0
+        ? [...action.messages, ...liveAfterInit]
+        : action.messages;
+      return { ...state, messages: merged, latestSeq: Math.max(tlLatestSeq, state.latestSeq) };
+    }
     case "connection":
       return { ...state, connection: action.value };
     case "event":
@@ -81,6 +93,48 @@ export function reduceChat(state: ChatState, action: ChatAction): ChatState {
     default:
       return state;
   }
+}
+
+function shouldKeepLiveMessage(
+  msg: ChatMessage,
+  timelineMessages: ChatMessage[],
+  timelineLatestSeq: number,
+): boolean {
+  if ((msg.seq ?? 0) <= timelineLatestSeq) {
+    return false;
+  }
+  return !timelineMessages.some((timelineMsg) => sameLogicalMessage(msg, timelineMsg));
+}
+
+function sameLogicalMessage(a: ChatMessage, b: ChatMessage): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  if (a.turnId && b.turnId && a.turnId === b.turnId) {
+    return true;
+  }
+  if (a.kind === "tool_call" && a.toolCallId && a.toolCallId === b.toolCallId) {
+    return true;
+  }
+  if (
+    a.kind === "permission_block" &&
+    a.permissionRequestId &&
+    a.permissionRequestId === b.permissionRequestId
+  ) {
+    return true;
+  }
+  return a.kind === "user_message" && a.text === b.text;
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (predicate(items[i])) return i;
+  }
+  return -1;
+}
+
+function turnMatches(msg: ChatMessage, turnId: string | undefined): boolean {
+  return !turnId || !msg.turnId || msg.turnId === turnId;
 }
 
 function applyEvent(state: ChatState, event: ServerEvent): ChatState {
@@ -95,6 +149,7 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       const msgs = [...state.messages];
       msgs.push({
         id: event.id,
+        seq: event.seq,
         turnId: event.turn_id,
         kind: "user_message",
         text,
@@ -108,12 +163,17 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
     case "assistant.delta": {
       const payload = event.payload as DeltaPayload;
       const msgs = [...state.messages];
-      let idx = msgs.length - 1;
-      while (idx >= 0 && (msgs[idx].kind !== "assistant_message" || msgs[idx].streaming !== true))
-        idx--;
+      const idx = findLastIndex(
+        msgs,
+        (msg) =>
+          msg.kind === "assistant_message" &&
+          msg.streaming === true &&
+          turnMatches(msg, event.turn_id),
+      );
       if (idx < 0) {
         msgs.push({
-          id: `a_${event.seq}_${crypto.randomUUID()}`,
+          id: `a_${event.seq}_${event.turn_id ?? crypto.randomUUID()}`,
+          seq: event.seq,
           turnId: event.turn_id,
           kind: "assistant_message",
           text: payload.text,
@@ -122,6 +182,7 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       } else {
         msgs[idx] = {
           ...msgs[idx],
+          seq: event.seq,
           text: (msgs[idx].text ?? "") + payload.text,
           streaming: true,
         };
@@ -131,10 +192,12 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
 
     case "assistant.completed": {
       const msgs = [...state.messages];
-      let idx = msgs.length - 1;
-      while (idx >= 0 && msgs[idx].kind !== "assistant_message") idx--;
+      const idx = findLastIndex(
+        msgs,
+        (msg) => msg.kind === "assistant_message" && turnMatches(msg, event.turn_id),
+      );
       if (idx >= 0) {
-        msgs[idx] = { ...msgs[idx], streaming: false };
+        msgs[idx] = { ...msgs[idx], seq: event.seq, streaming: false };
       }
       return { ...state, messages: msgs, latestSeq: nextSeq };
     }
@@ -142,15 +205,24 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
     case "tool.started": {
       const p = event.payload as ToolEventPayload;
       const msgs = [...state.messages];
-      msgs.push({
-        id: `tc_${p.tool_call_id}`,
+      const idx = p.tool_call_id
+        ? msgs.findIndex((m) => m.kind === "tool_call" && m.toolCallId === p.tool_call_id)
+        : -1;
+      const nextToolCall: ChatMessage = {
+        id: p.tool_call_id ? `tc_${p.tool_call_id}` : `tc_${event.seq}`,
+        seq: event.seq,
         turnId: event.turn_id,
         kind: "tool_call",
         toolCallId: p.tool_call_id,
         toolName: p.tool_name,
         argsPreview: p.arguments,
         status: "running",
-      });
+      };
+      if (idx >= 0) {
+        msgs[idx] = { ...msgs[idx], ...nextToolCall };
+      } else {
+        msgs.push(nextToolCall);
+      }
       return { ...state, messages: msgs, latestSeq: nextSeq };
     }
 
@@ -163,6 +235,7 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       if (idx >= 0) {
         msgs[idx] = {
           ...msgs[idx],
+          seq: event.seq,
           status: p.is_error ? "failed" : "completed",
           resultPreview: p.result_preview,
           isError: p.is_error,
@@ -179,6 +252,7 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       const msgs = [...state.messages];
       msgs.push({
         id: `perm_${p.request_id ?? event.seq}`,
+        seq: event.seq,
         turnId: event.turn_id,
         kind: "permission_block",
         permissionRequestId: p.request_id,
@@ -200,6 +274,7 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       if (idx >= 0) {
         msgs[idx] = {
           ...msgs[idx],
+          seq: event.seq,
           status: p.decision,
           text: `Permission ${p.decision}: ${p.requested_profile}`,
           decision: p.decision,
@@ -213,6 +288,7 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       const msgs = [...state.messages];
       msgs.push({
         id: `notice_${event.seq}`,
+        seq: event.seq,
         turnId: event.turn_id,
         kind: "notice",
         text: p.text,
@@ -225,6 +301,7 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       const msgs = [...state.messages];
       msgs.push({
         id: `error_${event.seq}`,
+        seq: event.seq,
         turnId: event.turn_id,
         kind: "error",
         text: p.message,
@@ -236,6 +313,7 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       const msgs = [...state.messages];
       msgs.push({
         id: `notice_${event.seq}`,
+        seq: event.seq,
         turnId: event.turn_id,
         kind: "notice",
         text: "Turn interrupted. Waiting for further input.",
@@ -282,6 +360,7 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       const msgs = [...state.messages];
       msgs.push({
         id: `notice_${event.seq}`,
+        seq: event.seq,
         turnId: event.turn_id,
         kind: "notice",
         text: "Context was compacted by the system.",
@@ -367,77 +446,112 @@ export function useSessionEvents(
   onConnectionChange: (status: ChatState["connection"]) => void,
 ) {
   const esRef = useRef<EventSource | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const afterSeqRef = useRef(afterSeq);
+  const onEventRef = useRef(onEvent);
+  const onConnectionChangeRef = useRef(onConnectionChange);
 
   const connect = useCallback(() => {
     if (!sessionId) return;
-    onConnectionChange("connecting");
-    const es = openEventStream(sessionId, afterSeq);
+    if (reconnectTimerRef.current != null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    esRef.current?.close();
+    onConnectionChangeRef.current("connecting");
+    const es = openEventStream(sessionId, afterSeqRef.current);
     esRef.current = es;
 
-    es.addEventListener("open", () => onConnectionChange("open"));
+    es.addEventListener("open", () => onConnectionChangeRef.current("open"));
     es.addEventListener("error", () => {
-      onConnectionChange("reconnecting");
+      onConnectionChangeRef.current("reconnecting");
       es.close();
+      if (esRef.current === es) {
+        esRef.current = null;
+      }
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+        connect();
+      }, 1000);
     });
 
-    es.addEventListener("message", (e: MessageEvent) => {
+    const dispatchEvent = (e: MessageEvent) => {
       if (!e.data) return;
       try {
-        const event: ServerEvent = JSON.parse(e.data);
-        onEvent(event);
+        onEventRef.current(JSON.parse(e.data));
       } catch {
         // ignore parse errors
       }
+    };
+
+    es.addEventListener("message", (e: MessageEvent) => {
+      dispatchEvent(e);
     });
 
     // Named SSE events
     es.addEventListener("turn.started", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("assistant.delta", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("assistant.completed", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("tool.started", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("tool.completed", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("permission.requested", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("permission.resolved", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("system.notice", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("turn.failed", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("turn.interrupted", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("session_memory.started", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("session_memory.completed", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("session_memory.failed", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
     es.addEventListener("context.compacted", (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data)); } catch {}
+      dispatchEvent(e);
     });
-  }, [sessionId, afterSeq, onEvent, onConnectionChange]);
+  }, [sessionId]);
+
+  useEffect(() => {
+    afterSeqRef.current = afterSeq;
+  }, [afterSeq]);
+
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  }, [onEvent]);
+
+  useEffect(() => {
+    onConnectionChangeRef.current = onConnectionChange;
+  }, [onConnectionChange]);
 
   useEffect(() => {
     connect();
     return () => {
+      if (reconnectTimerRef.current != null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       esRef.current?.close();
       esRef.current = null;
     };

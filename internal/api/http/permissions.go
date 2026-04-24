@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"go-agent/internal/automation"
 	rolectx "go-agent/internal/roles"
 	"go-agent/internal/session"
 	"go-agent/internal/types"
@@ -17,20 +16,14 @@ import (
 type permissionStore interface {
 	GetPermissionRequest(context.Context, string) (types.PermissionRequest, bool, error)
 	GetTurnContinuationByPermissionRequest(context.Context, string) (types.TurnContinuation, bool, error)
+	ListPendingTurnContinuations(context.Context) ([]types.TurnContinuation, error)
 	GetTurn(context.Context, string) (types.Turn, bool, error)
 	GetSession(context.Context, string) (types.Session, bool, error)
 	ResolveSpecialistRoleID(context.Context, string, string) (string, error)
 	GetToolRun(context.Context, string) (types.ToolRun, bool, error)
-	ListDispatchAttempts(context.Context, types.DispatchAttemptFilter) ([]types.DispatchAttempt, error)
-	ListPendingAutomationPermissions(context.Context, string) ([]types.PendingAutomationPermission, error)
-	FindDispatchAttemptByTaskID(context.Context, string) (types.DispatchAttempt, bool, error)
-	GetAutomationWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
-	ListAutomationWatcherHolds(context.Context, string) ([]types.AutomationWatcherHold, error)
 	UpsertPermissionRequest(context.Context, types.PermissionRequest) error
-	UpsertDispatchAttempt(context.Context, types.DispatchAttempt) error
 	UpsertTurnContinuation(context.Context, types.TurnContinuation) error
 	UpsertToolRun(context.Context, types.ToolRun) error
-	ReplaceAutomationWatcherHolds(context.Context, string, string, []types.AutomationWatcherHold) error
 	CommitPermissionDecision(context.Context, types.PermissionRequest, types.TurnContinuation, *types.ToolRun, string) error
 	CommitPermissionResume(context.Context, string, string, types.TurnContinuation, *types.ToolRun) error
 	UpdateSessionPermissionProfile(context.Context, string, string) (types.Session, bool, error)
@@ -65,7 +58,7 @@ func handleListPendingPermissions(deps Dependencies) http.HandlerFunc {
 			return
 		}
 
-		items, err := store.ListPendingAutomationPermissions(r.Context(), workspaceRoot)
+		items, err := listPendingAutomationPermissions(r.Context(), store, workspaceRoot)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
@@ -124,26 +117,62 @@ func findPendingAutomationPermission(ctx context.Context, store permissionStore,
 	if !found || continuation.State != types.TurnContinuationStatePending {
 		return types.PendingAutomationPermission{}, false, nil
 	}
-	attempts, err := store.ListDispatchAttempts(ctx, types.DispatchAttemptFilter{
-		Status: types.DispatchAttemptStatusAwaitingApproval,
-	})
+	sessionRow, found, err := store.GetSession(ctx, continuation.SessionID)
 	if err != nil {
 		return types.PendingAutomationPermission{}, false, err
 	}
-	for _, attempt := range attempts {
-		if strings.TrimSpace(attempt.PermissionRequestID) != requestID {
+	if !found {
+		return types.PendingAutomationPermission{}, false, nil
+	}
+	return types.PendingAutomationPermission{
+		RequestID:          requestID,
+		WorkspaceRoot:      strings.TrimSpace(sessionRow.WorkspaceRoot),
+		PreferredSessionID: strings.TrimSpace(continuation.SessionID),
+	}, true, nil
+}
+
+func listPendingAutomationPermissions(ctx context.Context, store permissionStore, workspaceRoot string) ([]types.PendingAutomationPermission, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	continuations, err := store.ListPendingTurnContinuations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]types.PendingAutomationPermission, 0, len(continuations))
+	seen := make(map[string]struct{}, len(continuations))
+	for _, continuation := range continuations {
+		requestID := strings.TrimSpace(continuation.PermissionRequestID)
+		if requestID == "" {
 			continue
 		}
-		return types.PendingAutomationPermission{
+		if _, ok := seen[requestID]; ok {
+			continue
+		}
+		request, ok, err := store.GetPermissionRequest(ctx, requestID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || request.Status != types.PermissionRequestStatusRequested {
+			continue
+		}
+		sessionRow, ok, err := store.GetSession(ctx, continuation.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		rowWorkspaceRoot := strings.TrimSpace(sessionRow.WorkspaceRoot)
+		if workspaceRoot != "" && workspaceRoot != rowWorkspaceRoot {
+			continue
+		}
+		seen[requestID] = struct{}{}
+		items = append(items, types.PendingAutomationPermission{
 			RequestID:          requestID,
-			WorkspaceRoot:      attempt.WorkspaceRoot,
-			AutomationID:       attempt.AutomationID,
-			IncidentID:         attempt.IncidentID,
-			DispatchID:         attempt.DispatchID,
-			PreferredSessionID: attempt.PreferredSessionID,
-		}, true, nil
+			WorkspaceRoot:      rowWorkspaceRoot,
+			PreferredSessionID: strings.TrimSpace(continuation.SessionID),
+		})
 	}
-	return types.PendingAutomationPermission{}, false, nil
+	return items, nil
 }
 
 func handlePermissionDecision(deps Dependencies) http.HandlerFunc {
@@ -381,9 +410,6 @@ func resumeCommittedPermissionDecision(
 		}); ok {
 			interrupter.InterruptTurn(sessionRow.ID, turn.ID)
 		}
-		return false, err
-	}
-	if err := automation.RestoreDispatchAfterApprovalResume(ctx, store, continuation.TaskID, request.ID, now); err != nil {
 		return false, err
 	}
 	if toolRun != nil {

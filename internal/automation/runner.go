@@ -18,7 +18,7 @@ import (
 
 type watcherRuntimeClient interface {
 	GetAutomation(context.Context, string) (types.AutomationSpec, error)
-	EmitTrigger(context.Context, types.TriggerEmitRequest) (types.AutomationIncident, error)
+	EmitTrigger(context.Context, types.TriggerEmitRequest) (types.TriggerEvent, error)
 	RecordHeartbeat(context.Context, types.TriggerHeartbeatRequest) (types.AutomationHeartbeat, error)
 }
 
@@ -164,14 +164,15 @@ func (r *WatcherRunner) Run(ctx context.Context, automationID, watcherID, stateP
 				}
 			}
 
-			if _, err := r.client.EmitTrigger(ctx, types.TriggerEmitRequest{
+			emitReq := types.TriggerEmitRequest{
 				AutomationID: automationID,
 				SignalKind:   signal.SignalKind,
 				Source:       signal.Source,
 				Summary:      summary,
 				Payload:      payload,
 				ObservedAt:   now,
-			}); err != nil {
+			}
+			if _, err := r.client.EmitTrigger(ctx, emitReq); err != nil {
 				return err
 			}
 
@@ -243,6 +244,9 @@ func (r *WatcherRunner) currentTime() time.Time {
 func compileWatcherSignals(spec types.AutomationSpec) ([]compiledWatcherSignal, watcherLifecycleConfig, error) {
 	lifecycle := watcherLifecycleConfig{}
 	_ = json.Unmarshal(spec.WatcherLifecycle, &lifecycle)
+	if strings.EqualFold(strings.TrimSpace(string(spec.Mode)), string(types.AutomationModeSimple)) && strings.TrimSpace(lifecycle.AfterDispatch) == "" {
+		lifecycle.AfterDispatch = "pause"
+	}
 	retrigger := watcherRetriggerPolicy{}
 	_ = json.Unmarshal(spec.RetriggerPolicy, &retrigger)
 

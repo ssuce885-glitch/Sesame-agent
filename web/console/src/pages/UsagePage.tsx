@@ -17,8 +17,8 @@ export function UsagePage({ sessionId }: UsagePageProps) {
       {/* Page title */}
       <div>
         <h1
-          className="text-lg font-semibold"
-          style={{ color: "var(--color-text)" }}
+          className="text-xl font-bold"
+          style={{ color: "var(--color-text)", borderBottom: "2px solid var(--color-accent)", paddingBottom: 8, display: "inline-block" }}
         >
           {t("usage.title")}
         </h1>

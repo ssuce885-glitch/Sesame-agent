@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Update is the main message dispatcher for the TUI model.
@@ -70,22 +70,65 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // Msg types — exposed so stream.go can construct them.
 type (
-	tuiStreamReadyMsg      struct{ SessionID string; Ch <-chan tea.Msg; Cancel context.CancelFunc }
-	QueuePromptMsg         struct{ Prompt string }
-	tuiStreamEventMsg      struct{ SessionID string; Event Event }
-	tuiStreamClosedMsg    struct{ SessionID string }
-	tuiSubmitTurnMsg      struct{ Err error }
-	tuiInterruptMsg       struct{ Err error }
-	tuiPermissionDecisionMsg struct{ RequestID string; Err error }
-	tuiHistoryMsg         struct{ Resp ListContextHistoryResponse; Err error }
-	tuiContextSwitchMsg    struct{ Head ContextHead; Timeline SessionTimelineResponse; Notice string; Err error }
-	tuiStatusMsg          struct{ Status StatusResponse; Err error; Announce bool }
-	tuiMailboxMsg         struct{ Resp MailboxResponse; Err error }
-	tuiCronListMsg        struct{ Resp CronListResponse; Err error; AllWorkspaces bool }
-	tuiCronJobMsg         struct{ Job CronJob; Err error; Notice string }
-	tuiCronDeleteMsg      struct{ JobID string; Err error; Notice string }
-	tuiRuntimeGraphMsg    struct{ Resp RuntimeGraphResponse; Err error }
-	tuiReportingOverviewMsg struct{ Resp ReportingOverview; Err error }
+	tuiStreamReadyMsg struct {
+		SessionID string
+		Ch        <-chan tea.Msg
+		Cancel    context.CancelFunc
+	}
+	QueuePromptMsg    struct{ Prompt string }
+	tuiStreamEventMsg struct {
+		SessionID string
+		Event     Event
+	}
+	tuiStreamClosedMsg       struct{ SessionID string }
+	tuiSubmitTurnMsg         struct{ Err error }
+	tuiInterruptMsg          struct{ Err error }
+	tuiPermissionDecisionMsg struct {
+		RequestID string
+		Err       error
+	}
+	tuiHistoryMsg struct {
+		Resp ListContextHistoryResponse
+		Err  error
+	}
+	tuiContextSwitchMsg struct {
+		Head     ContextHead
+		Timeline SessionTimelineResponse
+		Notice   string
+		Err      error
+	}
+	tuiStatusMsg struct {
+		Status   StatusResponse
+		Err      error
+		Announce bool
+	}
+	tuiMailboxMsg struct {
+		Resp MailboxResponse
+		Err  error
+	}
+	tuiCronListMsg struct {
+		Resp          CronListResponse
+		Err           error
+		AllWorkspaces bool
+	}
+	tuiCronJobMsg struct {
+		Job    CronJob
+		Err    error
+		Notice string
+	}
+	tuiCronDeleteMsg struct {
+		JobID  string
+		Err    error
+		Notice string
+	}
+	tuiRuntimeGraphMsg struct {
+		Resp RuntimeGraphResponse
+		Err  error
+	}
+	tuiReportingOverviewMsg struct {
+		Resp ReportingOverview
+		Err  error
+	}
 	tuiWorkspaceRefreshTickMsg struct{}
 )
 
@@ -146,9 +189,21 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewport.HalfViewDown()
 		return m, nil
 	case "up":
+		if strings.Contains(m.textarea.Value(), "\n") {
+			var cmd tea.Cmd
+			m.textarea, cmd = m.textarea.Update(msg)
+			m.layout()
+			return m, cmd
+		}
 		m.viewport.LineUp(m.viewport.MouseWheelDelta)
 		return m, nil
 	case "down":
+		if strings.Contains(m.textarea.Value(), "\n") {
+			var cmd tea.Cmd
+			m.textarea, cmd = m.textarea.Update(msg)
+			m.layout()
+			return m, cmd
+		}
 		m.viewport.LineDown(m.viewport.MouseWheelDelta)
 		return m, nil
 	case "home":

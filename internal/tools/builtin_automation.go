@@ -3,26 +3,14 @@ package tools
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"go-agent/internal/types"
 )
 
-type automationApplyTool struct{}
 type automationGetTool struct{}
 type automationListTool struct{}
 type automationControlTool struct{}
-type incidentAckTool struct{}
-type incidentControlTool struct{}
-type incidentGetTool struct{}
-type incidentListTool struct{}
-
-type AutomationApplyInput struct {
-	Confirmed bool                    `json:"confirmed"`
-	Spec      types.AutomationSpec    `json:"spec"`
-	Assets    []types.AutomationAsset `json:"assets,omitempty"`
-}
 
 type AutomationGetInput struct {
 	AutomationID string `json:"automation_id"`
@@ -39,30 +27,6 @@ type AutomationControlInput struct {
 	Action       types.AutomationControlAction `json:"action"`
 }
 
-type IncidentAckInput struct {
-	IncidentID string `json:"incident_id"`
-}
-
-type IncidentControlInput struct {
-	IncidentID string                      `json:"incident_id"`
-	Action     types.IncidentControlAction `json:"action"`
-}
-
-type IncidentGetInput struct {
-	IncidentID string `json:"incident_id"`
-}
-
-type IncidentListInput struct {
-	WorkspaceRoot string                         `json:"workspace_root,omitempty"`
-	AutomationID  string                         `json:"automation_id,omitempty"`
-	Status        types.AutomationIncidentStatus `json:"status,omitempty"`
-	Limit         int                            `json:"limit,omitempty"`
-}
-
-func (automationApplyTool) IsEnabled(execCtx ExecContext) bool {
-	return execCtx.AutomationService != nil
-}
-
 func (automationGetTool) IsEnabled(execCtx ExecContext) bool {
 	return execCtx.AutomationService != nil
 }
@@ -72,43 +36,9 @@ func (automationListTool) IsEnabled(execCtx ExecContext) bool {
 }
 
 func (automationControlTool) IsEnabled(execCtx ExecContext) bool {
-	return execCtx.AutomationService != nil
-}
-
-func (incidentAckTool) IsEnabled(execCtx ExecContext) bool {
-	return execCtx.AutomationService != nil
-}
-
-func (incidentControlTool) IsEnabled(execCtx ExecContext) bool {
-	return execCtx.AutomationService != nil
-}
-
-func (incidentGetTool) IsEnabled(execCtx ExecContext) bool {
-	return execCtx.AutomationService != nil
-}
-
-func (incidentListTool) IsEnabled(execCtx ExecContext) bool {
-	return execCtx.AutomationService != nil
-}
-
-func (automationApplyTool) Definition() Definition {
-	return Definition{
-		Name:        "automation_apply",
-		Description: "Advanced path: persist an explicitly authored low-level automation spec plus workspace assets after user approval. Prefer high-level builder tools such as automation_create_detector for detector-first native flows; use this tool for precise schema control, migration-style edits, or other expert-level overrides. For script-backed automations, save detector facts in scripts/detect.sh and child-agent strategy in child_agents/<phase>/<agent_id>/{strategy.json,prompt.md,skills.json} before applying.",
-		InputSchema: objectSchema(map[string]any{
-			"confirmed": map[string]any{
-				"type":        "boolean",
-				"description": "Must be true after the user has reviewed and approved the final automation draft.",
-			},
-			"spec": automationSpecInputSchema(),
-			"assets": map[string]any{
-				"type":        "array",
-				"items":       automationAssetSchema(),
-				"description": "Workspace files to persist before advanced-schema validation, including scripts/detect.sh and child_agents/<phase>/<agent_id> asset bundles.",
-			},
-		}, "confirmed", "spec"),
-		OutputSchema: automationSpecOutputSchema(),
-	}
+	return execCtx.AutomationService != nil &&
+		!isAutomationOwnerTaskMode(execCtx) &&
+		hasActiveSkills(execCtx, "automation-standard-behavior")
 }
 
 func (automationGetTool) Definition() Definition {
@@ -172,40 +102,9 @@ func (automationControlTool) Definition() Definition {
 	}
 }
 
-func (automationApplyTool) IsConcurrencySafe() bool   { return false }
 func (automationGetTool) IsConcurrencySafe() bool     { return true }
 func (automationListTool) IsConcurrencySafe() bool    { return true }
 func (automationControlTool) IsConcurrencySafe() bool { return false }
-
-func (automationApplyTool) Decode(call Call) (DecodedCall, error) {
-	rawConfirmed, ok := call.Input["confirmed"]
-	if !ok {
-		return DecodedCall{}, fmt.Errorf("confirmed is required")
-	}
-	confirmed, ok := rawConfirmed.(bool)
-	if !ok {
-		return DecodedCall{}, fmt.Errorf("confirmed must be a boolean")
-	}
-	raw, ok := call.Input["spec"]
-	if !ok {
-		return DecodedCall{}, fmt.Errorf("spec is required")
-	}
-	var spec types.AutomationSpec
-	if err := decodeAutomationJSON(raw, &spec); err != nil {
-		return DecodedCall{}, fmt.Errorf("spec must be a valid automation spec: %w", err)
-	}
-	var assets []types.AutomationAsset
-	if rawAssets, ok := call.Input["assets"]; ok {
-		if err := decodeAutomationJSON(rawAssets, &assets); err != nil {
-			return DecodedCall{}, fmt.Errorf("assets must be valid automation assets: %w", err)
-		}
-	}
-	return DecodedCall{Call: call, Input: AutomationApplyInput{
-		Confirmed: confirmed,
-		Spec:      spec,
-		Assets:    assets,
-	}}, nil
-}
 
 func (automationGetTool) Decode(call Call) (DecodedCall, error) {
 	input := AutomationGetInput{AutomationID: strings.TrimSpace(call.StringInput("automation_id"))}
@@ -257,15 +156,6 @@ func (automationControlTool) Decode(call Call) (DecodedCall, error) {
 	return DecodedCall{Call: call, Input: input}, nil
 }
 
-func (t automationApplyTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
-	decoded, err := t.Decode(call)
-	if err != nil {
-		return Result{}, err
-	}
-	output, err := t.ExecuteDecoded(ctx, decoded, execCtx)
-	return output.Result, err
-}
-
 func (t automationGetTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
 	decoded, err := t.Decode(call)
 	if err != nil {
@@ -291,50 +181,6 @@ func (t automationControlTool) Execute(ctx context.Context, call Call, execCtx E
 	}
 	output, err := t.ExecuteDecoded(ctx, decoded, execCtx)
 	return output.Result, err
-}
-
-func (automationApplyTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
-	service, err := requireAutomationService(execCtx)
-	if err != nil {
-		return ToolExecutionResult{}, err
-	}
-	input, _ := decoded.Input.(AutomationApplyInput)
-	input.Spec.WorkspaceRoot = collapseAutomationAssetBundleWorkspaceRoot(input.Spec.WorkspaceRoot, execCtx.WorkspaceRoot)
-	spec, err := service.ApplyRequest(ctx, types.ApplyAutomationRequest{
-		Confirmed: input.Confirmed,
-		Spec:      input.Spec,
-		Assets:    input.Assets,
-	})
-	if err != nil {
-		return ToolExecutionResult{}, err
-	}
-	return ToolExecutionResult{
-		Result: Result{
-			Text:      mustJSON(spec),
-			ModelText: mustJSON(spec),
-		},
-		Data: spec,
-	}, nil
-}
-
-func collapseAutomationAssetBundleWorkspaceRoot(specRoot, sessionRoot string) string {
-	specRoot = strings.TrimSpace(specRoot)
-	sessionRoot = strings.TrimSpace(sessionRoot)
-	if specRoot == "" || sessionRoot == "" {
-		return specRoot
-	}
-	rel, err := filepath.Rel(sessionRoot, specRoot)
-	if err != nil {
-		return specRoot
-	}
-	rel = filepath.ToSlash(rel)
-	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
-		return specRoot
-	}
-	if rel == "automations" || strings.HasPrefix(rel, "automations/") {
-		return sessionRoot
-	}
-	return specRoot
 }
 
 func (automationGetTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
@@ -388,6 +234,12 @@ func (automationControlTool) ExecuteDecoded(ctx context.Context, decoded Decoded
 	if err != nil {
 		return ToolExecutionResult{}, err
 	}
+	if err := rejectAutomationControlFromOwnerTask(execCtx); err != nil {
+		return ToolExecutionResult{}, err
+	}
+	if err := requireActiveSkills(execCtx, "automation-standard-behavior"); err != nil {
+		return ToolExecutionResult{}, err
+	}
 	input, _ := decoded.Input.(AutomationControlInput)
 	spec, ok, err := service.Control(ctx, input.AutomationID, input.Action)
 	if err != nil {
@@ -405,8 +257,11 @@ func (automationControlTool) ExecuteDecoded(ctx context.Context, decoded Decoded
 	}, nil
 }
 
-func (automationApplyTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
-	return defaultStructuredModelResult(output)
+func rejectAutomationControlFromOwnerTask(execCtx ExecContext) error {
+	if !isAutomationOwnerTaskMode(execCtx) {
+		return nil
+	}
+	return fmt.Errorf("automation_control is not allowed in Owner Task Mode; execute the automation_goal and report the result instead of pausing or resuming automations")
 }
 
 func (automationGetTool) MapModelResult(output ToolExecutionResult) ModelToolResult {

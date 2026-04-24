@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   createBrowserRouter,
   RouterProvider,
@@ -43,6 +43,11 @@ export function AppShell() {
   const { data: currentSession } = useCurrentSession();
   const { data: workspace } = useWorkspaceMeta();
   const activeSessionId = currentSession?.id ?? null;
+  const [sidebarConnection, setSidebarConnection] = useState<"idle" | "connecting" | "open" | "reconnecting" | "error">("idle");
+
+  const handleConnectionChange = useCallback((value: "idle" | "connecting" | "open" | "reconnecting" | "error") => {
+    setSidebarConnection(value);
+  }, []);
 
   // Auto-enter chat once the current session is ready.
   useEffect(() => {
@@ -55,6 +60,12 @@ export function AppShell() {
   const isRuntime = location.pathname === "/runtime";
   const isUsage = location.pathname === "/usage";
   const isRoles = location.pathname === "/roles";
+
+  useEffect(() => {
+    if (!isChat) {
+      setSidebarConnection("idle");
+    }
+  }, [isChat]);
 
   return (
     <div
@@ -124,9 +135,9 @@ export function AppShell() {
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar workspaceName={workspace?.name} workspaceRoot={workspace?.workspace_root} />
+        <Sidebar workspaceName={workspace?.name} workspaceRoot={workspace?.workspace_root} connection={sidebarConnection} />
         <main className="flex-1 flex flex-col overflow-hidden">
-          {isChat && <ChatPage sessionId={activeSessionId ?? ""} />}
+          {isChat && <ChatPage sessionId={activeSessionId ?? ""} onConnectionChange={handleConnectionChange} />}
           {isRuntime && <RuntimePage sessionId={activeSessionId ?? ""} />}
           {isUsage && <UsagePage sessionId={activeSessionId ?? undefined} />}
           {isRoles && <RolesPage />}
@@ -197,16 +208,24 @@ function NavTab({
   active: boolean;
   children: React.ReactNode;
 }) {
+  const [hovered, setHovered] = useState(false);
   return (
     <Link
       to={to}
-      className="px-4 py-1.5 rounded-lg text-sm font-medium transition-colors"
+      className="px-4 py-1.5 rounded-lg text-sm font-medium"
       style={{
-        backgroundColor: active ? "var(--color-accent)" : "transparent",
+        backgroundColor: active
+          ? "var(--color-accent)"
+          : hovered
+          ? "rgba(255,255,255,0.06)"
+          : "transparent",
         color: active ? "#fff" : "var(--color-text-muted)",
         textDecoration: "none",
         border: active ? "none" : "1px solid transparent",
+        transition: "background-color 0.15s, color 0.15s",
       }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       {children}
     </Link>

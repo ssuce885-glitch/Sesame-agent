@@ -116,7 +116,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	scriptCommand := scriptArgs || opts.Automation != nil || opts.Trigger != nil || opts.Incident != nil
+	scriptCommand := scriptArgs || opts.Automation != nil || opts.Trigger != nil || opts.Permissions != nil
 
 	if opts.ShowVersion {
 		_, err := fmt.Fprintln(a.Stdout, Version)
@@ -167,7 +167,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 	if opts.ShowStatus {
 		return a.runStatus(ctx, cfg)
 	}
-	if opts.Automation != nil || opts.Trigger != nil || opts.Incident != nil {
+	if opts.Automation != nil || opts.Trigger != nil || opts.Permissions != nil {
 		return a.runScriptCommand(ctx, opts, cfg)
 	}
 	if err := ensureRuntimeConfigured(a.Stdin, a.Stdout, cfg); err != nil {
@@ -265,7 +265,7 @@ func (a App) runScriptCommand(ctx context.Context, opts Options, cfg config.Conf
 	case opts.Permissions != nil:
 		runErr = runPermissionsCommand(ctx, a.Stdout, runtimeClient, *opts.Permissions)
 	default:
-		runErr = runIncidentCommand(ctx, a.Stdout, runtimeClient, *opts.Incident)
+		runErr = errors.New("unknown script command")
 	}
 
 	if !a.shouldStopDaemonAfterRun(opts) {

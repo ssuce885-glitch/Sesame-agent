@@ -99,11 +99,10 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 		if err != nil {
 			return DelegateToRoleOutput{}, err
 		}
-		spec, ok := catalog.ByID[targetRole]
+		_, ok := catalog.ByID[targetRole]
 		if !ok {
 			return DelegateToRoleOutput{}, fmt.Errorf("target_role %q is currently unavailable", targetRole)
 		}
-		activatedSkillNames = append([]string(nil), spec.SkillNames...)
 	}
 
 	description := strings.TrimSpace(in.Reason)

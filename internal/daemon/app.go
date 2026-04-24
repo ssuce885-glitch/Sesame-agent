@@ -9,10 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	httpapi "go-agent/internal/api/http"
-	"go-agent/internal/automation"
 	"go-agent/internal/config"
 	"go-agent/internal/model"
 	"go-agent/internal/store/artifacts"
@@ -89,10 +87,6 @@ func Run(ctx context.Context) error {
 		}()
 	}
 
-	dispatcher := automation.NewDispatcher(runtime.Store, automationTaskLauncher{
-		store:   runtime.Store,
-		manager: runtime.TaskManager,
-	}, automation.DispatcherConfig{Watcher: runtime.WatcherService})
 	go func() {
 		if err := runtime.SchedulerService.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("scheduler loop exited", "error", err)
@@ -112,12 +106,6 @@ func Run(ctx context.Context) error {
 			})
 		}()
 	}
-	go func() {
-		runSupervisedLoop(ctx, "automation_dispatcher", time.Second, dispatcher.Tick, func(_ context.Context, err error) {
-			slog.Error("automation dispatcher tick failed", "error", err)
-		})
-	}()
-
 	handler := httpapi.NewRouter(buildHTTPDependencies(cfg, runtime.Store, runtime.Bus, runtime.SessionManager, runtime.SchedulerService, runtime.AutomationService))
 
 	slog.Info("sesame daemon listening", "addr", cfg.Addr)

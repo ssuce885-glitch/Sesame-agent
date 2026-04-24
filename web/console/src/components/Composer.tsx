@@ -2,24 +2,34 @@ import { useState, useRef, useCallback } from "react";
 import { useI18n } from "../i18n";
 
 interface ComposerProps {
-  onSend: (message: string) => void;
+  onSend: (message: string) => void | Promise<void>;
   disabled?: boolean;
 }
 
 export function Composer({ onSend, disabled }: ComposerProps) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
+  const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isDisabled = disabled || sending;
+  const canSend = value.trim() !== "" && !isDisabled;
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
-    if (!trimmed || disabled) return;
-    setValue("");
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
+    if (!trimmed || isDisabled) return;
+    setSending(true);
+    try {
+      await onSend(trimmed);
+      setValue("");
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+      }
+    } catch {
+      textareaRef.current?.focus();
+    } finally {
+      setSending(false);
     }
-    onSend(trimmed);
-  }, [value, disabled, onSend]);
+  }, [value, isDisabled, onSend]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -50,7 +60,7 @@ export function Composer({ onSend, disabled }: ComposerProps) {
         onChange={handleChange}
         onKeyDown={handleKeyDown}
         placeholder={t("composer.placeholder")}
-        disabled={disabled}
+        disabled={isDisabled}
         rows={1}
         className="flex-1 resize-none rounded-lg px-4 py-3 text-sm"
         style={{
@@ -66,17 +76,20 @@ export function Composer({ onSend, disabled }: ComposerProps) {
       />
       <button
         onClick={handleSubmit}
-        disabled={disabled || !value.trim()}
+        disabled={!canSend}
         className="w-full rounded-lg px-4 py-2 text-sm font-medium sm:w-auto"
         style={{
-          backgroundColor: disabled ? "var(--color-border)" : "var(--color-accent)",
+          backgroundColor: canSend ? "var(--color-accent)" : "var(--color-border)",
           color: "#fff",
           border: "none",
-          cursor: disabled ? "not-allowed" : "pointer",
-          opacity: disabled ? 0.5 : 1,
+          cursor: canSend ? "pointer" : "not-allowed",
+          opacity: canSend ? 1 : 0.5,
+          transition: "opacity 0.15s, filter 0.15s",
         }}
+        onMouseEnter={(e) => { if (canSend) e.currentTarget.style.filter = "brightness(0.9)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.filter = "none"; }}
       >
-        {disabled ? t("composer.sending") : t("composer.send")}
+        {isDisabled ? t("composer.sending") : t("composer.send")}
       </button>
     </div>
   );

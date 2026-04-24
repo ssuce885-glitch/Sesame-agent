@@ -301,45 +301,12 @@ export interface RuntimeWorktree {
   updated_at?: string;
 }
 
-export interface RuntimeIncident {
-  id: string;
-  automation_id: string;
-  workspace_root: string;
-  status: string;
-  signal_kind?: string;
-  source?: string;
-  summary?: string;
-  observed_at?: string;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export interface RuntimeDispatchAttempt {
-  dispatch_id: string;
-  incident_id: string;
-  automation_id: string;
-  workspace_root: string;
-  phase: string;
-  attempt: number;
-  status: string;
-  outcome?: string;
-  outcome_summary?: string;
-  task_id?: string;
-  child_agent_id?: string;
-  permission_request_id?: string;
-  activated_skill_names?: string[];
-  created_at?: string;
-  updated_at?: string;
-}
-
 export interface RuntimeGraph {
   runs: Array<{ id: string; session_id: string; turn_id?: string; state: string }>;
   plans: Array<{ id: string; run_id: string; state: string; title?: string }>;
   tasks: RuntimeTask[];
   tool_runs: RuntimeToolRun[];
   worktrees: RuntimeWorktree[];
-  incidents: RuntimeIncident[];
-  dispatch_attempts: RuntimeDispatchAttempt[];
   permission_requests: RuntimePermissionRequest[];
   diagnostics?: RuntimeDiagnostic[];
 }

@@ -49,17 +49,6 @@ func (s combinedEventSink) FinalizeTurn(ctx context.Context, usage *types.TurnUs
 	return s.finalizer.FinalizeTurn(ctx, usage, events)
 }
 
-func mustParseDetectorSignalForPrompt(incident types.AutomationIncident) types.AutomationDetectorSignal {
-	detectorSignal, err := automation.ParseAutomationDetectorSignalPayload(incident.Payload)
-	if err != nil {
-		return types.AutomationDetectorSignal{
-			Summary: strings.TrimSpace(incident.Summary),
-			Facts:   map[string]any{},
-		}
-	}
-	return detectorSignal
-}
-
 func ensureDataDir(path string) error {
 	return os.MkdirAll(path, 0o755)
 }
@@ -88,13 +77,15 @@ func buildHTTPDependencies(cfg config.Config, store *sqlite.Store, bus *stream.B
 	if automationService == nil && store != nil {
 		automationService = automation.NewService(store)
 	}
+	roleService := rolectx.NewServiceWithGlobalRoot(cfg.Paths.GlobalRoot)
+	roleService.SetAutomationCleanupService(automationService)
 	return httpapi.Dependencies{
 		Bus:           bus,
 		Store:         store,
 		Manager:       manager,
 		Scheduler:     schedulerService,
 		Automation:    automationService,
-		RoleService:   rolectx.NewService(),
+		RoleService:   roleService,
 		Status:        buildStatusPayload(cfg),
 		ConsoleRoot:   filepath.Join("web", "console", "dist"),
 		WorkspaceRoot: cfg.Paths.WorkspaceRoot,

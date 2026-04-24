@@ -19,8 +19,10 @@ const (
 	discordIngressStatusFinalPostFailed  = "final_post_failed"
 	discordIngressStatusRuntimeFailed    = "runtime_failed_without_parent_reply"
 	discordIngressStatusSubmitFailed     = "submit_failed"
+	discordIngressStatusCancelled        = "cancelled"
 
 	defaultReplyWaitTimeout = 120 * time.Second
+	statusUpdateTimeout     = 5 * time.Second
 )
 
 type bridgeRuntimeStore interface {
@@ -139,9 +141,22 @@ func (b *Bridge) handleReplyWaitError(ctx context.Context, msg AcceptedMessage, 
 		b.watchLateParentReply(msg, sessionID, turnID)
 		return joinErrors(waitErr, statusErr, replyErr)
 	}
+	if errors.Is(waitErr, context.Canceled) {
+		statusErr := b.setIngressStatusAfterCancel(msg.DiscordMessageID, discordIngressStatusCancelled, waitErr.Error())
+		return joinErrors(waitErr, statusErr)
+	}
 	statusErr := b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusRuntimeFailed, waitErr.Error())
 	replyErr := postGenericReply(ctx, b.replies, msg.ChannelID, msg.DiscordMessageID, genericReplyRuntime)
 	return joinErrors(waitErr, statusErr, replyErr)
+}
+
+func (b *Bridge) setIngressStatusAfterCancel(discordMessageID, status, errorMessage string) error {
+	if b.state == nil {
+		return errors.New("discord bridge state store is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), statusUpdateTimeout)
+	defer cancel()
+	return b.state.SetDiscordIngressStatus(ctx, discordMessageID, status, errorMessage)
 }
 
 func (b *Bridge) watchLateParentReply(msg AcceptedMessage, sessionID, turnID string) {
