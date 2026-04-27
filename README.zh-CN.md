@@ -22,6 +22,7 @@ Sesame 是一个本地优先的个人助理 runtime，用于管理 workspace 范
 - 内置 shell、文件、补丁、搜索和任务委托等工具
 - 基于 task 的 specialist delegation，并通过 report delivery 回到主对话
 - 带 skill gating 的 role automations：watcher asset -> owner role task -> main agent report -> policy loop
+- 用脚本承担高频低成本扫描，只在 watcher 输出需要 agent 处理的信号时才进入模型工作
 - role-owned automation source files、watcher contract validation 和 runtime inspection
 - 用于 chat、runtime、roles 和 usage 的 Web Console
 - 可选 Discord ingress，用于远程接入同一套 workspace runtime
@@ -32,6 +33,7 @@ Sesame 适合那些以本地 workspace 为中心、并且需要 assistant 在工
 
 - **个人 workspace 操作**：让主 session 检查文件、运行命令、更新本地资产、总结 runtime 状态，或基于已有上下文继续处理。
 - **长期 role 分工**：为研究 intake、日志分诊、发布检查、workspace 维护等长期职责创建 specialist role。委托出去的工作会在该 role 的持久 session 中执行，并把结果 report 回主对话。
+- **低成本信号扫描**：用普通脚本做高频、确定性的检查，比如轮询信息源、检查日志、查看本地文件或探测外部状态页。脚本先过滤日常噪音，只有发现值得处理的信号时才触发模型。
 - **Role-owned automation**：让 role 拥有 `roles/<role_id>/automations/<automation_id>/` 下的 watcher scripts。watcher 检测到信号后，Sesame 只派发一个 owner-role task，并把结果交付给 main agent。
 - **Discord 远程跟进**：当你不在终端前时，可以通过 Discord 进入同一个 workspace runtime，同时仍然让执行和状态保留在本地。
 - **Runtime 检查和恢复**：使用 Web Console 查看 chats、reports、tasks、roles、automation runs 和 usage，在工作流需要诊断或清理时更容易定位问题。
@@ -164,6 +166,8 @@ role watcher script
 ```
 
 watcher 只负责检测。当 watcher 上报 `needs_agent` 时，Sesame 会暂停该 watcher 的本轮调度，为这次信号只派发一个任务给 owning role，等待 task 结果，把 report 交付给 main agent，然后根据 automation policy 决定恢复、暂停或升级。
+
+这个设计是为了让扫描变得廉价。watcher 可以是很小的 shell、Python 或其它本地脚本，负责确定性检查并输出结构化 `script_status` JSON。常规的“没有变化”运行不需要进入模型 turn；只有脚本发现需要判断、综合、修复或跟进的信号时，才走 LLM 处理链路。
 
 Automation 创建被显式 gating：
 

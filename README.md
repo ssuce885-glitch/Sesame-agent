@@ -22,6 +22,7 @@ It keeps chat, tool execution, background tasks, automation, reports, and runtim
 - Built-in tools for shell, file work, patching, search, and task delegation
 - Task-backed specialist delegation with reports returned to the main conversation
 - Skill-gated role automations with a watcher asset -> owner role task -> main agent report -> policy loop
+- Cheap script-based scanning for frequent checks, with model work only when a watcher emits a signal that needs an agent
 - Role-owned automation source files, watcher contract validation, and runtime inspection
 - Web console for chat, runtime state, roles, and usage
 - Optional Discord ingress for remote workspace interaction
@@ -32,6 +33,7 @@ Sesame is useful when work is centered on a local workspace and the assistant ne
 
 - **Personal workspace operations**: Ask the main session to inspect files, run commands, update local assets, summarize runtime state, or continue from previous context.
 - **Role-based recurring work**: Create specialist roles for durable responsibilities such as research intake, log triage, release checks, or workspace maintenance. Delegated work runs in that role's persistent session and reports back to the main conversation.
+- **Cheap signal scanning**: Use plain scripts for frequent deterministic checks, such as polling feeds, inspecting logs, checking local files, or probing external status pages. The script filters routine noise; the model is invoked only when the script reports something worth handling.
 - **Role-owned automation**: Let a role own watcher scripts under `roles/<role_id>/automations/<automation_id>/`. When a watcher detects a signal, Sesame dispatches one owner-role task and delivers the result to the main agent.
 - **Remote follow-up through Discord**: Use Discord as an ingress path into the same workspace runtime when you are away from the terminal, while keeping execution and state local.
 - **Runtime inspection and recovery**: Use the web console to review chats, reports, tasks, roles, automation runs, and usage when a workflow needs diagnosis or cleanup.
@@ -164,6 +166,8 @@ role watcher script
 ```
 
 The watcher is only responsible for detection. When it reports `needs_agent`, Sesame pauses that watcher run, dispatches exactly one task to the owning role, waits for the task result, reports to the main agent, then resumes or pauses according to the automation policy.
+
+This is designed to make scanning cheap. A watcher can run as a small shell, Python, or other local script that performs deterministic checks and exits with structured `script_status` JSON. Normal "nothing changed" runs do not need a model turn. The LLM path is reserved for the moments where the script has found a signal that needs judgment, synthesis, repair, or follow-up work.
 
 Automation creation is intentionally gated:
 
