@@ -171,7 +171,7 @@ Automation 创建被显式 gating：
 - `internal/task`
   后台 task 模型和执行
 - `internal/tools`
-  内置工具、工具运行时、权限门禁和执行控制
+  内置工具、工具运行时、能力门禁和执行控制
 - `internal/automation`
   watcher、simple owner-task automation 和 automation 生命周期
 - `internal/reporting`

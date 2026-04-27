@@ -6,7 +6,7 @@ Use this checklist when reviewing automation behavior, prompts, or generated pla
 
 - What mode is the current turn in: create automation, owner task, or status/report?
 - Did the behavior stay inside that mode?
-- Did the model cross from report mode into repair mode without permission?
+- Did the model cross from report mode into repair mode outside the requested scope?
 
 ## Ownership Check
 

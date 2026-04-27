@@ -171,7 +171,7 @@ This keeps creation, runtime execution, and status/report turns separated so a w
 - `internal/task`
   Background task model and execution
 - `internal/tools`
-  Built-in tools, tool runtime, permission gates, and execution control
+  Built-in tools, tool runtime, capability gates, and execution control
 - `internal/automation`
   Watchers, simple owner-task automation, and automation lifecycle
 - `internal/reporting`

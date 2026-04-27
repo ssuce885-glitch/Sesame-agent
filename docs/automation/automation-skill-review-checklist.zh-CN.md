@@ -6,7 +6,7 @@
 
 - 当前 turn 属于哪种模式：create automation、owner task 还是 status/report？
 - 实际行为有没有保持在该模式内？
-- 有没有在未获授权时从 report 模式漂移到 repair 模式？
+- 有没有在请求范围外从 report 模式漂移到 repair 模式？
 
 ## 所有权检查
 
