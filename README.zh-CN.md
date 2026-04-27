@@ -26,6 +26,24 @@ Sesame 是一个本地优先的个人助理 runtime，用于管理 workspace 范
 - 用于 chat、runtime、roles 和 usage 的 Web Console
 - 可选 Discord ingress，用于远程接入同一套 workspace runtime
 
+## 工作场景
+
+Sesame 适合那些以本地 workspace 为中心、并且需要 assistant 在工具、角色、任务和自动化之间持续保留状态的工作。
+
+- **个人 workspace 操作**：让主 session 检查文件、运行命令、更新本地资产、总结 runtime 状态，或基于已有上下文继续处理。
+- **长期 role 分工**：为研究 intake、日志分诊、发布检查、workspace 维护等长期职责创建 specialist role。委托出去的工作会在该 role 的持久 session 中执行，并把结果 report 回主对话。
+- **Role-owned automation**：让 role 拥有 `roles/<role_id>/automations/<automation_id>/` 下的 watcher scripts。watcher 检测到信号后，Sesame 只派发一个 owner-role task，并把结果交付给 main agent。
+- **Discord 远程跟进**：当你不在终端前时，可以通过 Discord 进入同一个 workspace runtime，同时仍然让执行和状态保留在本地。
+- **Runtime 检查和恢复**：使用 Web Console 查看 chats、reports、tasks、roles、automation runs 和 usage，在工作流需要诊断或清理时更容易定位问题。
+
+示例请求：
+
+```text
+让 research role 每个工作日扫描这些来源，并报告重要变化。
+当这个 watcher 检测到失败任务时，让 owning role 检查 workspace 并报告原因。
+总结今天这个 workspace 里发生了什么，并列出仍在运行的后台任务。
+```
+
 ## 快速开始
 
 ### 环境要求
