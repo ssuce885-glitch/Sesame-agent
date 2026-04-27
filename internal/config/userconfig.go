@@ -22,6 +22,7 @@ type UserConfig struct {
 	SystemPromptFile               string              `json:"system_prompt_file"`
 	Anthropic                      UserConfigAnthropic `json:"anthropic"`
 	OpenAI                         UserConfigOpenAI    `json:"openai"`
+	Vision                         UserConfigVision    `json:"vision"`
 	Skills                         UserConfigSkills    `json:"skills"`
 	Discord                        UserConfigDiscord   `json:"discord"`
 	MaxToolSteps                   int                 `json:"max_tool_steps"`
@@ -32,6 +33,7 @@ type UserConfig struct {
 	MaxCompactionPasses            int                 `json:"max_compaction_passes"`
 	ResetAnthropic                 bool                `json:"-"`
 	ResetOpenAI                    bool                `json:"-"`
+	ResetVision                    bool                `json:"-"`
 	SetDiscordEnabled              bool                `json:"-"`
 	SetDiscordMessageContentIntent bool                `json:"-"`
 	SetDiscordLogIgnoredMessages   bool                `json:"-"`
@@ -53,6 +55,13 @@ type UserConfigOpenAI struct {
 	APIKey  string `json:"api_key"`
 	BaseURL string `json:"base_url"`
 	Model   string `json:"model"`
+}
+
+type UserConfigVision struct {
+	Provider string `json:"provider"`
+	APIKey   string `json:"api_key"`
+	BaseURL  string `json:"base_url"`
+	Model    string `json:"model"`
 }
 
 type UserConfigSkills struct {
@@ -344,6 +353,47 @@ func userConfigPatchRoot(patch UserConfig) (map[string]json.RawMessage, error) {
 	}
 	if len(anthropicPatch) > 0 {
 		if err := putJSONObject(out, "anthropic", anthropicPatch); err != nil {
+			return nil, err
+		}
+	}
+
+	visionPatch := map[string]json.RawMessage{}
+	if patch.ResetVision {
+		if err := putJSONString(visionPatch, "provider", ""); err != nil {
+			return nil, err
+		}
+		if err := putJSONString(visionPatch, "api_key", ""); err != nil {
+			return nil, err
+		}
+		if err := putJSONString(visionPatch, "base_url", ""); err != nil {
+			return nil, err
+		}
+		if err := putJSONString(visionPatch, "model", ""); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.Vision.Provider) != "" {
+		if err := putJSONString(visionPatch, "provider", patch.Vision.Provider); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.Vision.APIKey) != "" {
+		if err := putJSONString(visionPatch, "api_key", patch.Vision.APIKey); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.Vision.BaseURL) != "" {
+		if err := putJSONString(visionPatch, "base_url", patch.Vision.BaseURL); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(patch.Vision.Model) != "" {
+		if err := putJSONString(visionPatch, "model", patch.Vision.Model); err != nil {
+			return nil, err
+		}
+	}
+	if len(visionPatch) > 0 {
+		if err := putJSONObject(out, "vision", visionPatch); err != nil {
 			return nil, err
 		}
 	}

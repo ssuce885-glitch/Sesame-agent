@@ -26,6 +26,7 @@ type integrationChoice string
 
 const (
 	integrationDiscord integrationChoice = "discord"
+	integrationVision  integrationChoice = "vision"
 )
 
 type flowState struct {

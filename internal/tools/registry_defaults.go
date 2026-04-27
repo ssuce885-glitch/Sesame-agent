@@ -57,6 +57,7 @@ func (r *Registry) registerTaskTools() {
 }
 
 func (r *Registry) registerRuntimeTools() {
+	r.Register(analyzeImageTool{})
 	r.Register(requestUserInputTool{})
 	r.Register(shellTool{})
 	r.Register(skillUseTool{})

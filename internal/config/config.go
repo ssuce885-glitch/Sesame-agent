@@ -19,21 +19,26 @@ type CLIStartupOverrides struct {
 }
 
 type Config struct {
-	Addr                         string
-	DataDir                      string
-	ModelProvider                string
-	CompatMode                   string
-	Model                        string
-	AnthropicAPIKey              string
-	AnthropicBaseURL             string
-	OpenAIAPIKey                 string
-	OpenAIBaseURL                string
-	ProviderCacheProfile         string
-	CacheExpirySeconds           int
-	MicrocompactBytesThreshold   int
-	LogLevel                     string
-	PermissionProfile            string
-	MaxToolSteps                 int
+	Addr                       string
+	DataDir                    string
+	ModelProvider              string
+	CompatMode                 string
+	Model                      string
+	AnthropicAPIKey            string
+	AnthropicBaseURL           string
+	OpenAIAPIKey               string
+	OpenAIBaseURL              string
+	VisionProvider             string
+	VisionAPIKey               string
+	VisionBaseURL              string
+	VisionModel                string
+	ProviderCacheProfile       string
+	CacheExpirySeconds         int
+	MicrocompactBytesThreshold int
+	LogLevel                   string
+	PermissionProfile          string
+	MaxToolSteps               int
+	// MaxShellOutputBytes defaults to 65536 and can be tuned with SESAME_MAX_SHELL_OUTPUT_BYTES for larger shell_command reports.
 	MaxShellOutputBytes          int
 	ShellTimeoutSeconds          int
 	MaxFileWriteBytes            int
@@ -173,6 +178,10 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 	primaryAnthropicBaseURL := selectedProviderBaseURL(modelProvider == "anthropic", genericBaseURL, envOrDefaultWithFallback("ANTHROPIC_BASE_URL", uc.Anthropic.BaseURL, ""), "https://api.anthropic.com")
 	primaryOpenAIAPIKey := selectedProviderAPIKey(modelProvider == "openai_compatible", genericAPIKey, envOrDefaultWithFallback("OPENAI_API_KEY", uc.OpenAI.APIKey, ""))
 	primaryOpenAIBaseURL := selectedProviderBaseURL(modelProvider == "openai_compatible", genericBaseURL, envOrDefaultWithFallback("OPENAI_BASE_URL", uc.OpenAI.BaseURL, ""), "")
+	visionProvider := firstNonEmpty(envOrDefault("SESAME_VISION_PROVIDER", ""), uc.Vision.Provider)
+	visionAPIKey := firstNonEmpty(envOrDefault("SESAME_VISION_API_KEY", ""), uc.Vision.APIKey)
+	visionBaseURL := firstNonEmpty(envOrDefault("SESAME_VISION_BASE_URL", ""), uc.Vision.BaseURL, visionDefaultURL(visionProvider))
+	visionModel := firstNonEmpty(envOrDefault("SESAME_VISION_MODEL", ""), uc.Vision.Model)
 	cfg := Config{
 		Addr:                         firstNonEmpty(strings.TrimSpace(overrides.Addr), envOrDefaultWithFallback("SESAME_ADDR", uc.Listen.Addr, "127.0.0.1:4317")),
 		DataDir:                      paths.DataDir,
@@ -183,13 +192,17 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		AnthropicBaseURL:             primaryAnthropicBaseURL,
 		OpenAIAPIKey:                 primaryOpenAIAPIKey,
 		OpenAIBaseURL:                primaryOpenAIBaseURL,
+		VisionProvider:               visionProvider,
+		VisionAPIKey:                 visionAPIKey,
+		VisionBaseURL:                visionBaseURL,
+		VisionModel:                  visionModel,
 		ProviderCacheProfile:         firstNonEmpty(envOrDefault("SESAME_PROVIDER_CACHE_PROFILE", ""), defaultProviderCacheProfile(modelProvider, uc, genericBaseURL), "none"),
 		CacheExpirySeconds:           intEnvOrDefault("SESAME_CACHE_EXPIRY_SECONDS", 86400),
 		MicrocompactBytesThreshold:   intEnvOrDefaultWithFallback("SESAME_MICROCOMPACT_BYTES_THRESHOLD", uc.MicrocompactBytesThreshold, 8192),
 		LogLevel:                     envOrDefault("SESAME_LOG_LEVEL", "info"),
 		PermissionProfile:            firstNonEmpty(strings.TrimSpace(overrides.PermissionMode), envOrDefaultWithFallback("SESAME_PERMISSION_PROFILE", uc.PermissionProfile, "trusted_local")),
 		MaxToolSteps:                 intEnvOrDefaultWithFallback("SESAME_MAX_TOOL_STEPS", uc.MaxToolSteps, 100),
-		MaxShellOutputBytes:          intEnvOrDefault("SESAME_MAX_SHELL_OUTPUT_BYTES", 4096),
+		MaxShellOutputBytes:          intEnvOrDefault("SESAME_MAX_SHELL_OUTPUT_BYTES", 65536),
 		ShellTimeoutSeconds:          intEnvOrDefault("SESAME_SHELL_TIMEOUT_SECONDS", 30),
 		MaxFileWriteBytes:            intEnvOrDefault("SESAME_MAX_FILE_WRITE_BYTES", 1<<20),
 		MaxRecentItems:               intEnvOrDefaultWithFallback("SESAME_MAX_RECENT_ITEMS", uc.MaxRecentItems, 12),
@@ -221,6 +234,10 @@ func (c Config) Fingerprint() string {
 		AnthropicBaseURL             string `json:"anthropic_base_url"`
 		OpenAIAPIKey                 string `json:"openai_api_key"`
 		OpenAIBaseURL                string `json:"openai_base_url"`
+		VisionProvider               string `json:"vision_provider"`
+		VisionAPIKey                 string `json:"vision_api_key"`
+		VisionBaseURL                string `json:"vision_base_url"`
+		VisionModel                  string `json:"vision_model"`
 		ProviderCacheProfile         string `json:"provider_cache_profile"`
 		LogLevel                     string `json:"log_level"`
 		PermissionProfile            string `json:"permission_profile"`
@@ -249,6 +266,10 @@ func (c Config) Fingerprint() string {
 		AnthropicBaseURL:             c.AnthropicBaseURL,
 		OpenAIAPIKey:                 c.OpenAIAPIKey,
 		OpenAIBaseURL:                c.OpenAIBaseURL,
+		VisionProvider:               c.VisionProvider,
+		VisionAPIKey:                 c.VisionAPIKey,
+		VisionBaseURL:                c.VisionBaseURL,
+		VisionModel:                  c.VisionModel,
 		ProviderCacheProfile:         c.ProviderCacheProfile,
 		LogLevel:                     c.LogLevel,
 		PermissionProfile:            c.PermissionProfile,
@@ -326,6 +347,17 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func visionDefaultURL(provider string) string {
+	switch strings.TrimSpace(provider) {
+	case "anthropic":
+		return "https://api.anthropic.com"
+	case "openai_compatible":
+		return "https://api.openai.com/v1"
+	default:
+		return ""
+	}
 }
 
 func providerModelFallback(modelProvider string, uc UserConfig) string {

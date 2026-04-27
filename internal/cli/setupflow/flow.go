@@ -169,7 +169,7 @@ func chooseHomeSection(reader *bufio.Reader, w io.Writer, cfg config.Config, fil
 
 func runIntegrationsMenu(reader *bufio.Reader, w io.Writer, cfg config.Config, fileCfg config.UserConfig) error {
 	fmt.Fprintln(w, "Third-Party Integrations")
-	choices := []string{"Discord", "Back"}
+	choices := []string{"Discord", "Vision Model", "Back"}
 	idx, err := chooseArrowOption(reader, w, "Select integration", choices, 0)
 	if err != nil {
 		return err
@@ -178,6 +178,8 @@ func runIntegrationsMenu(reader *bufio.Reader, w io.Writer, cfg config.Config, f
 	case 0:
 		return runDiscordSetup(reader, w, cfg, fileCfg)
 	case 1:
+		return runVisionSetup(reader, w, cfg, fileCfg)
+	case 2:
 		return nil
 	default:
 		return fmt.Errorf("unknown integration selection index: %d", idx)
@@ -192,21 +194,29 @@ func modelSetupStatus(cfg config.Config) string {
 }
 
 func integrationsStatus(cfg config.Config, fileCfg config.UserConfig) string {
-	if !fileCfg.Discord.Enabled {
+	statuses := make([]string, 0, 2)
+	if fileCfg.Discord.Enabled {
+		workspaceRoot := strings.TrimSpace(cfg.Paths.WorkspaceRoot)
+		if workspaceRoot == "" {
+			statuses = append(statuses, "Discord Enabled")
+		} else {
+			binding, err := loadWorkspaceBinding(workspaceRoot)
+			if err != nil {
+				statuses = append(statuses, "Discord Config Error")
+			} else if strings.TrimSpace(binding.GuildID) != "" && strings.TrimSpace(binding.ChannelID) != "" {
+				statuses = append(statuses, "Discord Configured")
+			} else {
+				statuses = append(statuses, "Discord Partially Configured")
+			}
+		}
+	}
+	if strings.TrimSpace(fileCfg.Vision.Provider) != "" && strings.TrimSpace(fileCfg.Vision.Model) != "" {
+		statuses = append(statuses, "Vision Configured")
+	}
+	if len(statuses) == 0 {
 		return "Not Configured"
 	}
-	workspaceRoot := strings.TrimSpace(cfg.Paths.WorkspaceRoot)
-	if workspaceRoot == "" {
-		return "Discord Enabled"
-	}
-	binding, err := loadWorkspaceBinding(workspaceRoot)
-	if err != nil {
-		return "Discord Config Error"
-	}
-	if strings.TrimSpace(binding.GuildID) != "" && strings.TrimSpace(binding.ChannelID) != "" {
-		return "Discord Configured"
-	}
-	return "Discord Partially Configured"
+	return strings.Join(statuses, ", ")
 }
 
 func loadWorkspaceBinding(workspaceRoot string) (struct{ GuildID, ChannelID string }, error) {
