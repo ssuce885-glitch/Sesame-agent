@@ -71,6 +71,9 @@ func MaterializeRoleBoundSimpleAutomationSource(workspaceRoot string, input type
 	if types.NormalizeAutomationID(automationID) == "" {
 		return RoleBoundSourceLayout{}, fmt.Errorf("automation_id must match ^[a-z][a-z0-9_-]{0,127}$")
 	}
+	if err := ValidateRoleBoundSimpleWatchScriptInput(workspaceRoot, input); err != nil {
+		return RoleBoundSourceLayout{}, err
+	}
 
 	sourceDir := filepath.Join(workspaceRoot, "roles", roleID, "automations", automationID)
 	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
@@ -123,6 +126,50 @@ func roleBoundWatchScriptSourceFromInput(workspaceRoot, watchScript string) (rol
 	return roleBoundWatchScriptSource{
 		Content: []byte("#!/usr/bin/env bash\nset -euo pipefail\n" + watchScript + "\n"),
 	}, nil
+}
+
+func ValidateRoleBoundSimpleWatchScriptInput(workspaceRoot string, input types.SimpleAutomationBuilderInput) error {
+	selector := CanonicalRoleBoundWatchScriptSelector(input.Owner, input.AutomationID)
+	if selector == "" {
+		return nil
+	}
+	watchScript := strings.TrimSpace(input.WatchScript)
+	if watchScript == "" {
+		return nil
+	}
+	targetPath := filepath.Join(strings.TrimSpace(workspaceRoot), filepath.FromSlash(selector))
+	if watchScriptReferencesCanonicalPath(watchScript, workspaceRoot, targetPath, selector) {
+		return nativeBuilderValidationError("watch_script must not invoke or copy its own canonical role-owned watch.sh path; provide detector logic that exits after emitting one JSON object")
+	}
+	return nil
+}
+
+func watchScriptReferencesCanonicalPath(watchScript, workspaceRoot, targetPath, selector string) bool {
+	targetAbs, err := filepath.Abs(targetPath)
+	if err != nil {
+		targetAbs = filepath.Clean(targetPath)
+	}
+	targetSlash := filepath.ToSlash(targetAbs)
+	selectorSlash := filepath.ToSlash(filepath.Clean(selector))
+
+	if filepath.IsAbs(watchScript) {
+		rawAbs, err := filepath.Abs(watchScript)
+		if err == nil && rawAbs == targetAbs {
+			return true
+		}
+	} else {
+		workspaceRoot = strings.TrimSpace(workspaceRoot)
+		if workspaceRoot != "" {
+			rawAbs, err := filepath.Abs(filepath.Join(workspaceRoot, watchScript))
+			if err == nil && rawAbs == targetAbs {
+				return true
+			}
+		}
+	}
+
+	watchScriptSlash := filepath.ToSlash(watchScript)
+	return strings.Contains(watchScriptSlash, targetSlash) ||
+		strings.Contains(watchScriptSlash, selectorSlash)
 }
 
 func writeRoleBoundAutomationYAML(path, selector string, input types.SimpleAutomationBuilderInput) error {

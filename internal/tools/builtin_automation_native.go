@@ -116,6 +116,9 @@ func (automationCreateSimpleTool) ExecuteDecoded(ctx context.Context, decoded De
 	if err := requireOwningRoleAutomationContext(ctx, input.Owner); err != nil {
 		return ToolExecutionResult{}, err
 	}
+	if err := automation.ValidateRoleBoundSimpleWatchScriptInput(execCtx.WorkspaceRoot, input); err != nil {
+		return ToolExecutionResult{}, err
+	}
 	if _, err := automation.CompileSimpleAutomationBuilder(input, execCtx.WorkspaceRoot); err != nil {
 		return ToolExecutionResult{}, err
 	}
