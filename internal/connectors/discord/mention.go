@@ -15,6 +15,16 @@ func hasBotMention(mentions []GatewayMention, botUserID string) bool {
 	return false
 }
 
+func contentHasBotMention(content, botUserID string) bool {
+	bot := strings.TrimSpace(botUserID)
+	if bot == "" {
+		return false
+	}
+	plain := "<@" + bot + ">"
+	nick := "<@!" + bot + ">"
+	return firstMentionPosition(content, plain, nick) >= 0
+}
+
 func cleanTextAfterBotMention(content, botUserID string) string {
 	text := content
 	bot := strings.TrimSpace(botUserID)

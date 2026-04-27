@@ -16,43 +16,34 @@ func chooseArrowOption(reader *bufio.Reader, w io.Writer, label string, options 
 		defaultIndex = 0
 	}
 
-	idx := defaultIndex
-	fmt.Fprintf(w, "%s: %s (use ↑/↓ then Enter)\n", label, options[idx])
+	fmt.Fprintf(w, "%s:\n", label)
+	for i, option := range options {
+		defaultMarker := ""
+		if i == defaultIndex {
+			defaultMarker = " [default]"
+		}
+		fmt.Fprintf(w, "  %d) %s%s\n", i+1, option, defaultMarker)
+	}
 	for {
-		b, err := reader.ReadByte()
-		if err != nil {
+		fmt.Fprintf(w, "Select option [%d]: ", defaultIndex+1)
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
 			return 0, err
 		}
-		switch b {
-		case '\n':
-			return idx, nil
-		case '\r':
-			next, err := reader.Peek(1)
-			if err == nil && len(next) == 1 && next[0] == '\n' {
-				_, _ = reader.ReadByte()
+		value := strings.TrimSpace(line)
+		if value == "" {
+			if err == io.EOF && len(line) == 0 {
+				return 0, io.EOF
 			}
-			return idx, nil
-		case 0x1b:
-			open, err := reader.ReadByte()
-			if err != nil {
-				return 0, err
-			}
-			dir, err := reader.ReadByte()
-			if err != nil {
-				return 0, err
-			}
-			if open != '[' {
-				continue
-			}
-			switch dir {
-			case 'A':
-				idx = (idx - 1 + len(options)) % len(options)
-			case 'B':
-				idx = (idx + 1) % len(options)
-			}
-			fmt.Fprintf(w, "%s: %s\n", label, options[idx])
-		default:
-			// Ignore typed characters and keep current selection.
+			return defaultIndex, nil
+		}
+		selected, convErr := strconv.Atoi(value)
+		if convErr == nil && selected >= 1 && selected <= len(options) {
+			return selected - 1, nil
+		}
+		fmt.Fprintf(w, "Invalid selection for %s: enter 1-%d, or press Enter for %d.\n", label, len(options), defaultIndex+1)
+		if err == io.EOF {
+			return 0, io.EOF
 		}
 	}
 }

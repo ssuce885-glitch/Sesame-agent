@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"go-agent/internal/config"
+	"go-agent/internal/skillcatalog"
 )
 
 const (
@@ -27,13 +28,13 @@ const (
 //go:embed system_skills
 var embeddedSystemSkills embed.FS
 
-func LoadCatalog(globalRoot, workspaceRoot string) (Catalog, error) {
+func LoadCatalog(globalRoot, workspaceRoot string) (skillcatalog.Catalog, error) {
 	paths, err := resolveExtensionPaths(globalRoot, workspaceRoot)
 	if err != nil {
-		return Catalog{}, err
+		return skillcatalog.Catalog{}, err
 	}
 	if err := EnsureSystemSkills(paths.GlobalRoot); err != nil {
-		return Catalog{}, err
+		return skillcatalog.Catalog{}, err
 	}
 	return loadCatalogWithCache(paths)
 }

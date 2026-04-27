@@ -9,7 +9,6 @@ import (
 
 	"go-agent/internal/model"
 	"go-agent/internal/session"
-	"go-agent/internal/store/sqlite"
 	"go-agent/internal/stream"
 	"go-agent/internal/types"
 )
@@ -19,17 +18,38 @@ type turnResultEventSink interface {
 }
 
 type turnResultFallbackSink struct {
-	store     *sqlite.Store
-	eventSink turnResultEventSink
+	store         turnResultStore
+	eventSink     turnResultEventSink
+	reportEnqueue reportTurnEnqueuer
 }
 
-func newTurnResultFallbackSink(store *sqlite.Store, bus *stream.Bus) session.TurnResultSink {
+type reportTurnEnqueuer interface {
+	enqueueSyntheticReportTurn(context.Context, string) error
+}
+
+type turnResultStore interface {
+	eventSinkStore
+	GetTurn(context.Context, string) (types.Turn, bool, error)
+	RequeueClaimedReportDeliveriesForTurn(context.Context, string) error
+	ListSessionEvents(context.Context, string, int64) ([]types.Event, error)
+	InsertConversationItemWithContextHead(context.Context, string, string, string, int, model.ConversationItem) error
+	GetConversationItemIDByContextHeadAndPosition(context.Context, string, string, int) (int64, bool, error)
+	InsertConversationItem(context.Context, string, string, int, model.ConversationItem) error
+	ListConversationTimelineItems(context.Context, string) ([]types.ConversationTimelineItem, error)
+}
+
+func newTurnResultFallbackSink(store turnResultStore, bus *stream.Bus, reportEnqueue ...reportTurnEnqueuer) session.TurnResultSink {
 	if store == nil || bus == nil {
 		return turnResultFallbackSink{}
 	}
+	var enqueuer reportTurnEnqueuer
+	if len(reportEnqueue) > 0 {
+		enqueuer = reportEnqueue[0]
+	}
 	return turnResultFallbackSink{
-		store:     store,
-		eventSink: storeAndBusSink{store: store, bus: bus},
+		store:         store,
+		eventSink:     storeAndBusSink{store: store, bus: bus},
+		reportEnqueue: enqueuer,
 	}
 }
 
@@ -47,8 +67,11 @@ func (s turnResultFallbackSink) HandleTurnResult(ctx context.Context, sess types
 		eventType := types.EventTurnFailed
 		payload := any(types.TurnFailedPayload{Message: err.Error()})
 		if errors.Is(err, context.Canceled) {
-			if turn.Kind == types.TurnKindChildReportBatch {
-				_ = s.store.RequeueClaimedChildReportsForTurn(ctx, turnID)
+			if turn.Kind == types.TurnKindReportBatch {
+				_ = s.store.RequeueClaimedReportDeliveriesForTurn(ctx, turnID)
+				if s.reportEnqueue != nil {
+					_ = s.reportEnqueue.enqueueSyntheticReportTurn(ctx, sess.ID)
+				}
 			}
 			eventType = types.EventTurnInterrupted
 			payload = map[string]string{"reason": "run_context_canceled"}
@@ -87,6 +110,7 @@ func (s turnResultFallbackSink) maybeBackfillParentReplyCommitted(ctx context.Co
 		WorkspaceRoot: strings.TrimSpace(sess.WorkspaceRoot),
 		SessionID:     sess.ID,
 		TurnID:        turn.ID,
+		TurnKind:      turn.Kind,
 		ItemID:        itemID,
 		Text:          fallbackText,
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),

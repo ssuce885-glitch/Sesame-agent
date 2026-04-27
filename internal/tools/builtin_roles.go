@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -188,7 +187,7 @@ func (roleCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		Policy:      input.Policy,
 	})
 	if err != nil {
-		return ToolExecutionResult{}, normalizeRoleServiceError(err)
+		return ToolExecutionResult{}, err
 	}
 	output := roleOutputFromSpec(spec)
 	return ToolExecutionResult{
@@ -210,7 +209,7 @@ func (roleGetTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, exec
 	input := decoded.Input.(RoleGetInput)
 	spec, err := service.Get(execCtx.WorkspaceRoot, input.RoleID)
 	if err != nil {
-		return ToolExecutionResult{}, normalizeRoleServiceError(err)
+		return ToolExecutionResult{}, err
 	}
 	output := roleOutputFromSpec(spec)
 	return ToolExecutionResult{
@@ -232,7 +231,7 @@ func (roleListTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, exe
 	input := decoded.Input.(RoleListInput)
 	catalog, err := service.List(execCtx.WorkspaceRoot)
 	if err != nil {
-		return ToolExecutionResult{}, normalizeRoleServiceError(err)
+		return ToolExecutionResult{}, err
 	}
 	output := RoleListOutput{
 		Roles: roleOutputsFromSpecs(catalog.Roles),
@@ -259,6 +258,11 @@ func (roleUpdateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		return ToolExecutionResult{}, err
 	}
 	input := decoded.Input.(RoleUpsertInput)
+	current, err := service.Get(execCtx.WorkspaceRoot, input.RoleID)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+	input = mergeRoleUpdateWithCurrent(input, current)
 	input.Prompt = appendRolePromptBaseline(input.Prompt)
 	spec, err := service.Update(execCtx.WorkspaceRoot, roles.UpsertInput{
 		RoleID:      input.RoleID,
@@ -269,7 +273,7 @@ func (roleUpdateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		Policy:      input.Policy,
 	})
 	if err != nil {
-		return ToolExecutionResult{}, normalizeRoleServiceError(err)
+		return ToolExecutionResult{}, err
 	}
 	output := roleOutputFromSpec(spec)
 	return ToolExecutionResult{
@@ -282,6 +286,22 @@ func (roleUpdateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 	}, nil
 }
 
+func mergeRoleUpdateWithCurrent(input RoleUpsertInput, current roles.Spec) RoleUpsertInput {
+	if strings.TrimSpace(input.DisplayName) == "" {
+		input.DisplayName = current.DisplayName
+	}
+	if strings.TrimSpace(input.Description) == "" {
+		input.Description = current.Description
+	}
+	if input.Skills == nil {
+		input.Skills = append([]string(nil), current.SkillNames...)
+	}
+	if input.Policy == nil {
+		input.Policy = clonePolicyMap(current.Policy)
+	}
+	return input
+}
+
 func appendRolePromptBaseline(prompt string) string {
 	prompt = strings.TrimSpace(prompt)
 	sections := []string{prompt}
@@ -289,13 +309,14 @@ func appendRolePromptBaseline(prompt string) string {
 		sections = append(sections, strings.TrimSpace(`# Specialist boundaries
 - Work only within your described specialist scope.
 - Do not create test data in the workspace unless explicitly asked.
-- Report outcomes concisely back to main_parent.`))
+- Your final assistant response is the report back to main_parent; the runtime delivers it automatically.
+- Do not call delegate_to_role to report outcomes.`))
 	}
 	if !strings.Contains(prompt, "Automation boundaries") {
 		sections = append(sections, strings.TrimSpace(`# Automation boundaries
 - Create Automation Mode: when explicitly asked to define or change an automation owned by this role, activate automation-standard-behavior and automation-normalizer before using automation_create_simple.
 - Automation Control Mode: when explicitly asked to pause or resume an automation, activate automation-standard-behavior before using automation_control.
-- Owner Task Mode: when running after a watcher match, execute the assigned automation_goal and report the result; do not call automation_create_simple, automation_control, edit automation definitions, watcher scripts, or role configuration.
+- Owner Task Mode: when running after a watcher match, execute the assigned automation_goal and return the result as your final assistant response; do not call delegate_to_role, automation_create_simple, automation_control, edit automation definitions, watcher scripts, or role configuration.
 - Status/Report Mode: when asked for status or diagnosis, use read-only inspection such as automation_query and do not repair or mutate state unless explicitly asked.`))
 	}
 	out := make([]string, 0, len(sections))
@@ -469,7 +490,7 @@ func decodeStringArrayField(raw any, field string) ([]string, error) {
 
 func decodePolicyField(raw any) (map[string]any, error) {
 	if raw == nil {
-		return map[string]any{}, nil
+		return nil, nil
 	}
 	policy, ok := raw.(map[string]any)
 	if !ok {
@@ -532,19 +553,4 @@ func requireRoleService(execCtx ExecContext) (RoleService, error) {
 		return nil, fmt.Errorf("role service is not configured")
 	}
 	return execCtx.RoleService, nil
-}
-
-func normalizeRoleServiceError(err error) error {
-	if err == nil {
-		return nil
-	}
-	cause := errors.Unwrap(err)
-	if cause == nil {
-		return err
-	}
-	detail := strings.TrimSpace(cause.Error())
-	if detail == "" || detail == err.Error() {
-		return err
-	}
-	return fmt.Errorf("%s: %s", err.Error(), detail)
 }

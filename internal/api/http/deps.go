@@ -27,10 +27,10 @@ type Manager interface {
 	RegisterSession(types.Session)
 	UpdateSession(types.Session) bool
 	SubmitTurn(context.Context, string, session.SubmitTurnInput) (string, error)
-	ResumeTurn(context.Context, string, session.ResumeTurnInput) (string, error)
 }
 
 type Bus interface {
+	Publish(types.Event)
 	Subscribe(sessionID string) (<-chan types.Event, func())
 }
 

@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"go-agent/internal/extensions"
+	"go-agent/internal/skillcatalog"
 )
 
 const (
@@ -25,15 +25,14 @@ type Model struct {
 	// Dependencies
 	ctx           Context
 	client        RuntimeClient
-	catalog       extensions.Catalog
-	catalogLoader func() (extensions.Catalog, error)
+	catalog       skillcatalog.Catalog
+	catalogLoader func() (skillcatalog.Catalog, error)
 
 	// Session
-	sessionID               string
-	workspaceRoot           string
-	lastSeq                 int64
-	lastPermissionRequestID string
-	status                  StatusResponse
+	sessionID     string
+	workspaceRoot string
+	lastSeq       int64
+	status        StatusResponse
 
 	// Layout
 	width    int
@@ -65,12 +64,12 @@ type Model struct {
 	// Queue
 	queueSummary QueueSummary
 
-	// Mailbox
-	mailbox            MailboxResponse
-	mailboxLoaded      bool
-	mailboxErr         string
-	mailboxPushes      []MailboxItem
-	pendingReportCount int
+	// Reports
+	reports           ReportsResponse
+	reportsLoaded     bool
+	reportsErr        string
+	reportPushes      []ReportDeliveryItem
+	queuedReportCount int
 
 	// Cron
 	cronList     []CronJob
@@ -93,12 +92,12 @@ type Model struct {
 
 // QueueSummary mirrors SessionQueuePayload for view rendering.
 type QueueSummary struct {
-	ActiveTurnID             string
-	ActiveTurnKind           string
-	QueueDepth               int
-	QueuedUserTurns          int
-	QueuedChildReportBatches int
-	PendingChildReports      int
+	ActiveTurnID        string
+	ActiveTurnKind      string
+	QueueDepth          int
+	QueuedUserTurns     int
+	QueuedReportBatches int
+	QueuedReports       int
 }
 
 // View is the currently active view tab.
@@ -107,7 +106,7 @@ type View string
 const (
 	ViewChat      View = "chat"
 	ViewSubagents View = "subagents"
-	ViewMailbox   View = "mailbox"
+	ViewReports   View = "reports"
 	ViewCron      View = "cron"
 )
 
@@ -121,13 +120,12 @@ type RuntimeClient interface {
 	Status(Context) (StatusResponse, error)
 	SubmitTurn(Context, SubmitTurnRequest) (Turn, error)
 	InterruptTurn(Context) error
-	DecidePermission(Context, PermissionDecisionRequest) (PermissionDecisionResponse, error)
 	StreamEvents(Context, int64) (<-chan Event, error)
 	GetTimeline(Context) (SessionTimelineResponse, error)
 	ListContextHistory(Context) (ListContextHistoryResponse, error)
 	ReopenContext(Context) (ContextHead, error)
 	LoadContextHistory(Context, string) (ContextHead, error)
-	GetWorkspaceMailbox(Context) (MailboxResponse, error)
+	GetWorkspaceReports(Context) (ReportsResponse, error)
 	GetRuntimeGraph(Context) (RuntimeGraphResponse, error)
 	GetReportingOverview(Context, string) (ReportingOverview, error)
 	ListCronJobs(Context, string) (CronListResponse, error)

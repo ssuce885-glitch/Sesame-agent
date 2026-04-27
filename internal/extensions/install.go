@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"go-agent/internal/config"
+	"go-agent/internal/skillcatalog"
 )
 
 const defaultGitHubRef = "main"
@@ -239,7 +240,7 @@ func RemoveSkill(globalRoot, workspaceRoot, scopeRaw, name string) (RemoveResult
 	return RemoveResult{Name: resolvedName, Scope: scope, Path: targetPath}, nil
 }
 
-func ListSkills(globalRoot, workspaceRoot, scope string) ([]Skill, error) {
+func ListSkills(globalRoot, workspaceRoot, scope string) ([]skillcatalog.SkillSpec, error) {
 	catalog, err := LoadCatalog(globalRoot, workspaceRoot)
 	if err != nil {
 		return nil, err
@@ -251,7 +252,7 @@ func ListSkills(globalRoot, workspaceRoot, scope string) ([]Skill, error) {
 	if normalizedScope == "" {
 		return catalog.Skills, nil
 	}
-	filtered := make([]Skill, 0, len(catalog.Skills))
+	filtered := make([]skillcatalog.SkillSpec, 0, len(catalog.Skills))
 	for _, skill := range catalog.Skills {
 		if skill.Scope == normalizedScope {
 			filtered = append(filtered, skill)

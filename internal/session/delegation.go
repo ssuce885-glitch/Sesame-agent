@@ -72,6 +72,9 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 	if err != nil {
 		return DelegateToRoleOutput{}, err
 	}
+	if targetRole == string(types.SessionRoleMainParent) {
+		return DelegateToRoleOutput{}, fmt.Errorf("delegate_to_role targets installed specialist roles only; main_parent receives specialist results through reports")
+	}
 	sourceSessionRole, err := s.store.ResolveSessionRole(ctx, sourceSessionID, workspaceRoot)
 	if err != nil {
 		return DelegateToRoleOutput{}, err
@@ -87,22 +90,18 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 	if strings.TrimSpace(sourceSpecialistRoleID) == "" && sourceSessionRole != types.SessionRoleMainParent && !strings.HasPrefix(sourceSessionID, "task_session_") {
 		return DelegateToRoleOutput{}, fmt.Errorf("source session %q in workspace %q is neither main_parent nor mapped specialist", sourceSessionID, workspaceRoot)
 	}
-	if sourceSpecialistRoleID != "" && targetRole != string(types.SessionRoleMainParent) {
-		return DelegateToRoleOutput{}, fmt.Errorf("specialist roles cannot delegate directly to another specialist role; report back to main_parent and ask it to delegate")
+	if sourceSpecialistRoleID != "" {
+		return DelegateToRoleOutput{}, fmt.Errorf("specialist roles cannot call delegate_to_role; return a final response instead because role task results are delivered to main_parent through reports")
 	}
 
 	activatedSkillNames := []string(nil)
-	if targetRole == string(types.SessionRoleMainParent) {
-		targetRole = string(types.SessionRoleMainParent)
-	} else {
-		catalog, err := rolectx.LoadCatalog(workspaceRoot)
-		if err != nil {
-			return DelegateToRoleOutput{}, err
-		}
-		_, ok := catalog.ByID[targetRole]
-		if !ok {
-			return DelegateToRoleOutput{}, fmt.Errorf("target_role %q is currently unavailable", targetRole)
-		}
+	catalog, err := rolectx.LoadCatalog(workspaceRoot)
+	if err != nil {
+		return DelegateToRoleOutput{}, err
+	}
+	_, ok := catalog.ByID[targetRole]
+	if !ok {
+		return DelegateToRoleOutput{}, fmt.Errorf("target_role %q is currently unavailable", targetRole)
 	}
 
 	description := strings.TrimSpace(in.Reason)

@@ -75,7 +75,7 @@ func processMessageForIngress(msg GatewayMessage, cfg WorkspaceBinding, opts ing
 
 	cleaned := strings.TrimSpace(msg.Content)
 	if cfg.RequireMention {
-		if !hasBotMention(msg.Mentions, opts.BotUserID) {
+		if !hasBotMention(msg.Mentions, opts.BotUserID) && !contentHasBotMention(msg.Content, opts.BotUserID) {
 			return ingressDecision{Action: ingressActionIgnore, Reason: "missing_mention"}
 		}
 		cleaned = cleanTextAfterBotMention(msg.Content, opts.BotUserID)

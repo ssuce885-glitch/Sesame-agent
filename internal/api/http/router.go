@@ -60,9 +60,8 @@ func NewRouter(deps Dependencies) http.Handler {
 	registerCurrentSessionRoutes(mux, deps)
 	registerWorkspaceRoutes(mux, deps)
 	registerRuntimeGraphRoutes(mux, deps)
-	registerWorkspaceMailboxRoutes(mux, deps)
+	registerWorkspaceReportsRoutes(mux, deps)
 	registerMetricsRoutes(mux, deps)
-	registerPermissionRoutes(mux, deps)
 	registerMemoryRoutes(mux, deps)
 	registerReportingRoutes(mux, deps)
 	registerCronRoutes(mux, deps)
@@ -73,16 +72,16 @@ func NewRouter(deps Dependencies) http.Handler {
 	return mux
 }
 
-type workspaceMailboxStore interface {
-	ListWorkspaceReportMailboxItems(context.Context, string) ([]types.ReportMailboxItem, error)
-	CountPendingWorkspaceReportMailboxItems(context.Context, string) (int, error)
+type workspaceReportsStore interface {
+	ListWorkspaceReportDeliveryItems(context.Context, string) ([]types.ReportDeliveryItem, error)
+	CountQueuedWorkspaceReportDeliveries(context.Context, string) (int, error)
 }
 
-func registerWorkspaceMailboxRoutes(mux *http.ServeMux, deps Dependencies) {
-	mux.HandleFunc("/v1/mailbox", handleGetWorkspaceMailbox(deps))
+func registerWorkspaceReportsRoutes(mux *http.ServeMux, deps Dependencies) {
+	mux.HandleFunc("/v1/reports", handleGetWorkspaceReports(deps))
 }
 
-func handleGetWorkspaceMailbox(deps Dependencies) http.HandlerFunc {
+func handleGetWorkspaceReports(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -97,26 +96,26 @@ func handleGetWorkspaceMailbox(deps Dependencies) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		store, ok := deps.Store.(workspaceMailboxStore)
+		store, ok := deps.Store.(workspaceReportsStore)
 		if !ok {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		items, err := store.ListWorkspaceReportMailboxItems(r.Context(), root)
+		items, err := store.ListWorkspaceReportDeliveryItems(r.Context(), root)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		pendingCount, err := store.CountPendingWorkspaceReportMailboxItems(r.Context(), root)
+		queuedCount, err := store.CountQueuedWorkspaceReportDeliveries(r.Context(), root)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(types.WorkspaceReportMailboxResponse{
+		_ = json.NewEncoder(w).Encode(types.WorkspaceReportsResponse{
 			WorkspaceRoot: root,
 			Items:         items,
-			PendingCount:  pendingCount,
+			QueuedCount:   queuedCount,
 		})
 	}
 }

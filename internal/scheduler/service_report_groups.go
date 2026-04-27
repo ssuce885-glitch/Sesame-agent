@@ -99,7 +99,7 @@ func (s *Service) upsertReportGroupForJob(ctx context.Context, store reportGroup
 			Sources:   []string{strings.TrimSpace(job.ID)},
 			Schedule:  reportGroupScheduleFromCreateInput(in),
 			Delivery: types.DeliveryProfile{
-				Channels: []string{string(types.ReportChannelMailbox)},
+				Channels: []string{string(types.ReportChannelAgent)},
 			},
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -117,7 +117,7 @@ func (s *Service) upsertReportGroupForJob(ctx context.Context, store reportGroup
 	}
 	group.UpdatedAt = now
 	if len(group.Delivery.Channels) == 0 {
-		group.Delivery.Channels = []string{string(types.ReportChannelMailbox)}
+		group.Delivery.Channels = []string{string(types.ReportChannelAgent)}
 	}
 	return store.UpsertReportGroup(ctx, group)
 }

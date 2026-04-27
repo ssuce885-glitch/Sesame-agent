@@ -3,7 +3,6 @@ package repl
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +10,7 @@ import (
 
 	"go-agent/internal/cli/client"
 	"go-agent/internal/cli/render"
-	"go-agent/internal/extensions"
+	"go-agent/internal/skillcatalog"
 	"go-agent/internal/types"
 )
 
@@ -21,13 +20,12 @@ type RuntimeClient interface {
 	Status(context.Context) (client.StatusResponse, error)
 	SubmitTurn(context.Context, types.SubmitTurnRequest) (types.Turn, error)
 	InterruptTurn(context.Context) error
-	DecidePermission(context.Context, types.PermissionDecisionRequest) (types.PermissionDecisionResponse, error)
 	StreamEvents(context.Context, int64) (<-chan types.Event, error)
 	GetTimeline(context.Context) (types.SessionTimelineResponse, error)
 	ListContextHistory(context.Context) (types.ListContextHistoryResponse, error)
 	ReopenContext(context.Context) (types.ContextHead, error)
 	LoadContextHistory(context.Context, string) (types.ContextHead, error)
-	GetWorkspaceMailbox(context.Context) (types.WorkspaceReportMailboxResponse, error)
+	GetWorkspaceReports(context.Context) (types.WorkspaceReportsResponse, error)
 	GetRuntimeGraph(context.Context) (types.WorkspaceRuntimeGraphResponse, error)
 	GetReportingOverview(context.Context, string) (types.ReportingOverview, error)
 	ListCronJobs(context.Context, string) (types.ListScheduledJobsResponse, error)
@@ -44,22 +42,21 @@ type Options struct {
 	WorkspaceRoot         string
 	ShowExtensionsSummary bool
 	Client                RuntimeClient
-	Catalog               extensions.Catalog
-	CatalogLoader         func() (extensions.Catalog, error)
+	Catalog               skillcatalog.Catalog
+	CatalogLoader         func() (skillcatalog.Catalog, error)
 }
 
 type REPL struct {
-	stdin                   io.Reader
-	stdout                  io.Writer
-	client                  RuntimeClient
-	renderer                *render.Renderer
-	sessionID               string
-	lastSeq                 int64
-	lastPermissionRequestID string
-	catalog                 extensions.Catalog
-	catalogLoader           func() (extensions.Catalog, error)
-	workspaceRoot           string
-	showExtensionsSummary   bool
+	stdin                 io.Reader
+	stdout                io.Writer
+	client                RuntimeClient
+	renderer              *render.Renderer
+	sessionID             string
+	lastSeq               int64
+	catalog               skillcatalog.Catalog
+	catalogLoader         func() (skillcatalog.Catalog, error)
+	workspaceRoot         string
+	showExtensionsSummary bool
 }
 
 func New(opts Options) *REPL {
@@ -133,10 +130,6 @@ func (r *REPL) HandleLine(ctx context.Context, line string) (bool, error) {
 	if strings.TrimSpace(r.sessionID) == "" {
 		return false, errors.New("session is not selected")
 	}
-	if pending := strings.TrimSpace(r.lastPermissionRequestID); pending != "" {
-		fmt.Fprintln(r.stdout, pendingPermissionNotice(pending))
-		return true, nil
-	}
 	if _, err := r.client.SubmitTurn(ctx, types.SubmitTurnRequest{Message: line}); err != nil {
 		return false, err
 	}
@@ -148,7 +141,6 @@ func (r *REPL) HandleLine(ctx context.Context, line string) (bool, error) {
 		if event.Seq > r.lastSeq {
 			r.lastSeq = event.Seq
 		}
-		r.trackPermissionEvent(event)
 		r.renderer.RenderEvent(event)
 		if event.Type == types.EventTurnCompleted || event.Type == types.EventTurnFailed || event.Type == types.EventTurnInterrupted {
 			break
@@ -166,7 +158,6 @@ func (r *REPL) loadSession(ctx context.Context) error {
 		return err
 	}
 	r.lastSeq = timeline.LatestSeq
-	r.lastPermissionRequestID = pendingPermissionRequestIDFromTimeline(timeline)
 	r.renderer.RenderTimeline(timeline)
 	return nil
 }
@@ -191,7 +182,7 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 
 	switch fields[0] {
 	case "help":
-		fmt.Fprintln(r.stdout, "/help /clear /exit /status /skills /tools /history [/load <head_id>] /reopen /approve [<request_id>] [once|run|session] /deny [<request_id>] /mailbox /cron list [--all] /cron inspect <id> /cron pause <id> /cron resume <id> /cron remove <id>")
+		fmt.Fprintln(r.stdout, "/help /clear /exit /status /skills /tools /history [/load <head_id>] /reopen /reports /cron list [--all] /cron inspect <id> /cron pause <id> /cron resume <id> /cron remove <id>")
 		return nil
 	case "exit":
 		return errExitRequested
@@ -227,18 +218,16 @@ func (r *REPL) handleCommand(ctx context.Context, line string) error {
 		}
 		fmt.Fprintf(r.stdout, "Reopened context: %s\n", head.ID)
 		return r.reloadTimeline(ctx)
-	case "approve", "allow", "deny":
-		return r.handlePermissionDecisionCommand(ctx, fields[0], fields[1:])
-	case "mailbox", "inbox":
-		resp, err := r.client.GetWorkspaceMailbox(ctx)
+	case "reports":
+		resp, err := r.client.GetWorkspaceReports(ctx)
 		if err != nil {
 			return err
 		}
-		r.renderer.RenderReportMailbox(types.SessionReportMailboxResponse{
-			Items:        resp.Items,
-			PendingCount: resp.PendingCount,
-			Reports:      resp.Reports,
-			Deliveries:   resp.Deliveries,
+		r.renderer.RenderReports(types.SessionReportsResponse{
+			Items:       resp.Items,
+			QueuedCount: resp.QueuedCount,
+			Reports:     resp.Reports,
+			Deliveries:  resp.Deliveries,
 		})
 		return nil
 	case "cron":
@@ -277,7 +266,6 @@ func (r *REPL) reloadTimeline(ctx context.Context) error {
 		return err
 	}
 	r.lastSeq = timeline.LatestSeq
-	r.lastPermissionRequestID = pendingPermissionRequestIDFromTimeline(timeline)
 	r.renderer.RenderTimeline(timeline)
 	return nil
 }
@@ -292,149 +280,6 @@ func (r *REPL) refreshCatalog() error {
 	}
 	r.catalog = catalog
 	return nil
-}
-
-func (r *REPL) handlePermissionDecisionCommand(ctx context.Context, command string, args []string) error {
-	req, err := buildPermissionDecisionRequest(command, args, r.lastPermissionRequestID)
-	if err != nil {
-		return err
-	}
-	resp, err := r.client.DecidePermission(ctx, req)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(resp.Request.ID) != "" && resp.Request.ID == r.lastPermissionRequestID {
-		r.lastPermissionRequestID = ""
-	}
-	if !resp.Resumed || strings.TrimSpace(r.sessionID) == "" {
-		return nil
-	}
-	events, err := r.client.StreamEvents(ctx, r.lastSeq)
-	if err != nil {
-		return err
-	}
-	for event := range events {
-		if event.Seq > r.lastSeq {
-			r.lastSeq = event.Seq
-		}
-		r.trackPermissionEvent(event)
-		r.renderer.RenderEvent(event)
-		if event.Type == types.EventTurnCompleted || event.Type == types.EventTurnFailed || event.Type == types.EventTurnInterrupted {
-			break
-		}
-	}
-	return nil
-}
-
-func (r *REPL) trackPermissionEvent(event types.Event) {
-	switch event.Type {
-	case types.EventPermissionRequested:
-		var payload types.PermissionRequestedPayload
-		if err := json.Unmarshal(event.Payload, &payload); err == nil {
-			r.lastPermissionRequestID = strings.TrimSpace(payload.RequestID)
-		}
-	case types.EventPermissionResolved:
-		var payload types.PermissionResolvedPayload
-		if err := json.Unmarshal(event.Payload, &payload); err == nil && strings.TrimSpace(payload.RequestID) != "" {
-			if payload.RequestID == r.lastPermissionRequestID {
-				r.lastPermissionRequestID = ""
-			}
-		}
-	}
-}
-
-func buildPermissionDecisionRequest(command string, args []string, fallbackRequestID string) (types.PermissionDecisionRequest, error) {
-	command = strings.ToLower(strings.TrimSpace(command))
-	requestID := strings.TrimSpace(fallbackRequestID)
-	scopeArgIndex := -1
-	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
-		if _, isScope := parsePermissionDecisionAlias(args[0]); isScope && requestID != "" && (command == "approve" || command == "allow") {
-			scopeArgIndex = 0
-		} else {
-			requestID = strings.TrimSpace(args[0])
-		}
-	}
-	if requestID == "" {
-		return types.PermissionDecisionRequest{}, fmt.Errorf("usage: /%s %s", command, permissionCommandUsage(command))
-	}
-
-	switch command {
-	case "deny":
-		if len(args) > 1 {
-			return types.PermissionDecisionRequest{}, fmt.Errorf("usage: /deny [<request_id>]")
-		}
-		return types.PermissionDecisionRequest{
-			RequestID: requestID,
-			Decision:  types.PermissionDecisionDeny,
-		}, nil
-	case "approve", "allow":
-		decision := types.PermissionDecisionAllowOnce
-		if scopeArgIndex < 0 && len(args) > 1 {
-			scopeArgIndex = 1
-		}
-		if scopeArgIndex >= 0 {
-			mapped, ok := parsePermissionDecisionAlias(args[scopeArgIndex])
-			if !ok {
-				return types.PermissionDecisionRequest{}, fmt.Errorf("unknown permission scope %q; use once, run, or session", strings.TrimSpace(args[scopeArgIndex]))
-			}
-			decision = mapped
-		}
-		return types.PermissionDecisionRequest{
-			RequestID: requestID,
-			Decision:  decision,
-		}, nil
-	default:
-		return types.PermissionDecisionRequest{}, fmt.Errorf("unknown permission command: %s", command)
-	}
-}
-
-func parsePermissionDecisionAlias(raw string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "once", types.PermissionDecisionAllowOnce:
-		return types.PermissionDecisionAllowOnce, true
-	case "run", types.PermissionDecisionAllowRun:
-		return types.PermissionDecisionAllowRun, true
-	case "session", types.PermissionDecisionAllowSession:
-		return types.PermissionDecisionAllowSession, true
-	default:
-		return "", false
-	}
-}
-
-func permissionCommandUsage(command string) string {
-	if strings.EqualFold(command, "deny") {
-		return "[<request_id>]"
-	}
-	return "[<request_id>] [once|run|session]"
-}
-
-func pendingPermissionNotice(requestID string) string {
-	requestID = strings.TrimSpace(requestID)
-	if requestID == "" {
-		return "permission request is pending; resolve it before sending another prompt"
-	}
-	return fmt.Sprintf("permission request is pending; use /approve %s [once|run|session] or /deny %s before sending another prompt", requestID, requestID)
-}
-
-func pendingPermissionRequestIDFromTimeline(timeline types.SessionTimelineResponse) string {
-	pending := ""
-	for _, block := range timeline.Blocks {
-		if block.Kind != "permission_block" {
-			continue
-		}
-		requestID := strings.TrimSpace(block.PermissionRequestID)
-		if requestID == "" {
-			continue
-		}
-		if strings.EqualFold(block.Status, string(types.PermissionRequestStatusRequested)) {
-			pending = requestID
-			continue
-		}
-		if requestID == pending {
-			pending = ""
-		}
-	}
-	return pending
 }
 
 func (r *REPL) handleCronCommand(ctx context.Context, args []string) error {

@@ -382,11 +382,17 @@ func validateAutomationSpec(spec types.AutomationSpec) error {
 	if !strings.EqualFold(strings.TrimSpace(string(spec.Mode)), string(types.AutomationModeSimple)) {
 		return errManagedRuntimeUnsupported
 	}
-	if types.NormalizeAutomationOwner(spec.Owner) == "" {
+	if types.NormalizeRoleAutomationOwner(spec.Owner) == "" {
 		return &types.AutomationValidationError{
 			Code:    "invalid_automation_spec",
-			Message: "owner must be main_agent or role:<role_id> for simple mode automations",
+			Message: "owner must be role:<role_id> for simple mode automations",
 		}
+	}
+	if _, err := normalizeSimpleAutomationMainAgentTarget("report_target", spec.ReportTarget); err != nil {
+		return err
+	}
+	if _, err := normalizeSimpleAutomationMainAgentTarget("escalation_target", spec.EscalationTarget); err != nil {
+		return err
 	}
 	if !isJSONObject(spec.WatcherLifecycle) || !isJSONObject(spec.RetriggerPolicy) {
 		return &types.AutomationValidationError{

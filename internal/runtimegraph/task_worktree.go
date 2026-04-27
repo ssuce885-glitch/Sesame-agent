@@ -150,6 +150,8 @@ func ensureRunLocked(ctx context.Context, tx RuntimeTx, turnCtx *TurnContext, se
 		return "", err
 	}
 	turnCtx.CurrentRunID = runID
+	turnCtx.CurrentRunObjective = objective
+	turnCtx.CurrentRunStartedAt = now
 	return runID, nil
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -37,55 +36,24 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	if err := persistInitialLoopItems(ctx, e, in, emitter, state); err != nil {
 		return err
 	}
-	return executePreparedLoop(ctx, e, in, emitter, state)
+	runErr := executePreparedLoop(ctx, e, in, emitter, state)
+	if e.runtimeService != nil {
+		if finishErr := e.runtimeService.FinishCurrentRun(context.WithoutCancel(ctx), state.turnCtx, in.Session.ID, in.Turn.ID, runErr); finishErr != nil && runErr == nil {
+			return finishErr
+		}
+	}
+	return runErr
 }
 
 func effectiveTurnMessage(turn types.Turn) string {
-	if normalizeTurnKind(turn.Kind) == types.TurnKindChildReportBatch {
-		return "Review the child reports and continue the main conversation."
+	if normalizeTurnKind(turn.Kind) == types.TurnKindReportBatch {
+		return "Review the reports and continue the conversation."
 	}
 	return turn.UserMessage
 }
 
 func turnEntryUserItem(in Input) model.ConversationItem {
-	if in.Resume != nil {
-		return model.ConversationItem{}
-	}
 	return model.UserMessageItem(effectiveTurnMessage(in.Turn))
-}
-
-func resumeToolResultItem(resume *types.TurnResume) (model.ConversationItem, model.ToolResult) {
-	if resume == nil {
-		return model.ConversationItem{}, model.ToolResult{}
-	}
-	content := fmt.Sprintf("Permission request resolved: %s.", resume.Decision)
-	isError := resume.Decision == types.PermissionDecisionDeny
-	if resume.DecisionScope != "" {
-		content += " Scope: " + resume.DecisionScope + "."
-	}
-	if resume.RequestedProfile != "" {
-		content += " Requested profile: " + resume.RequestedProfile + "."
-	}
-	if resume.Reason != "" {
-		content += " Reason: " + resume.Reason + "."
-	}
-	if resume.EffectivePermissionProfile != "" {
-		content += " Effective profile: " + resume.EffectivePermissionProfile + "."
-	}
-	result := model.ToolResult{
-		ToolCallID: resume.ToolCallID,
-		ToolName:   resume.ToolName,
-		Content:    content,
-		StructuredJSON: marshalStructuredToolResult(map[string]any{
-			"status":                       map[bool]string{true: "denied", false: "resolved"}[isError],
-			"decision":                     resume.Decision,
-			"decision_scope":               resume.DecisionScope,
-			"requested_profile":            resume.RequestedProfile,
-			"effective_permission_profile": resume.EffectivePermissionProfile,
-		}),
-		IsError: isError,
-	}
-	return model.ToolResultItem(result), result
 }
 
 func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string, turnMessage string) (int, contextstate.WorkingSet, error) {
@@ -103,19 +71,23 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	}
 	totalItems := len(items)
 
-	summaryBundle, compactions, err := loadHeadMemoryBundle(ctx, e.store, sessionID, contextHeadID)
+	summaryBundle, compactions, err := loadContextHeadSummaryBundle(ctx, e.store, sessionID, contextHeadID)
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, err
 	}
-	hasHeadMemory := summaryBundle.HeadMemory != nil
-	headMemoryUpTo := loadHeadMemoryUpTo(ctx, e.store, sessionID, contextHeadID)
+	hasContextHeadSummary := summaryBundle.ContextHeadSummary != nil
+	contextHeadSummaryUpTo := loadContextHeadSummaryUpTo(ctx, e.store, sessionID, contextHeadID)
 
-	entries, err := e.store.ListMemoryEntriesByWorkspace(ctx, in.Session.WorkspaceRoot)
+	roleID := resolveMemoryRoleID(ctx, in)
+	entries, err := e.store.ListVisibleMemoryEntries(ctx, in.Session.WorkspaceRoot, roleID)
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, err
 	}
 
-	memoryRefs := buildMemoryRefs(entries, hasHeadMemory, in.Session.WorkspaceRoot, turnMessage)
+	memoryRefs, usedMemoryIDs := buildMemoryRefsAndUsage(entries, hasContextHeadSummary, in.Session.WorkspaceRoot, turnMessage)
+	if err := markMemoryEntriesUsed(ctx, e.store, usedMemoryIDs); err != nil {
+		return 0, contextstate.WorkingSet{}, err
+	}
 
 	persistedMicroItems := activeMicrocompactItems(compactions)
 	recentWindowItems, recentWindowOverride := recentRawItemsForCompactionWindow(items, compactions)
@@ -133,7 +105,7 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 			memoryRefs,
 			compactions,
 			recentWindowItems,
-			headMemoryUpTo,
+			contextHeadSummaryUpTo,
 			working,
 		)
 		if err != nil {
@@ -142,6 +114,21 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	}
 
 	return totalItems, working, nil
+}
+
+type memoryUsageStore interface {
+	MarkMemoryEntriesUsed(context.Context, []string, time.Time) error
+}
+
+func markMemoryEntriesUsed(ctx context.Context, store ConversationStore, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	usageStore, ok := store.(memoryUsageStore)
+	if !ok {
+		return nil
+	}
+	return usageStore.MarkMemoryEntriesUsed(ctx, ids, time.Now().UTC())
 }
 
 func runCompactionPasses(
@@ -155,7 +142,7 @@ func runCompactionPasses(
 	memoryRefs []string,
 	compactions []types.ConversationCompaction,
 	recentWindowItems []model.ConversationItem,
-	headMemoryUpTo int64,
+	contextHeadSummaryUpTo int64,
 	working contextstate.WorkingSet,
 ) (contextstate.WorkingSet, SummaryBundle, error) {
 	switch working.Action.Kind {
@@ -170,7 +157,7 @@ func runCompactionPasses(
 			summaryBundle,
 			memoryRefs,
 			compactions,
-			headMemoryUpTo,
+			contextHeadSummaryUpTo,
 			working,
 			len(compactions)+1,
 			types.ConversationCompactionKindRolling,
@@ -206,7 +193,7 @@ func runCompactionPasses(
 			nextBundle,
 			memoryRefs,
 			nextCompactions,
-			headMemoryUpTo,
+			contextHeadSummaryUpTo,
 			nextWorking,
 			len(nextCompactions)+1,
 			types.ConversationCompactionKindRolling,
@@ -262,7 +249,7 @@ func applyMicrocompactPass(
 		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
 	}
 
-	nextBundle, nextCompactions, err := loadHeadMemoryBundle(ctx, e.store, sessionID, contextHeadID)
+	nextBundle, nextCompactions, err := loadContextHeadSummaryBundle(ctx, e.store, sessionID, contextHeadID)
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
 	}
@@ -293,7 +280,7 @@ func applySummaryCompaction(
 	summaryBundle SummaryBundle,
 	memoryRefs []string,
 	compactions []types.ConversationCompaction,
-	headMemoryUpTo int64,
+	contextHeadSummaryUpTo int64,
 	working contextstate.WorkingSet,
 	generation int,
 	kind types.ConversationCompactionKind,
@@ -339,11 +326,12 @@ func applySummaryCompaction(
 		MetadataJSON: encodeBoundaryMetadata(newBoundaryMetadata(
 			generation,
 			cutoff,
-			headMemoryUpTo,
+			contextHeadSummaryUpTo,
 			len(items),
 			reason,
 			string(e.model.Capabilities().Profile),
 			len(activeMicrocompactItems(compactions)) > 0,
+			items,
 		)),
 		Reason:          reason,
 		ProviderProfile: string(e.model.Capabilities().Profile),
@@ -352,7 +340,7 @@ func applySummaryCompaction(
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
 
-	summaryBundle, compactions, err = loadHeadMemoryBundle(ctx, e.store, sessionID, contextHeadID)
+	summaryBundle, compactions, err = loadContextHeadSummaryBundle(ctx, e.store, sessionID, contextHeadID)
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
@@ -364,19 +352,27 @@ func applySummaryCompaction(
 	return working, summaryBundle, nil
 }
 
-func newBoundaryMetadata(generation int, cutoff int, headMemoryUpTo int64, sourceItemCount int, reason string, providerProfile string, hasRecentMicrocompact bool) types.CompactionBoundaryMetadata {
+func newBoundaryMetadata(generation int, cutoff int, contextHeadSummaryUpTo int64, sourceItemCount int, reason string, providerProfile string, hasRecentMicrocompact bool, items []model.ConversationItem) types.CompactionBoundaryMetadata {
+	preservedUserCount := 0
+	for _, item := range items[cutoff:] {
+		if item.Kind == model.ConversationItemUserMessage {
+			preservedUserCount++
+		}
+	}
 	return types.CompactionBoundaryMetadata{
-		Version:               1,
-		PromptLayoutVersion:   1,
-		Generation:            generation,
-		CompactedStart:        0,
-		CompactedEnd:          cutoff,
-		PreservedRecentStart:  cutoff,
-		HeadMemoryUpTo:        headMemoryUpTo,
-		SourceItemCount:       sourceItemCount,
-		Reason:                reason,
-		ProviderProfile:       providerProfile,
-		HasRecentMicrocompact: hasRecentMicrocompact,
+		Version:                   1,
+		PromptLayoutVersion:       1,
+		Generation:                generation,
+		CompactedStart:            0,
+		CompactedEnd:              cutoff,
+		PreservedRecentStart:      cutoff,
+		PreservedUserMessageCount: preservedUserCount,
+		IsPreTurn:                 true,
+		ContextHeadSummaryUpTo:    contextHeadSummaryUpTo,
+		SourceItemCount:           sourceItemCount,
+		Reason:                    reason,
+		ProviderProfile:           providerProfile,
+		HasRecentMicrocompact:     hasRecentMicrocompact,
 	}
 }
 
@@ -402,11 +398,11 @@ func setPromptItems(working contextstate.WorkingSet, carryForwardItems []model.C
 	return working
 }
 
-func loadHeadMemoryUpTo(ctx context.Context, store ConversationStore, sessionID, contextHeadID string) int64 {
+func loadContextHeadSummaryUpTo(ctx context.Context, store ConversationStore, sessionID, contextHeadID string) int64 {
 	if store == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(contextHeadID) == "" {
 		return 0
 	}
-	memory, ok, err := store.GetHeadMemory(ctx, sessionID, contextHeadID)
+	memory, ok, err := store.GetContextHeadSummary(ctx, sessionID, contextHeadID)
 	if err != nil || !ok || memory.UpToItemID < 0 {
 		return 0
 	}

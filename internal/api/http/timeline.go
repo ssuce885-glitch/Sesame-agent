@@ -11,13 +11,9 @@ import (
 	"go-agent/internal/workspace"
 )
 
-type reportMailboxStore interface {
-	ListReportMailboxItems(context.Context, string) ([]types.ReportMailboxItem, error)
-	CountPendingReportMailboxItems(context.Context, string) (int, error)
-}
-
-type childReportCountStore interface {
-	CountPendingChildReports(context.Context, string) (int, error)
+type reportDeliveryStore interface {
+	ListReportDeliveryItems(context.Context, string) ([]types.ReportDeliveryItem, error)
+	CountQueuedReportDeliveries(context.Context, string) (int, error)
 }
 
 type queueSummaryProvider interface {

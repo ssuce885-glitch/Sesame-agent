@@ -7,7 +7,7 @@ import (
 	"go-agent/internal/model"
 )
 
-func cloneSummaryForSessionMemory(summary model.Summary) model.Summary {
+func cloneSummaryForContextHeadSummary(summary model.Summary) model.Summary {
 	cloned := model.Summary{
 		RangeLabel:       summary.RangeLabel,
 		UserGoals:        append([]string(nil), summary.UserGoals...),
@@ -17,16 +17,16 @@ func cloneSummaryForSessionMemory(summary model.Summary) model.Summary {
 		OpenThreads:      append([]string(nil), summary.OpenThreads...),
 	}
 	if strings.TrimSpace(cloned.RangeLabel) == "" {
-		cloned.RangeLabel = sessionMemoryRangeLabel
+		cloned.RangeLabel = contextHeadSummaryRangeLabel
 	}
 	return cloned
 }
 
-func prependSessionMemorySummary(summaries []model.Summary, summary model.Summary) []model.Summary {
+func prependContextHeadSummary(summaries []model.Summary, summary model.Summary) []model.Summary {
 	out := make([]model.Summary, 0, len(summaries)+1)
-	out = append(out, cloneSummaryForSessionMemory(summary))
+	out = append(out, cloneSummaryForContextHeadSummary(summary))
 	for _, existing := range summaries {
-		out = append(out, cloneSummaryForSessionMemory(existing))
+		out = append(out, cloneSummaryForContextHeadSummary(existing))
 	}
 	return out
 }
@@ -40,7 +40,7 @@ func dedupeSummaries(summaries []model.Summary) []model.Summary {
 	out := make([]model.Summary, 0, len(summaries))
 	for _, summary := range summaries {
 		normalized := normalizeSummaryForPrompt(summary)
-		key := encodeSessionMemorySummary(normalized)
+		key := encodeContextHeadSummaryPayload(normalized)
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -51,7 +51,7 @@ func dedupeSummaries(summaries []model.Summary) []model.Summary {
 }
 
 func normalizeSummaryForPrompt(summary model.Summary) model.Summary {
-	normalized := cloneSummaryForSessionMemory(summary)
+	normalized := cloneSummaryForContextHeadSummary(summary)
 	normalized.RangeLabel = strings.TrimSpace(normalized.RangeLabel)
 	normalized.UserGoals = dedupeSummaryStrings(normalized.UserGoals)
 	normalized.ImportantChoices = dedupeSummaryStrings(normalized.ImportantChoices)
@@ -106,18 +106,18 @@ func dedupeSummaryStrings(values []string) []string {
 	return result
 }
 
-func selectPromptSummaries(summaries []model.Summary, sessionMemoryPresent bool) SummaryBundle {
+func selectPromptSummaries(summaries []model.Summary, contextHeadSummaryPresent bool) SummaryBundle {
 	summaries = dedupeSummaries(summaries)
 	if len(summaries) == 0 {
 		return SummaryBundle{}
 	}
 
-	var sessionMemory *model.Summary
+	var contextHeadSummary *model.Summary
 	start := 0
-	if sessionMemoryPresent {
-		if selected := takeSummaryBudget(summaries[:1], sessionMemorySummaryTokenBudget, sessionMemorySummaryMaxCount); len(selected) > 0 {
+	if contextHeadSummaryPresent {
+		if selected := takeSummaryBudget(summaries[:1], contextHeadSummaryTokenBudget, contextHeadSummaryMaxCount); len(selected) > 0 {
 			value := selected[0]
-			sessionMemory = &value
+			contextHeadSummary = &value
 		}
 		start = 1
 	}
@@ -130,7 +130,7 @@ func selectPromptSummaries(summaries []model.Summary, sessionMemoryPresent bool)
 	}
 
 	rolling := summaries[start:]
-	return selectPromptSummaryBundle(sessionMemory, boundary, rolling)
+	return selectPromptSummaryBundle(contextHeadSummary, boundary, rolling)
 }
 
 func takeSummaryBudget(summaries []model.Summary, tokenBudget int, maxCount int) []model.Summary {
@@ -213,10 +213,10 @@ func removeMatchingSummary(summaries []model.Summary, target model.Summary) []mo
 		return nil
 	}
 
-	targetKey := encodeSessionMemorySummary(normalizeSummaryForPrompt(target))
+	targetKey := encodeContextHeadSummaryPayload(normalizeSummaryForPrompt(target))
 	out := make([]model.Summary, 0, len(summaries))
 	for _, summary := range summaries {
-		summaryKey := encodeSessionMemorySummary(normalizeSummaryForPrompt(summary))
+		summaryKey := encodeContextHeadSummaryPayload(normalizeSummaryForPrompt(summary))
 		if summaryKey == targetKey {
 			continue
 		}

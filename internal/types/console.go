@@ -7,29 +7,25 @@ import (
 )
 
 type TimelineBlock struct {
-	ID                  string                 `json:"id"`
-	RunID               string                 `json:"run_id,omitempty"`
-	TurnID              string                 `json:"turn_id,omitempty"`
-	Kind                string                 `json:"kind"`
-	Status              string                 `json:"status,omitempty"`
-	Title               string                 `json:"title,omitempty"`
-	Text                string                 `json:"text,omitempty"`
-	ToolCallID          string                 `json:"tool_call_id,omitempty"`
-	ToolRunID           string                 `json:"tool_run_id,omitempty"`
-	ToolName            string                 `json:"tool_name,omitempty"`
-	TaskID              string                 `json:"task_id,omitempty"`
-	PlanID              string                 `json:"plan_id,omitempty"`
-	WorktreeID          string                 `json:"worktree_id,omitempty"`
-	PermissionRequestID string                 `json:"permission_request_id,omitempty"`
-	RequestedProfile    string                 `json:"requested_profile,omitempty"`
-	Decision            string                 `json:"decision,omitempty"`
-	DecisionScope       string                 `json:"decision_scope,omitempty"`
-	Reason              string                 `json:"reason,omitempty"`
-	Path                string                 `json:"path,omitempty"`
-	ArgsPreview         string                 `json:"args_preview,omitempty"`
-	ResultPreview       string                 `json:"result_preview,omitempty"`
-	Content             []TimelineContentBlock `json:"content,omitempty"`
-	Usage               *TurnUsage             `json:"usage,omitempty"`
+	ID            string                 `json:"id"`
+	RunID         string                 `json:"run_id,omitempty"`
+	TurnID        string                 `json:"turn_id,omitempty"`
+	Kind          string                 `json:"kind"`
+	Status        string                 `json:"status,omitempty"`
+	Title         string                 `json:"title,omitempty"`
+	Text          string                 `json:"text,omitempty"`
+	ToolCallID    string                 `json:"tool_call_id,omitempty"`
+	ToolRunID     string                 `json:"tool_run_id,omitempty"`
+	ToolName      string                 `json:"tool_name,omitempty"`
+	TaskID        string                 `json:"task_id,omitempty"`
+	PlanID        string                 `json:"plan_id,omitempty"`
+	WorktreeID    string                 `json:"worktree_id,omitempty"`
+	Reason        string                 `json:"reason,omitempty"`
+	Path          string                 `json:"path,omitempty"`
+	ArgsPreview   string                 `json:"args_preview,omitempty"`
+	ResultPreview string                 `json:"result_preview,omitempty"`
+	Content       []TimelineContentBlock `json:"content,omitempty"`
+	Usage         *TurnUsage             `json:"usage,omitempty"`
 }
 
 type TimelineContentBlock struct {
@@ -51,17 +47,17 @@ type TimelineContentBlock struct {
 type SessionTimelineResponse struct {
 	Blocks             []TimelineBlock     `json:"blocks"`
 	LatestSeq          int64               `json:"latest_seq"`
-	PendingReportCount int                 `json:"pending_report_count"`
+	QueuedReportCount int                 `json:"queued_report_count"`
 	Queue              SessionQueueSummary `json:"queue"`
 }
 
 type SessionQueueSummary struct {
-	ActiveTurnID             string   `json:"active_turn_id,omitempty"`
-	ActiveTurnKind           TurnKind `json:"active_turn_kind,omitempty"`
-	QueueDepth               int      `json:"queue_depth"`
-	QueuedUserTurns          int      `json:"queued_user_turns"`
-	QueuedChildReportBatches int      `json:"queued_child_report_batches"`
-	PendingChildReports      int      `json:"pending_child_reports"`
+	ActiveTurnID        string   `json:"active_turn_id,omitempty"`
+	ActiveTurnKind      TurnKind `json:"active_turn_kind,omitempty"`
+	QueueDepth          int      `json:"queue_depth"`
+	QueuedUserTurns     int      `json:"queued_user_turns"`
+	QueuedReportBatches int      `json:"queued_report_batches"`
+	QueuedReports      int      `json:"queued_reports"`
 }
 
 type ConversationTimelineItem struct {
@@ -119,18 +115,17 @@ func TimelineBlockFromTask(task Task) TimelineBlock {
 
 func TimelineBlockFromToolRun(toolRun ToolRun) TimelineBlock {
 	return TimelineBlock{
-		ID:                  toolRun.ID,
-		RunID:               toolRun.RunID,
-		Kind:                "tool_run_block",
-		Status:              string(toolRun.State),
-		Title:               toolRun.ToolName,
-		ToolRunID:           toolRun.ID,
-		TaskID:              toolRun.TaskID,
-		ToolCallID:          toolRun.ToolCallID,
-		ToolName:            toolRun.ToolName,
-		PermissionRequestID: toolRun.PermissionRequestID,
-		ArgsPreview:         clampConsolePreview(toolRun.InputJSON),
-		ResultPreview:       clampConsolePreview(firstNonEmptyConsole(toolRun.OutputJSON, toolRun.Error)),
+		ID:            toolRun.ID,
+		RunID:         toolRun.RunID,
+		Kind:          "tool_run_block",
+		Status:        string(toolRun.State),
+		Title:         toolRun.ToolName,
+		ToolRunID:     toolRun.ID,
+		TaskID:        toolRun.TaskID,
+		ToolCallID:    toolRun.ToolCallID,
+		ToolName:      toolRun.ToolName,
+		ArgsPreview:   clampConsolePreview(toolRun.InputJSON),
+		ResultPreview: clampConsolePreview(firstNonEmptyConsole(toolRun.OutputJSON, toolRun.Error)),
 	}
 }
 
@@ -145,27 +140,6 @@ func TimelineBlockFromWorktree(worktree Worktree) TimelineBlock {
 		WorktreeID: worktree.ID,
 		Path:       worktree.WorktreePath,
 		Text:       worktree.WorktreePath,
-	}
-}
-
-func TimelineBlockFromPermissionRequest(request PermissionRequest) TimelineBlock {
-	return TimelineBlock{
-		ID:                  request.ID,
-		RunID:               request.RunID,
-		TurnID:              request.TurnID,
-		Kind:                "permission_block",
-		Status:              string(request.Status),
-		Title:               firstNonEmptyConsole(request.ToolName, "Permission"),
-		ToolRunID:           request.ToolRunID,
-		ToolCallID:          request.ToolCallID,
-		ToolName:            request.ToolName,
-		TaskID:              request.TaskID,
-		PermissionRequestID: request.ID,
-		RequestedProfile:    request.RequestedProfile,
-		Decision:            request.Decision,
-		DecisionScope:       request.DecisionScope,
-		Reason:              request.Reason,
-		Text:                clampConsolePreview(firstNonEmptyConsole(request.Reason, request.RequestedProfile)),
 	}
 }
 

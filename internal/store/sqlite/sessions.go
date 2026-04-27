@@ -248,13 +248,12 @@ func (s *Store) ListRunningTurns(ctx context.Context) ([]types.Turn, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		select id, session_id, context_head_id, turn_kind, client_turn_id, state, user_message, created_at, updated_at
 		from turns
-		where state in (?, ?, ?, ?, ?, ?)
+		where state in (?, ?, ?, ?, ?)
 		order by created_at asc
 	`,
 		types.TurnStateBuildingContext,
 		types.TurnStateModelStreaming,
 		types.TurnStateToolDispatching,
-		types.TurnStateAwaitingPermission,
 		types.TurnStateToolRunning,
 		types.TurnStateLoopContinue,
 	)

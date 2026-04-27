@@ -47,6 +47,7 @@ type Service struct {
 	mu            sync.Mutex
 	gateway       Gateway
 	bridge        Bridge
+	bus           sessionEventSubscriber
 	logger        *slog.Logger
 	workspaceRoot string
 	started       bool
@@ -108,6 +109,49 @@ func (w eventReplyWaiter) WaitParentReplyCommitted(ctx context.Context, sessionI
 	}
 }
 
+func (w eventReplyWaiter) WaitNextParentReplyCommitted(ctx context.Context, sessionID string, seen map[string]struct{}) (types.ParentReplyCommittedPayload, error) {
+	if w.store == nil {
+		return types.ParentReplyCommittedPayload{}, errors.New("discord parent reply event store is not configured")
+	}
+	if w.bus == nil {
+		return types.ParentReplyCommittedPayload{}, errors.New("discord parent reply bus is not configured")
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return types.ParentReplyCommittedPayload{}, errors.New("discord parent reply lookup requires session ID")
+	}
+	if seen == nil {
+		seen = map[string]struct{}{}
+	}
+
+	events, unsubscribe := w.bus.Subscribe(sessionID)
+	defer unsubscribe()
+
+	if payload, ok, err := w.findNextInStore(ctx, sessionID, seen); err != nil {
+		return types.ParentReplyCommittedPayload{}, err
+	} else if ok {
+		return payload, nil
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return types.ParentReplyCommittedPayload{}, ctx.Err()
+		case event, ok := <-events:
+			if !ok {
+				return types.ParentReplyCommittedPayload{}, errors.New("discord parent reply subscription closed")
+			}
+			payload, matched, err := decodeAnyParentReplyEvent(event, seen)
+			if err != nil {
+				return types.ParentReplyCommittedPayload{}, err
+			}
+			if matched {
+				return payload, nil
+			}
+		}
+	}
+}
+
 func (w eventReplyWaiter) findInStore(ctx context.Context, sessionID, turnID string) (types.ParentReplyCommittedPayload, bool, error) {
 	events, err := w.store.ListSessionEvents(ctx, sessionID, 0)
 	if err != nil {
@@ -115,6 +159,23 @@ func (w eventReplyWaiter) findInStore(ctx context.Context, sessionID, turnID str
 	}
 	for _, event := range events {
 		payload, matched, err := decodeParentReplyEvent(event, turnID)
+		if err != nil {
+			return types.ParentReplyCommittedPayload{}, false, err
+		}
+		if matched {
+			return payload, true, nil
+		}
+	}
+	return types.ParentReplyCommittedPayload{}, false, nil
+}
+
+func (w eventReplyWaiter) findNextInStore(ctx context.Context, sessionID string, seen map[string]struct{}) (types.ParentReplyCommittedPayload, bool, error) {
+	events, err := w.store.ListSessionEvents(ctx, sessionID, 0)
+	if err != nil {
+		return types.ParentReplyCommittedPayload{}, false, err
+	}
+	for _, event := range events {
+		payload, matched, err := decodeAnyParentReplyEvent(event, seen)
 		if err != nil {
 			return types.ParentReplyCommittedPayload{}, false, err
 		}
@@ -136,6 +197,23 @@ func decodeParentReplyEvent(event types.Event, turnID string) (types.ParentReply
 	var payload types.ParentReplyCommittedPayload
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return types.ParentReplyCommittedPayload{}, false, err
+	}
+	return payload, true, nil
+}
+
+func decodeAnyParentReplyEvent(event types.Event, seen map[string]struct{}) (types.ParentReplyCommittedPayload, bool, error) {
+	if event.Type != types.EventParentReplyCommitted {
+		return types.ParentReplyCommittedPayload{}, false, nil
+	}
+	var payload types.ParentReplyCommittedPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return types.ParentReplyCommittedPayload{}, false, err
+	}
+	key := parentReplyKey(payload)
+	if key != "" {
+		if _, ok := seen[key]; ok {
+			return types.ParentReplyCommittedPayload{}, false, nil
+		}
 	}
 	return payload, true, nil
 }
@@ -181,6 +259,7 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 	svc := &Service{
 		logger:        logger,
 		workspaceRoot: workspaceRoot,
+		bus:           cfg.Bus,
 	}
 	svc.bridge = Bridge{
 		state:   state,
@@ -231,6 +310,7 @@ func (s *Service) Start(ctx context.Context) error {
 		cancel()
 		return err
 	}
+	s.startBackgroundReplyForwarder(runCtx)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -255,3 +335,61 @@ func (s *Service) Close() error {
 }
 
 var _ Connector = (*Service)(nil)
+
+func (s *Service) startBackgroundReplyForwarder(ctx context.Context) {
+	if s == nil || s.bus == nil || s.bridge.store == nil || s.bridge.replies == nil {
+		return
+	}
+	if !s.bridge.cfg.Enabled || strings.TrimSpace(s.bridge.cfg.ChannelID) == "" {
+		return
+	}
+	sessionRow, _, _, err := s.bridge.store.EnsureRoleSession(ctx, s.workspaceRoot, types.SessionRoleMainParent)
+	if err != nil {
+		s.logger.Warn("discord report forwarder disabled; main session unavailable", "error", err)
+		return
+	}
+	events, unsubscribe := s.bus.Subscribe(sessionRow.ID)
+	go func() {
+		defer unsubscribe()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-events:
+				if !ok {
+					return
+				}
+				if event.Type != types.EventParentReplyCommitted {
+					continue
+				}
+				var payload types.ParentReplyCommittedPayload
+				if err := json.Unmarshal(event.Payload, &payload); err != nil {
+					s.logger.Warn("discord parent reply decode failed", "error", err)
+					continue
+				}
+				if !isDiscordBackgroundReportReply(payload, s.workspaceRoot) {
+					continue
+				}
+				postCtx, cancel := context.WithTimeout(ctx, statusUpdateTimeout)
+				err := postFinalReply(postCtx, s.bridge.replies, s.bridge.cfg.ChannelID, "", payload.Text, s.bridge.cfg)
+				cancel()
+				if err != nil {
+					s.logger.Warn("discord background reply post failed", "turn_id", payload.TurnID, "error", err)
+				}
+			}
+		}
+	}()
+}
+
+func isDiscordBackgroundReportReply(payload types.ParentReplyCommittedPayload, workspaceRoot string) bool {
+	if payload.TurnKind != types.TurnKindReportBatch {
+		return false
+	}
+	if strings.TrimSpace(payload.Text) == "" {
+		return false
+	}
+	if strings.TrimSpace(payload.WorkspaceRoot) != "" && strings.TrimSpace(payload.WorkspaceRoot) != strings.TrimSpace(workspaceRoot) {
+		return false
+	}
+	return len(payload.SourceParentTurnIDs) == 0
+}

@@ -2,18 +2,22 @@ package runtimegraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"go-agent/internal/store/sqlite"
+	"go-agent/internal/types"
 )
 
 type TurnContext struct {
-	CurrentSessionID string
-	CurrentTurnID    string
-	CurrentRunID     string
-	CurrentTaskID    string
+	CurrentSessionID    string
+	CurrentTurnID       string
+	CurrentRunID        string
+	CurrentTaskID       string
+	CurrentRunObjective string
+	CurrentRunStartedAt time.Time
 
 	mu            sync.RWMutex
 	fileReadState map[string]time.Time
@@ -79,4 +83,50 @@ func (s *Service) EnsureRun(ctx context.Context, turnCtx *TurnContext, sessionID
 		return "", err
 	}
 	return runID, nil
+}
+
+func (s *Service) FinishCurrentRun(ctx context.Context, turnCtx *TurnContext, sessionID, turnID string, runErr error) error {
+	if s == nil || s.store == nil || turnCtx == nil || turnCtx.CurrentRunID == "" {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	state := types.RunStateCompleted
+	errorText := ""
+	switch {
+	case errors.Is(runErr, context.Canceled):
+		state = types.RunStateInterrupted
+		errorText = runErr.Error()
+	case runErr != nil:
+		state = types.RunStateFailed
+		errorText = runErr.Error()
+	}
+	run := types.Run{
+		ID:        turnCtx.CurrentRunID,
+		SessionID: sessionID,
+		TurnID:    turnID,
+		State:     state,
+		Objective: turnCtx.CurrentRunObjective,
+		Error:     errorText,
+		CreatedAt: firstNonZeroTime(turnCtx.CurrentRunStartedAt, now),
+		UpdatedAt: now,
+	}
+	if err := s.store.WithTx(ctx, func(tx RuntimeTx) error {
+		return tx.UpsertRun(ctx, run)
+	}); err != nil {
+		return err
+	}
+	turnCtx.CurrentRunID = ""
+	turnCtx.CurrentRunObjective = ""
+	turnCtx.CurrentRunStartedAt = time.Time{}
+	return nil
+}
+
+func firstNonZeroTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value
+		}
+	}
+	return time.Time{}
 }

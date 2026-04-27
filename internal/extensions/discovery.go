@@ -6,53 +6,9 @@ import (
 	"sort"
 	"strings"
 
+	"go-agent/internal/skillcatalog"
 	"gopkg.in/yaml.v3"
 )
-
-type Skill struct {
-	Name         string
-	Description  string
-	Path         string
-	Scope        string
-	Body         string
-	Triggers     []string
-	AllowedTools []string
-	Policy       SkillPolicy
-	Agent        SkillAgent
-}
-
-type SkillPolicy struct {
-	AllowImplicitActivation bool
-	AllowFullInjection      bool
-	CapabilityTags          []string
-	PreferredTools          []string
-}
-
-type SkillAgent struct {
-	Type         string
-	Description  string
-	Instructions string
-	Tools        []string
-}
-
-type ToolAsset struct {
-	Name        string
-	Path        string
-	Scope       string
-	Description string
-}
-
-type SkillDirectories struct {
-	System    string
-	Global    string
-	Workspace string
-}
-
-type Catalog struct {
-	Skills    []Skill
-	Tools     []ToolAsset
-	SkillDirs SkillDirectories
-}
 
 type stringList []string
 
@@ -86,8 +42,8 @@ type parsedSkillDocument struct {
 	Body         string
 	Triggers     []string
 	AllowedTools []string
-	Policy       SkillPolicy
-	Agent        SkillAgent
+	Policy       skillcatalog.SkillPolicy
+	Agent        skillcatalog.AgentSpec
 }
 
 func (l *stringList) UnmarshalYAML(node *yaml.Node) error {
@@ -125,30 +81,30 @@ func (l *stringList) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
-func Discover(globalRoot, workspaceRoot string) (Catalog, error) {
+func Discover(globalRoot, workspaceRoot string) (skillcatalog.Catalog, error) {
 	paths, err := resolveExtensionPaths(globalRoot, workspaceRoot)
 	if err != nil {
-		return Catalog{}, err
+		return skillcatalog.Catalog{}, err
 	}
 
 	systemSkills, err := readSkillsDir(filepath.Join(paths.GlobalSkillsDir, systemSkillsDirName), ScopeSystem)
 	if err != nil {
-		return Catalog{}, err
+		return skillcatalog.Catalog{}, err
 	}
 	globalSkills, err := readSkillsDir(paths.GlobalSkillsDir, ScopeGlobal)
 	if err != nil {
-		return Catalog{}, err
+		return skillcatalog.Catalog{}, err
 	}
 	workspaceSkills, err := readSkillsDir(paths.WorkspaceSkillsDir, ScopeWorkspace)
 	if err != nil {
-		return Catalog{}, err
+		return skillcatalog.Catalog{}, err
 	}
 	toolSpecs, err := DiscoverToolSpecs(globalRoot, workspaceRoot)
 	if err != nil {
-		return Catalog{}, err
+		return skillcatalog.Catalog{}, err
 	}
 
-	skillMap := make(map[string]Skill, len(systemSkills)+len(globalSkills)+len(workspaceSkills))
+	skillMap := make(map[string]skillcatalog.SkillSpec, len(systemSkills)+len(globalSkills)+len(workspaceSkills))
 	for _, skill := range systemSkills {
 		skillMap[strings.ToLower(skill.Name)] = skill
 	}
@@ -158,7 +114,7 @@ func Discover(globalRoot, workspaceRoot string) (Catalog, error) {
 	for _, skill := range workspaceSkills {
 		skillMap[strings.ToLower(skill.Name)] = skill
 	}
-	skills := make([]Skill, 0, len(skillMap))
+	skills := make([]skillcatalog.SkillSpec, 0, len(skillMap))
 	for _, skill := range skillMap {
 		skills = append(skills, skill)
 	}
@@ -171,9 +127,9 @@ func Discover(globalRoot, workspaceRoot string) (Catalog, error) {
 		return left < right
 	})
 
-	tools := make([]ToolAsset, 0, len(toolSpecs))
+	tools := make([]skillcatalog.ToolAsset, 0, len(toolSpecs))
 	for _, spec := range toolSpecs {
-		tools = append(tools, ToolAsset{
+		tools = append(tools, skillcatalog.ToolAsset{
 			Name:        spec.Name,
 			Path:        spec.Path,
 			Scope:       spec.Scope,
@@ -181,10 +137,10 @@ func Discover(globalRoot, workspaceRoot string) (Catalog, error) {
 		})
 	}
 
-	return Catalog{
+	return skillcatalog.Catalog{
 		Skills: skills,
 		Tools:  tools,
-		SkillDirs: SkillDirectories{
+		SkillDirs: skillcatalog.SkillDirectories{
 			System:    filepath.Join(paths.GlobalSkillsDir, systemSkillsDirName),
 			Global:    paths.GlobalSkillsDir,
 			Workspace: paths.WorkspaceSkillsDir,
@@ -192,7 +148,7 @@ func Discover(globalRoot, workspaceRoot string) (Catalog, error) {
 	}, nil
 }
 
-func readSkillsDir(root string, scope string) ([]Skill, error) {
+func readSkillsDir(root string, scope string) ([]skillcatalog.SkillSpec, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, nil
 	}
@@ -203,7 +159,7 @@ func readSkillsDir(root string, scope string) ([]Skill, error) {
 	if err != nil {
 		return nil, err
 	}
-	skills := make([]Skill, 0, len(entries))
+	skills := make([]skillcatalog.SkillSpec, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
@@ -214,7 +170,7 @@ func readSkillsDir(root string, scope string) ([]Skill, error) {
 			continue
 		}
 		parsed := parseSkillDocument(entry.Name(), string(data))
-		skills = append(skills, Skill{
+		skills = append(skills, skillcatalog.SkillSpec{
 			Name:         parsed.Name,
 			Description:  parsed.Description,
 			Path:         filepath.Join(root, entry.Name()),
@@ -245,7 +201,7 @@ func parseSkillDocument(defaultName, raw string) parsedSkillDocument {
 	return parsedSkillDocument{
 		Name: name,
 		Body: body,
-		Policy: SkillPolicy{
+		Policy: skillcatalog.SkillPolicy{
 			AllowFullInjection: true,
 		},
 	}
@@ -319,7 +275,7 @@ func buildParsedSkillDocument(defaultName string, meta skillMetadata, body strin
 		Triggers:     append([]string(nil), meta.Triggers...),
 		AllowedTools: append([]string(nil), meta.AllowedTools...),
 		Policy:       normalizeSkillPolicy(meta.Policy),
-		Agent: SkillAgent{
+		Agent: skillcatalog.AgentSpec{
 			Type:         meta.Agent.Type,
 			Description:  meta.Agent.Description,
 			Instructions: meta.Agent.Instructions,
@@ -397,8 +353,8 @@ func firstNonEmptySkillString(values ...string) string {
 	return ""
 }
 
-func cloneSkillAgent(agent SkillAgent) SkillAgent {
-	return SkillAgent{
+func cloneSkillAgent(agent skillcatalog.AgentSpec) skillcatalog.AgentSpec {
+	return skillcatalog.AgentSpec{
 		Type:         strings.TrimSpace(agent.Type),
 		Description:  strings.TrimSpace(agent.Description),
 		Instructions: strings.TrimSpace(agent.Instructions),
@@ -406,8 +362,8 @@ func cloneSkillAgent(agent SkillAgent) SkillAgent {
 	}
 }
 
-func normalizeSkillPolicy(section skillPolicySection) SkillPolicy {
-	policy := SkillPolicy{
+func normalizeSkillPolicy(section skillPolicySection) skillcatalog.SkillPolicy {
+	policy := skillcatalog.SkillPolicy{
 		AllowFullInjection: true,
 		CapabilityTags:     append([]string(nil), section.CapabilityTags...),
 		PreferredTools:     append([]string(nil), section.PreferredTools...),
@@ -421,8 +377,8 @@ func normalizeSkillPolicy(section skillPolicySection) SkillPolicy {
 	return policy
 }
 
-func cloneSkillPolicy(policy SkillPolicy) SkillPolicy {
-	return SkillPolicy{
+func cloneSkillPolicy(policy skillcatalog.SkillPolicy) skillcatalog.SkillPolicy {
+	return skillcatalog.SkillPolicy{
 		AllowImplicitActivation: policy.AllowImplicitActivation,
 		AllowFullInjection:      policy.AllowFullInjection,
 		CapabilityTags:          append([]string(nil), policy.CapabilityTags...),

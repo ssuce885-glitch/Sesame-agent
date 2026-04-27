@@ -9,8 +9,8 @@ import (
 type queueItemKind string
 
 const (
-	queueItemKindUserMessage      queueItemKind = "user_message"
-	queueItemKindChildReportBatch queueItemKind = "child_report_batch"
+	queueItemKindUserMessage queueItemKind = "user_message"
+	queueItemKindReportBatch queueItemKind = "report_batch"
 )
 
 type queuedTurn struct {
@@ -20,23 +20,23 @@ type queuedTurn struct {
 }
 
 func normalizeTurnKind(kind types.TurnKind) types.TurnKind {
-	if kind == types.TurnKindChildReportBatch {
-		return types.TurnKindChildReportBatch
+	if kind == types.TurnKindReportBatch {
+		return types.TurnKindReportBatch
 	}
 	return types.TurnKindUserMessage
 }
 
 func queueItemKindForTurn(turn types.Turn) queueItemKind {
-	if normalizeTurnKind(turn.Kind) == types.TurnKindChildReportBatch {
-		return queueItemKindChildReportBatch
+	if normalizeTurnKind(turn.Kind) == types.TurnKindReportBatch {
+		return queueItemKindReportBatch
 	}
 	return queueItemKindUserMessage
 }
 
 func enqueueQueuedTurn(queue []queuedTurn, item queuedTurn) ([]queuedTurn, string, bool) {
-	if item.kind == queueItemKindChildReportBatch {
+	if item.kind == queueItemKindReportBatch {
 		for _, queued := range queue {
-			if queued.kind == queueItemKindChildReportBatch {
+			if queued.kind == queueItemKindReportBatch {
 				return queue, queued.in.Turn.ID, false
 			}
 		}
@@ -51,15 +51,15 @@ func dequeueQueuedTurn(queue []queuedTurn) (queuedTurn, []queuedTurn, bool) {
 	return queue[0], queue[1:], true
 }
 
-func queueCounters(queue []queuedTurn) (depth, queuedUsers, queuedChildReportBatches int) {
+func queueCounters(queue []queuedTurn) (depth, queuedUsers, queuedReportBatches int) {
 	depth = len(queue)
 	for _, item := range queue {
 		switch item.kind {
-		case queueItemKindChildReportBatch:
-			queuedChildReportBatches++
+		case queueItemKindReportBatch:
+			queuedReportBatches++
 		default:
 			queuedUsers++
 		}
 	}
-	return depth, queuedUsers, queuedChildReportBatches
+	return depth, queuedUsers, queuedReportBatches
 }

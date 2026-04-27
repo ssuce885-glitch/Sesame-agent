@@ -4,12 +4,11 @@ import {
   getTimeline,
   getContextHistory,
   getWorkspace,
-  getWorkspaceMailbox,
+  getWorkspaceReports,
   getWorkspaceRuntimeGraph,
   loadContextHistory,
   reopenContext,
   submitMessage,
-  submitPermission,
   getMetricsOverview,
   getMetricsTimeseries,
   getRole,
@@ -65,10 +64,10 @@ export function useWorkspaceRuntimeGraph() {
   });
 }
 
-export function useWorkspaceMailbox() {
+export function useWorkspaceReports() {
   return useQuery({
-    queryKey: ["workspace-mailbox"],
-    queryFn: getWorkspaceMailbox,
+    queryKey: ["workspace-reports"],
+    queryFn: getWorkspaceReports,
     staleTime: 10_000,
   });
 }
@@ -152,13 +151,6 @@ export function useSubmitMessage(sessionId: string) {
       // Invalidate timeline so it refetches latest messages
       qc.invalidateQueries({ queryKey: ["timeline", sessionId] });
     },
-  });
-}
-
-export function useSubmitPermission(sessionId: string) {
-  return useMutation({
-    mutationFn: ({ requestId, decision }: { requestId: string; decision: string }) =>
-      submitPermission(sessionId, requestId, decision),
   });
 }
 

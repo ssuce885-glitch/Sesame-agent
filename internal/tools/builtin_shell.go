@@ -106,6 +106,9 @@ func (t shellTool) Decode(call Call) (DecodedCall, error) {
 	if command == "" {
 		return DecodedCall{}, fmt.Errorf("shell command is required")
 	}
+	if isShellWaitOnlyCommand(command) {
+		return DecodedCall{}, fmt.Errorf("shell_command must not be used just to wait or poll; report the current state and stop instead")
+	}
 	workdir := strings.TrimSpace(call.StringInput("workdir"))
 
 	timeoutSeconds, err := decodeShellPositiveInt(call.Input["timeout_seconds"], shellCommandTimeoutSeconds)
@@ -142,6 +145,26 @@ func (t shellTool) Decode(call Call) (DecodedCall, error) {
 			MaxOutputBytes: maxOutputBytes,
 		},
 	}, nil
+}
+
+func isShellWaitOnlyCommand(command string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	normalized = strings.TrimSuffix(normalized, ";")
+	if normalized == "" {
+		return false
+	}
+	if strings.HasPrefix(normalized, "sleep ") {
+		rest := strings.TrimSpace(strings.TrimPrefix(normalized, "sleep "))
+		rest = strings.ReplaceAll(rest, ";", " ; ")
+		fields := strings.Fields(rest)
+		if len(fields) == 1 {
+			return true
+		}
+		if len(fields) >= 3 && (fields[1] == "&&" || fields[1] == ";") && fields[2] == "echo" {
+			return true
+		}
+	}
+	return false
 }
 
 func (t shellTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
@@ -230,7 +253,7 @@ func (shellTool) CheckPermission(_ context.Context, decoded DecodedCall, _ ExecC
 		input.Command = strings.TrimSpace(decoded.Call.StringInput("command"))
 	}
 	if classifyShellCommand(input.Command) == shellCommandSafetyDestructive {
-		return permissions.DecisionAsk, "destructive shell command detected", nil
+		return permissions.DecisionDeny, "destructive shell command detected", nil
 	}
 	return permissions.DecisionAllow, "", nil
 }

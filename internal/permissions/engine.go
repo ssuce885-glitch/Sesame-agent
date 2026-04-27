@@ -6,8 +6,15 @@ type Decision string
 
 const (
 	DecisionAllow Decision = "allow"
-	DecisionAsk   Decision = "ask"
 	DecisionDeny  Decision = "deny"
+)
+
+const (
+	ProfileReadOnly       = "read_only"
+	ProfileWorkspaceWrite = "workspace_write"
+	ProfileTrustedLocal   = "trusted_local"
+
+	defaultProfile = ProfileTrustedLocal
 )
 
 type Engine struct {
@@ -15,7 +22,7 @@ type Engine struct {
 }
 
 func NewEngine(profile ...string) *Engine {
-	selected := "read_only"
+	selected := defaultProfile
 	if len(profile) > 0 {
 		value := strings.TrimSpace(profile[0])
 		value = strings.NewReplacer("-", "_").Replace(strings.ToLower(value))
@@ -29,7 +36,7 @@ func NewEngine(profile ...string) *Engine {
 
 func (e *Engine) Profile() string {
 	if e == nil || strings.TrimSpace(e.profile) == "" {
-		return "read_only"
+		return defaultProfile
 	}
 	return e.profile
 }
@@ -41,15 +48,14 @@ type profileSpec struct {
 
 func baseReadOnlyTools() map[string]struct{} {
 	return map[string]struct{}{
-		"file_read":           {},
-		"glob":                {},
-		"grep":                {},
-		"list_dir":            {},
-		"request_permissions": {},
-		"request_user_input":  {},
-		"skill_use":           {},
-		"view_image":          {},
-		"web_fetch":           {},
+		"file_read":          {},
+		"glob":               {},
+		"grep":               {},
+		"list_dir":           {},
+		"request_user_input": {},
+		"skill_use":          {},
+		"view_image":         {},
+		"web_fetch":          {},
 	}
 }
 
@@ -65,10 +71,10 @@ func mergeAllowed(base map[string]struct{}, tools ...string) map[string]struct{}
 }
 
 var profileSpecs = map[string]profileSpec{
-	"read_only": {
+	ProfileReadOnly: {
 		Allowed: baseReadOnlyTools(),
 	},
-	"workspace_write": {
+	ProfileWorkspaceWrite: {
 		Allowed: mergeAllowed(
 			baseReadOnlyTools(),
 			"apply_patch",
@@ -77,9 +83,20 @@ var profileSpecs = map[string]profileSpec{
 			"notebook_edit",
 		),
 	},
-	"trusted_local": {
+	ProfileTrustedLocal: {
 		Wildcard: true,
 	},
+}
+
+func (e *Engine) AllowsAll() bool {
+	if e == nil {
+		return false
+	}
+	spec, ok := profileSpecs[e.Profile()]
+	if !ok {
+		spec = profileSpecs[defaultProfile]
+	}
+	return spec.Wildcard
 }
 
 func (e *Engine) Decide(toolName string) Decision {
@@ -89,7 +106,7 @@ func (e *Engine) Decide(toolName string) Decision {
 
 	spec, ok := profileSpecs[e.Profile()]
 	if !ok {
-		spec = profileSpecs["read_only"]
+		spec = profileSpecs[defaultProfile]
 	}
 	if _, ok := spec.Allowed[toolName]; ok || spec.Wildcard {
 		return DecisionAllow

@@ -187,7 +187,7 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		CacheExpirySeconds:           intEnvOrDefault("SESAME_CACHE_EXPIRY_SECONDS", 86400),
 		MicrocompactBytesThreshold:   intEnvOrDefaultWithFallback("SESAME_MICROCOMPACT_BYTES_THRESHOLD", uc.MicrocompactBytesThreshold, 8192),
 		LogLevel:                     envOrDefault("SESAME_LOG_LEVEL", "info"),
-		PermissionProfile:            firstNonEmpty(strings.TrimSpace(overrides.PermissionMode), envOrDefaultWithFallback("SESAME_PERMISSION_PROFILE", uc.PermissionProfile, "read_only")),
+		PermissionProfile:            firstNonEmpty(strings.TrimSpace(overrides.PermissionMode), envOrDefaultWithFallback("SESAME_PERMISSION_PROFILE", uc.PermissionProfile, "trusted_local")),
 		MaxToolSteps:                 intEnvOrDefaultWithFallback("SESAME_MAX_TOOL_STEPS", uc.MaxToolSteps, 100),
 		MaxShellOutputBytes:          intEnvOrDefault("SESAME_MAX_SHELL_OUTPUT_BYTES", 4096),
 		ShellTimeoutSeconds:          intEnvOrDefault("SESAME_SHELL_TIMEOUT_SECONDS", 30),

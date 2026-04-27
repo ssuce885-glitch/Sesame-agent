@@ -85,8 +85,6 @@ func compactToolAction(toolName string) string {
 		return "task stop"
 	case "task_update":
 		return "task update"
-	case "request_permissions":
-		return "permissions"
 	default:
 		trimmed := strings.TrimSpace(toolName)
 		if trimmed == "" {
@@ -345,7 +343,7 @@ func compactToolDetail(toolName string, args map[string]any, resultPreview, targ
 		return ""
 	case "web":
 		return ""
-	case "shell", "edit", "task", "image", "permissions":
+	case "shell", "edit", "task", "image":
 		if preview == target {
 			return ""
 		}

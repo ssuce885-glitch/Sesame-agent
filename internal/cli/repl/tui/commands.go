@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"go-agent/internal/extensions"
+	"go-agent/internal/skillcatalog"
 )
 
 func (m *Model) handleCommand(line string) (tea.Model, tea.Cmd) {
@@ -57,16 +57,8 @@ func (m *Model) handleCommand(line string) (tea.Model, tea.Cmd) {
 		return m.handleHistoryCommand(fields[1:])
 	case "reopen":
 		return m, m.reopenContextCmd()
-	case "approve", "allow", "deny":
-		cmd, err := m.permissionDecisionCmd(fields[0], fields[1:])
-		if err != nil {
-			m.appendError(err.Error())
-			m.layout()
-			return m, nil
-		}
-		return m, cmd
-	case "mailbox", "inbox":
-		return m.switchView(ViewMailbox, m.loadMailboxCmd())
+	case "reports":
+		return m.switchView(ViewReports, m.loadReportsCmd())
 	case "cron":
 		return m.handleCronCommand(fields[1:])
 	default:
@@ -79,8 +71,8 @@ func (m *Model) handleCommand(line string) (tea.Model, tea.Cmd) {
 func commandHelpText() string {
 	return strings.Join([]string{
 		"/help /clear /exit /status /skills /tools /history [list|load <head_id>]",
-		"/reopen /approve [<request_id>] [once|run|session] /deny [<request_id>]",
-		"/mailbox /cron list [--all] /cron inspect <id> /cron pause <id>",
+		"/reopen",
+		"/reports /cron list [--all] /cron inspect <id> /cron pause <id>",
 		"/cron resume <id> /cron remove <id>",
 	}, "\n")
 }
@@ -147,7 +139,7 @@ func (m *Model) handleCronCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 }
 
-func formatSkillList(catalog extensions.Catalog) []string {
+func formatSkillList(catalog skillcatalog.Catalog) []string {
 	lines := make([]string, 0, len(catalog.Skills))
 	for _, skill := range catalog.Skills {
 		line := skill.Name + " [" + skill.Scope + "]"
@@ -159,7 +151,7 @@ func formatSkillList(catalog extensions.Catalog) []string {
 	return lines
 }
 
-func formatToolList(catalog extensions.Catalog) []string {
+func formatToolList(catalog skillcatalog.Catalog) []string {
 	lines := make([]string, 0, len(catalog.Tools))
 	for _, tool := range catalog.Tools {
 		line := tool.Name + " [" + tool.Scope + "]"

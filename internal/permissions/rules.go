@@ -1,5 +1,5 @@
 package permissions
 
 func DefaultMode() Decision {
-	return DecisionAsk
+	return DecisionAllow
 }

@@ -454,18 +454,14 @@ func (g *discordGateway) handleMessageCreate(ctx context.Context, msg GatewayMes
 	switch decision.Action {
 	case ingressActionIgnore:
 		if g.cfg.Global.LogIgnoredMessages {
-			g.logger.Info("discord message ignored",
-				"discord_message_id", msg.ID,
-				"guild_id", msg.GuildID,
-				"channel_id", msg.ChannelID,
-				"author_id", msg.Author.ID,
-				"reason", decision.Reason,
-			)
+			g.logger.Info("discord message ignored", append(discordMessageLogArgs(msg, g.botID()), "reason", decision.Reason)...)
 		}
 		return nil
 	case ingressActionRejectWithReply:
+		g.logger.Info("discord message rejected", append(discordMessageLogArgs(msg, g.botID()), "reason", decision.Reason)...)
 		return g.replyPoster.PostMessage(ctx, msg.ChannelID, buildOutboundMessage(decision.ReplyText, msg.ID))
 	case ingressActionAccept:
+		g.logger.Info("discord message accepted", append(discordMessageLogArgs(msg, g.botID()), "truncated", decision.Truncated)...)
 		if !g.markInFlight(msg.ID) {
 			return nil
 		}
@@ -480,6 +476,18 @@ func (g *discordGateway) handleMessageCreate(ctx context.Context, msg GatewayMes
 		})
 	default:
 		return nil
+	}
+}
+
+func discordMessageLogArgs(msg GatewayMessage, botUserID string) []any {
+	return []any{
+		"discord_message_id", msg.ID,
+		"guild_id", msg.GuildID,
+		"channel_id", msg.ChannelID,
+		"author_id", msg.Author.ID,
+		"content_len", len([]rune(msg.Content)),
+		"mention_count", len(msg.Mentions),
+		"bot_mentioned", hasBotMention(msg.Mentions, botUserID) || contentHasBotMention(msg.Content, botUserID),
 	}
 }
 

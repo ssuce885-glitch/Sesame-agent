@@ -24,7 +24,7 @@ func handleRoles(deps Dependencies) http.HandlerFunc {
 		case http.MethodGet:
 			catalog, err := deps.RoleService.List(deps.WorkspaceRoot)
 			if err != nil {
-				writeRoleServiceError(w, err)
+				writeRoleError(w, err)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -40,7 +40,7 @@ func handleRoles(deps Dependencies) http.HandlerFunc {
 			}
 			spec, err := deps.RoleService.Create(deps.WorkspaceRoot, input)
 			if err != nil {
-				writeRoleServiceError(w, err)
+				writeRoleError(w, err)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -74,7 +74,7 @@ func handleRoleByID(deps Dependencies) http.HandlerFunc {
 			case http.MethodGet:
 				versions, err := deps.RoleService.ListVersions(deps.WorkspaceRoot, roleID)
 				if err != nil {
-					writeRoleServiceError(w, err)
+					writeRoleError(w, err)
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")
@@ -95,7 +95,7 @@ func handleRoleByID(deps Dependencies) http.HandlerFunc {
 		case http.MethodGet:
 			spec, err := deps.RoleService.Get(deps.WorkspaceRoot, roleID)
 			if err != nil {
-				writeRoleServiceError(w, err)
+				writeRoleError(w, err)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -109,14 +109,14 @@ func handleRoleByID(deps Dependencies) http.HandlerFunc {
 			input.RoleID = roleID
 			spec, err := deps.RoleService.Update(deps.WorkspaceRoot, input)
 			if err != nil {
-				writeRoleServiceError(w, err)
+				writeRoleError(w, err)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(toRoleResponse(spec))
 		case http.MethodDelete:
 			if err := deps.RoleService.Delete(deps.WorkspaceRoot, roleID); err != nil {
-				writeRoleServiceError(w, err)
+				writeRoleError(w, err)
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -234,13 +234,13 @@ func decodeStrictJSONBody(r *http.Request, dst any) error {
 	return nil
 }
 
-func writeRoleServiceError(w http.ResponseWriter, err error) {
-	switch roles.KindOf(err) {
-	case roles.ErrorKindInvalidInput:
+func writeRoleError(w http.ResponseWriter, err error) {
+	switch {
+	case roles.IsInvalidInput(err):
 		http.Error(w, "bad request", http.StatusBadRequest)
-	case roles.ErrorKindNotFound:
+	case roles.IsNotFound(err):
 		http.Error(w, "not found", http.StatusNotFound)
-	case roles.ErrorKindConflict:
+	case roles.IsConflict(err):
 		http.Error(w, "conflict", http.StatusConflict)
 	default:
 		http.Error(w, "internal server error", http.StatusInternalServerError)

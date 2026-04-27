@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -65,4 +66,23 @@ func sqliteDSN(path string) string {
 		separator = "&"
 	}
 	return path + separator + query.Encode()
+}
+
+func parsePendingOptionalTime(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(timeLayout, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse time %q: %w", raw, err)
+	}
+	return parsed.UTC(), nil
+}
+
+func formatPendingOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(timeLayout)
 }

@@ -13,7 +13,7 @@ The goal is to keep simple-chain automation behavior stable, auditable, and mode
 
 The simple chain is:
 
-`watcher signal -> owner task -> report`
+`watcher signal -> owner role task -> main agent report`
 
 ## Mode Boundaries
 
@@ -31,7 +31,8 @@ This mode is for defining, updating, or replacing an automation.
 This mode is for runtime execution after a watcher match.
 
 - Execute the business action defined by `automation_goal`.
-- Report the result in the requested format.
+- Return the result as the owner role's final response; the runtime delivers it to the main agent report stream.
+- Do not call `delegate_to_role` to report back to `main_parent`.
 - Do not create or modify automations here.
 - Do not repair watcher scripts or role configuration here.
 
@@ -76,16 +77,9 @@ This skill owns:
 
 ## Why This Exists
 
-The previous four-skill split created too much overlap:
+The previous planned split across intake, behavior, normalization, and dispatch concerns created too much overlap. That overlap made it easier for the model to mix modes, mis-route supervision, and accept watcher payloads that did not match the runtime contract.
 
-- `automation-standard-behavior`
-- `automation-intake`
-- `automation-normalizer`
-- `automation-dispatch-planner`
-
-That overlap made it easier for the model to mix modes, mis-route supervision, and accept watcher payloads that did not match the runtime contract.
-
-The new two-skill baseline reduces ambiguity:
+The implemented two-skill baseline reduces ambiguity:
 
 - one skill for behavior and boundaries
 - one skill for normalization and hard rules

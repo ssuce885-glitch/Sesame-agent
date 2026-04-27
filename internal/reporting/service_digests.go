@@ -68,7 +68,7 @@ func (s *Service) canonicalDigestForGroup(ctx context.Context, group types.Repor
 		WindowEnd:       firstNonZeroTime(windowEnd, now),
 		Delivery:        group.Delivery,
 		Envelope: types.ReportEnvelope{
-			Source:   string(types.ReportMailboxSourceDigest),
+			Source:   string(types.ReportSourceDigest),
 			Status:   overallStatus,
 			Severity: overallSeverity,
 			Title:    title,
@@ -91,8 +91,8 @@ func (s *Service) canonicalDigestForGroup(ctx context.Context, group types.Repor
 	}, true, nil
 }
 
-func (s *Service) emitDueDigestsForGroup(ctx context.Context, group types.ReportGroup, now time.Time) ([]types.ReportMailboxItem, error) {
-	items := make([]types.ReportMailboxItem, 0)
+func (s *Service) emitDueDigestsForGroup(ctx context.Context, group types.ReportGroup, now time.Time) ([]types.ReportDeliveryItem, error) {
+	items := make([]types.ReportDeliveryItem, 0)
 	workspaceRoot := s.resolveWorkspaceRoot(ctx, group.SessionID, "")
 	for {
 		digest, ok, err := s.scheduledDigestForGroup(ctx, group, now)
@@ -105,8 +105,8 @@ func (s *Service) emitDueDigestsForGroup(ctx context.Context, group types.Report
 		if err := s.store.UpsertDigestRecord(ctx, digest); err != nil {
 			return nil, err
 		}
-		if reportGroupDeliversToMailbox(group) {
-			item, err := s.persistReportMailboxItem(ctx, ReportFromDigestRecord(workspaceRoot, digest, now), now)
+		if reportGroupDeliversToAgent(group) {
+			item, err := s.persistReportDeliveryItem(ctx, ReportFromDigestRecord(workspaceRoot, digest, now), now)
 			if err != nil {
 				return nil, err
 			}
@@ -173,7 +173,7 @@ func (s *Service) scheduledDigestForGroup(ctx context.Context, group types.Repor
 		WindowEnd:       windowEnd,
 		Delivery:        group.Delivery,
 		Envelope: types.ReportEnvelope{
-			Source:   string(types.ReportMailboxSourceDigest),
+			Source:   string(types.ReportSourceDigest),
 			Status:   status,
 			Severity: severity,
 			Title:    title,
@@ -333,12 +333,12 @@ func buildDigestSummary(total int, severityCounts map[string]int) string {
 	return strings.Join(parts, " · ")
 }
 
-func reportGroupDeliversToMailbox(group types.ReportGroup) bool {
+func reportGroupDeliversToAgent(group types.ReportGroup) bool {
 	if len(group.Delivery.Channels) == 0 {
 		return true
 	}
 	for _, channel := range group.Delivery.Channels {
-		if strings.EqualFold(strings.TrimSpace(channel), string(types.ReportChannelMailbox)) {
+		if strings.EqualFold(strings.TrimSpace(channel), string(types.ReportChannelAgent)) {
 			return true
 		}
 	}

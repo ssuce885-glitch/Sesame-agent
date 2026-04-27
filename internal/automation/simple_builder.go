@@ -17,9 +17,9 @@ func CompileSimpleAutomationBuilder(input types.SimpleAutomationBuilderInput, wo
 		return types.AutomationSpec{}, nativeBuilderValidationError("automation_id must match ^[a-z][a-z0-9_-]{0,127}$")
 	}
 
-	owner := types.NormalizeAutomationOwner(input.Owner)
+	owner := types.NormalizeRoleAutomationOwner(input.Owner)
 	if owner == "" {
-		return types.AutomationSpec{}, nativeBuilderValidationError("owner must be main_agent or role:<role_id>")
+		return types.AutomationSpec{}, nativeBuilderValidationError("owner must be role:<role_id>")
 	}
 
 	watchScript := strings.TrimSpace(input.WatchScript)
@@ -44,23 +44,13 @@ func CompileSimpleAutomationBuilder(input types.SimpleAutomationBuilderInput, wo
 		goal = "Run watcher script and dispatch deterministic owner task on match."
 	}
 
-	reportTarget := ""
-	if strings.TrimSpace(input.ReportTarget) == "" {
-		reportTarget = owner
-	} else {
-		reportTarget = types.NormalizeAutomationOwner(input.ReportTarget)
-		if reportTarget == "" {
-			return types.AutomationSpec{}, nativeBuilderValidationError("report_target must be main_agent or role:<role_id>")
-		}
+	reportTarget, err := normalizeSimpleAutomationMainAgentTarget("report_target", input.ReportTarget)
+	if err != nil {
+		return types.AutomationSpec{}, err
 	}
-	escalationTarget := ""
-	if strings.TrimSpace(input.EscalationTarget) == "" {
-		escalationTarget = "main_agent"
-	} else {
-		escalationTarget = types.NormalizeAutomationOwner(input.EscalationTarget)
-		if escalationTarget == "" {
-			return types.AutomationSpec{}, nativeBuilderValidationError("escalation_target must be main_agent or role:<role_id>")
-		}
+	escalationTarget, err := normalizeSimpleAutomationMainAgentTarget("escalation_target", input.EscalationTarget)
+	if err != nil {
+		return types.AutomationSpec{}, err
 	}
 
 	onSuccess, err := normalizeSimpleAutomationPolicyAction("on_success", input.SimplePolicy.OnSuccess, "continue")
@@ -132,4 +122,12 @@ func normalizeSimpleAutomationPolicyAction(field, raw, fallback string) (string,
 	default:
 		return "", nativeBuilderValidationError(fmt.Sprintf("simple_policy.%s must be one of continue, pause, escalate", strings.TrimSpace(field)))
 	}
+}
+
+func normalizeSimpleAutomationMainAgentTarget(field, raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" || value == "main_agent" {
+		return "main_agent", nil
+	}
+	return "", nativeBuilderValidationError(fmt.Sprintf("%s must be main_agent", strings.TrimSpace(field)))
 }

@@ -19,14 +19,14 @@ type Bundle struct {
 	ActiveSkills []skills.ActivatedSkill
 }
 
-type CompileInput struct {
+type RenderInput struct {
 	BaseText     string
 	Catalog      skills.Catalog
 	Message      string
 	ActiveSkills []skills.ActivatedSkill
 }
 
-func Compile(input CompileInput) Bundle {
+func Render(input RenderInput) Bundle {
 	activated := append([]skills.ActivatedSkill(nil), input.ActiveSkills...)
 	notices := skills.ActivationNotices(activated)
 	sections := make([]Section, 0, 3)

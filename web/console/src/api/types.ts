@@ -21,7 +21,6 @@ export interface TimelineBlock {
     | "task_block"
     | "tool_call"
     | "tool_run_block"
-    | "permission_block"
     | "worktree_block";
   status?: string;
   title?: string;
@@ -32,10 +31,6 @@ export interface TimelineBlock {
   task_id?: string;
   plan_id?: string;
   worktree_id?: string;
-  permission_request_id?: string;
-  requested_profile?: string;
-  decision?: string;
-  decision_scope?: string;
   reason?: string;
   path?: string;
   args_preview?: string;
@@ -47,7 +42,7 @@ export interface TimelineBlock {
 export interface TimelineResponse {
   blocks: TimelineBlock[];
   latest_seq: number;
-  pending_report_count: number;
+  queued_report_count: number;
   queue: QueueSummary;
 }
 
@@ -56,8 +51,8 @@ export interface QueueSummary {
   active_turn_kind?: string;
   queue_depth: number;
   queued_user_turns: number;
-  queued_child_report_batches: number;
-  pending_child_reports: number;
+  queued_report_batches: number;
+  queued_reports: number;
 }
 
 // ─── Content Blocks ────────────────────────────────────────────────────────────
@@ -118,29 +113,7 @@ export interface FailurePayload {
   message: string;
 }
 
-export interface PermissionRequestPayload {
-  request_id?: string;
-  tool_run_id?: string;
-  tool_call_id?: string;
-  tool_name?: string;
-  requested_profile: string;
-  reason?: string;
-  turn_id?: string;
-}
-
-export interface PermissionResolvedPayload {
-  request_id: string;
-  tool_run_id?: string;
-  tool_call_id?: string;
-  tool_name?: string;
-  requested_profile: string;
-  decision: string;
-  decision_scope?: string;
-  effective_profile?: string;
-  turn_id?: string;
-}
-
-export interface SessionMemoryPayload {
+export interface ContextHeadSummaryPayload {
   source_turn_id?: string;
   workspace_root?: string;
   async?: boolean;
@@ -240,25 +213,6 @@ export interface RuntimeTask {
   updated_at: string;
 }
 
-export interface RuntimePermissionRequest {
-  id: string;
-  session_id: string;
-  turn_id: string;
-  run_id?: string;
-  task_id?: string;
-  tool_run_id?: string;
-  tool_call_id?: string;
-  tool_name?: string;
-  requested_profile: string;
-  reason?: string;
-  status: string;
-  decision?: string;
-  decision_scope?: string;
-  resolved_at?: string;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface RuntimeDiagnostic {
   id: string;
   session_id: string;
@@ -284,7 +238,6 @@ export interface RuntimeToolRun {
   input_json?: string;
   output_json?: string;
   error?: string;
-  permission_request_id?: string;
   lock_wait_ms?: number;
   created_at?: string;
   updated_at?: string;
@@ -307,7 +260,6 @@ export interface RuntimeGraph {
   tasks: RuntimeTask[];
   tool_runs: RuntimeToolRun[];
   worktrees: RuntimeWorktree[];
-  permission_requests: RuntimePermissionRequest[];
   diagnostics?: RuntimeDiagnostic[];
 }
 
@@ -324,7 +276,7 @@ export interface ReportEnvelope {
   summary?: string;
 }
 
-export interface WorkspaceMailboxItem {
+export interface WorkspaceReportDeliveryItem {
   id: string;
   report_id?: string;
   delivery_id?: string;
@@ -344,10 +296,10 @@ export interface WorkspaceMailboxItem {
   updated_at?: string;
 }
 
-export interface WorkspaceMailboxResponse {
+export interface WorkspaceReportsResponse {
   workspace_root: string;
-  items: WorkspaceMailboxItem[];
-  pending_count: number;
+  items: WorkspaceReportDeliveryItem[];
+  queued_count: number;
 }
 
 // ─── Roles ────────────────────────────────────────────────────────────────────

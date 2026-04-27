@@ -278,7 +278,7 @@ func (taskCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 	modelText := fmt.Sprintf("Task created successfully with id: %s", created.ID)
 	if created.Type == task.TaskTypeAgent {
 		modelText = fmt.Sprintf(
-			"Task created successfully with id: %s. Agent tasks run in the background; do not call task_wait. Continue the turn and wait for child reports unless you need to inspect state with task_get/task_output/task_result.",
+			"Task created successfully with id: %s. Agent tasks run in the background; do not call task_wait, poll task status repeatedly, or use shell sleep to wait. End the turn unless the user explicitly asked for a single current-state inspection; results return through reports.",
 			created.ID,
 		)
 	}

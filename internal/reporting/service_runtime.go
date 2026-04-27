@@ -92,7 +92,7 @@ func scheduleConfigured(schedule types.ScheduleSpec) bool {
 	}
 }
 
-func (s *Service) emitReportReady(ctx context.Context, sessionID, turnID string, item types.ReportMailboxItem) error {
+func (s *Service) emitReportReady(ctx context.Context, sessionID, turnID string, item types.ReportDeliveryItem) error {
 	if s == nil || s.reportReadySink == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}

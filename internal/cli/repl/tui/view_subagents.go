@@ -37,16 +37,15 @@ func (m *Model) renderSubagentsContent(width int) string {
 		renderLineSection("Digests", formatDigests(m.reportingOverview.Digests), "No digests yet.", width),
 		renderLineSection("Tool Runs", formatToolRuns(graph.ToolRuns), "No tool runs yet.", width),
 		renderLineSection("Worktrees", formatWorktrees(graph.Worktrees), "No worktrees attached.", width),
-		renderLineSection("Permissions", formatPermissions(graph.PermissionRequests), "No pending permission requests.", width),
 	)
 	return strings.Join(parts, "\n\n")
 }
 
 func subagentsMeta(graph RuntimeGraph, overview ReportingOverview) string {
-	return fmt.Sprintf("%d runs · %d diagnostics · %d tasks · %d workers · %d groups · %d agent results · %d digests · %d tool runs · %d worktrees · %d permissions",
+	return fmt.Sprintf("%d runs · %d diagnostics · %d tasks · %d workers · %d groups · %d agent results · %d digests · %d tool runs · %d worktrees",
 		len(graph.Runs), len(graph.Diagnostics), len(graph.Tasks),
 		len(overview.ChildAgents), len(overview.ReportGroups), len(overview.ChildResults),
-		len(overview.Digests), len(graph.ToolRuns), len(graph.Worktrees), len(graph.PermissionRequests))
+		len(overview.Digests), len(graph.ToolRuns), len(graph.Worktrees))
 }
 
 func renderLineSection(title string, lines []string, empty string, width int) string {
@@ -230,21 +229,6 @@ func formatWorktrees(worktrees []Worktree) []string {
 		parts := []string{w.State, firstNonEmpty(w.WorktreeBranch, shortID(w.ID))}
 		if path := trim(w.WorktreePath); path != "" {
 			parts = append(parts, path)
-		}
-		lines = append(lines, strings.Join(parts, " · "))
-	}
-	return lines
-}
-
-func formatPermissions(requests []PermissionRequest) []string {
-	lines := make([]string, 0, len(requests))
-	for _, p := range requests {
-		parts := []string{p.Status, firstNonEmpty(p.ToolName, p.ID)}
-		if profile := trim(p.RequestedProfile); profile != "" {
-			parts = append(parts, profile)
-		}
-		if reason := clampText(firstNonEmpty(p.Decision, p.Reason), 100); reason != "" {
-			parts = append(parts, reason)
 		}
 		lines = append(lines, strings.Join(parts, " · "))
 	}

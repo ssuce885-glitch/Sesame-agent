@@ -42,6 +42,12 @@ func Recall(query string, entries []types.MemoryEntry, limit int) []types.Memory
 		if scored[i].score != scored[j].score {
 			return scored[i].score > scored[j].score
 		}
+		if scored[i].entry.UsageCount != scored[j].entry.UsageCount {
+			return scored[i].entry.UsageCount > scored[j].entry.UsageCount
+		}
+		if !scored[i].entry.LastUsedAt.Equal(scored[j].entry.LastUsedAt) {
+			return scored[i].entry.LastUsedAt.After(scored[j].entry.LastUsedAt)
+		}
 		if !scored[i].entry.UpdatedAt.Equal(scored[j].entry.UpdatedAt) {
 			return scored[i].entry.UpdatedAt.After(scored[j].entry.UpdatedAt)
 		}

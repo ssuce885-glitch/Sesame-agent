@@ -44,6 +44,16 @@ func executePreparedLoop(ctx context.Context, e *Engine, in Input, emitter loopE
 				} else {
 					orderedAssistantItems = append(orderedAssistantItems, model.AssistantThinkingItem(event.TextDelta))
 				}
+			case model.StreamEventThinkingSignature:
+				if strings.TrimSpace(event.ThinkingSignature) == "" {
+					continue
+				}
+				lastIndex := len(orderedAssistantItems) - 1
+				if lastIndex >= 0 && orderedAssistantItems[lastIndex].Kind == model.ConversationItemAssistantThinking {
+					orderedAssistantItems[lastIndex].ThinkingSignature = event.ThinkingSignature
+				} else {
+					orderedAssistantItems = append(orderedAssistantItems, model.AssistantThinkingBlockItem("", event.ThinkingSignature))
+				}
 			case model.StreamEventTextDelta:
 				if !assistantStarted {
 					if err := emitter.Emit(ctx, types.EventAssistantStarted, struct{}{}); err != nil {
@@ -107,7 +117,7 @@ func executePreparedLoop(ctx context.Context, e *Engine, in Input, emitter loopE
 
 		var err error
 		var interrupted bool
-		toolSteps, interrupted, err = executeToolCallBatches(ctx, e, in, emitter, state, toolCalls, orderedAssistantItems, toolSteps)
+		toolSteps, interrupted, err = executeToolCallBatches(ctx, e, in, emitter, state, toolCalls, orderedAssistantItems, toolSteps, usageTotals)
 		if err != nil {
 			return err
 		}
@@ -189,7 +199,7 @@ func completeAssistantOnlyTurn(
 		usageTotals.outputTokens,
 		usageTotals.cachedTokens,
 	)
-	parentReplyCommitted, err := buildParentReplyCommittedPayload(ctx, e.store, in.Session, in.Turn, writeContextHeadID, nextPositionBeforeFlush, orderedAssistantItems)
+	parentReplyCommitted, err := buildParentReplyCommittedPayload(ctx, e.store, in.Session, in.Turn, writeContextHeadID, nextPositionBeforeFlush, orderedAssistantItems, state.reports)
 	if err != nil {
 		return emitter.Fail(ctx, err)
 	}
@@ -205,6 +215,7 @@ func executeToolCallBatches(
 	toolCalls []model.ToolCallChunk,
 	orderedAssistantItems []model.ConversationItem,
 	toolSteps int,
+	usageTotals loopUsageTotals,
 ) (int, bool, error) {
 	callInputs := make([]tools.Call, 0, len(toolCalls))
 	for _, call := range toolCalls {
@@ -222,9 +233,34 @@ func executeToolCallBatches(
 
 	callOffset := 0
 	assistantCursor := 0
+	nextPositionBeforeFlush := state.nextPosition
 	persistRemainingAssistantItems := true
 	interrupted := false
-	for _, batch := range state.toolRuntime.PlanBatches(callInputs, state.toolExecCtx) {
+	completeTurnAfterTools := false
+	if e.maxToolSteps > 0 && toolSteps+len(toolCalls) > e.maxToolSteps {
+		return toolSteps, false, emitter.Fail(ctx, fmt.Errorf("turn exceeded max tool steps (%d)", e.maxToolSteps))
+	}
+	plannedBatches := state.toolRuntime.PlanBatches(callInputs, state.toolExecCtx)
+	turnCompletingBatch := firstTurnCompletingBatchIndex(plannedBatches)
+	assistantFlushBatch := len(plannedBatches) - 1
+	if turnCompletingBatch >= 0 {
+		assistantFlushBatch = turnCompletingBatch
+	}
+	if assistantFlushBatch >= 0 {
+		lastToolCallID, ok := batchLastToolCallID(toolCalls, plannedBatches, assistantFlushBatch)
+		if !ok {
+			return toolSteps, false, emitter.Fail(ctx, fmt.Errorf("tool batch size mismatch"))
+		}
+		var err error
+		state.nextPosition, assistantCursor, err = flushAssistantItems(ctx, e.store, state.sessionID, in.Turn.ContextHeadID, in.Turn.ID, state.nextPosition, orderedAssistantItems, assistantCursor, lastToolCallID, &state.req, state.nativeContinuation)
+		if err != nil {
+			return toolSteps, false, emitter.Fail(ctx, err)
+		}
+	}
+	for batchIndex, batch := range plannedBatches {
+		if turnCompletingBatch >= 0 && batchIndex > turnCompletingBatch {
+			break
+		}
 		if callOffset+len(batch.Calls) > len(toolCalls) {
 			return toolSteps, false, emitter.Fail(ctx, fmt.Errorf("tool batch size mismatch"))
 		}
@@ -263,7 +299,7 @@ func executeToolCallBatches(
 			return toolSteps, false, emitter.Fail(ctx, err)
 		}
 
-		stopAfterBatch, batchInterrupted, nextPosition, nextCursor, err := applyExecutedToolBatch(
+		stopAfterBatch, batchInterrupted, nextPosition, err := applyExecutedToolBatch(
 			ctx,
 			e,
 			in,
@@ -271,15 +307,16 @@ func executeToolCallBatches(
 			state,
 			batchToolCalls,
 			executed,
-			orderedAssistantItems,
-			assistantCursor,
 		)
 		if err != nil {
 			return toolSteps, false, err
 		}
 		state.nextPosition = nextPosition
-		assistantCursor = nextCursor
 		callOffset += len(batch.Calls)
+		if stopAfterBatch {
+			completeTurnAfterTools = true
+			persistRemainingAssistantItems = false
+		}
 
 		if stepLimitExceededAfterBatch {
 			return toolSteps, false, emitter.Fail(ctx, fmt.Errorf("turn exceeded max tool steps (%d)", e.maxToolSteps))
@@ -290,6 +327,9 @@ func executeToolCallBatches(
 			break
 		}
 		if stopAfterBatch {
+			break
+		}
+		if turnCompletingBatch == batchIndex {
 			persistRemainingAssistantItems = false
 			break
 		}
@@ -301,7 +341,69 @@ func executeToolCallBatches(
 			return toolSteps, false, emitter.Fail(ctx, err)
 		}
 	}
+	if completeTurnAfterTools && !interrupted {
+		writeContextHeadID := in.Turn.ContextHeadID
+		if e.store != nil {
+			resolvedContextHeadID, err := resolveConversationWriteContextHeadID(ctx, e.store, in.Turn.ContextHeadID)
+			if err != nil {
+				return toolSteps, false, emitter.Fail(ctx, err)
+			}
+			writeContextHeadID = resolvedContextHeadID
+		}
+		usage := buildTurnUsage(
+			usageTotals.hasUsage,
+			in.Turn.ID,
+			state.sessionID,
+			state.usageProvider,
+			state.usageModel,
+			usageTotals.inputTokens,
+			usageTotals.outputTokens,
+			usageTotals.cachedTokens,
+		)
+		committedAssistantItems := orderedAssistantItems
+		if assistantCursor >= 0 && assistantCursor <= len(orderedAssistantItems) {
+			committedAssistantItems = orderedAssistantItems[:assistantCursor]
+		}
+		parentReplyCommitted, err := buildParentReplyCommittedPayload(ctx, e.store, in.Session, in.Turn, writeContextHeadID, nextPositionBeforeFlush, committedAssistantItems, state.reports)
+		if err != nil {
+			return toolSteps, false, emitter.Fail(ctx, err)
+		}
+		if err := finalizeTurn(ctx, e, in, usage, parentReplyCommitted); err != nil {
+			return toolSteps, false, err
+		}
+		return toolSteps, true, nil
+	}
 	return toolSteps, interrupted, nil
+}
+
+func firstTurnCompletingBatchIndex(batches []tools.CallBatch) int {
+	for index, batch := range batches {
+		for _, call := range batch.Calls {
+			if tools.CompletesTurnOnSuccess(call.Tool) {
+				return index
+			}
+		}
+	}
+	return -1
+}
+
+func batchLastToolCallID(toolCalls []model.ToolCallChunk, batches []tools.CallBatch, batchIndex int) (string, bool) {
+	if batchIndex < 0 || batchIndex >= len(batches) {
+		return "", false
+	}
+	offset := 0
+	for index := 0; index < batchIndex; index++ {
+		offset += len(batches[index].Calls)
+	}
+	batchSize := len(batches[batchIndex].Calls)
+	if batchSize == 0 {
+		return "", false
+	}
+	lastIndex := offset + batchSize - 1
+	if lastIndex < 0 || lastIndex >= len(toolCalls) {
+		return "", false
+	}
+	return toolCalls[lastIndex].ID, true
 }
 
 func applyExecutedToolBatch(
@@ -312,22 +414,15 @@ func applyExecutedToolBatch(
 	state *preparedLoopState,
 	batchToolCalls []model.ToolCallChunk,
 	executed []tools.CallExecution,
-	orderedAssistantItems []model.ConversationItem,
-	assistantCursor int,
-) (bool, bool, int, int, error) {
+) (bool, bool, int, error) {
 	stopAfterBatch := false
 	interrupted := false
 	nextPosition := state.nextPosition
 	for index, execResult := range executed {
 		call := batchToolCalls[index]
-		var err error
-		nextPosition, assistantCursor, err = flushAssistantItems(ctx, e.store, state.sessionID, in.Turn.ContextHeadID, in.Turn.ID, nextPosition, orderedAssistantItems, assistantCursor, call.ID, &state.req, state.nativeContinuation)
-		if err != nil {
-			return false, false, state.nextPosition, assistantCursor, emitter.Fail(ctx, err)
-		}
 		shouldStop, toolInterrupted, err := applyExecutedToolResult(ctx, e, in, emitter, state, call, execResult, &nextPosition)
 		if err != nil {
-			return false, false, state.nextPosition, assistantCursor, err
+			return false, false, state.nextPosition, err
 		}
 		if shouldStop {
 			stopAfterBatch = true
@@ -336,7 +431,7 @@ func applyExecutedToolBatch(
 			interrupted = true
 		}
 	}
-	return stopAfterBatch, interrupted, nextPosition, assistantCursor, nil
+	return stopAfterBatch, interrupted, nextPosition, nil
 }
 
 func applyExecutedToolResult(
@@ -424,7 +519,10 @@ func applyExecutedToolResult(
 		}
 		return false, true, nil
 	}
-	return toolIsError, false, nil
+	if output.CompleteTurn {
+		return true, false, nil
+	}
+	return false, false, nil
 }
 
 func updateLoopSkillsFromToolMetadata(e *Engine, state *preparedLoopState, metadata map[string]any) error {
@@ -446,12 +544,12 @@ func updateLoopSkillsFromToolMetadata(e *Engine, state *preparedLoopState, metad
 	state.visibleDefs = state.toolRuntime.VisibleDefinitions(state.toolExecCtx)
 	clearPreviousResponseWhenVisibleToolsChange(&state.req, previousDefs, state.visibleDefs)
 	state.req.Tools = buildToolSchemas(state.visibleDefs)
-	state.req.Instructions = appendChildReportPromptSection(instructions.Compile(instructions.CompileInput{
+	state.req.Instructions = appendReportPromptSection(instructions.Render(instructions.RenderInput{
 		BaseText:     state.baseInstructions,
 		Catalog:      state.skillCatalog,
 		Message:      state.turnMessage,
 		ActiveSkills: state.activeSkills,
-	}).Render(), state.childReports)
+	}).Render(), state.reports)
 	return nil
 }
 
@@ -502,23 +600,6 @@ func emitToolInterrupt(
 	call model.ToolCallChunk,
 	output tools.ToolExecutionResult,
 ) error {
-	if strings.TrimSpace(output.Interrupt.EventType) == types.EventPermissionRequested {
-		if err := persistPermissionPause(ctx, e, in, state.turnCtx, call, output); err != nil {
-			return emitter.Fail(ctx, err)
-		}
-		if payload, ok := output.Interrupt.EventPayload.(types.PermissionRequestedPayload); ok {
-			if payload.ToolCallID == "" {
-				payload.ToolCallID = call.ID
-			}
-			if payload.ToolName == "" {
-				payload.ToolName = call.Name
-			}
-			if payload.TurnID == "" {
-				payload.TurnID = in.Turn.ID
-			}
-			output.Interrupt.EventPayload = payload
-		}
-	}
 	if eventType := strings.TrimSpace(output.Interrupt.EventType); eventType != "" {
 		payload := output.Interrupt.EventPayload
 		if payload == nil {

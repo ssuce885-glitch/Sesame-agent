@@ -47,11 +47,11 @@ func (r *SimpleRuntime) HandleMatch(ctx context.Context, spec types.AutomationSp
 		return errMissingAutomationID
 	}
 
-	owner := types.NormalizeAutomationOwner(spec.Owner)
+	owner := types.NormalizeRoleAutomationOwner(spec.Owner)
 	if owner == "" {
 		return &types.AutomationValidationError{
 			Code:    "invalid_automation_spec",
-			Message: "owner must be main_agent or role:<role_id> for simple mode automations",
+			Message: "owner must be role:<role_id> for simple mode automations",
 		}
 	}
 
@@ -107,11 +107,11 @@ func shouldDispatchSimpleAutomationRun(spec types.AutomationSpec, existing types
 		return false
 	case "running":
 		return false
-	case string(types.ChildReportStatusSuccess):
+	case "success":
 		return !strings.EqualFold(strings.TrimSpace(spec.SimplePolicy.OnSuccess), "pause")
-	case string(types.ChildReportStatusFailure):
+	case "failure":
 		return strings.EqualFold(strings.TrimSpace(spec.SimplePolicy.OnFailure), "continue")
-	case string(types.ChildReportStatusBlocked):
+	case "blocked":
 		return strings.EqualFold(strings.TrimSpace(spec.SimplePolicy.OnBlocked), "continue")
 	default:
 		return false
@@ -170,20 +170,15 @@ func resolveSimpleRunSignalData(trigger types.TriggerEvent, detector types.Autom
 }
 
 func resolveSimpleAutomationTargetRole(owner string) (string, error) {
-	switch owner {
-	case "main_agent":
-		return "", nil
-	default:
-		if strings.HasPrefix(owner, "role:") {
-			roleID := strings.TrimSpace(strings.TrimPrefix(owner, "role:"))
-			if roleID != "" {
-				return roleID, nil
-			}
+	if strings.HasPrefix(owner, "role:") {
+		roleID := strings.TrimSpace(strings.TrimPrefix(owner, "role:"))
+		if roleID != "" {
+			return roleID, nil
 		}
-		return "", &types.AutomationValidationError{
-			Code:    "invalid_automation_spec",
-			Message: "owner must be main_agent or role:<role_id> for simple mode automations",
-		}
+	}
+	return "", &types.AutomationValidationError{
+		Code:    "invalid_automation_spec",
+		Message: "owner must be role:<role_id> for simple mode automations",
 	}
 }
 
@@ -199,7 +194,8 @@ func buildSimpleAutomationPrompt(spec types.AutomationSpec, summary, dedupeKey s
 		"Do not create, update, pause, resume, or reinstall automations.",
 		"Do not call automation_create_simple or automation_control.",
 		"Execute automation_goal using the detector facts.",
-		"Report the result back to main_parent.",
+		"Return the result as your final assistant response; the runtime delivers that response to the main agent report stream.",
+		"Do not call delegate_to_role to report the result.",
 		"",
 		"Simple automation task",
 		"automation_title: " + strings.TrimSpace(spec.Title),

@@ -9,7 +9,7 @@ import (
 	"go-agent/internal/engine"
 	rolectx "go-agent/internal/roles"
 	"go-agent/internal/session"
-	"go-agent/internal/sessionbinding"
+	"go-agent/internal/sessionrole"
 	"go-agent/internal/store/sqlite"
 	"go-agent/internal/task"
 	"go-agent/internal/types"
@@ -18,9 +18,23 @@ import (
 
 type agentTaskExecutor struct {
 	runner  *engine.Engine
-	store   *sqlite.Store
+	store   agentTaskStore
 	manager *session.Manager
 	now     func() time.Time
+}
+
+type agentTaskStore interface {
+	GetSession(context.Context, string) (types.Session, bool, error)
+	InsertSession(context.Context, types.Session) error
+	GetTurn(context.Context, string) (types.Turn, bool, error)
+	InsertTurn(context.Context, types.Turn) error
+	GetCurrentContextHeadID(context.Context) (string, bool, error)
+	GetContextHead(context.Context, string) (types.ContextHead, bool, error)
+	InsertContextHead(context.Context, types.ContextHead) error
+	AssignTurnsWithoutHead(context.Context, string, string) error
+	SetCurrentContextHeadID(context.Context, string) error
+	EnsureRoleSession(context.Context, string, types.SessionRole) (types.Session, types.ContextHead, bool, error)
+	EnsureSpecialistSession(context.Context, string, string, string, []string) (types.Session, types.ContextHead, bool, error)
 }
 
 func buildAgentTaskExecutor(runner *engine.Engine, stores ...*sqlite.Store) *agentTaskExecutor {
@@ -42,39 +56,37 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, taskID string, workspace
 		return errors.New("engine runner is not configured")
 	}
 
-	sessionID := types.NewID("task_session")
 	turnID := types.NewID("task_turn")
-	taskCtx := sessionbinding.WithContextBinding(ctx, taskContextBinding(sessionID))
-	taskCtx = workspace.WithWorkspaceRoot(taskCtx, workspaceRoot)
-	targetRole = strings.TrimSpace(targetRole)
-	specialistRoleID := ""
-	if targetRole != "" && targetRole != string(types.SessionRoleMainParent) {
-		specialistRoleID = targetRole
+	taskCtx, sessionRow, sessionRole, activeSkillNames, contextHeadID, err := a.resolveTaskRunContext(ctx, workspaceRoot, activatedSkillNames, targetRole)
+	if err != nil {
+		return err
 	}
-	taskCtx = rolectx.WithSpecialistRoleID(taskCtx, specialistRoleID)
-	if err := a.prepareTaskRun(taskCtx, sessionID, turnID, workspaceRoot, prompt); err != nil {
+	turnRow := types.Turn{
+		ID:            turnID,
+		SessionID:     sessionRow.ID,
+		ContextHeadID: contextHeadID,
+		Kind:          types.TurnKindUserMessage,
+		UserMessage:   prompt,
+	}
+	if err := a.prepareTaskRun(taskCtx, sessionRow, turnRow); err != nil {
 		return err
 	}
 	sink := &taskEventSink{observer: observer}
 	if observer != nil {
-		if err := observer.SetRunContext(sessionID, turnID); err != nil {
+		if err := observer.SetRunContext(sessionRow.ID, turnID); err != nil {
 			return err
 		}
 	}
+	if a.shouldSubmitThroughSessionManager(sessionRow) {
+		return a.runManagedTaskTurn(taskCtx, sessionRow, turnRow, strings.TrimSpace(taskID), activeSkillNames, observer)
+	}
 	if err := a.runner.RunTurn(taskCtx, engine.Input{
-		Session: types.Session{
-			ID:            sessionID,
-			WorkspaceRoot: workspaceRoot,
-		},
-		Turn: types.Turn{
-			ID:          turnID,
-			SessionID:   sessionID,
-			Kind:        types.TurnKindUserMessage,
-			UserMessage: prompt,
-		},
+		Session:             sessionRow,
+		SessionRole:         sessionRole,
+		Turn:                turnRow,
 		TaskID:              strings.TrimSpace(taskID),
 		Sink:                sink,
-		ActivatedSkillNames: append([]string(nil), activatedSkillNames...),
+		ActivatedSkillNames: activeSkillNames,
 	}); err != nil {
 		return err
 	}
@@ -88,19 +100,97 @@ func (a agentTaskExecutor) RunTask(ctx context.Context, taskID string, workspace
 	return observer.SetFinalText(finalText)
 }
 
-func (a agentTaskExecutor) prepareTaskRun(ctx context.Context, sessionID, turnID, workspaceRoot, prompt string) error {
-	if a.store == nil {
-		return nil
+func (a agentTaskExecutor) shouldSubmitThroughSessionManager(sessionRow types.Session) bool {
+	return a.manager != nil && !strings.HasPrefix(strings.TrimSpace(sessionRow.ID), "task_session_")
+}
+
+func (a agentTaskExecutor) runManagedTaskTurn(ctx context.Context, sessionRow types.Session, turnRow types.Turn, taskID string, activatedSkillNames []string, observer task.AgentTaskObserver) error {
+	done := make(chan error, 1)
+	if _, err := a.manager.SubmitTurn(ctx, sessionRow.ID, session.SubmitTurnInput{
+		Turn: turnRow,
+		Run: session.RunMetadata{
+			TaskID:                  taskID,
+			TaskObserver:            observer,
+			ActivatedSkillNames:     append([]string(nil), activatedSkillNames...),
+			CancelWithSubmitContext: true,
+			Done:                    done,
+		},
+	}); err != nil {
+		return err
 	}
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		a.manager.CancelTurn(sessionRow.ID, turnRow.ID)
+		select {
+		case err := <-done:
+			if err != nil {
+				return err
+			}
+			return ctx.Err()
+		default:
+			return ctx.Err()
+		}
+	}
+}
+
+func (a agentTaskExecutor) resolveTaskRunContext(ctx context.Context, workspaceRoot string, activatedSkillNames []string, targetRole string) (context.Context, types.Session, types.SessionRole, []string, string, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	targetRole = strings.TrimSpace(targetRole)
+	if targetRole != "" {
+		if a.store == nil {
+			return nil, types.Session{}, "", nil, "", errors.New("target role execution requires persistent runtime store")
+		}
+		roleID, err := rolectx.CanonicalRoleID(targetRole)
+		if err != nil {
+			return nil, types.Session{}, "", nil, "", err
+		}
+		if roleID == string(types.SessionRoleMainParent) {
+			sessionRow, head, _, err := a.store.EnsureRoleSession(ctx, workspaceRoot, types.SessionRoleMainParent)
+			if err != nil {
+				return nil, types.Session{}, "", nil, "", err
+			}
+			runCtx := withRunnerSessionContext(ctx, sessionRow, types.SessionRoleMainParent, "")
+			activeSkillNames := sessionrole.MergeActivatedSkillNames(activatedSkillNames, types.SessionRoleMainParent, nil)
+			return runCtx, sessionRow, types.SessionRoleMainParent, activeSkillNames, strings.TrimSpace(head.ID), nil
+		}
+		catalog, err := rolectx.LoadCatalog(workspaceRoot)
+		if err != nil {
+			return nil, types.Session{}, "", nil, "", err
+		}
+		spec, ok := catalog.ByID[roleID]
+		if !ok {
+			return nil, types.Session{}, "", nil, "", errors.New("specialist role is not installed: " + roleID)
+		}
+		sessionRow, head, _, err := a.store.EnsureSpecialistSession(ctx, workspaceRoot, roleID, spec.Prompt, spec.SkillNames)
+		if err != nil {
+			return nil, types.Session{}, "", nil, "", err
+		}
+		runCtx := withRunnerSessionContext(ctx, sessionRow, types.SessionRoleMainParent, roleID)
+		activeSkillNames := sessionrole.MergeActivatedSkillNames(activatedSkillNames, types.SessionRoleMainParent, &spec)
+		return runCtx, sessionRow, types.SessionRoleMainParent, activeSkillNames, strings.TrimSpace(head.ID), nil
+	}
+
 	now := a.currentTime()
 	sessionRow := types.Session{
-		ID:                sessionID,
-		WorkspaceRoot:     strings.TrimSpace(workspaceRoot),
-		PermissionProfile: "read_only",
+		ID:                types.NewID("task_session"),
+		WorkspaceRoot:     workspaceRoot,
+		PermissionProfile: "trusted_local",
 		State:             types.SessionStateIdle,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
+	runCtx := withRunnerSessionContext(ctx, sessionRow, "", "")
+	return runCtx, sessionRow, "", append([]string(nil), activatedSkillNames...), "", nil
+}
+
+func (a agentTaskExecutor) prepareTaskRun(ctx context.Context, sessionRow types.Session, turnRow types.Turn) error {
+	if a.store == nil {
+		return nil
+	}
+	now := a.currentTime()
 	if existing, ok, err := a.store.GetSession(ctx, sessionRow.ID); err != nil {
 		return err
 	} else if ok {
@@ -108,15 +198,10 @@ func (a agentTaskExecutor) prepareTaskRun(ctx context.Context, sessionID, turnID
 	} else if err := a.store.InsertSession(ctx, sessionRow); err != nil {
 		return err
 	}
-	turnRow := types.Turn{
-		ID:          turnID,
-		SessionID:   sessionRow.ID,
-		Kind:        types.TurnKindUserMessage,
-		State:       types.TurnStateCreated,
-		UserMessage: prompt,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
+	turnRow.SessionID = sessionRow.ID
+	turnRow.State = types.TurnStateCreated
+	turnRow.CreatedAt = now
+	turnRow.UpdatedAt = now
 	if _, ok, err := a.store.GetTurn(ctx, turnRow.ID); err != nil {
 		return err
 	} else if !ok {
@@ -124,13 +209,23 @@ func (a agentTaskExecutor) prepareTaskRun(ctx context.Context, sessionID, turnID
 			return err
 		}
 	}
-	if err := a.ensureTaskContextHead(ctx, sessionRow); err != nil {
-		return err
+	if strings.TrimSpace(turnRow.ContextHeadID) == "" {
+		if err := a.ensureTaskContextHead(ctx, sessionRow); err != nil {
+			return err
+		}
 	}
-	if a.manager != nil {
-		a.manager.RegisterSession(sessionRow)
-	}
+	a.registerTaskSession(sessionRow)
 	return nil
+}
+
+func (a agentTaskExecutor) registerTaskSession(sessionRow types.Session) {
+	if a.manager == nil {
+		return
+	}
+	if a.manager.UpdateSession(sessionRow) {
+		return
+	}
+	a.manager.RegisterSession(sessionRow)
 }
 
 func (a agentTaskExecutor) ensureTaskContextHead(ctx context.Context, sessionRow types.Session) error {

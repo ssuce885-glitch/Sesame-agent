@@ -108,7 +108,7 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 		buildMaxToolSteps(cfg),
 	)
 	runner.SetGlobalConfigRoot(cfg.Paths.GlobalRoot)
-	runner.SetHeadMemoryAsync(true)
+	runner.SetContextHeadSummaryAsync(true)
 	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
 	runner.SetRuntimeService(runtimeService)
 	runner.SetAutomationService(automationService)
@@ -155,7 +155,7 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 			store: store,
 			bus:   bus,
 		},
-	}, newTurnResultFallbackSink(store, bus))
+	}, newTurnResultFallbackSink(store, bus, taskNotifier))
 	if agentExecutor != nil {
 		agentExecutor.manager = sessionManager
 	}

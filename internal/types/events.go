@@ -6,32 +6,30 @@ import (
 )
 
 const (
-	EventTurnStarted          = "turn.started"
-	EventTurnCompleted        = "turn.completed"
-	EventTurnFailed           = "turn.failed"
-	EventTurnInterrupted      = "turn.interrupted"
-	EventTurnUsage            = "turn.usage"
-	EventAssistantStarted     = "assistant.started"
-	EventAssistantDelta       = "assistant.delta"
-	EventAssistantCompleted   = "assistant.completed"
-	EventToolStarted          = "tool.started"
-	EventToolProgress         = "tool.progress"
-	EventToolCompleted        = "tool.completed"
-	EventPermissionRequested  = "permission.requested"
-	EventPermissionResolved   = "permission.resolved"
-	EventPlanUpdated          = "plan.updated"
-	EventTaskUpdated          = "task.updated"
-	EventTaskResultReady      = "task.result_ready"
-	EventReportReady          = "report.ready"
-	EventToolRunUpdated       = "tool_run.updated"
-	EventWorktreeUpdated      = "worktree.updated"
-	EventParentReplyCommitted = "parent.reply_committed"
-	EventContextCompacted     = "context.compacted"
-	EventHeadMemoryStarted    = "head_memory.started"
-	EventHeadMemoryCompleted  = "head_memory.completed"
-	EventHeadMemoryFailed     = "head_memory.failed"
-	EventSessionQueueUpdated  = "session.queue_updated"
-	EventSystemNotice         = "system.notice"
+	EventTurnStarted                 = "turn.started"
+	EventTurnCompleted               = "turn.completed"
+	EventTurnFailed                  = "turn.failed"
+	EventTurnInterrupted             = "turn.interrupted"
+	EventTurnUsage                   = "turn.usage"
+	EventAssistantStarted            = "assistant.started"
+	EventAssistantDelta              = "assistant.delta"
+	EventAssistantCompleted          = "assistant.completed"
+	EventToolStarted                 = "tool.started"
+	EventToolProgress                = "tool.progress"
+	EventToolCompleted               = "tool.completed"
+	EventPlanUpdated                 = "plan.updated"
+	EventTaskUpdated                 = "task.updated"
+	EventTaskResultReady             = "task.result_ready"
+	EventReportReady                 = "report.ready"
+	EventToolRunUpdated              = "tool_run.updated"
+	EventWorktreeUpdated             = "worktree.updated"
+	EventParentReplyCommitted        = "parent.reply_committed"
+	EventContextCompacted            = "context.compacted"
+	EventContextHeadSummaryStarted   = "context_head_summary.started"
+	EventContextHeadSummaryCompleted = "context_head_summary.completed"
+	EventContextHeadSummaryFailed    = "context_head_summary.failed"
+	EventSessionQueueUpdated         = "session.queue_updated"
+	EventSystemNotice                = "system.notice"
 )
 
 type Event struct {
@@ -57,12 +55,15 @@ type AssistantDeltaPayload struct {
 }
 
 type ParentReplyCommittedPayload struct {
-	WorkspaceRoot string `json:"workspace_root"`
-	SessionID     string `json:"session_id"`
-	TurnID        string `json:"turn_id"`
-	ItemID        int64  `json:"item_id"`
-	Text          string `json:"text"`
-	CreatedAt     string `json:"created_at"`
+	WorkspaceRoot       string   `json:"workspace_root"`
+	SessionID           string   `json:"session_id"`
+	TurnID              string   `json:"turn_id"`
+	TurnKind            TurnKind `json:"turn_kind,omitempty"`
+	SourceParentTurnIDs []string `json:"source_parent_turn_ids,omitempty"`
+	SourceTaskIDs       []string `json:"source_task_ids,omitempty"`
+	ItemID              int64    `json:"item_id"`
+	Text                string   `json:"text"`
+	CreatedAt           string   `json:"created_at"`
 }
 
 type NoticePayload struct {
@@ -79,29 +80,7 @@ type ToolEventPayload struct {
 	IsError           bool   `json:"is_error,omitempty"`
 }
 
-type PermissionRequestedPayload struct {
-	RequestID        string `json:"request_id,omitempty"`
-	ToolRunID        string `json:"tool_run_id,omitempty"`
-	ToolCallID       string `json:"tool_call_id,omitempty"`
-	ToolName         string `json:"tool_name,omitempty"`
-	RequestedProfile string `json:"requested_profile"`
-	Reason           string `json:"reason,omitempty"`
-	TurnID           string `json:"turn_id,omitempty"`
-}
-
-type PermissionResolvedPayload struct {
-	RequestID        string `json:"request_id"`
-	ToolRunID        string `json:"tool_run_id,omitempty"`
-	ToolCallID       string `json:"tool_call_id,omitempty"`
-	ToolName         string `json:"tool_name,omitempty"`
-	RequestedProfile string `json:"requested_profile"`
-	Decision         string `json:"decision"`
-	DecisionScope    string `json:"decision_scope,omitempty"`
-	EffectiveProfile string `json:"effective_profile,omitempty"`
-	TurnID           string `json:"turn_id,omitempty"`
-}
-
-type HeadMemoryEventPayload struct {
+type ContextHeadSummaryEventPayload struct {
 	SourceTurnID             string `json:"source_turn_id,omitempty"`
 	WorkspaceRoot            string `json:"workspace_root,omitempty"`
 	Async                    bool   `json:"async,omitempty"`
@@ -113,11 +92,11 @@ type HeadMemoryEventPayload struct {
 }
 
 type SessionQueuePayload struct {
-	ActiveTurnID             string   `json:"active_turn_id,omitempty"`
-	ActiveTurnKind           TurnKind `json:"active_turn_kind,omitempty"`
-	QueueDepth               int      `json:"queue_depth"`
-	QueuedUserTurns          int      `json:"queued_user_turns"`
-	QueuedChildReportBatches int      `json:"queued_child_report_batches"`
+	ActiveTurnID        string   `json:"active_turn_id,omitempty"`
+	ActiveTurnKind      TurnKind `json:"active_turn_kind,omitempty"`
+	QueueDepth          int      `json:"queue_depth"`
+	QueuedUserTurns     int      `json:"queued_user_turns"`
+	QueuedReportBatches int      `json:"queued_report_batches"`
 }
 
 func NewEvent(sessionID, turnID, eventType string, payload any) (Event, error) {

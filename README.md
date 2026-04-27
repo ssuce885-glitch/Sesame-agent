@@ -2,14 +2,14 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Sesame is a local-first workspace agent runtime for terminal-driven software operations.
+Sesame is a local-first personal assistant runtime for workspace-scoped tools, roles, automations, reports, and memory.
 
-It keeps chat, tool execution, approvals, background tasks, automation, reports, and runtime state in one workspace-scoped loop so you can ask for work, execute it, inspect what happened, and continue from the same context.
+It keeps chat, tool execution, background tasks, automation, reports, and runtime state in one workspace-scoped loop so you can ask for work, execute it, inspect what happened, and continue from the same context.
 
 ## Why Sesame
 
 - Local-first by default. Workspace state lives on your machine instead of in a remote SaaS control plane.
-- One runtime spine. Interactive turns, background execution, approvals, reports, and automations share the same runtime model.
+- One runtime spine. Interactive turns, background execution, reports, and automations share the same runtime model.
 - Workspace-scoped state. Context history, tasks, reports, roles, and runtime data stay attached to a workspace.
 - Terminal-native workflow. Use the CLI/TUI for day-to-day work and the web console when you need broader runtime visibility.
 - File-backed roles. Specialist roles live under `roles/<role_id>/` and can be managed as part of the workspace.
@@ -19,9 +19,9 @@ It keeps chat, tool execution, approvals, background tasks, automation, reports,
 - CLI and TUI entrypoints for interactive agent workflows
 - Local daemon that automatically manages runtime state for a workspace
 - Context history with load, reopen, and branch-style workflows
-- Built-in tools for shell, file work, patching, search, task delegation, and approvals
-- Task-backed specialist delegation with child reports returned to the main conversation
-- Skill-gated workspace automations with a simple watcher -> owner task -> report -> policy loop
+- Built-in tools for shell, file work, patching, search, and task delegation
+- Task-backed specialist delegation with reports returned to the main conversation
+- Skill-gated role automations with a watcher asset -> owner role task -> main agent report -> policy loop
 - Role-owned automation source files, watcher contract validation, and runtime inspection
 - Web console for chat, runtime state, roles, and usage
 - Optional Discord ingress for remote workspace interaction
@@ -47,19 +47,19 @@ mkdir -p /path/to/workspace
 Run Sesame from the repository root and point it at the workspace you want to use:
 
 ```bash
-go run ./cmd/sesame --workspace-root /path/to/workspace
+go run ./cmd/sesame --workspace /path/to/workspace
 ```
 
 If this is your first run, complete setup first:
 
 ```bash
-go run ./cmd/sesame setup --workspace-root /path/to/workspace
+go run ./cmd/sesame setup
 ```
 
 To reopen provider configuration later:
 
 ```bash
-go run ./cmd/sesame configure --workspace-root /path/to/workspace
+go run ./cmd/sesame configure
 ```
 
 `configure` opens a shared configuration home page with two entries:
@@ -75,7 +75,7 @@ When configuration is missing, normal `sesame` startup automatically enters setu
 Or check daemon/runtime status:
 
 ```bash
-go run ./cmd/sesame --workspace-root /path/to/workspace --status
+go run ./cmd/sesame --workspace /path/to/workspace --status
 ```
 
 ### 3. Open the console
@@ -127,7 +127,7 @@ user request
   -> main parent session
   -> tool call or task creation
   -> runtime execution
-  -> child report / approval / result
+  -> report delivery / task result
   -> main parent responds to the user
 ```
 
@@ -138,14 +138,14 @@ Specialist roles may use internal sessions or context handles as implementation 
 Simple automations use one explicit runtime chain:
 
 ```text
-watcher script
+role watcher script
   -> runtime dispatch lock
-  -> owner task
-  -> child report
+  -> owner role task
+  -> main agent report delivery
   -> policy-driven resume / pause / escalation
 ```
 
-The watcher is only responsible for detection. When it reports `needs_agent`, Sesame pauses that watcher run, dispatches exactly one owner task for the matching signal, waits for the task result, then resumes or pauses according to the automation policy.
+The watcher is only responsible for detection. When it reports `needs_agent`, Sesame pauses that watcher run, dispatches exactly one task to the owning role, waits for the task result, reports to the main agent, then resumes or pauses according to the automation policy.
 
 Automation creation is intentionally gated:
 
@@ -171,11 +171,11 @@ This keeps creation, runtime execution, and status/report turns separated so a w
 - `internal/task`
   Background task model and execution
 - `internal/tools`
-  Built-in tools, tool runtime, approvals, and execution control
+  Built-in tools, tool runtime, permission gates, and execution control
 - `internal/automation`
   Watchers, simple owner-task automation, and automation lifecycle
 - `internal/reporting`
-  Mailbox/report delivery
+  Report delivery
 - `internal/roles`
   File-backed role catalog and role service
 - `internal/store/sqlite`
@@ -190,7 +190,7 @@ Sesame is actively evolving toward a more explicit workspace runtime model:
 - workspace as the main runtime boundary
 - task as the primary background execution primitive
 - role as a file-backed execution profile, not a second public chat line
-- runtime diagnostics, reports, approvals, and automations exposed in the console
+- runtime diagnostics, reports, tasks, roles, and automations exposed in the console
 - automation skills and tool-layer checks working together to enforce mode boundaries
 - TUI and Discord flows sharing the same daemon/session runtime
 
@@ -212,7 +212,7 @@ Build the CLI from source:
 go build ./cmd/sesame
 ```
 
-Run the Go test suite:
+Run package checks:
 
 ```bash
 go test ./...
@@ -225,12 +225,7 @@ cd web/console
 npm run build
 ```
 
-Run console tests when changing Web Console behavior:
-
-```bash
-cd web/console
-npm run test
-```
+If your local checkout includes ignored test files, run the relevant package tests before publishing changes.
 
 ## License
 

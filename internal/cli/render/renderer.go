@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"go-agent/internal/cli/client"
-	"go-agent/internal/extensions"
+	"go-agent/internal/skillcatalog"
 	"go-agent/internal/types"
 )
 
@@ -23,7 +23,7 @@ type WelcomeInfo struct {
 	SessionID             string
 	WorkspaceRoot         string
 	Status                client.StatusResponse
-	Catalog               extensions.Catalog
+	Catalog               skillcatalog.Catalog
 	ShowExtensionsSummary bool
 }
 
@@ -51,10 +51,10 @@ func (r *Renderer) RenderWelcome(info WelcomeInfo) {
 	}
 	lines = append(lines, fmt.Sprintf("extensions   %d skills · %d tools", len(info.Catalog.Skills), len(info.Catalog.Tools)))
 	if info.ShowExtensionsSummary {
-		if summary := summarizeExtensionNames(info.Catalog.Skills, func(skill extensions.Skill) string { return skill.Name }); summary != "" {
+		if summary := summarizeExtensionNames(info.Catalog.Skills, func(skill skillcatalog.SkillSpec) string { return skill.Name }); summary != "" {
 			lines = append(lines, fmt.Sprintf("skills       %s  (/skills)", summary))
 		}
-		if summary := summarizeExtensionNames(info.Catalog.Tools, func(tool extensions.ToolAsset) string { return tool.Name }); summary != "" {
+		if summary := summarizeExtensionNames(info.Catalog.Tools, func(tool skillcatalog.ToolAsset) string { return tool.Name }); summary != "" {
 			lines = append(lines, fmt.Sprintf("tools        %s  (/tools)", summary))
 		}
 	}
@@ -80,7 +80,7 @@ func (r *Renderer) PrintStatusLine(sessionID string, status client.StatusRespons
 	fmt.Fprintf(r.out, "◉ %s\n", strings.Join(parts, "  ·  "))
 }
 
-func (r *Renderer) RenderSkillList(skills []extensions.Skill) {
+func (r *Renderer) RenderSkillList(skills []skillcatalog.SkillSpec) {
 	if len(skills) == 0 {
 		fmt.Fprintln(r.out, "No skills discovered.")
 		return
@@ -97,7 +97,7 @@ func (r *Renderer) RenderSkillList(skills []extensions.Skill) {
 	}
 }
 
-func (r *Renderer) RenderToolList(tools []extensions.ToolAsset) {
+func (r *Renderer) RenderToolList(tools []skillcatalog.ToolAsset) {
 	if len(tools) == 0 {
 		fmt.Fprintln(r.out, "No workspace/global tool assets discovered.")
 		return
@@ -141,9 +141,9 @@ func (r *Renderer) RenderTimeline(resp types.SessionTimelineResponse) {
 	}
 }
 
-func (r *Renderer) RenderReportMailbox(resp types.SessionReportMailboxResponse) {
+func (r *Renderer) RenderReports(resp types.SessionReportsResponse) {
 	if len(resp.Items) == 0 {
-		r.renderDetail("Mailbox", "", "No reports.")
+		r.renderDetail("Reports", "", "No reports.")
 		return
 	}
 	for _, item := range resp.Items {
@@ -156,7 +156,7 @@ func (r *Renderer) RenderReportMailbox(resp types.SessionReportMailboxResponse) 
 			bodyParts = append(bodyParts, item.ObservedAt.UTC().Format(time.RFC3339))
 		}
 		if item.InjectedTurnID == "" {
-			bodyParts = append(bodyParts, "pending")
+			bodyParts = append(bodyParts, "queued")
 		} else {
 			bodyParts = append(bodyParts, "delivered to "+item.InjectedTurnID)
 		}
@@ -166,7 +166,7 @@ func (r *Renderer) RenderReportMailbox(resp types.SessionReportMailboxResponse) 
 				break
 			}
 		}
-		r.renderDetail("Mailbox", title, strings.Join(bodyParts, "\n"))
+		r.renderDetail("Reports", title, strings.Join(bodyParts, "\n"))
 	}
 }
 
@@ -213,50 +213,24 @@ func (r *Renderer) RenderEvent(event types.Event) {
 			display := SummarizeToolDisplay(payload.ToolName, payload.Arguments, payload.ResultPreview)
 			r.renderDetail(display.Action, display.Target, joinDetailLines(display.Detail, ToolArgumentRecoveryDetail(payload.ArgumentsRecovery, payload.ArgumentsRaw)))
 		}
-	case types.EventPermissionRequested:
-		r.closeAssistantStream()
-		var payload types.PermissionRequestedPayload
-		if err := json.Unmarshal(event.Payload, &payload); err == nil {
-			body := strings.TrimSpace(payload.Reason)
-			if strings.TrimSpace(payload.RequestID) != "" {
-				if body != "" {
-					body += "\n"
-				}
-				body += "use /approve " + payload.RequestID + " [once|run|session] or /deny " + payload.RequestID
-			}
-			r.renderDetail("Permission", firstNonEmpty(payload.ToolName, payload.RequestedProfile), body)
-		}
-	case types.EventPermissionResolved:
-		r.closeAssistantStream()
-		var payload types.PermissionResolvedPayload
-		if err := json.Unmarshal(event.Payload, &payload); err == nil {
-			body := strings.TrimSpace(payload.RequestedProfile)
-			if decision := strings.TrimSpace(payload.Decision); decision != "" {
-				if body != "" {
-					body += "\n"
-				}
-				body += "decision: " + decision
-			}
-			r.renderDetail("Permission", firstNonEmpty(payload.ToolName, payload.RequestID), body)
-		}
 	case types.EventSystemNotice:
 		r.closeAssistantStream()
 		var payload types.NoticePayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil {
 			r.renderDetail("Notice", "", payload.Text)
 		}
-	case types.EventHeadMemoryStarted:
+	case types.EventContextHeadSummaryStarted:
 		return
-	case types.EventHeadMemoryCompleted:
+	case types.EventContextHeadSummaryCompleted:
 		return
-	case types.EventHeadMemoryFailed:
+	case types.EventContextHeadSummaryFailed:
 		r.closeAssistantStream()
-		var payload types.HeadMemoryEventPayload
+		var payload types.ContextHeadSummaryEventPayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil && strings.TrimSpace(payload.Message) != "" {
-			r.renderDetail("Memory", "", "head memory refresh failed: "+payload.Message)
+			r.renderDetail("Context", "", "context head summary refresh failed: "+payload.Message)
 			return
 		}
-		r.renderDetail("Memory", "", "head memory refresh failed")
+		r.renderDetail("Context", "", "context head summary refresh failed")
 	case types.EventTurnFailed:
 		r.closeAssistantStream()
 		var payload types.TurnFailedPayload

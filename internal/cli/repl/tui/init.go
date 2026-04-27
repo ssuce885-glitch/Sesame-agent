@@ -6,7 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"go-agent/internal/extensions"
+	"go-agent/internal/skillcatalog"
 )
 
 func NewModel(opts ModelOptions) *Model {
@@ -51,8 +51,8 @@ type ModelOptions struct {
 	SessionID     string
 	WorkspaceRoot string
 	Status        StatusResponse
-	Catalog       extensions.Catalog
-	CatalogLoader func() (extensions.Catalog, error)
+	Catalog       skillcatalog.Catalog
+	CatalogLoader func() (skillcatalog.Catalog, error)
 	Timeline      SessionTimelineResponse
 	InitialPrompt string
 }
@@ -68,7 +68,7 @@ func (m *Model) Init() tea.Cmd {
 	}
 
 	cmds = append(cmds,
-		m.loadMailboxCmd(),
+		m.loadReportsCmd(),
 		m.listCronJobsCmd(false),
 		m.loadRuntimeGraphCmd(),
 		m.loadReportingOverviewCmd(),

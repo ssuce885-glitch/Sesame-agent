@@ -211,16 +211,9 @@ func (r *Runtime) executePrepared(ctx context.Context, prepared PreparedCall, ex
 			runRecord.CompletedAt = completedAt
 		} else {
 			runRecord.Error = ""
-			if output.Interrupt != nil && strings.TrimSpace(output.Interrupt.EventType) == types.EventPermissionRequested {
-				runRecord.State = types.ToolRunStateWaitingPermission
-				runRecord.CompletedAt = time.Time{}
-				runRecord.OutputJSON = marshalToolRunOutput(output)
-				runRecord.PermissionRequestID = firstMetadataString(output.Metadata, "permission_request_id")
-			} else {
-				runRecord.State = types.ToolRunStateCompleted
-				runRecord.CompletedAt = completedAt
-				runRecord.OutputJSON = marshalToolRunOutput(output)
-			}
+			runRecord.State = types.ToolRunStateCompleted
+			runRecord.CompletedAt = completedAt
+			runRecord.OutputJSON = marshalToolRunOutput(output)
 		}
 		if err := r.store.UpsertToolRun(ctx, *runRecord); err != nil {
 			if execErr != nil {

@@ -20,17 +20,32 @@ type TurnResultSink interface {
 
 type SubmitTurnInput struct {
 	Turn types.Turn
+	Run  RunMetadata
 }
 
-type ResumeTurnInput struct {
-	Turn   types.Turn
-	Resume *types.TurnResume
+type RunMetadata struct {
+	TaskID                  string
+	TaskObserver            TaskObserver
+	ActivatedSkillNames     []string
+	CancelWithSubmitContext bool
+	Done                    chan error
 }
 
 type RunInput struct {
-	Session types.Session
-	Turn    types.Turn
-	Resume  *types.TurnResume
+	Session                 types.Session
+	Turn                    types.Turn
+	TaskID                  string
+	TaskObserver            TaskObserver
+	ActivatedSkillNames     []string
+	CancelWithSubmitContext bool
+	Done                    chan error
+}
+
+type TaskObserver interface {
+	AppendLog([]byte) error
+	SetFinalText(string) error
+	SetOutcome(types.ChildAgentOutcome, string) error
+	SetRunContext(string, string) error
 }
 
 type Manager struct {
@@ -91,24 +106,22 @@ func (m *Manager) QueuePayload(sessionID string) (types.SessionQueuePayload, boo
 		return types.SessionQueuePayload{}, false
 	}
 	return types.SessionQueuePayload{
-		ActiveTurnID:             state.ActiveTurnID,
-		ActiveTurnKind:           state.ActiveTurnKind,
-		QueueDepth:               state.QueueDepth,
-		QueuedUserTurns:          state.QueuedUserTurns,
-		QueuedChildReportBatches: state.QueuedChildReportBatches,
+		ActiveTurnID:        state.ActiveTurnID,
+		ActiveTurnKind:      state.ActiveTurnKind,
+		QueueDepth:          state.QueueDepth,
+		QueuedUserTurns:     state.QueuedUserTurns,
+		QueuedReportBatches: state.QueuedReportBatches,
 	}, true
 }
 
 func (m *Manager) SubmitTurn(ctx context.Context, sessionID string, in SubmitTurnInput) (string, error) {
 	return m.startTurn(ctx, sessionID, RunInput{
-		Turn: in.Turn,
-	})
-}
-
-func (m *Manager) ResumeTurn(ctx context.Context, sessionID string, in ResumeTurnInput) (string, error) {
-	return m.startTurn(ctx, sessionID, RunInput{
-		Turn:   in.Turn,
-		Resume: in.Resume,
+		Turn:                    in.Turn,
+		TaskID:                  in.Run.TaskID,
+		TaskObserver:            in.Run.TaskObserver,
+		ActivatedSkillNames:     append([]string(nil), in.Run.ActivatedSkillNames...),
+		CancelWithSubmitContext: in.Run.CancelWithSubmitContext,
+		Done:                    in.Run.Done,
 	})
 }
 
@@ -138,6 +151,45 @@ func (m *Manager) InterruptTurn(sessionID, turnID string) bool {
 	return true
 }
 
+func (m *Manager) CancelTurn(sessionID, turnID string) bool {
+	m.mu.Lock()
+	state, ok := m.runtime[sessionID]
+	if !ok || turnID == "" {
+		m.mu.Unlock()
+		return false
+	}
+	if state.ActiveTurnID == turnID {
+		if state.cancel != nil {
+			state.cancel()
+		}
+		m.clearActiveTurnLocked(state)
+
+		next, runCtx, hasNext := m.dequeueAndActivateNextLocked(state)
+		m.mu.Unlock()
+
+		if hasNext {
+			m.runTurn(sessionID, runCtx, next)
+		}
+		return true
+	}
+
+	for i, queued := range state.queue {
+		if queued.in.Turn.ID != turnID {
+			continue
+		}
+		done := queued.in.Done
+		state.queue = append(state.queue[:i], state.queue[i+1:]...)
+		m.refreshQueueCountersLocked(state)
+		m.mu.Unlock()
+		if done != nil {
+			done <- context.Canceled
+		}
+		return true
+	}
+	m.mu.Unlock()
+	return false
+}
+
 func (m *Manager) startTurn(ctx context.Context, sessionID string, in RunInput) (string, error) {
 	m.mu.Lock()
 	session, ok := m.sessions[sessionID]
@@ -155,14 +207,8 @@ func (m *Manager) startTurn(ctx context.Context, sessionID string, in RunInput) 
 	in.Session = session
 	in.Turn.Kind = normalizeTurnKind(in.Turn.Kind)
 
-	if in.Resume != nil && in.Resume.DecisionScope == types.PermissionDecisionAllowSession && in.Resume.EffectivePermissionProfile != "" {
-		session.PermissionProfile = in.Resume.EffectivePermissionProfile
-		m.sessions[sessionID] = session
-		in.Session = session
-	}
-
 	if state.ActiveTurnID != "" {
-		if state.ActiveTurnKind == types.TurnKindChildReportBatch && in.Turn.Kind == types.TurnKindUserMessage {
+		if state.ActiveTurnKind == types.TurnKindReportBatch && in.Turn.Kind == types.TurnKindUserMessage {
 			if state.cancel != nil {
 				state.cancel()
 			}
@@ -220,6 +266,9 @@ func (m *Manager) runTurn(sessionID string, runCtx context.Context, in RunInput)
 		if m.turnResultSink != nil {
 			m.turnResultSink.HandleTurnResult(context.WithoutCancel(runCtx), in.Session, in.Turn.ID, runErr)
 		}
+		if in.Done != nil {
+			in.Done <- runErr
+		}
 		m.finishTurn(sessionID, in.Turn.ID)
 	}()
 }
@@ -227,16 +276,14 @@ func (m *Manager) runTurn(sessionID string, runCtx context.Context, in RunInput)
 func (m *Manager) activateTurnLocked(state *RuntimeState, in RunInput, submitCtx context.Context) context.Context {
 	in.Turn.Kind = normalizeTurnKind(in.Turn.Kind)
 
-	runCtx, cancel := context.WithCancel(context.WithoutCancel(submitCtx))
+	baseCtx := context.WithoutCancel(submitCtx)
+	if in.CancelWithSubmitContext {
+		baseCtx = submitCtx
+	}
+	runCtx, cancel := context.WithCancel(baseCtx)
 	state.cancel = cancel
 	state.ActiveTurnID = in.Turn.ID
 	state.ActiveTurnKind = in.Turn.Kind
-	state.RunPermissions = nil
-	if in.Resume != nil && in.Resume.RunID != "" && in.Resume.EffectivePermissionProfile != "" {
-		if in.Resume.DecisionScope == types.PermissionDecisionAllowRun || in.Resume.DecisionScope == types.PermissionDecisionAllowOnce {
-			state.RunPermissions = map[string]string{in.Resume.RunID: in.Resume.EffectivePermissionProfile}
-		}
-	}
 	m.refreshQueueCountersLocked(state)
 	return runCtx
 }
@@ -259,9 +306,8 @@ func (m *Manager) clearActiveTurnLocked(state *RuntimeState) {
 	state.ActiveTurnID = ""
 	state.ActiveTurnKind = ""
 	state.cancel = nil
-	state.RunPermissions = nil
 }
 
 func (m *Manager) refreshQueueCountersLocked(state *RuntimeState) {
-	state.QueueDepth, state.QueuedUserTurns, state.QueuedChildReportBatches = queueCounters(state.queue)
+	state.QueueDepth, state.QueuedUserTurns, state.QueuedReportBatches = queueCounters(state.queue)
 }

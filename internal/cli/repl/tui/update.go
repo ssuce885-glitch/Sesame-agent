@@ -18,7 +18,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tuiWorkspaceRefreshTickMsg:
-		cmds := []tea.Cmd{m.loadMailboxCmd()}
+		cmds := []tea.Cmd{m.loadReportsCmd()}
 		if m.activeView == ViewSubagents || m.runtimeGraphStale || m.reportingStale {
 			cmds = append(cmds, m.loadAgentsCmd())
 		}
@@ -41,16 +41,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleSubmitTurn(msg)
 	case tuiInterruptMsg:
 		return m.handleInterrupt(msg)
-	case tuiPermissionDecisionMsg:
-		return m.handlePermissionDecision(msg)
 	case tuiHistoryMsg:
 		return m.handleHistory(msg)
 	case tuiContextSwitchMsg:
 		return m.handleContextSwitch(msg)
 	case tuiStatusMsg:
 		return m.handleStatus(msg)
-	case tuiMailboxMsg:
-		return m.handleMailbox(msg)
+	case tuiReportsMsg:
+		return m.handleReports(msg)
 	case tuiCronListMsg:
 		return m.handleCronList(msg)
 	case tuiCronJobMsg:
@@ -80,14 +78,10 @@ type (
 		SessionID string
 		Event     Event
 	}
-	tuiStreamClosedMsg       struct{ SessionID string }
-	tuiSubmitTurnMsg         struct{ Err error }
-	tuiInterruptMsg          struct{ Err error }
-	tuiPermissionDecisionMsg struct {
-		RequestID string
-		Err       error
-	}
-	tuiHistoryMsg struct {
+	tuiStreamClosedMsg struct{ SessionID string }
+	tuiSubmitTurnMsg   struct{ Err error }
+	tuiInterruptMsg    struct{ Err error }
+	tuiHistoryMsg      struct {
 		Resp ListContextHistoryResponse
 		Err  error
 	}
@@ -102,8 +96,8 @@ type (
 		Err      error
 		Announce bool
 	}
-	tuiMailboxMsg struct {
-		Resp MailboxResponse
+	tuiReportsMsg struct {
+		Resp ReportsResponse
 		Err  error
 	}
 	tuiCronListMsg struct {
@@ -262,20 +256,6 @@ func (m *Model) handleInterrupt(msg tuiInterruptMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) handlePermissionDecision(msg tuiPermissionDecisionMsg) (tea.Model, tea.Cmd) {
-	if msg.Err != nil {
-		m.appendError(msg.Err.Error())
-		m.layout()
-		return m, nil
-	}
-	if trim(msg.RequestID) != "" && msg.RequestID == m.lastPermissionRequestID {
-		m.lastPermissionRequestID = ""
-	}
-	m.setStatusFlash("permission decision sent")
-	m.layout()
-	return m, nil
-}
-
 // History / context switch handlers
 
 func (m *Model) handleHistory(msg tuiHistoryMsg) (tea.Model, tea.Cmd) {
@@ -344,21 +324,21 @@ func (m *Model) handleStatus(msg tuiStatusMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// Mailbox handler
+// Reports handler
 
-func (m *Model) handleMailbox(msg tuiMailboxMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleReports(msg tuiReportsMsg) (tea.Model, tea.Cmd) {
 	if msg.Err != nil {
-		m.mailboxErr = msg.Err.Error()
-		m.setStatusFlash("Mailbox refresh failed")
+		m.reportsErr = msg.Err.Error()
+		m.setStatusFlash("Reports refresh failed")
 		m.layout()
 		return m, nil
 	}
-	m.mailbox = msg.Resp
-	m.mailboxLoaded = true
-	m.mailboxErr = ""
-	m.pendingReportCount = msg.Resp.PendingCount
-	if m.activeView == ViewMailbox {
-		m.clearMailboxPushes()
+	m.reports = msg.Resp
+	m.reportsLoaded = true
+	m.reportsErr = ""
+	m.queuedReportCount = msg.Resp.QueuedCount
+	if m.activeView == ViewReports {
+		m.clearReportPushes()
 	}
 	m.layout()
 	return m, nil

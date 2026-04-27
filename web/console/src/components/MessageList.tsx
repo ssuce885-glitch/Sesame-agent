@@ -5,7 +5,6 @@ import { AssistantMessage } from "./blocks/AssistantMessage";
 import { ToolCallGroup } from "./blocks/ToolCallGroup";
 import { NoticeBlock } from "./blocks/NoticeBlock";
 import { ErrorBlock } from "./blocks/ErrorBlock";
-import { PermissionBlock } from "./blocks/PermissionBlock";
 import { ArrowDown } from "./Icon";
 import { useI18n } from "../i18n";
 
@@ -166,17 +165,6 @@ export function MessageList({ messages, connection, onSuggestionClick, suggestio
                   return <NoticeBlock key={msg.id} text={msg.text ?? ""} />;
                 case "error":
                   return <ErrorBlock key={msg.id} text={msg.text ?? ""} />;
-                case "permission_block":
-                  return (
-                    <PermissionBlock
-                      key={msg.id}
-                      requestId={msg.permissionRequestId ?? ""}
-                      profile={msg.requestedProfile ?? ""}
-                      reason={msg.reason}
-                      decision={msg.decision}
-                      text={msg.text ?? ""}
-                    />
-                  );
                 default:
                   return null;
               }

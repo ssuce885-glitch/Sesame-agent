@@ -12,6 +12,54 @@ func (s *Store) AppendEvent(ctx context.Context, event types.Event) (int64, erro
 	return appendEventWithExec(ctx, s.db, event)
 }
 
+func (s *Store) ListTurnsBySession(ctx context.Context, sessionID string) ([]types.Turn, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		select id, session_id, context_head_id, turn_kind, client_turn_id, state, user_message, created_at, updated_at
+		from turns
+		where session_id = ?
+		order by created_at asc, id asc
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []types.Turn
+	for rows.Next() {
+		var turn types.Turn
+		var kind string
+		var state string
+		var createdAt string
+		var updatedAt string
+		if err := rows.Scan(&turn.ID, &turn.SessionID, &turn.ContextHeadID, &kind, &turn.ClientTurnID, &state, &turn.UserMessage, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		turn.Kind = types.TurnKind(kind)
+		turn.State = types.TurnState(state)
+		turn.CreatedAt, err = time.Parse(timeLayout, createdAt)
+		if err != nil {
+			return nil, err
+		}
+		turn.UpdatedAt, err = time.Parse(timeLayout, updatedAt)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, turn)
+	}
+
+	return out, rows.Err()
+}
+
+func (s *Store) LatestSessionEventSeq(ctx context.Context, sessionID string) (int64, error) {
+	var seq int64
+	err := s.db.QueryRowContext(ctx, `
+		select coalesce(max(seq), 0)
+		from events
+		where session_id = ?
+	`, sessionID).Scan(&seq)
+	return seq, err
+}
+
 func appendEventWithExec(ctx context.Context, execer execContexter, event types.Event) (int64, error) {
 	res, err := execer.ExecContext(ctx, `
 		insert into events (id, session_id, turn_id, type, time, payload)

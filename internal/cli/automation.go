@@ -25,8 +25,6 @@ type automationClient interface {
 	DeleteAutomation(context.Context, string) error
 	EmitTrigger(context.Context, types.TriggerEmitRequest) (types.TriggerEvent, error)
 	RecordHeartbeat(context.Context, types.TriggerHeartbeatRequest) (types.AutomationHeartbeat, error)
-	ListPendingAutomationPermissions(context.Context) (types.ListPendingAutomationPermissionsResponse, error)
-	GetPendingAutomationPermission(context.Context, string) (types.PendingAutomationPermission, error)
 }
 
 type scriptCommandError struct {
@@ -187,26 +185,6 @@ func runTriggerCommand(ctx context.Context, stdout io.Writer, client automationC
 		return runner.Run(ctx, cmd.AutomationID, cmd.WatcherID, cmd.StateFile)
 	default:
 		return fmt.Errorf("unknown trigger command %q", cmd.Action)
-	}
-}
-
-func runPermissionsCommand(ctx context.Context, stdout io.Writer, client automationClient, cmd PermissionCommand) error {
-	switch cmd.Action {
-	case "pending":
-		if strings.TrimSpace(cmd.RequestID) != "" {
-			item, err := client.GetPendingAutomationPermission(ctx, cmd.RequestID)
-			if err != nil {
-				return err
-			}
-			return writeJSON(stdout, item)
-		}
-		items, err := client.ListPendingAutomationPermissions(ctx)
-		if err != nil {
-			return err
-		}
-		return writeJSON(stdout, items)
-	default:
-		return fmt.Errorf("unknown permissions command %q", cmd.Action)
 	}
 }
 

@@ -10,74 +10,10 @@ import (
 
 	"go-agent/internal/config"
 	"go-agent/internal/model"
-	"go-agent/internal/runtimegraph"
 	"go-agent/internal/skills"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
 )
-
-type permissionPauseStore interface {
-	UpsertPermissionRequest(context.Context, types.PermissionRequest) error
-	UpsertTurnContinuation(context.Context, types.TurnContinuation) error
-	UpdateTurnState(context.Context, string, types.TurnState) error
-	UpdateSessionState(context.Context, string, types.SessionState, string) error
-}
-
-func persistPermissionPause(ctx context.Context, e *Engine, in Input, turnCtx *runtimegraph.TurnContext, call model.ToolCallChunk, output tools.ToolExecutionResult) error {
-	store, ok := e.store.(permissionPauseStore)
-	if !ok {
-		return nil
-	}
-	payload, ok := output.Interrupt.EventPayload.(types.PermissionRequestedPayload)
-	if !ok {
-		return nil
-	}
-	now := time.Now().UTC()
-	request := types.PermissionRequest{
-		ID:               payload.RequestID,
-		SessionID:        in.Session.ID,
-		TurnID:           in.Turn.ID,
-		RunID:            turnCtx.CurrentRunID,
-		TaskID:           turnCtx.CurrentTaskID,
-		ToolRunID:        payload.ToolRunID,
-		ToolCallID:       firstNonEmpty(payload.ToolCallID, call.ID),
-		ToolName:         firstNonEmpty(payload.ToolName, call.Name),
-		RequestedProfile: payload.RequestedProfile,
-		Reason:           payload.Reason,
-		Status:           types.PermissionRequestStatusRequested,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}
-	if request.ID == "" {
-		request.ID = types.NewID("perm")
-	}
-	if err := store.UpsertPermissionRequest(ctx, request); err != nil {
-		return err
-	}
-	continuation := types.TurnContinuation{
-		ID:                  types.NewID("cont"),
-		SessionID:           in.Session.ID,
-		TurnID:              in.Turn.ID,
-		RunID:               turnCtx.CurrentRunID,
-		TaskID:              turnCtx.CurrentTaskID,
-		PermissionRequestID: request.ID,
-		ToolRunID:           request.ToolRunID,
-		ToolCallID:          request.ToolCallID,
-		ToolName:            request.ToolName,
-		RequestedProfile:    request.RequestedProfile,
-		Reason:              request.Reason,
-		State:               types.TurnContinuationStatePending,
-		CreatedAt:           now,
-		UpdatedAt:           now,
-	}
-	if err := store.UpsertTurnContinuation(ctx, continuation); err != nil {
-		return err
-	}
-	if err := store.UpdateTurnState(ctx, in.Turn.ID, types.TurnStateAwaitingPermission); err != nil {
-		return err
-	}
-	return store.UpdateSessionState(ctx, in.Session.ID, types.SessionStateAwaitingPermission, in.Turn.ID)
-}
 
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
@@ -88,70 +24,59 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-type pendingTaskCompletionStore interface {
-	ClaimPendingTaskCompletionsForTurn(context.Context, string, string) ([]types.PendingTaskCompletion, error)
-}
-
-type pendingChildReportStore interface {
-	ClaimPendingChildReportsForTurn(context.Context, string, string) ([]types.ChildReport, error)
+type queuedReportStore interface {
+	ClaimQueuedReportDeliveriesForTurn(context.Context, string, string) ([]types.ReportDeliveryItem, error)
 }
 
 func normalizeTurnKind(kind types.TurnKind) types.TurnKind {
-	if kind == types.TurnKindChildReportBatch {
-		return types.TurnKindChildReportBatch
+	if kind == types.TurnKindReportBatch {
+		return types.TurnKindReportBatch
 	}
 	return types.TurnKindUserMessage
 }
 
-func loadPendingChildReports(ctx context.Context, store ConversationStore, sessionID, turnID string) ([]types.ChildReport, error) {
-	claimStore, ok := store.(pendingChildReportStore)
-	if ok && strings.TrimSpace(sessionID) != "" && strings.TrimSpace(turnID) != "" {
-		return claimStore.ClaimPendingChildReportsForTurn(ctx, sessionID, turnID)
-	}
-
-	legacyStore, ok := store.(pendingTaskCompletionStore)
+func loadQueuedReports(ctx context.Context, store ConversationStore, sessionID, turnID string) ([]types.ReportDeliveryItem, error) {
+	claimStore, ok := store.(queuedReportStore)
 	if !ok || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(turnID) == "" {
 		return nil, nil
 	}
-	completions, err := legacyStore.ClaimPendingTaskCompletionsForTurn(ctx, sessionID, turnID)
-	if err != nil {
-		return nil, err
-	}
-	reports := make([]types.ChildReport, len(completions))
-	for i := range completions {
-		reports[i] = types.ChildReport(completions[i])
-	}
-	return reports, nil
+	return claimStore.ClaimQueuedReportDeliveriesForTurn(ctx, sessionID, turnID)
 }
 
-func buildChildReportPromptSection(reports []types.ChildReport) string {
+func buildReportPromptSection(reports []types.ReportDeliveryItem) string {
 	if len(reports) == 0 {
 		return ""
 	}
-	lines := []string{"Child reports ready for parent review:"}
+	lines := []string{"Reports ready for review:"}
 	for _, report := range reports {
-		taskID := firstNonEmpty(report.TaskID, report.ID)
-		if taskID == "" {
+		sourceID := firstNonEmpty(report.SourceID, report.ReportID, report.ID)
+		if sourceID == "" {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("- task_id=%s status=%s source=%s objective=%q result_ready=%t observed_at=%s",
-			taskID,
-			report.Status,
-			report.Source,
-			report.Objective,
-			report.ResultReady,
+		envelope := report.Envelope
+		lines = append(lines, fmt.Sprintf("- source_id=%s source=%s status=%s severity=%s title=%q observed_at=%s",
+			sourceID,
+			report.SourceKind,
+			envelope.Status,
+			envelope.Severity,
+			envelope.Title,
 			report.ObservedAt.UTC().Format(time.RFC3339),
 		))
-		if preview := strings.TrimSpace(firstNonEmpty(report.ResultPreview, report.ResultText)); preview != "" {
-			lines = append(lines, "  preview: "+preview)
+		if summary := strings.TrimSpace(envelope.Summary); summary != "" {
+			lines = append(lines, "  summary: "+summary)
+		}
+		for _, section := range envelope.Sections {
+			if text := strings.TrimSpace(section.Text); text != "" {
+				lines = append(lines, "  "+firstNonEmpty(section.Title, "details")+": "+text)
+			}
 		}
 	}
 	return strings.Join(lines, "\n")
 }
 
-func appendChildReportPromptSection(text string, reports []types.ChildReport) string {
+func appendReportPromptSection(text string, reports []types.ReportDeliveryItem) string {
 	text = strings.TrimSpace(text)
-	section := strings.TrimSpace(buildChildReportPromptSection(reports))
+	section := strings.TrimSpace(buildReportPromptSection(reports))
 	if section == "" {
 		return text
 	}
@@ -335,7 +260,10 @@ func persistConversationItem(ctx context.Context, store ConversationStore, sessi
 	if store == nil {
 		return nil
 	}
-	if (item.Kind == model.ConversationItemAssistantText || item.Kind == model.ConversationItemAssistantThinking) && strings.TrimSpace(item.Text) == "" {
+	if item.Kind == model.ConversationItemAssistantText && strings.TrimSpace(item.Text) == "" {
+		return nil
+	}
+	if item.Kind == model.ConversationItemAssistantThinking && strings.TrimSpace(item.Text) == "" && strings.TrimSpace(item.ThinkingSignature) == "" {
 		return nil
 	}
 	contextHeadID, err := resolveConversationWriteContextHeadID(ctx, store, turnContextHeadID)
@@ -473,14 +401,14 @@ func finalizeTurn(ctx context.Context, e *Engine, in Input, usage *types.TurnUsa
 		}
 	}
 
-	if e != nil && e.headMemoryAsync {
-		if e.headMemoryWorker != nil {
-			e.headMemoryWorker.Enqueue(ctx, e, in)
+	if e != nil && e.contextHeadSummaryAsync {
+		if e.contextHeadSummaryWorker != nil {
+			e.contextHeadSummaryWorker.Enqueue(ctx, e, in)
 		} else {
-			startAsyncHeadMemoryRefresh(ctx, e, in)
+			startAsyncContextHeadSummaryRefresh(ctx, e, in)
 		}
 	} else {
-		_ = maybeRefreshHeadMemory(ctx, e, in)
+		_ = maybeRefreshContextHeadSummary(ctx, e, in)
 	}
 	return nil
 }
@@ -493,6 +421,7 @@ func buildParentReplyCommittedPayload(
 	contextHeadID string,
 	nextPositionBeforeFlush int,
 	orderedAssistantItems []model.ConversationItem,
+	reports []types.ReportDeliveryItem,
 ) (*types.ParentReplyCommittedPayload, error) {
 	if store == nil {
 		return nil, nil
@@ -526,13 +455,53 @@ func buildParentReplyCommittedPayload(
 	}
 
 	return &types.ParentReplyCommittedPayload{
-		WorkspaceRoot: session.WorkspaceRoot,
-		SessionID:     session.ID,
-		TurnID:        turn.ID,
-		ItemID:        itemID,
-		Text:          text,
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		WorkspaceRoot:       session.WorkspaceRoot,
+		SessionID:           session.ID,
+		TurnID:              turn.ID,
+		TurnKind:            normalizeTurnKind(turn.Kind),
+		SourceParentTurnIDs: reportSourceTurnIDs(reports),
+		SourceTaskIDs:       reportTaskIDs(reports),
+		ItemID:              itemID,
+		Text:                text,
+		CreatedAt:           time.Now().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func reportSourceTurnIDs(reports []types.ReportDeliveryItem) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0)
+	for _, report := range reports {
+		turnID := strings.TrimSpace(report.SourceTurnID)
+		if turnID == "" {
+			continue
+		}
+		if _, ok := seen[turnID]; ok {
+			continue
+		}
+		seen[turnID] = struct{}{}
+		out = append(out, turnID)
+	}
+	return out
+}
+
+func reportTaskIDs(reports []types.ReportDeliveryItem) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0)
+	for _, report := range reports {
+		taskID := strings.TrimSpace(report.SourceID)
+		if report.SourceKind != types.ReportSourceTaskResult {
+			taskID = ""
+		}
+		if taskID == "" {
+			continue
+		}
+		if _, ok := seen[taskID]; ok {
+			continue
+		}
+		seen[taskID] = struct{}{}
+		out = append(out, taskID)
+	}
+	return out
 }
 
 func marshalToolArguments(input map[string]any) string {

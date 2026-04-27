@@ -29,7 +29,7 @@ type Service struct {
 	store           Store
 	now             func() time.Time
 	pollInterval    time.Duration
-	reportReadySink func(context.Context, string, string, types.ReportMailboxItem) error
+	reportReadySink func(context.Context, string, string, types.ReportDeliveryItem) error
 	workspaceRoot   string
 }
 
@@ -61,7 +61,7 @@ func (s *Service) SetPollInterval(interval time.Duration) {
 	}
 }
 
-func (s *Service) SetReportReadySink(fn func(context.Context, string, string, types.ReportMailboxItem) error) {
+func (s *Service) SetReportReadySink(fn func(context.Context, string, string, types.ReportDeliveryItem) error) {
 	if s != nil {
 		s.reportReadySink = fn
 	}

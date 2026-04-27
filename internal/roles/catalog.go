@@ -156,12 +156,16 @@ func loadRoleSpec(root, roleID string) (Spec, error) {
 	if err := node.Decode(&cfg); err != nil {
 		return Spec{}, err
 	}
+	prompt := strings.TrimSpace(string(promptData))
+	if prompt == "" {
+		return Spec{}, fmt.Errorf("role prompt is required")
+	}
 
 	return Spec{
 		RoleID:      roleID,
 		DisplayName: strings.TrimSpace(cfg.DisplayName),
 		Description: strings.TrimSpace(cfg.Description),
-		Prompt:      strings.TrimSpace(string(promptData)),
+		Prompt:      prompt,
 		SkillNames:  normalizeSkillNames(cfg.Skills),
 		Policy:      normalizePolicyMap(cfg.Policy),
 		Version:     normalizeRoleVersion(cfg.Version),

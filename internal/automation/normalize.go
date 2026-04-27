@@ -25,6 +25,14 @@ func normalizeAutomationSpec(spec types.AutomationSpec, now time.Time) types.Aut
 	spec.Owner = strings.TrimSpace(spec.Owner)
 	spec.ReportTarget = strings.TrimSpace(spec.ReportTarget)
 	spec.EscalationTarget = strings.TrimSpace(spec.EscalationTarget)
+	if strings.EqualFold(strings.TrimSpace(string(spec.Mode)), string(types.AutomationModeSimple)) {
+		if spec.ReportTarget == "" {
+			spec.ReportTarget = "main_agent"
+		}
+		if spec.EscalationTarget == "" {
+			spec.EscalationTarget = "main_agent"
+		}
+	}
 	spec.SimplePolicy.OnSuccess = strings.ToLower(strings.TrimSpace(spec.SimplePolicy.OnSuccess))
 	spec.SimplePolicy.OnFailure = strings.ToLower(strings.TrimSpace(spec.SimplePolicy.OnFailure))
 	spec.SimplePolicy.OnBlocked = strings.ToLower(strings.TrimSpace(spec.SimplePolicy.OnBlocked))

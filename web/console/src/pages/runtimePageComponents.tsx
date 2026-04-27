@@ -2,11 +2,10 @@ import type { CSSProperties, ReactNode } from "react";
 import type {
   HistoryEntry,
   RuntimeDiagnostic,
-  RuntimePermissionRequest,
   RuntimeTask,
   RuntimeToolRun,
   RuntimeWorktree,
-  WorkspaceMailboxItem,
+  WorkspaceReportDeliveryItem,
 } from "../api/types";
 
 export interface DetailItem {
@@ -246,7 +245,7 @@ export function ReportRow({
   selected,
   onSelect,
 }: {
-  item: WorkspaceMailboxItem;
+  item: WorkspaceReportDeliveryItem;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -318,44 +317,6 @@ export function DiagnosticRow({
         <span>Session: {diagnostic.session_id}</span>
         <span>Turn: {diagnostic.turn_id}</span>
         <span>Created {formatTimestamp(diagnostic.created_at)}</span>
-      </div>
-    </button>
-  );
-}
-
-export function ApprovalRow({
-  request,
-  selected,
-  onSelect,
-}: {
-  request: RuntimePermissionRequest;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className="rounded-xl px-4 py-3"
-      style={rowBaseStyle(selected)}
-      onMouseEnter={(e) => rowHoverIn(e, selected)}
-      onMouseLeave={(e) => rowHoverOut(e, selected)}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
-            {request.tool_name || request.requested_profile}
-          </div>
-          <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
-            {request.reason || "Awaiting approval to continue execution."}
-          </div>
-        </div>
-        <StatusBadge tone="warning">{request.status}</StatusBadge>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-        <span>Profile: {request.requested_profile}</span>
-        <span>Updated {formatTimestamp(request.updated_at)}</span>
       </div>
     </button>
   );

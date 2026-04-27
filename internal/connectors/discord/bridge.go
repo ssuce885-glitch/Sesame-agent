@@ -14,6 +14,7 @@ import (
 const (
 	discordIngressStatusAccepted         = "accepted"
 	discordIngressStatusAwaitingReply    = "awaiting_reply"
+	discordIngressStatusReplyPosted      = "reply_posted"
 	discordIngressStatusFinalPosted      = "final_posted"
 	discordIngressStatusReplyWaitExpired = "reply_wait_expired"
 	discordIngressStatusFinalPostFailed  = "final_post_failed"
@@ -21,8 +22,9 @@ const (
 	discordIngressStatusSubmitFailed     = "submit_failed"
 	discordIngressStatusCancelled        = "cancelled"
 
-	defaultReplyWaitTimeout = 120 * time.Second
-	statusUpdateTimeout     = 5 * time.Second
+	defaultReplyWaitTimeout    = 120 * time.Second
+	defaultFollowupWaitTimeout = 30 * time.Minute
+	statusUpdateTimeout        = 5 * time.Second
 )
 
 type bridgeRuntimeStore interface {
@@ -38,6 +40,7 @@ type bridgeRuntimeManager interface {
 
 type parentReplyWaiter interface {
 	WaitParentReplyCommitted(ctx context.Context, sessionID, turnID string) (types.ParentReplyCommittedPayload, error)
+	WaitNextParentReplyCommitted(ctx context.Context, sessionID string, seen map[string]struct{}) (types.ParentReplyCommittedPayload, error)
 }
 
 type AcceptedMessage struct {
@@ -125,7 +128,12 @@ func (b *Bridge) HandleAcceptedMessage(ctx context.Context, msg AcceptedMessage)
 		return joinErrors(err, statusErr)
 	}
 
-	return b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusFinalPosted, "")
+	seen := map[string]struct{}{parentReplyKey(payload): {}}
+	if err := b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusReplyPosted, ""); err != nil {
+		return err
+	}
+	b.watchAdditionalParentReplies(msg, sessionRow.ID, turnID, seen)
+	return nil
 }
 
 func (b *Bridge) failSubmit(ctx context.Context, msg AcceptedMessage, cause error) error {
@@ -137,9 +145,8 @@ func (b *Bridge) failSubmit(ctx context.Context, msg AcceptedMessage, cause erro
 func (b *Bridge) handleReplyWaitError(ctx context.Context, msg AcceptedMessage, sessionID, turnID string, waitErr error) error {
 	if errors.Is(waitErr, context.DeadlineExceeded) {
 		statusErr := b.state.SetDiscordIngressStatus(ctx, msg.DiscordMessageID, discordIngressStatusReplyWaitExpired, waitErr.Error())
-		replyErr := postGenericReply(ctx, b.replies, msg.ChannelID, msg.DiscordMessageID, genericReplyTimeout)
-		b.watchLateParentReply(msg, sessionID, turnID)
-		return joinErrors(waitErr, statusErr, replyErr)
+		b.watchLateParentReplies(msg, sessionID, turnID, map[string]struct{}{}, true)
+		return statusErr
 	}
 	if errors.Is(waitErr, context.Canceled) {
 		statusErr := b.setIngressStatusAfterCancel(msg.DiscordMessageID, discordIngressStatusCancelled, waitErr.Error())
@@ -159,7 +166,11 @@ func (b *Bridge) setIngressStatusAfterCancel(discordMessageID, status, errorMess
 	return b.state.SetDiscordIngressStatus(ctx, discordMessageID, status, errorMessage)
 }
 
-func (b *Bridge) watchLateParentReply(msg AcceptedMessage, sessionID, turnID string) {
+func (b *Bridge) watchAdditionalParentReplies(msg AcceptedMessage, sessionID, parentTurnID string, seen map[string]struct{}) {
+	b.watchLateParentReplies(msg, sessionID, parentTurnID, seen, false)
+}
+
+func (b *Bridge) watchLateParentReplies(msg AcceptedMessage, sessionID, parentTurnID string, seen map[string]struct{}, includeOriginalTurn bool) {
 	if b.waiter == nil || b.state == nil || b.replies == nil {
 		return
 	}
@@ -167,20 +178,72 @@ func (b *Bridge) watchLateParentReply(msg AcceptedMessage, sessionID, turnID str
 	if waitCtx == nil {
 		waitCtx = context.Background()
 	}
+	timeout := b.resolveFollowupWaitTimeout()
 	go func() {
-		payload, err := b.waiter.WaitParentReplyCommitted(waitCtx, sessionID, turnID)
-		if err != nil {
-			return
+		ctx, cancel := context.WithTimeout(waitCtx, timeout)
+		defer cancel()
+		if seen == nil {
+			seen = map[string]struct{}{}
 		}
-		if err := validateCommittedPayload(payload, msg.WorkspaceRoot, sessionID, turnID); err != nil {
-			return
+		postedAny := !includeOriginalTurn
+		for {
+			payload, err := b.waiter.WaitNextParentReplyCommitted(ctx, sessionID, seen)
+			if err != nil {
+				if postedAny && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+					_ = b.state.SetDiscordIngressStatus(context.Background(), msg.DiscordMessageID, discordIngressStatusFinalPosted, "")
+				}
+				return
+			}
+			key := parentReplyKey(payload)
+			if key != "" {
+				seen[key] = struct{}{}
+			}
+			if !isDiscordRelevantLateReply(payload, msg.WorkspaceRoot, sessionID, parentTurnID, includeOriginalTurn) {
+				continue
+			}
+			if err := postFinalReply(ctx, b.replies, msg.ChannelID, msg.DiscordMessageID, payload.Text, b.cfg); err != nil {
+				_ = b.state.SetDiscordIngressStatus(context.Background(), msg.DiscordMessageID, discordIngressStatusFinalPostFailed, err.Error())
+				return
+			}
+			postedAny = true
 		}
-		if err := postFinalReply(waitCtx, b.replies, msg.ChannelID, msg.DiscordMessageID, payload.Text, b.cfg); err != nil {
-			_ = b.state.SetDiscordIngressStatus(waitCtx, msg.DiscordMessageID, discordIngressStatusFinalPostFailed, err.Error())
-			return
-		}
-		_ = b.state.SetDiscordIngressStatus(waitCtx, msg.DiscordMessageID, discordIngressStatusFinalPosted, "")
 	}()
+}
+
+func isDiscordRelevantLateReply(payload types.ParentReplyCommittedPayload, workspaceRoot, sessionID, parentTurnID string, includeOriginalTurn bool) bool {
+	if includeOriginalTurn {
+		if validateCommittedPayload(payload, workspaceRoot, sessionID, parentTurnID) == nil {
+			return true
+		}
+	}
+	return isDiscordFollowupReply(payload, workspaceRoot, parentTurnID)
+}
+
+func isDiscordFollowupReply(payload types.ParentReplyCommittedPayload, workspaceRoot, parentTurnID string) bool {
+	if strings.TrimSpace(payload.WorkspaceRoot) != "" && strings.TrimSpace(payload.WorkspaceRoot) != strings.TrimSpace(workspaceRoot) {
+		return false
+	}
+	if payload.TurnKind != types.TurnKindReportBatch {
+		return false
+	}
+	parentTurnID = strings.TrimSpace(parentTurnID)
+	if parentTurnID == "" {
+		return false
+	}
+	for _, sourceTurnID := range payload.SourceParentTurnIDs {
+		if strings.TrimSpace(sourceTurnID) == parentTurnID {
+			return true
+		}
+	}
+	return false
+}
+
+func parentReplyKey(payload types.ParentReplyCommittedPayload) string {
+	turnID := strings.TrimSpace(payload.TurnID)
+	if turnID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", turnID, payload.ItemID)
 }
 
 func validateCommittedPayload(payload types.ParentReplyCommittedPayload, workspaceRoot, sessionID, turnID string) error {
@@ -221,6 +284,17 @@ func (b *Bridge) resolveReplyWaitTimeout() time.Duration {
 		return defaultReplyWaitTimeout
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func (b *Bridge) resolveFollowupWaitTimeout() time.Duration {
+	if b.replyWaitTimeout > 0 {
+		return b.replyWaitTimeout
+	}
+	timeout := b.resolveReplyWaitTimeout() * 3
+	if timeout < defaultFollowupWaitTimeout {
+		return defaultFollowupWaitTimeout
+	}
+	return timeout
 }
 
 func (b *Bridge) newTurn(sessionID, contextHeadID, userMessage string) types.Turn {

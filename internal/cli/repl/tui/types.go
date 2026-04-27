@@ -38,21 +38,20 @@ type StatusResponse struct {
 
 // SessionTimelineResponse is the session timeline.
 type SessionTimelineResponse struct {
-	LatestSeq          int64           `json:"latest_seq"`
-	Blocks             []TimelineBlock `json:"blocks"`
-	PendingReportCount int             `json:"pending_report_count"`
-	Queue              QueueSummary    `json:"queue"`
+	LatestSeq         int64           `json:"latest_seq"`
+	Blocks            []TimelineBlock `json:"blocks"`
+	QueuedReportCount int             `json:"queued_report_count"`
+	Queue             QueueSummary    `json:"queue"`
 }
 
 // TimelineBlock is a block in the session timeline.
 type TimelineBlock struct {
-	Kind                string         `json:"kind"`
-	Text                string         `json:"text,omitempty"`
-	Title               string         `json:"title,omitempty"`
-	Path                string         `json:"path,omitempty"`
-	Status              string         `json:"status,omitempty"`
-	Content             []ContentBlock `json:"content,omitempty"`
-	PermissionRequestID string         `json:"permission_request_id,omitempty"`
+	Kind    string         `json:"kind"`
+	Text    string         `json:"text,omitempty"`
+	Title   string         `json:"title,omitempty"`
+	Path    string         `json:"path,omitempty"`
+	Status  string         `json:"status,omitempty"`
+	Content []ContentBlock `json:"content,omitempty"`
 }
 
 // ContentBlock is a content block within an assistant message.
@@ -85,25 +84,25 @@ type ContextHead struct {
 	ID string `json:"id"`
 }
 
-// MailboxResponse is the workspace mailbox.
-type MailboxResponse struct {
-	Items        []MailboxItem `json:"items"`
-	PendingCount int           `json:"pending_count"`
-	Reports      int           `json:"reports"`
-	Deliveries   int           `json:"deliveries"`
+// ReportsResponse is the workspace reports.
+type ReportsResponse struct {
+	Items       []ReportDeliveryItem `json:"items"`
+	QueuedCount int                  `json:"queued_count"`
+	Reports     int                  `json:"reports"`
+	Deliveries  int                  `json:"deliveries"`
 }
 
-// MailboxItem is a single report item in the mailbox.
-type MailboxItem struct {
-	ID             string          `json:"id"`
-	SourceKind     string          `json:"source_kind"`
-	InjectedTurnID string          `json:"injected_turn_id,omitempty"`
-	ObservedAt     time.Time       `json:"observed_at"`
-	Envelope       MailboxEnvelope `json:"envelope"`
+// ReportDeliveryItem is a single delivered or queued report item.
+type ReportDeliveryItem struct {
+	ID             string         `json:"id"`
+	SourceKind     string         `json:"source_kind"`
+	InjectedTurnID string         `json:"injected_turn_id,omitempty"`
+	ObservedAt     time.Time      `json:"observed_at"`
+	Envelope       ReportEnvelope `json:"envelope"`
 }
 
-// MailboxEnvelope is the envelope of a mailbox item.
-type MailboxEnvelope struct {
+// ReportEnvelope is the envelope of a report item.
+type ReportEnvelope struct {
 	Title    string          `json:"title,omitempty"`
 	Summary  string          `json:"summary,omitempty"`
 	Status   string          `json:"status,omitempty"`
@@ -129,12 +128,11 @@ type RuntimeGraphResponse struct {
 
 // RuntimeGraph is the runtime graph.
 type RuntimeGraph struct {
-	Runs               []Run               `json:"runs"`
-	Diagnostics        []RuntimeDiagnostic `json:"diagnostics"`
-	Tasks              []Task              `json:"tasks"`
-	ToolRuns           []ToolRun           `json:"tool_runs"`
-	Worktrees          []Worktree          `json:"worktrees"`
-	PermissionRequests []PermissionRequest `json:"permission_requests"`
+	Runs        []Run               `json:"runs"`
+	Diagnostics []RuntimeDiagnostic `json:"diagnostics"`
+	Tasks       []Task              `json:"tasks"`
+	ToolRuns    []ToolRun           `json:"tool_runs"`
+	Worktrees   []Worktree          `json:"worktrees"`
 }
 
 // Run is a runtime run.
@@ -188,16 +186,6 @@ type Worktree struct {
 	State          string `json:"state"`
 	WorktreeBranch string `json:"worktree_branch,omitempty"`
 	WorktreePath   string `json:"worktree_path,omitempty"`
-}
-
-// PermissionRequest is a permission request in the runtime graph.
-type PermissionRequest struct {
-	ID               string `json:"id"`
-	Status           string `json:"status"`
-	ToolName         string `json:"tool_name,omitempty"`
-	RequestedProfile string `json:"requested_profile,omitempty"`
-	Decision         string `json:"decision,omitempty"`
-	Reason           string `json:"reason,omitempty"`
 }
 
 // CronListResponse is the response from listing cron jobs.
@@ -277,23 +265,6 @@ type DigestRecord struct {
 // DigestEnvelope is the envelope of a digest.
 type DigestEnvelope = ResultEnvelope
 
-// PermissionDecisionRequest is a permission decision request.
-type PermissionDecisionRequest struct {
-	RequestID string `json:"request_id"`
-	Decision  string `json:"decision"`
-}
-
-// PermissionDecisionResponse is the response from a permission decision.
-type PermissionDecisionResponse struct {
-	Request PermissionRequestInfo `json:"request"`
-	Resumed bool                  `json:"resumed"`
-}
-
-// PermissionRequestInfo is a permission request.
-type PermissionRequestInfo struct {
-	ID string `json:"id"`
-}
-
 // ToolEventPayload is the payload for tool events.
 type ToolEventPayload struct {
 	ToolCallID        string `json:"tool_call_id"`
@@ -315,30 +286,6 @@ type NoticePayload struct {
 	Text string `json:"text"`
 }
 
-// PermissionRequestedPayload is the payload for permission requested events.
-type PermissionRequestedPayload struct {
-	RequestID        string `json:"request_id,omitempty"`
-	ToolRunID        string `json:"tool_run_id,omitempty"`
-	ToolCallID       string `json:"tool_call_id,omitempty"`
-	ToolName         string `json:"tool_name,omitempty"`
-	RequestedProfile string `json:"requested_profile"`
-	Reason           string `json:"reason,omitempty"`
-	TurnID           string `json:"turn_id,omitempty"`
-}
-
-// PermissionResolvedPayload is the payload for permission resolved events.
-type PermissionResolvedPayload struct {
-	RequestID        string `json:"request_id"`
-	ToolRunID        string `json:"tool_run_id,omitempty"`
-	ToolCallID       string `json:"tool_call_id,omitempty"`
-	ToolName         string `json:"tool_name,omitempty"`
-	RequestedProfile string `json:"requested_profile"`
-	Decision         string `json:"decision"`
-	DecisionScope    string `json:"decision_scope,omitempty"`
-	EffectiveProfile string `json:"effective_profile,omitempty"`
-	TurnID           string `json:"turn_id,omitempty"`
-}
-
 // TurnFailedPayload is the payload for turn failed events.
 type TurnFailedPayload struct {
 	Message string `json:"message"`
@@ -346,17 +293,14 @@ type TurnFailedPayload struct {
 
 // SessionQueuePayload is the payload for session queue updated events.
 type SessionQueuePayload struct {
-	ActiveTurnID             string `json:"active_turn_id,omitempty"`
-	ActiveTurnKind           string `json:"active_turn_kind,omitempty"`
-	QueueDepth               int    `json:"queue_depth"`
-	QueuedUserTurns          int    `json:"queued_user_turns"`
-	QueuedChildReportBatches int    `json:"queued_child_report_batches"`
+	ActiveTurnID        string `json:"active_turn_id,omitempty"`
+	ActiveTurnKind      string `json:"active_turn_kind,omitempty"`
+	QueueDepth          int    `json:"queue_depth"`
+	QueuedUserTurns     int    `json:"queued_user_turns"`
+	QueuedReportBatches int    `json:"queued_report_batches"`
 }
 
-// SessionMemoryEventPayload is the payload for session memory events.
-type SessionMemoryEventPayload struct {
+// ContextHeadSummaryEventPayload is the payload for context head summary events.
+type ContextHeadSummaryEventPayload struct {
 	Message string `json:"message,omitempty"`
 }
-
-// ReportMailboxItem is the payload for report ready events.
-type ReportMailboxItem = MailboxItem

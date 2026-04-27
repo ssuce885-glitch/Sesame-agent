@@ -158,7 +158,7 @@ var (
 				Bold(true).
 				Foreground(lipgloss.Color(colorTitle))
 
-	// Push bar (mailbox notification)
+	// Push bar (reports notification)
 	StylePushBar = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color(colorHighlight))

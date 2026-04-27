@@ -2,22 +2,20 @@ import { useMemo, useState } from "react";
 import {
   useContextHistory,
   useLoadContextHistory,
-  useWorkspaceMailbox,
+  useWorkspaceReports,
   useWorkspaceRuntimeGraph,
   useReopenContext,
 } from "../api/queries";
 import type {
   HistoryEntry,
   RuntimeDiagnostic,
-  RuntimePermissionRequest,
   RuntimeTask,
   RuntimeToolRun,
   RuntimeWorktree,
-  WorkspaceMailboxItem,
+  WorkspaceReportDeliveryItem,
 } from "../api/types";
 import { useI18n } from "../i18n";
 import {
-  ApprovalRow,
   ContextHeadRow,
   DiagnosticRow,
   formatTimestamp,
@@ -40,7 +38,7 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
   const { t } = useI18n();
   const history = useContextHistory(sessionId || null);
   const runtimeGraph = useWorkspaceRuntimeGraph();
-  const mailbox = useWorkspaceMailbox();
+  const reports = useWorkspaceReports();
   const reopenContext = useReopenContext(sessionId);
   const loadContextHistory = useLoadContextHistory(sessionId);
 
@@ -49,10 +47,7 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
   const toolRuns = [...(runtimeGraph.data?.graph.tool_runs ?? [])].sort(sortByUpdatedAtDesc);
   const worktrees = [...(runtimeGraph.data?.graph.worktrees ?? [])].sort(sortByUpdatedAtDesc);
   const diagnostics = [...(runtimeGraph.data?.graph.diagnostics ?? [])].sort(sortByCreatedAtDesc);
-  const pendingApprovals = (runtimeGraph.data?.graph.permission_requests ?? []).filter(
-    (request) => request.status === "requested",
-  );
-  const mailboxItems = [...(mailbox.data?.items ?? [])].sort(sortByUpdatedAtDesc);
+  const reportItems = [...(reports.data?.items ?? [])].sort(sortByUpdatedAtDesc);
   const activeTaskCount = tasks.filter((task) => task.state === "running" || task.state === "pending").length;
   const [selection, setSelection] = useState<RuntimeSelection | null>(null);
   const selectedDetail = useMemo(
@@ -61,19 +56,18 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
         selection,
         contextEntries,
         tasks,
-        mailboxItems,
-        pendingApprovals,
+        reportItems,
         diagnostics,
         toolRuns,
         worktrees,
       ),
-    [selection, contextEntries, tasks, mailboxItems, pendingApprovals, diagnostics, toolRuns, worktrees],
+    [selection, contextEntries, tasks, reportItems, diagnostics, toolRuns, worktrees],
   );
 
   const isInitialLoading =
     (history.isLoading && !history.data) ||
     (runtimeGraph.isLoading && !runtimeGraph.data) ||
-    (mailbox.isLoading && !mailbox.data);
+    (reports.isLoading && !reports.data);
 
   if (isInitialLoading) {
     return (
@@ -94,7 +88,7 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SummaryCard label={t("runtime.summary.contextHeads")} value={String(contextEntries.length)} detail={t("runtime.summary.contextHeadsDetail")} />
         <SummaryCard label={t("runtime.summary.activeTasks")} value={String(activeTaskCount)} detail={t("runtime.summary.activeTasksDetail", { count: tasks.length })} />
         <SummaryCard
@@ -103,14 +97,9 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
           detail={t("runtime.summary.diagnosticsDetail")}
         />
         <SummaryCard
-          label={t("runtime.summary.pendingReports")}
-          value={String(mailbox.data?.pending_count ?? 0)}
-          detail={t("runtime.summary.pendingReportsDetail", { count: mailboxItems.length })}
-        />
-        <SummaryCard
-          label={t("runtime.summary.approvals")}
-          value={String(pendingApprovals.length)}
-          detail={t("runtime.summary.approvalsDetail")}
+          label={t("runtime.summary.queuedReports")}
+          value={String(reports.data?.queued_count ?? 0)}
+          detail={t("runtime.summary.queuedReportsDetail", { count: reportItems.length })}
         />
       </div>
 
@@ -150,7 +139,7 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
           subtitle={t("runtime.panels.reportsSubtitle")}
           emptyText={t("runtime.panels.reportsEmpty")}
         >
-          {mailboxItems.map((item) => (
+          {reportItems.map((item) => (
             <ReportRow
               key={item.id}
               item={item}
@@ -161,7 +150,7 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
         </Panel>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.3fr_0.9fr]">
+      <div className="grid grid-cols-1 gap-6">
         <Panel title={t("runtime.panels.tasksTitle")} subtitle={t("runtime.panels.tasksSubtitle")} emptyText={t("runtime.panels.tasksEmpty")}>
           {tasks.map((task) => (
             <TaskRow
@@ -169,21 +158,6 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
               task={task}
               selected={selection?.kind === "task" && selection.id === task.id}
               onSelect={() => setSelection({ kind: "task", id: task.id })}
-            />
-          ))}
-        </Panel>
-
-        <Panel
-          title={t("runtime.panels.approvalsTitle")}
-          subtitle={t("runtime.panels.approvalsSubtitle")}
-          emptyText={t("runtime.panels.approvalsEmpty")}
-        >
-          {pendingApprovals.map((request) => (
-            <ApprovalRow
-              key={request.id}
-              request={request}
-              selected={selection?.kind === "approval" && selection.id === request.id}
-              onSelect={() => setSelection({ kind: "approval", id: request.id })}
             />
           ))}
         </Panel>
@@ -233,10 +207,9 @@ export function RuntimePage({ sessionId }: RuntimePageProps) {
               selection,
               contextEntries,
               tasks,
-              mailboxItems,
+              reportItems,
               toolRuns,
               worktrees,
-              pendingApprovals,
               reopenContext,
               loadContextHistory,
               setSelection,
@@ -253,7 +226,6 @@ type RuntimeSelection =
   | { kind: "task"; id: string }
   | { kind: "report"; id: string }
   | { kind: "diagnostic"; id: string }
-  | { kind: "approval"; id: string }
   | { kind: "tool_run"; id: string }
   | { kind: "worktree"; id: string };
 
@@ -279,8 +251,7 @@ function buildSelectionDetail(
   selection: RuntimeSelection | null,
   contextEntries: HistoryEntry[],
   tasks: RuntimeTask[],
-  mailboxItems: WorkspaceMailboxItem[],
-  pendingApprovals: RuntimePermissionRequest[],
+  reportItems: WorkspaceReportDeliveryItem[],
   diagnostics: RuntimeDiagnostic[],
   toolRuns: RuntimeToolRun[],
   worktrees: RuntimeWorktree[],
@@ -308,7 +279,7 @@ function buildSelectionDetail(
     }
     case "task": {
       const task = tasks.find((item) => item.id === selection.id);
-      const relatedReport = mailboxItems.find((item) => item.source_id === task?.id);
+      const relatedReport = reportItems.find((item) => item.source_id === task?.id);
       if (!task) {
         return null;
       }
@@ -328,7 +299,7 @@ function buildSelectionDetail(
       };
     }
     case "report": {
-      const item = mailboxItems.find((entry) => entry.id === selection.id);
+      const item = reportItems.find((entry) => entry.id === selection.id);
       const relatedTask = tasks.find((task) => task.id === item?.source_id);
       if (!item) {
         return null;
@@ -373,25 +344,6 @@ function buildSelectionDetail(
         ]),
       };
     }
-    case "approval": {
-      const request = pendingApprovals.find((item) => item.id === selection.id);
-      if (!request) {
-        return null;
-      }
-      return {
-        title: request.tool_name || request.requested_profile,
-        kindLabel: "approval",
-        summary: request.reason || "Awaiting approval to continue execution.",
-        items: compactDetailItems([
-          { label: "Request ID", value: request.id },
-          { label: "Profile", value: request.requested_profile },
-          { label: "Turn ID", value: request.turn_id },
-          { label: "Task ID", value: request.task_id },
-          { label: "Status", value: request.status },
-          { label: "Updated", value: formatTimestamp(request.updated_at) },
-        ]),
-      };
-    }
     case "tool_run": {
       const toolRun = toolRuns.find((item) => item.id === selection.id);
       if (!toolRun) {
@@ -408,7 +360,6 @@ function buildSelectionDetail(
           { label: "State", value: toolRun.state },
           { label: "Tool Call", value: toolRun.tool_call_id },
           { label: "Input", value: toolRun.input_json },
-          { label: "Permission Request", value: toolRun.permission_request_id },
           { label: "Lock Wait", value: toolRun.lock_wait_ms != null ? `${toolRun.lock_wait_ms} ms` : undefined },
           { label: "Updated", value: formatTimestamp(toolRun.updated_at || toolRun.created_at) },
         ]),
@@ -441,10 +392,9 @@ function buildSelectionActions({
   selection,
   contextEntries,
   tasks,
-  mailboxItems,
+  reportItems,
   toolRuns,
   worktrees,
-  pendingApprovals,
   reopenContext,
   loadContextHistory,
   setSelection,
@@ -452,10 +402,9 @@ function buildSelectionActions({
   selection: RuntimeSelection | null;
   contextEntries: HistoryEntry[];
   tasks: RuntimeTask[];
-  mailboxItems: WorkspaceMailboxItem[];
+  reportItems: WorkspaceReportDeliveryItem[];
   toolRuns: RuntimeToolRun[];
   worktrees: RuntimeWorktree[];
-  pendingApprovals: RuntimePermissionRequest[];
   reopenContext: ReturnType<typeof useReopenContext>;
   loadContextHistory: ReturnType<typeof useLoadContextHistory>;
   setSelection: (selection: RuntimeSelection | null) => void;
@@ -494,7 +443,7 @@ function buildSelectionActions({
     }
     case "task": {
       const task = tasks.find((item) => item.id === selection.id);
-      const relatedReport = mailboxItems.find((item) => item.source_id === task?.id);
+      const relatedReport = reportItems.find((item) => item.source_id === task?.id);
       const relatedToolRun = toolRuns.find((item) => item.task_id === task?.id);
       const relatedWorktree = worktrees.find((item) => item.task_id === task?.id || item.id === task?.worktree_id);
       const actions: SelectionAction[] = [];
@@ -519,7 +468,7 @@ function buildSelectionActions({
       return actions;
     }
     case "report": {
-      const report = mailboxItems.find((item) => item.id === selection.id);
+      const report = reportItems.find((item) => item.id === selection.id);
       const relatedTask = tasks.find((task) => task.id === report?.source_id);
       if (!relatedTask) {
         return [];
@@ -534,18 +483,11 @@ function buildSelectionActions({
     case "tool_run": {
       const toolRun = toolRuns.find((item) => item.id === selection.id);
       const relatedTask = tasks.find((item) => item.id === toolRun?.task_id);
-      const relatedApproval = pendingApprovals.find((item) => item.id === toolRun?.permission_request_id);
       const actions: SelectionAction[] = [];
       if (relatedTask) {
         actions.push({
           label: "Open related task",
           onClick: () => setSelection({ kind: "task", id: relatedTask.id }),
-        });
-      }
-      if (relatedApproval) {
-        actions.push({
-          label: "Open approval request",
-          onClick: () => setSelection({ kind: "approval", id: relatedApproval.id }),
         });
       }
       return actions;

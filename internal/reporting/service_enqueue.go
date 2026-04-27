@@ -22,31 +22,31 @@ func ShouldQueueTaskReport(completed task.Task) bool {
 	}
 }
 
-func (s *Service) EnqueueTaskReport(ctx context.Context, completed task.Task, now time.Time) (types.ReportRecord, types.ReportDelivery, types.ReportMailboxItem, bool, error) {
+func (s *Service) EnqueueTaskReport(ctx context.Context, completed task.Task, now time.Time) (types.ReportRecord, types.ReportDelivery, types.ReportDeliveryItem, bool, error) {
 	workspaceRoot := s.resolveWorkspaceRoot(ctx, completed.ParentSessionID, completed.WorkspaceRoot)
-	report, ok := ReportFromTask(workspaceRoot, completed, now)
+	report, ok := ReportFromTaskOutcome(workspaceRoot, completed, now)
 	if !ok {
-		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportMailboxItem{}, false, nil
+		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportDeliveryItem{}, false, nil
 	}
 	report, err := s.prepareReportForDelivery(ctx, report, completed.ParentSessionID)
 	if err != nil {
-		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportMailboxItem{}, false, err
+		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportDeliveryItem{}, false, err
 	}
-	delivery := MailboxDeliveryFromReport(report, now)
-	item := types.ReportMailboxItemFromRecordDelivery(report, delivery)
+	delivery := DeliveryFromReport(report, now)
+	item := types.ReportDeliveryItemFromRecordDelivery(report, delivery)
 	if s == nil || s.store == nil {
 		return report, delivery, item, true, nil
 	}
 	if err := s.store.UpsertReport(ctx, report); err != nil {
-		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportMailboxItem{}, false, err
+		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportDeliveryItem{}, false, err
 	}
 	if err := s.store.UpsertReportDelivery(ctx, delivery); err != nil {
-		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportMailboxItem{}, false, err
+		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportDeliveryItem{}, false, err
 	}
 	return report, delivery, item, true, nil
 }
 
-func (s *Service) EnqueueScheduledJobReport(ctx context.Context, completed task.Task, now time.Time) (types.ChildAgentResult, []types.ReportMailboxItem, bool, error) {
+func (s *Service) EnqueueScheduledJobReport(ctx context.Context, completed task.Task, now time.Time) (types.ChildAgentResult, []types.ReportDeliveryItem, bool, error) {
 	childSpec, _, err := s.childAgentSpecForTask(ctx, completed)
 	if err != nil {
 		return types.ChildAgentResult{}, nil, false, err
@@ -59,7 +59,7 @@ func (s *Service) EnqueueScheduledJobReport(ctx context.Context, completed task.
 	if s == nil || s.store == nil {
 		if len(childResult.ReportGroupRefs) == 0 {
 			report := ReportFromChildAgentResult(workspaceRoot, childResult.SessionID, childResult, now)
-			return childResult, []types.ReportMailboxItem{types.ReportMailboxItemFromRecordDelivery(report, MailboxDeliveryFromReport(report, now))}, true, nil
+			return childResult, []types.ReportDeliveryItem{types.ReportDeliveryItemFromRecordDelivery(report, DeliveryFromReport(report, now))}, true, nil
 		}
 		return childResult, nil, true, nil
 	}
@@ -67,10 +67,10 @@ func (s *Service) EnqueueScheduledJobReport(ctx context.Context, completed task.
 		return types.ChildAgentResult{}, nil, false, err
 	}
 
-	items := make([]types.ReportMailboxItem, 0, 1)
+	items := make([]types.ReportDeliveryItem, 0, 1)
 	if len(childResult.ReportGroupRefs) == 0 {
 		report := ReportFromChildAgentResult(workspaceRoot, childResult.SessionID, childResult, now)
-		item, err := s.persistReportMailboxItem(ctx, report, now)
+		item, err := s.persistReportDeliveryItem(ctx, report, now)
 		if err != nil {
 			return types.ChildAgentResult{}, nil, false, err
 		}
@@ -99,11 +99,11 @@ func (s *Service) EnqueueScheduledJobReport(ctx context.Context, completed task.
 		if err := s.store.UpsertDigestRecord(ctx, digest); err != nil {
 			return types.ChildAgentResult{}, nil, false, err
 		}
-		if !reportGroupDeliversToMailbox(group) {
+		if !reportGroupDeliversToAgent(group) {
 			continue
 		}
 		report := ReportFromDigestRecord(workspaceRoot, digest, now)
-		item, err := s.persistReportMailboxItem(ctx, report, now)
+		item, err := s.persistReportDeliveryItem(ctx, report, now)
 		if err != nil {
 			return types.ChildAgentResult{}, nil, false, err
 		}
@@ -112,7 +112,7 @@ func (s *Service) EnqueueScheduledJobReport(ctx context.Context, completed task.
 	return childResult, items, true, nil
 }
 
-func (s *Service) EnqueueAutomationChildResult(ctx context.Context, workspaceRoot string, result types.ChildAgentResult, now time.Time) (types.ReportMailboxItem, error) {
+func (s *Service) EnqueueAutomationChildResult(ctx context.Context, workspaceRoot string, result types.ChildAgentResult, now time.Time) (types.ReportDeliveryItem, error) {
 	if strings.TrimSpace(result.ResultID) == "" {
 		result.ResultID = types.NewID("child_result")
 	}
@@ -133,50 +133,88 @@ func (s *Service) EnqueueAutomationChildResult(ctx context.Context, workspaceRoo
 	}
 	if s == nil || s.store == nil {
 		report := ReportFromChildAgentResult(strings.TrimSpace(workspaceRoot), result.SessionID, result, now)
-		return types.ReportMailboxItemFromRecordDelivery(report, MailboxDeliveryFromReport(report, now)), nil
+		return types.ReportDeliveryItemFromRecordDelivery(report, DeliveryFromReport(report, now)), nil
 	}
 	if err := s.store.UpsertChildAgentResult(ctx, result); err != nil {
-		return types.ReportMailboxItem{}, err
+		return types.ReportDeliveryItem{}, err
 	}
 	report := ReportFromChildAgentResult(strings.TrimSpace(workspaceRoot), result.SessionID, result, now)
-	return s.persistReportMailboxItem(ctx, report, now)
+	return s.persistReportDeliveryItem(ctx, report, now)
 }
 
-func ReportFromTask(workspaceRoot string, completed task.Task, now time.Time) (types.ReportRecord, bool) {
+func ReportFromTaskOutcome(workspaceRoot string, completed task.Task, now time.Time) (types.ReportRecord, bool) {
 	result, ready := completed.FinalResult()
-	if !ready {
+	resultText := ""
+	observedAt := now
+	if ready {
+		resultText = strings.TrimSpace(result.Text)
+		observedAt = firstNonZeroReportTime(result.ObservedAt, now)
+	}
+	summary := firstNonEmptyTrimmed(resultText, completed.OutcomeSummary, completed.Error)
+	if summary == "" && completed.Status == task.TaskStatusRunning {
 		return types.ReportRecord{}, false
 	}
 
 	title := firstNonEmptyTrimmed(completed.Description, completed.Command, completed.ExecutionTaskID, completed.ID)
-	summary := clampTaskResultPreview(result.Text)
+	status := reportStatusFromTaskOutcome(completed)
 	envelope := types.ReportEnvelope{
-		Source:   string(types.ReportMailboxSourceTaskResult),
-		Status:   "completed",
-		Severity: mailboxSeverityFromTaskKind(completed.Kind),
+		Source:   string(types.ReportSourceTaskResult),
+		Status:   status,
+		Severity: reportSeverityFromTaskOutcome(completed),
 		Title:    title,
-		Summary:  summary,
+		Summary:  clampTaskResultPreview(summary),
 	}
-	if strings.TrimSpace(result.Text) != "" {
+	body := firstNonEmptyTrimmed(resultText, completed.OutcomeSummary, completed.Error)
+	if body != "" {
 		envelope.Sections = []types.ReportSectionContent{{
 			ID:    "report_body",
 			Title: firstNonEmptyTrimmed(title, "Report"),
-			Text:  strings.TrimSpace(result.Text),
+			Text:  body,
 		}}
 	}
 
-	reportID := fmt.Sprintf("%s:%s", types.ReportMailboxSourceTaskResult, completed.ID)
+	reportID := fmt.Sprintf("%s:%s", types.ReportSourceTaskResult, completed.ID)
 	return types.ReportRecord{
 		ID:            reportID,
 		WorkspaceRoot: strings.TrimSpace(workspaceRoot),
-		SessionID:     completed.ParentSessionID,
-		SourceKind:    types.ReportMailboxSourceTaskResult,
-		SourceID:      completed.ID,
+		SessionID:     strings.TrimSpace(completed.ParentSessionID),
+		SourceTurnID:  strings.TrimSpace(completed.ParentTurnID),
+		SourceKind:    types.ReportSourceTaskResult,
+		SourceID:      strings.TrimSpace(completed.ID),
 		Envelope:      envelope,
-		ObservedAt:    result.ObservedAt,
+		ObservedAt:    observedAt,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}, true
+}
+
+func reportStatusFromTaskOutcome(completed task.Task) string {
+	switch completed.Outcome {
+	case types.ChildAgentOutcomeBlocked:
+		return "blocked"
+	case types.ChildAgentOutcomeFailure:
+		return "failed"
+	case types.ChildAgentOutcomeSuccess:
+		return "completed"
+	}
+	switch completed.Status {
+	case task.TaskStatusFailed:
+		return "failed"
+	case task.TaskStatusStopped:
+		return "stopped"
+	default:
+		return "completed"
+	}
+}
+
+func reportSeverityFromTaskOutcome(completed task.Task) string {
+	if completed.Outcome == types.ChildAgentOutcomeFailure || completed.Status == task.TaskStatusFailed {
+		return "error"
+	}
+	if completed.Outcome == types.ChildAgentOutcomeBlocked || completed.Status == task.TaskStatusStopped {
+		return "warning"
+	}
+	return reportSeverityForTaskKind(completed.Kind)
 }
 
 func ChildAgentResultFromTask(completed task.Task, spec types.ChildAgentSpec, now time.Time) (types.ChildAgentResult, bool) {
@@ -192,9 +230,9 @@ func ChildAgentResultFromTask(completed task.Task, spec types.ChildAgentSpec, no
 	title := firstNonEmptyTrimmed(completed.Description, completed.Command, completed.ExecutionTaskID, completed.ID)
 	summary := clampTaskResultPreview(result.Text)
 	envelope := types.ReportEnvelope{
-		Source:   string(types.ReportMailboxSourceChildAgentResult),
+		Source:   string(types.ReportSourceChildAgentResult),
 		Status:   "completed",
-		Severity: mailboxSeverityFromTaskKind(completed.Kind),
+		Severity: reportSeverityForTaskKind(completed.Kind),
 		Title:    title,
 		Summary:  summary,
 	}
@@ -206,7 +244,7 @@ func ChildAgentResultFromTask(completed task.Task, spec types.ChildAgentSpec, no
 		}}
 	}
 
-	resultID := fmt.Sprintf("%s:%s", types.ReportMailboxSourceChildAgentResult, completed.ID)
+	resultID := fmt.Sprintf("%s:%s", types.ReportSourceChildAgentResult, completed.ID)
 	return types.ChildAgentResult{
 		ResultID:        resultID,
 		SessionID:       firstNonEmptyTrimmed(spec.SessionID, completed.ParentSessionID),
@@ -223,12 +261,12 @@ func ChildAgentResultFromTask(completed task.Task, spec types.ChildAgentSpec, no
 }
 
 func ReportFromChildAgentResult(workspaceRoot, sessionID string, result types.ChildAgentResult, now time.Time) types.ReportRecord {
-	reportID := fmt.Sprintf("%s:%s", types.ReportMailboxSourceChildAgentResult, result.ResultID)
+	reportID := fmt.Sprintf("%s:%s", types.ReportSourceChildAgentResult, result.ResultID)
 	return types.ReportRecord{
 		ID:            reportID,
 		WorkspaceRoot: strings.TrimSpace(workspaceRoot),
 		SessionID:     strings.TrimSpace(sessionID),
-		SourceKind:    types.ReportMailboxSourceChildAgentResult,
+		SourceKind:    types.ReportSourceChildAgentResult,
 		SourceID:      result.ResultID,
 		Envelope:      result.Envelope,
 		ObservedAt:    result.ObservedAt,
@@ -238,12 +276,12 @@ func ReportFromChildAgentResult(workspaceRoot, sessionID string, result types.Ch
 }
 
 func ReportFromDigestRecord(workspaceRoot string, digest types.DigestRecord, now time.Time) types.ReportRecord {
-	reportID := fmt.Sprintf("%s:%s", types.ReportMailboxSourceDigest, digest.DigestID)
+	reportID := fmt.Sprintf("%s:%s", types.ReportSourceDigest, digest.DigestID)
 	return types.ReportRecord{
 		ID:            reportID,
 		WorkspaceRoot: strings.TrimSpace(workspaceRoot),
 		SessionID:     strings.TrimSpace(digest.SessionID),
-		SourceKind:    types.ReportMailboxSourceDigest,
+		SourceKind:    types.ReportSourceDigest,
 		SourceID:      digest.DigestID,
 		Envelope:      digest.Envelope,
 		ObservedAt:    digest.WindowEnd,
@@ -252,21 +290,28 @@ func ReportFromDigestRecord(workspaceRoot string, digest types.DigestRecord, now
 	}
 }
 
-func MailboxDeliveryFromReport(report types.ReportRecord, now time.Time) types.ReportDelivery {
+func DeliveryFromReport(report types.ReportRecord, now time.Time) types.ReportDelivery {
+	targetKey := firstNonEmptyTrimmed(report.TargetSessionID, report.SessionID, report.TargetRoleID, string(report.Audience), "workspace")
 	deliveryID := strings.TrimSpace(report.ID)
+	if deliveryID != "" {
+		deliveryID = deliveryID + ":agent_report:" + targetKey
+	}
 	if deliveryID == "" {
 		deliveryID = types.NewID("report_delivery")
 	}
 	return types.ReportDelivery{
-		ID:            deliveryID,
-		WorkspaceRoot: strings.TrimSpace(report.WorkspaceRoot),
-		SessionID:     report.SessionID,
-		ReportID:      report.ID,
-		Channel:       types.ReportChannelMailbox,
-		State:         types.ReportDeliveryStatePending,
-		ObservedAt:    report.ObservedAt,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:              deliveryID,
+		WorkspaceRoot:   strings.TrimSpace(report.WorkspaceRoot),
+		SessionID:       firstNonEmptyTrimmed(report.TargetSessionID, report.SessionID),
+		ReportID:        report.ID,
+		TargetRoleID:    report.TargetRoleID,
+		TargetSessionID: report.TargetSessionID,
+		Audience:        report.Audience,
+		Channel:         types.ReportChannelAgent,
+		State:           types.ReportDeliveryStateQueued,
+		ObservedAt:      report.ObservedAt,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 }
 
@@ -281,23 +326,23 @@ func (s *Service) childAgentSpecForTask(ctx context.Context, completed task.Task
 	return s.store.GetChildAgentSpec(ctx, agentID)
 }
 
-func (s *Service) persistReportMailboxItem(ctx context.Context, report types.ReportRecord, now time.Time) (types.ReportMailboxItem, error) {
+func (s *Service) persistReportDeliveryItem(ctx context.Context, report types.ReportRecord, now time.Time) (types.ReportDeliveryItem, error) {
 	sourceSessionID := firstNonEmptyTrimmed(report.SourceSessionID, report.SessionID)
 	var err error
 	report, err = s.prepareReportForDelivery(ctx, report, sourceSessionID)
 	if err != nil {
-		return types.ReportMailboxItem{}, err
+		return types.ReportDeliveryItem{}, err
 	}
-	delivery := MailboxDeliveryFromReport(report, now)
-	item := types.ReportMailboxItemFromRecordDelivery(report, delivery)
+	delivery := DeliveryFromReport(report, now)
+	item := types.ReportDeliveryItemFromRecordDelivery(report, delivery)
 	if s == nil || s.store == nil {
 		return item, nil
 	}
 	if err := s.store.UpsertReport(ctx, report); err != nil {
-		return types.ReportMailboxItem{}, err
+		return types.ReportDeliveryItem{}, err
 	}
 	if err := s.store.UpsertReportDelivery(ctx, delivery); err != nil {
-		return types.ReportMailboxItem{}, err
+		return types.ReportDeliveryItem{}, err
 	}
 	return item, nil
 }
@@ -397,7 +442,7 @@ func normalizeTaskKind(kind string) string {
 	return strings.ToLower(strings.TrimSpace(kind))
 }
 
-func mailboxSeverityFromTaskKind(kind string) string {
+func reportSeverityForTaskKind(kind string) string {
 	switch normalizeTaskKind(kind) {
 	case "digest", "scheduled_digest":
 		return "warning"
@@ -425,4 +470,13 @@ func firstNonEmptyTrimmed(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstNonZeroReportTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value.UTC()
+		}
+	}
+	return time.Time{}
 }

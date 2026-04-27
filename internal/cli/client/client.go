@@ -85,14 +85,6 @@ func (c *Client) InterruptTurn(ctx context.Context) error {
 	return c.doJSON(ctx, http.MethodPost, "/v1/session/interrupt", nil, nil)
 }
 
-func (c *Client) DecidePermission(ctx context.Context, req types.PermissionDecisionRequest) (types.PermissionDecisionResponse, error) {
-	var out types.PermissionDecisionResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/permissions/decide", req, &out); err != nil {
-		return types.PermissionDecisionResponse{}, err
-	}
-	return out, nil
-}
-
 func (c *Client) GetTimeline(ctx context.Context) (types.SessionTimelineResponse, error) {
 	var out types.SessionTimelineResponse
 	if err := c.doJSON(ctx, http.MethodGet, "/v1/session/timeline", nil, &out); err != nil {
@@ -127,10 +119,10 @@ func (c *Client) LoadContextHistory(ctx context.Context, headID string) (types.C
 	return out, nil
 }
 
-func (c *Client) GetWorkspaceMailbox(ctx context.Context) (types.WorkspaceReportMailboxResponse, error) {
-	var out types.WorkspaceReportMailboxResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/v1/mailbox", nil, &out); err != nil {
-		return types.WorkspaceReportMailboxResponse{}, err
+func (c *Client) GetWorkspaceReports(ctx context.Context) (types.WorkspaceReportsResponse, error) {
+	var out types.WorkspaceReportsResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/reports", nil, &out); err != nil {
+		return types.WorkspaceReportsResponse{}, err
 	}
 	return out, nil
 }
@@ -283,22 +275,6 @@ func (c *Client) RecordHeartbeat(ctx context.Context, req types.TriggerHeartbeat
 	var out types.AutomationHeartbeat
 	if err := c.doJSON(ctx, http.MethodPost, "/v1/triggers/heartbeat", req, &out); err != nil {
 		return types.AutomationHeartbeat{}, err
-	}
-	return out, nil
-}
-
-func (c *Client) ListPendingAutomationPermissions(ctx context.Context) (types.ListPendingAutomationPermissionsResponse, error) {
-	var out types.ListPendingAutomationPermissionsResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/v1/permissions/pending", nil, &out); err != nil {
-		return types.ListPendingAutomationPermissionsResponse{}, err
-	}
-	return out, nil
-}
-
-func (c *Client) GetPendingAutomationPermission(ctx context.Context, requestID string) (types.PendingAutomationPermission, error) {
-	var out types.PendingAutomationPermission
-	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/permissions/pending/%s", requestID), nil, &out); err != nil {
-		return types.PendingAutomationPermission{}, err
 	}
 	return out, nil
 }

@@ -43,12 +43,13 @@ type Summary struct {
 }
 
 type ConversationItem struct {
-	Kind     ConversationItemKind
-	Text     string
-	Parts    []ContentPart
-	Summary  *Summary
-	ToolCall ToolCallChunk
-	Result   *ToolResult
+	Kind              ConversationItemKind
+	Text              string
+	ThinkingSignature string
+	Parts             []ContentPart
+	Summary           *Summary
+	ToolCall          ToolCallChunk
+	Result            *ToolResult
 }
 
 type ContentPart struct {
@@ -68,6 +69,10 @@ func UserMessageItem(text string) ConversationItem {
 
 func AssistantThinkingItem(text string) ConversationItem {
 	return ConversationItem{Kind: ConversationItemAssistantThinking, Text: text}
+}
+
+func AssistantThinkingBlockItem(text, signature string) ConversationItem {
+	return ConversationItem{Kind: ConversationItemAssistantThinking, Text: text, ThinkingSignature: signature}
 }
 
 func UserMultipartItem(parts []ContentPart) ConversationItem {
@@ -103,14 +108,15 @@ type Request struct {
 type StreamEventKind string
 
 const (
-	StreamEventTextDelta        StreamEventKind = "text_delta"
-	StreamEventThinkingDelta    StreamEventKind = "thinking_delta"
-	StreamEventToolCallStart    StreamEventKind = "tool_call_start"
-	StreamEventToolCallDelta    StreamEventKind = "tool_call_delta"
-	StreamEventToolCallEnd      StreamEventKind = "tool_call_end"
-	StreamEventResponseMetadata StreamEventKind = "response_metadata"
-	StreamEventMessageEnd       StreamEventKind = "message_end"
-	StreamEventUsage            StreamEventKind = "usage"
+	StreamEventTextDelta         StreamEventKind = "text_delta"
+	StreamEventThinkingDelta     StreamEventKind = "thinking_delta"
+	StreamEventThinkingSignature StreamEventKind = "thinking_signature"
+	StreamEventToolCallStart     StreamEventKind = "tool_call_start"
+	StreamEventToolCallDelta     StreamEventKind = "tool_call_delta"
+	StreamEventToolCallEnd       StreamEventKind = "tool_call_end"
+	StreamEventResponseMetadata  StreamEventKind = "response_metadata"
+	StreamEventMessageEnd        StreamEventKind = "message_end"
+	StreamEventUsage             StreamEventKind = "usage"
 )
 
 type ToolResult struct {
@@ -137,11 +143,12 @@ type Usage struct {
 }
 
 type StreamEvent struct {
-	Kind             StreamEventKind
-	TextDelta        string
-	ToolCall         ToolCallChunk
-	Usage            *Usage
-	ResponseMetadata *ResponseMetadata
+	Kind              StreamEventKind
+	TextDelta         string
+	ThinkingSignature string
+	ToolCall          ToolCallChunk
+	Usage             *Usage
+	ResponseMetadata  *ResponseMetadata
 }
 
 type StreamingClient interface {

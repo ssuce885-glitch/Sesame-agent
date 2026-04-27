@@ -18,7 +18,6 @@ const (
 
 var requiredDirs = []string{
 	"memory",
-	"mailbox",
 	"notices",
 	"automations",
 	"runs",

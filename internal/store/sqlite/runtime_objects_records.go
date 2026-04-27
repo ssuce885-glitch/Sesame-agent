@@ -41,6 +41,36 @@ func insertRunWithExec(ctx context.Context, execer interface {
 	return err
 }
 
+func upsertRunWithExec(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, run types.Run) error {
+	run = normalizeRun(run)
+	payload, err := marshalRuntimePayload(run)
+	if err != nil {
+		return err
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		insert into runs (id, session_id, turn_id, state, payload, created_at, updated_at)
+		values (?, ?, ?, ?, ?, ?, ?)
+		on conflict(id) do update set
+			session_id = excluded.session_id,
+			turn_id = excluded.turn_id,
+			state = excluded.state,
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+	`,
+		run.ID,
+		run.SessionID,
+		run.TurnID,
+		run.State,
+		payload,
+		run.CreatedAt.UTC().Format(timeLayout),
+		run.UpdatedAt.UTC().Format(timeLayout),
+	)
+	return err
+}
+
 func upsertPlanWithExec(ctx context.Context, execer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, plan types.Plan) error {
@@ -153,70 +183,6 @@ func upsertWorktreeWithExec(ctx context.Context, execer execContexter, worktree 
 	return err
 }
 
-func upsertPermissionRequestWithExec(ctx context.Context, execer execContexter, request types.PermissionRequest) error {
-	request = normalizePermissionRequest(request)
-	payload, err := marshalRuntimePayload(request)
-	if err != nil {
-		return err
-	}
-
-	_, err = execer.ExecContext(ctx, `
-		insert into permission_requests (id, session_id, turn_id, run_id, task_id, tool_run_id, status, payload, created_at, updated_at)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		on conflict(id) do update set
-			session_id = excluded.session_id,
-			turn_id = excluded.turn_id,
-			run_id = excluded.run_id,
-			task_id = excluded.task_id,
-			tool_run_id = excluded.tool_run_id,
-			status = excluded.status,
-			payload = excluded.payload,
-			updated_at = excluded.updated_at
-	`,
-		request.ID,
-		request.SessionID,
-		request.TurnID,
-		request.RunID,
-		request.TaskID,
-		request.ToolRunID,
-		request.Status,
-		payload,
-		request.CreatedAt.UTC().Format(timeLayout),
-		request.UpdatedAt.UTC().Format(timeLayout),
-	)
-	return err
-}
-
-func upsertTurnContinuationWithExec(ctx context.Context, execer execContexter, continuation types.TurnContinuation) error {
-	continuation = normalizeTurnContinuation(continuation)
-	payload, err := marshalRuntimePayload(continuation)
-	if err != nil {
-		return err
-	}
-
-	_, err = execer.ExecContext(ctx, `
-		insert into turn_continuations (id, session_id, turn_id, permission_request_id, state, payload, created_at, updated_at)
-		values (?, ?, ?, ?, ?, ?, ?, ?)
-		on conflict(id) do update set
-			session_id = excluded.session_id,
-			turn_id = excluded.turn_id,
-			permission_request_id = excluded.permission_request_id,
-			state = excluded.state,
-			payload = excluded.payload,
-			updated_at = excluded.updated_at
-	`,
-		continuation.ID,
-		continuation.SessionID,
-		continuation.TurnID,
-		continuation.PermissionRequestID,
-		continuation.State,
-		payload,
-		continuation.CreatedAt.UTC().Format(timeLayout),
-		continuation.UpdatedAt.UTC().Format(timeLayout),
-	)
-	return err
-}
-
 type runtimeObjectQueryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
@@ -295,12 +261,6 @@ func applyRuntimeTimestamps[T any](item *T, createdAt, updatedAt string) error {
 		v.CreatedAt = created.UTC()
 		v.UpdatedAt = updated.UTC()
 	case *types.Worktree:
-		v.CreatedAt = created.UTC()
-		v.UpdatedAt = updated.UTC()
-	case *types.PermissionRequest:
-		v.CreatedAt = created.UTC()
-		v.UpdatedAt = updated.UTC()
-	case *types.TurnContinuation:
 		v.CreatedAt = created.UTC()
 		v.UpdatedAt = updated.UTC()
 	}

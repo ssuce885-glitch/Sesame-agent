@@ -2,7 +2,6 @@ package tui
 
 import (
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -34,11 +33,6 @@ func (m *Model) submitPromptCmd(prompt string) tea.Cmd {
 	if trim(prompt) == "" || trim(m.sessionID) == "" {
 		return nil
 	}
-	if pending := trim(m.lastPermissionRequestID); pending != "" {
-		m.appendNotice(pendingPermissionNotice(pending))
-		m.layout()
-		return nil
-	}
 	m.appendUserEntry(prompt)
 	m.layout()
 
@@ -67,21 +61,6 @@ func (m *Model) interruptTurnCmd() tea.Cmd {
 	}
 }
 
-// --- Permission ---
-
-func (m *Model) permissionDecisionCmd(command string, args []string) (tea.Cmd, error) {
-	req, err := buildPermissionRequest(command, args, m.lastPermissionRequestID)
-	if err != nil {
-		return nil, err
-	}
-	ctx := m.ctx
-	client := m.client
-	return func() tea.Msg {
-		_, err := client.DecidePermission(ctx, req)
-		return tuiPermissionDecisionMsg{RequestID: req.RequestID, Err: err}
-	}, nil
-}
-
 // --- Status ---
 
 func (m *Model) refreshStatusCmd(announce bool) tea.Cmd {
@@ -91,14 +70,14 @@ func (m *Model) refreshStatusCmd(announce bool) tea.Cmd {
 	}
 }
 
-// --- Mailbox ---
+// --- Reports ---
 
-func (m *Model) loadMailboxCmd() tea.Cmd {
+func (m *Model) loadReportsCmd() tea.Cmd {
 	ctx := m.ctx
 	client := m.client
 	return func() tea.Msg {
-		resp, err := client.GetWorkspaceMailbox(ctx)
-		return tuiMailboxMsg{Resp: resp, Err: err}
+		resp, err := client.GetWorkspaceReports(ctx)
+		return tuiReportsMsg{Resp: resp, Err: err}
 	}
 }
 
@@ -255,8 +234,8 @@ func (m *Model) switchViewByOffset(offset int) (tea.Model, tea.Cmd) {
 
 func (m *Model) switchView(view View, override tea.Cmd) (tea.Model, tea.Cmd) {
 	m.activeView = view
-	if view == ViewMailbox {
-		m.clearMailboxPushes()
+	if view == ViewReports {
+		m.clearReportPushes()
 	}
 	switch view {
 	case ViewChat:
@@ -273,11 +252,11 @@ func (m *Model) switchView(view View, override tea.Cmd) (tea.Model, tea.Cmd) {
 
 func (m *Model) defaultViewLoadCmd(view View) tea.Cmd {
 	switch view {
-	case ViewMailbox:
-		if m.mailboxLoaded {
+	case ViewReports:
+		if m.reportsLoaded {
 			return nil
 		}
-		return m.loadMailboxCmd()
+		return m.loadReportsCmd()
 	case ViewCron:
 		if m.cronLoaded && !m.cronScopeAll {
 			return nil
@@ -291,80 +270,10 @@ func (m *Model) defaultViewLoadCmd(view View) tea.Cmd {
 	return nil
 }
 
-// --- Permission request builder ---
-
-func buildPermissionRequest(command string, args []string, fallbackRequestID string) (PermissionDecisionRequest, error) {
-	command = strings.ToLower(trim(command))
-	requestID := trim(fallbackRequestID)
-	scopeArgIndex := -1
-
-	if len(args) > 0 && trim(args[0]) != "" {
-		if _, isScope := parsePermissionScopeAlias(args[0]); isScope && requestID != "" && (command == "approve" || command == "allow") {
-			scopeArgIndex = 0
-		} else {
-			requestID = trim(args[0])
-		}
-	}
-	if requestID == "" {
-		return PermissionDecisionRequest{}, fmt.Errorf("usage: /%s %s", command, permissionCommandUsage(command))
-	}
-
-	switch command {
-	case "deny":
-		if len(args) > 1 {
-			return PermissionDecisionRequest{}, fmt.Errorf("usage: /deny [<request_id>]")
-		}
-		return PermissionDecisionRequest{RequestID: requestID, Decision: "deny"}, nil
-	case "approve", "allow":
-		decision := "allow_once"
-		if scopeArgIndex < 0 && len(args) > 1 {
-			scopeArgIndex = 1
-		}
-		if scopeArgIndex >= 0 {
-			mapped, ok := parsePermissionScopeAlias(args[scopeArgIndex])
-			if !ok {
-				return PermissionDecisionRequest{}, fmt.Errorf("unknown permission scope %q; use once, run, or session", trim(args[scopeArgIndex]))
-			}
-			decision = mapped
-		}
-		return PermissionDecisionRequest{RequestID: requestID, Decision: decision}, nil
-	default:
-		return PermissionDecisionRequest{}, fmt.Errorf("unknown permission command: %s", command)
-	}
-}
-
-func parsePermissionScopeAlias(raw string) (string, bool) {
-	switch strings.ToLower(trim(raw)) {
-	case "once", "allow_once":
-		return "allow_once", true
-	case "run", "allow_run":
-		return "allow_run", true
-	case "session", "allow_session":
-		return "allow_session", true
-	default:
-		return "", false
-	}
-}
-
-func permissionCommandUsage(command string) string {
-	if strings.EqualFold(command, "deny") {
-		return "[<request_id>]"
-	}
-	return "[<request_id>] [once|run|session]"
-}
-
-func pendingPermissionNotice(requestID string) string {
-	requestID = trim(requestID)
-	if requestID == "" {
-		return "permission request is pending; resolve it before sending another prompt"
-	}
-	return fmt.Sprintf("permission request is pending; use /approve %s [once|run|session] or /deny %s before sending another prompt", requestID, requestID)
-}
-
 // --- Timeline helpers ---
 
 func (m *Model) applyTimeline(timeline SessionTimelineResponse) {
-	m.pendingReportCount = timeline.PendingReportCount
+	m.queuedReportCount = timeline.QueuedReportCount
 	m.queueSummary = timeline.Queue
 	for _, block := range timeline.Blocks {
 		switch block.Kind {
@@ -391,12 +300,9 @@ func (m *Model) applyTimeline(timeline SessionTimelineResponse) {
 			if trim(block.Text) != "" {
 				m.appendNotice(trim(block.Text))
 			}
-		case "task_block", "plan_block", "worktree_block", "permission_block", "tool_run_block":
+		case "task_block", "plan_block", "worktree_block", "tool_run_block":
 			body := trim(firstNonEmpty(block.Text, block.Path))
 			title := trim(firstNonEmpty(block.Title, block.Kind))
-			if block.Kind == "permission_block" && strings.EqualFold(block.Status, "requested") && trim(block.PermissionRequestID) != "" {
-				m.lastPermissionRequestID = trim(block.PermissionRequestID)
-			}
 			if body == "" && title == "" {
 				continue
 			}
@@ -410,45 +316,23 @@ func (m *Model) replaceTimeline(timeline SessionTimelineResponse) {
 	m.toolIndexByCall = make(map[string]int)
 	m.toolIndexByKey = make(map[string]int)
 	m.lastSeq = timeline.LatestSeq
-	m.lastPermissionRequestID = pendingPermissionIDFromTimeline(timeline)
 	m.applyTimeline(timeline)
-}
-
-func pendingPermissionIDFromTimeline(timeline SessionTimelineResponse) string {
-	pending := ""
-	for _, block := range timeline.Blocks {
-		if block.Kind != "permission_block" {
-			continue
-		}
-		requestID := trim(block.PermissionRequestID)
-		if requestID == "" {
-			continue
-		}
-		if strings.EqualFold(block.Status, "requested") {
-			pending = requestID
-			continue
-		}
-		if requestID == pending {
-			pending = ""
-		}
-	}
-	return pending
 }
 
 func (m *Model) setStatusFlash(text string) {
 	m.statusFlash = trim(text)
 }
 
-func (m *Model) clearMailboxPushes() {
-	m.mailboxPushes = nil
+func (m *Model) clearReportPushes() {
+	m.reportPushes = nil
 }
 
-func (m *Model) enqueueMailboxPush(item MailboxItem) {
+func (m *Model) enqueueReportPush(item ReportDeliveryItem) {
 	if trim(item.ID) == "" {
 		return
 	}
-	filtered := []MailboxItem{item}
-	for _, existing := range m.mailboxPushes {
+	filtered := []ReportDeliveryItem{item}
+	for _, existing := range m.reportPushes {
 		if existing.ID == item.ID {
 			continue
 		}
@@ -457,7 +341,7 @@ func (m *Model) enqueueMailboxPush(item MailboxItem) {
 			break
 		}
 	}
-	m.mailboxPushes = filtered
+	m.reportPushes = filtered
 }
 
 func (m *Model) upsertCronJob(job CronJob) {
@@ -499,7 +383,7 @@ func (m *Model) applyEvent(event Event) tea.Cmd {
 		m.lastSeq = event.Seq
 	}
 	refreshAgents := false
-	refreshMailbox := false
+	refreshReports := false
 
 	switch event.Type {
 	case "turn.started":
@@ -513,15 +397,15 @@ func (m *Model) applyEvent(event Event) tea.Cmd {
 		}
 
 	case "report.ready":
-		var payload ReportMailboxItem
+		var payload ReportDeliveryItem
 		if err := decodePayload(event.Payload, &payload); err == nil {
-			m.pendingReportCount++
-			if m.activeView != ViewMailbox {
-				m.enqueueMailboxPush(payload)
+			m.queuedReportCount++
+			if m.activeView != ViewReports {
+				m.enqueueReportPush(payload)
 			}
-			m.setStatusFlash("Mailbox updated")
+			m.setStatusFlash("Reports updated")
 		}
-		refreshMailbox = true
+		refreshReports = true
 
 	case "tool.started":
 		var payload ToolEventPayload
@@ -542,51 +426,17 @@ func (m *Model) applyEvent(event Event) tea.Cmd {
 			m.appendNotice(payload.Text)
 		}
 
-	case "permission.requested":
-		var payload PermissionRequestedPayload
-		if err := decodePayload(event.Payload, &payload); err == nil {
-			m.closeAssistantStream()
-			m.lastPermissionRequestID = trim(payload.RequestID)
-			label := "permission requested"
-			if tn := trim(payload.ToolName); tn != "" {
-				label += " · " + tn
-			}
-			if rp := trim(payload.RequestedProfile); rp != "" {
-				label += " · " + rp
-			}
-			if rid := trim(payload.RequestID); rid != "" {
-				label += " · " + rid + "\nUse /approve " + rid + " [once|run|session] or /deny " + rid
-			}
-			m.appendNotice(label)
-		}
-		refreshAgents = true
-
-	case "permission.resolved":
-		var payload PermissionResolvedPayload
-		if err := decodePayload(event.Payload, &payload); err == nil {
-			m.closeAssistantStream()
-			if rid := trim(payload.RequestID); rid != "" && rid == m.lastPermissionRequestID {
-				m.lastPermissionRequestID = ""
-			}
-			label := "permission " + firstNonEmpty(payload.Decision, "updated")
-			if tn := trim(payload.ToolName); tn != "" {
-				label += " · " + tn
-			}
-			m.appendNotice(label)
-		}
-		refreshAgents = true
-
 	case "task.updated", "tool_run.updated", "worktree.updated":
 		refreshAgents = true
 
-	case "session_memory.started", "session_memory.completed":
+	case "context_head_summary.started", "context_head_summary.completed":
 		// no-op
 
-	case "session_memory.failed":
-		var payload SessionMemoryEventPayload
+	case "context_head_summary.failed":
+		var payload ContextHeadSummaryEventPayload
 		if err := decodePayload(event.Payload, &payload); err == nil && trim(payload.Message) != "" {
 			m.closeAssistantStream()
-			m.appendError("session memory refresh failed: " + payload.Message)
+			m.appendError("context head summary refresh failed: " + payload.Message)
 		}
 
 	case "turn.failed":
@@ -610,7 +460,7 @@ func (m *Model) applyEvent(event Event) tea.Cmd {
 			m.queueSummary.ActiveTurnKind = payload.ActiveTurnKind
 			m.queueSummary.QueueDepth = payload.QueueDepth
 			m.queueSummary.QueuedUserTurns = payload.QueuedUserTurns
-			m.queueSummary.QueuedChildReportBatches = payload.QueuedChildReportBatches
+			m.queueSummary.QueuedReportBatches = payload.QueuedReportBatches
 		}
 	}
 
@@ -621,8 +471,8 @@ func (m *Model) applyEvent(event Event) tea.Cmd {
 
 	m.layout()
 	cmds := []tea.Cmd{}
-	if refreshMailbox {
-		cmds = append(cmds, m.loadMailboxCmd())
+	if refreshReports {
+		cmds = append(cmds, m.loadReportsCmd())
 	}
 	if refreshAgents && m.activeView == ViewSubagents {
 		cmds = append(cmds, m.loadAgentsCmd())

@@ -36,6 +36,7 @@ coverage.out
 
 # Local Sesame state
 .sesame/
+workspace.json
 internal/cli/daemons/
 
 # Local workflow / agent metadata

@@ -91,9 +91,12 @@ func normalizeReport(report types.ReportRecord) types.ReportRecord {
 	report.WorkspaceRoot = strings.TrimSpace(report.WorkspaceRoot)
 	report.SessionID = strings.TrimSpace(report.SessionID)
 	report.SourceSessionID = strings.TrimSpace(report.SourceSessionID)
+	report.SourceTurnID = strings.TrimSpace(report.SourceTurnID)
 	report.SourceRoleID = strings.TrimSpace(report.SourceRoleID)
-	report.SourceKind = types.ReportMailboxSourceKind(strings.TrimSpace(string(report.SourceKind)))
+	report.SourceKind = types.ReportSourceKind(strings.TrimSpace(string(report.SourceKind)))
 	report.SourceID = strings.TrimSpace(report.SourceID)
+	report.TargetRoleID = strings.TrimSpace(report.TargetRoleID)
+	report.TargetSessionID = strings.TrimSpace(report.TargetSessionID)
 	report.Envelope.Source = strings.TrimSpace(report.Envelope.Source)
 	report.Envelope.Status = strings.TrimSpace(report.Envelope.Status)
 	report.Envelope.Severity = strings.TrimSpace(report.Envelope.Severity)
@@ -132,14 +135,16 @@ func normalizeReportDelivery(delivery types.ReportDelivery) types.ReportDelivery
 	delivery.WorkspaceRoot = strings.TrimSpace(delivery.WorkspaceRoot)
 	delivery.SessionID = strings.TrimSpace(delivery.SessionID)
 	delivery.ReportID = strings.TrimSpace(delivery.ReportID)
+	delivery.TargetRoleID = strings.TrimSpace(delivery.TargetRoleID)
+	delivery.TargetSessionID = strings.TrimSpace(delivery.TargetSessionID)
 	delivery.Channel = types.ReportChannel(strings.TrimSpace(string(delivery.Channel)))
 	delivery.State = types.ReportDeliveryState(strings.TrimSpace(string(delivery.State)))
 	delivery.InjectedTurnID = strings.TrimSpace(delivery.InjectedTurnID)
 	if delivery.Channel == "" {
-		delivery.Channel = types.ReportChannelMailbox
+		delivery.Channel = types.ReportChannelAgent
 	}
 	if delivery.State == "" {
-		delivery.State = types.ReportDeliveryStatePending
+		delivery.State = types.ReportDeliveryStateQueued
 	}
 	if strings.TrimSpace(delivery.ID) == "" {
 		delivery.ID = firstNonEmptyReportString(delivery.ReportID, types.NewID("report_delivery"))
@@ -199,32 +204,39 @@ func applyReportDeliveryTimes(delivery *types.ReportDelivery, observedAtRaw, inj
 	}
 }
 
-func mailboxItemToRecordDelivery(item types.ReportMailboxItem) (types.ReportRecord, types.ReportDelivery) {
+func reportDeliveryItemToRecordDelivery(item types.ReportDeliveryItem) (types.ReportRecord, types.ReportDelivery) {
 	report := normalizeReport(types.ReportRecord{
 		ID:              firstNonEmptyReportString(item.ReportID, item.ID),
 		WorkspaceRoot:   strings.TrimSpace(item.WorkspaceRoot),
 		SessionID:       item.SessionID,
 		SourceSessionID: item.SourceSessionID,
+		SourceTurnID:    item.SourceTurnID,
 		SourceRoleID:    item.SourceRoleID,
 		SourceKind:      item.SourceKind,
 		SourceID:        item.SourceID,
+		TargetRoleID:    item.TargetRoleID,
+		TargetSessionID: item.TargetSessionID,
+		Audience:        item.Audience,
 		Envelope:        item.Envelope,
 		ObservedAt:      item.ObservedAt,
 		CreatedAt:       item.CreatedAt,
 		UpdatedAt:       item.UpdatedAt,
 	})
 	delivery := normalizeReportDelivery(types.ReportDelivery{
-		ID:             firstNonEmptyReportString(item.DeliveryID, item.ID, report.ID),
-		WorkspaceRoot:  strings.TrimSpace(item.WorkspaceRoot),
-		SessionID:      item.SessionID,
-		ReportID:       report.ID,
-		Channel:        firstNonEmptyReportChannel(item.Channel, types.ReportChannelMailbox),
-		State:          firstNonEmptyReportState(item.DeliveryState, reportDeliveryStateFromInjection(item.InjectedTurnID)),
-		ObservedAt:     firstNonEmptyReportTime(item.ObservedAt, report.ObservedAt),
-		InjectedTurnID: item.InjectedTurnID,
-		InjectedAt:     item.InjectedAt,
-		CreatedAt:      item.CreatedAt,
-		UpdatedAt:      item.UpdatedAt,
+		ID:              firstNonEmptyReportString(item.DeliveryID, item.ID, report.ID),
+		WorkspaceRoot:   strings.TrimSpace(item.WorkspaceRoot),
+		SessionID:       item.SessionID,
+		ReportID:        report.ID,
+		TargetRoleID:    item.TargetRoleID,
+		TargetSessionID: item.TargetSessionID,
+		Audience:        item.Audience,
+		Channel:         firstNonEmptyReportChannel(item.Channel, types.ReportChannelAgent),
+		State:           firstNonEmptyReportState(item.DeliveryState, reportDeliveryStateFromInjection(item.InjectedTurnID)),
+		ObservedAt:      firstNonEmptyReportTime(item.ObservedAt, report.ObservedAt),
+		InjectedTurnID:  item.InjectedTurnID,
+		InjectedAt:      item.InjectedAt,
+		CreatedAt:       item.CreatedAt,
+		UpdatedAt:       item.UpdatedAt,
 	})
 	return report, delivery
 }
@@ -233,7 +245,7 @@ func reportDeliveryStateFromInjection(injectedTurnID string) types.ReportDeliver
 	if strings.TrimSpace(injectedTurnID) != "" {
 		return types.ReportDeliveryStateDelivered
 	}
-	return types.ReportDeliveryStatePending
+	return types.ReportDeliveryStateQueued
 }
 
 func firstNonEmptyReportString(values ...string) string {

@@ -71,7 +71,7 @@ func Run(ctx context.Context) error {
 		runtime.Engine.SetBaseSystemPrompt(basePrompt)
 	}
 
-	if err := recoverRuntimeState(ctx, runtime.Store, runtime.SessionManager); err != nil {
+	if err := recoverRuntimeState(ctx, runtime.Store, runtime.SessionManager, runtime.TaskNotifier); err != nil {
 		return err
 	}
 

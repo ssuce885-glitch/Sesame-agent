@@ -111,34 +111,16 @@ func (s *Store) listRuntimeGraph(ctx context.Context, workspaceRoot string) (typ
 		return types.RuntimeGraph{}, err
 	}
 
-	var permissionRequests []types.PermissionRequest
-	if workspaceRoot == "" {
-		permissionRequests, err = listRuntimeObjects[types.PermissionRequest](ctx, tx, `select payload, created_at, updated_at from permission_requests order by created_at asc, id asc`)
-	} else {
-		workspaceCondition, workspaceArgs := runtimeGraphWorkspaceCondition("s.workspace_root", workspaceRoot)
-		permissionRequests, err = listRuntimeObjects[types.PermissionRequest](ctx, tx, `
-			select pr.payload, pr.created_at, pr.updated_at
-			from permission_requests pr
-			join sessions s on s.id = pr.session_id
-			where `+workspaceCondition+`
-			order by pr.created_at asc, pr.id asc
-		`, workspaceArgs...)
-	}
-	if err != nil {
-		return types.RuntimeGraph{}, err
-	}
-
 	if err := tx.Commit(); err != nil {
 		return types.RuntimeGraph{}, err
 	}
 
 	return types.RuntimeGraph{
-		Runs:               runs,
-		Plans:              plans,
-		Tasks:              tasks,
-		ToolRuns:           toolRuns,
-		Worktrees:          worktrees,
-		PermissionRequests: permissionRequests,
+		Runs:      runs,
+		Plans:     plans,
+		Tasks:     tasks,
+		ToolRuns:  toolRuns,
+		Worktrees: worktrees,
 	}, nil
 }
 

@@ -49,65 +49,36 @@ func (s *Service) SetAutomationCleanupService(cleanup AutomationCleanupService) 
 
 var renameRoleDir = os.Rename
 
-type ErrorKind string
-
-const (
-	ErrorKindInvalidInput ErrorKind = "invalid_input"
-	ErrorKindNotFound     ErrorKind = "not_found"
-	ErrorKindConflict     ErrorKind = "conflict"
-	ErrorKindInternal     ErrorKind = "internal"
+var (
+	ErrInvalidInput = errors.New("invalid input")
+	ErrNotFound     = errors.New("not found")
+	ErrConflict     = errors.New("conflict")
+	ErrInternal     = errors.New("internal error")
 )
 
-type ServiceError struct {
-	kind  ErrorKind
-	cause error
+func IsInvalidInput(err error) bool { return errors.Is(err, ErrInvalidInput) }
+
+func IsNotFound(err error) bool {
+	return errors.Is(err, ErrNotFound) || errors.Is(err, os.ErrNotExist)
 }
 
-func (e *ServiceError) Error() string {
-	switch e.kind {
-	case ErrorKindInvalidInput:
-		return "invalid input"
-	case ErrorKindNotFound:
-		return "not found"
-	case ErrorKindConflict:
-		return "conflict"
-	default:
-		return "internal error"
-	}
-}
+func IsConflict(err error) bool { return errors.Is(err, ErrConflict) }
 
-func (e *ServiceError) Unwrap() error { return e.cause }
-
-func KindOf(err error) ErrorKind {
+func IsInternal(err error) bool {
 	if err == nil {
-		return ""
+		return false
 	}
-	var serviceErr *ServiceError
-	if errors.As(err, &serviceErr) {
-		return serviceErr.kind
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return ErrorKindNotFound
-	}
-	return ErrorKindInternal
+	return errors.Is(err, ErrInternal) || (!IsInvalidInput(err) && !IsNotFound(err) && !IsConflict(err))
 }
-
-func IsInvalidInput(err error) bool { return KindOf(err) == ErrorKindInvalidInput }
-
-func IsNotFound(err error) bool { return KindOf(err) == ErrorKindNotFound }
-
-func IsConflict(err error) bool { return KindOf(err) == ErrorKindConflict }
-
-func IsInternal(err error) bool { return KindOf(err) == ErrorKindInternal }
 
 func (s *Service) List(workspaceRoot string) (Catalog, error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
-		return Catalog{}, newServiceError(ErrorKindInvalidInput, err)
+		return Catalog{}, wrapRoleError(ErrInvalidInput, err)
 	}
 	catalog, err := LoadCatalog(workspaceRoot)
 	if err != nil {
-		return Catalog{}, newServiceError(ErrorKindInternal, err)
+		return Catalog{}, wrapRoleError(ErrInternal, err)
 	}
 	return catalog, nil
 }
@@ -115,46 +86,46 @@ func (s *Service) List(workspaceRoot string) (Catalog, error) {
 func (s *Service) Get(workspaceRoot, roleID string) (Spec, error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
-		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+		return Spec{}, wrapRoleError(ErrInvalidInput, err)
 	}
 	roleID, err := CanonicalRoleID(roleID)
 	if err != nil {
-		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+		return Spec{}, wrapRoleError(ErrInvalidInput, err)
 	}
 	catalog, err := LoadCatalog(workspaceRoot)
 	if err != nil {
-		return Spec{}, newServiceError(ErrorKindInternal, err)
+		return Spec{}, wrapRoleError(ErrInternal, err)
 	}
 	if spec, ok := catalog.ByID[roleID]; ok {
 		return spec, nil
 	}
 	if diagnostic, ok := catalogDiagnosticByRoleID(catalog, roleID); ok {
-		return Spec{}, newServiceError(ErrorKindConflict, fmt.Errorf("%s: %s", diagnostic.Path, diagnostic.Error))
+		return Spec{}, wrapRoleError(ErrConflict, fmt.Errorf("%s: %s", diagnostic.Path, diagnostic.Error))
 	}
-	return Spec{}, newServiceError(ErrorKindNotFound, os.ErrNotExist)
+	return Spec{}, wrapRoleError(ErrNotFound, os.ErrNotExist)
 }
 
 func (s *Service) Create(workspaceRoot string, in UpsertInput) (Spec, error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	normalized, err := normalizeUpsertInput(in)
 	if err != nil {
-		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+		return Spec{}, wrapRoleError(ErrInvalidInput, err)
 	}
 	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
-		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+		return Spec{}, wrapRoleError(ErrInvalidInput, err)
 	}
 	if err := validateUpsertInput(normalized); err != nil {
-		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+		return Spec{}, wrapRoleError(ErrInvalidInput, err)
 	}
 	if err := s.validateSkillNames(workspaceRoot, normalized.SkillNames); err != nil {
-		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+		return Spec{}, wrapRoleError(ErrInvalidInput, err)
 	}
 	rolesRoot := filepath.Join(workspaceRoot, "roles")
 	roleDir := filepath.Join(rolesRoot, normalized.RoleID)
 	if _, err := os.Lstat(roleDir); err == nil {
-		return Spec{}, newServiceError(ErrorKindConflict, fmt.Errorf("role already exists: %s", normalized.RoleID))
+		return Spec{}, wrapRoleError(ErrConflict, fmt.Errorf("role already exists: %s", normalized.RoleID))
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return Spec{}, newServiceError(ErrorKindInternal, err)
+		return Spec{}, wrapRoleError(ErrInternal, err)
 	}
 	stagingDir, err := prepareRoleStagingDir(workspaceRoot, rolesRoot, normalized, 1)
 	if err != nil {
@@ -163,17 +134,17 @@ func (s *Service) Create(workspaceRoot string, in UpsertInput) (Spec, error) {
 	defer func() { _ = os.RemoveAll(stagingDir) }()
 	createdSpec := specFromUpsertInput(normalized, 1)
 	if err := writeRoleSnapshotToDir(stagingDir, createdSpec); err != nil {
-		return Spec{}, newServiceError(ErrorKindInternal, err)
+		return Spec{}, wrapRoleError(ErrInternal, err)
 	}
 	if err := renameRoleDir(stagingDir, roleDir); err != nil {
 		if isCreateDestinationConflict(roleDir, err) {
-			return Spec{}, newServiceError(ErrorKindConflict, err)
+			return Spec{}, wrapRoleError(ErrConflict, err)
 		}
-		return Spec{}, newServiceError(ErrorKindInternal, err)
+		return Spec{}, wrapRoleError(ErrInternal, err)
 	}
 	spec, err := loadRoleSpec(rolesRoot, normalized.RoleID)
 	if err != nil {
-		return Spec{}, newServiceError(ErrorKindInternal, err)
+		return Spec{}, wrapRoleError(ErrInternal, err)
 	}
 	return spec, nil
 }
@@ -190,16 +161,16 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	normalized, err := normalizeUpsertInput(in)
 	if err != nil {
-		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+		return Spec{}, wrapRoleError(ErrInvalidInput, err)
 	}
 	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
-		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+		return Spec{}, wrapRoleError(ErrInvalidInput, err)
 	}
 	if err := validateUpsertInput(normalized); err != nil {
-		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+		return Spec{}, wrapRoleError(ErrInvalidInput, err)
 	}
 	if err := s.validateSkillNames(workspaceRoot, normalized.SkillNames); err != nil {
-		return Spec{}, newServiceError(ErrorKindInvalidInput, err)
+		return Spec{}, wrapRoleError(ErrInvalidInput, err)
 	}
 	rolesRoot := filepath.Join(workspaceRoot, "roles")
 	roleDir := filepath.Join(rolesRoot, normalized.RoleID)
@@ -207,14 +178,14 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			catalog, loadErr := LoadCatalog(workspaceRoot)
 			if loadErr != nil {
-				return Spec{}, newServiceError(ErrorKindInternal, loadErr)
+				return Spec{}, wrapRoleError(ErrInternal, loadErr)
 			}
 			if diagnostic, ok := catalogDiagnosticByRoleID(catalog, normalized.RoleID); ok {
-				return Spec{}, newServiceError(ErrorKindConflict, fmt.Errorf("%s: %s", diagnostic.Path, diagnostic.Error))
+				return Spec{}, wrapRoleError(ErrConflict, fmt.Errorf("%s: %s", diagnostic.Path, diagnostic.Error))
 			}
-			return Spec{}, newServiceError(ErrorKindNotFound, err)
+			return Spec{}, wrapRoleError(ErrNotFound, err)
 		}
-		return Spec{}, newServiceError(ErrorKindInternal, err)
+		return Spec{}, wrapRoleError(ErrInternal, err)
 	}
 
 	currentVersion := readRoleVersion(roleDir)
@@ -226,19 +197,19 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 	defer func() { _ = os.RemoveAll(stagingDir) }()
 	updatedSpec := specFromUpsertInput(normalized, nextVersion)
 	if err := writeRoleSnapshotToDir(stagingDir, updatedSpec); err != nil {
-		return Spec{}, newServiceError(ErrorKindInternal, err)
+		return Spec{}, wrapRoleError(ErrInternal, err)
 	}
 
 	if err := replaceRoleFilesFromStaging(workspaceRoot, roleDir, stagingDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Spec{}, newServiceError(ErrorKindNotFound, err)
+			return Spec{}, wrapRoleError(ErrNotFound, err)
 		}
-		return Spec{}, newServiceError(ErrorKindInternal, err)
+		return Spec{}, wrapRoleError(ErrInternal, err)
 	}
 
 	spec, err := loadRoleSpec(rolesRoot, normalized.RoleID)
 	if err != nil {
-		return Spec{}, newServiceError(ErrorKindInternal, err)
+		return Spec{}, wrapRoleError(ErrInternal, err)
 	}
 	return spec, nil
 }
@@ -246,18 +217,18 @@ func (s *Service) Update(workspaceRoot string, in UpsertInput) (Spec, error) {
 func (s *Service) ListVersions(workspaceRoot, roleID string) ([]Spec, error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
-		return nil, newServiceError(ErrorKindInvalidInput, err)
+		return nil, wrapRoleError(ErrInvalidInput, err)
 	}
 	roleID, err := CanonicalRoleID(roleID)
 	if err != nil {
-		return nil, newServiceError(ErrorKindInvalidInput, err)
+		return nil, wrapRoleError(ErrInvalidInput, err)
 	}
 	roleDir := filepath.Join(workspaceRoot, "roles", roleID)
 	if err := ensureConcreteRoleDir(roleDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, newServiceError(ErrorKindNotFound, err)
+			return nil, wrapRoleError(ErrNotFound, err)
 		}
-		return nil, newServiceError(ErrorKindInternal, err)
+		return nil, wrapRoleError(ErrInternal, err)
 	}
 	versionsDir := filepath.Join(roleDir, ".role-versions")
 	entries, err := os.ReadDir(versionsDir)
@@ -269,7 +240,7 @@ func (s *Service) ListVersions(workspaceRoot, roleID string) ([]Spec, error) {
 		return []Spec{spec}, nil
 	}
 	if err != nil {
-		return nil, newServiceError(ErrorKindInternal, err)
+		return nil, wrapRoleError(ErrInternal, err)
 	}
 	versions := make([]Spec, 0, len(entries))
 	for _, entry := range entries {
@@ -278,7 +249,7 @@ func (s *Service) ListVersions(workspaceRoot, roleID string) ([]Spec, error) {
 		}
 		spec, loadErr := loadRoleVersionSnapshot(filepath.Join(versionsDir, entry.Name()))
 		if loadErr != nil {
-			return nil, newServiceError(ErrorKindInternal, loadErr)
+			return nil, wrapRoleError(ErrInternal, loadErr)
 		}
 		versions = append(versions, spec)
 	}
@@ -298,24 +269,24 @@ func (s *Service) ListVersions(workspaceRoot, roleID string) ([]Spec, error) {
 func (s *Service) Delete(workspaceRoot, roleID string) error {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if err := validateWorkspaceRoot(workspaceRoot); err != nil {
-		return newServiceError(ErrorKindInvalidInput, err)
+		return wrapRoleError(ErrInvalidInput, err)
 	}
 	roleID, err := CanonicalRoleID(roleID)
 	if err != nil {
-		return newServiceError(ErrorKindInvalidInput, err)
+		return wrapRoleError(ErrInvalidInput, err)
 	}
 	roleDir := filepath.Join(workspaceRoot, "roles", roleID)
 	if _, err := os.Lstat(roleDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return newServiceError(ErrorKindNotFound, err)
+			return wrapRoleError(ErrNotFound, err)
 		}
-		return newServiceError(ErrorKindInternal, err)
+		return wrapRoleError(ErrInternal, err)
 	}
 	if err := s.deleteOwnedAutomations(context.Background(), workspaceRoot, roleID); err != nil {
-		return newServiceError(ErrorKindInternal, err)
+		return wrapRoleError(ErrInternal, err)
 	}
 	if err := os.RemoveAll(roleDir); err != nil {
-		return newServiceError(ErrorKindInternal, err)
+		return wrapRoleError(ErrInternal, err)
 	}
 	return nil
 }
@@ -330,7 +301,7 @@ func (s *Service) deleteOwnedAutomations(ctx context.Context, workspaceRoot, rol
 	}
 	wantOwner := "role:" + strings.TrimSpace(roleID)
 	for _, spec := range specs {
-		if types.NormalizeAutomationOwner(spec.Owner) != wantOwner {
+		if types.NormalizeRoleAutomationOwner(spec.Owner) != wantOwner {
 			continue
 		}
 		if _, err := s.automationCleanup.Delete(ctx, spec.ID); err != nil {
@@ -342,19 +313,19 @@ func (s *Service) deleteOwnedAutomations(ctx context.Context, workspaceRoot, rol
 
 func prepareRoleStagingDir(workspaceRoot, rolesRoot string, in UpsertInput, version int) (string, error) {
 	if err := os.MkdirAll(rolesRoot, 0o755); err != nil {
-		return "", newServiceError(ErrorKindInternal, err)
+		return "", wrapRoleError(ErrInternal, err)
 	}
 	scratchRoot, err := roleScratchRoot(workspaceRoot)
 	if err != nil {
-		return "", newServiceError(ErrorKindInternal, err)
+		return "", wrapRoleError(ErrInternal, err)
 	}
 	stagingDir, err := os.MkdirTemp(scratchRoot, ".role-staging-*")
 	if err != nil {
-		return "", newServiceError(ErrorKindInternal, err)
+		return "", wrapRoleError(ErrInternal, err)
 	}
 	if err := writeRoleFilesToDir(stagingDir, in, version); err != nil {
 		_ = os.RemoveAll(stagingDir)
-		return "", newServiceError(ErrorKindInternal, err)
+		return "", wrapRoleError(ErrInternal, err)
 	}
 	return stagingDir, nil
 }
@@ -592,8 +563,11 @@ func validateWorkspaceRoot(workspaceRoot string) error {
 	return nil
 }
 
-func newServiceError(kind ErrorKind, cause error) error {
-	return &ServiceError{kind: kind, cause: cause}
+func wrapRoleError(kind error, cause error) error {
+	if cause == nil {
+		return kind
+	}
+	return fmt.Errorf("%w: %w", kind, cause)
 }
 
 func catalogDiagnosticByRoleID(catalog Catalog, roleID string) (Diagnostic, bool) {

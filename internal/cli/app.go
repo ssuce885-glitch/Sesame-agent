@@ -17,6 +17,7 @@ import (
 	"go-agent/internal/config"
 	daemonapp "go-agent/internal/daemon"
 	"go-agent/internal/extensions"
+	"go-agent/internal/skillcatalog"
 	"go-agent/internal/types"
 	"go-agent/internal/workspace"
 )
@@ -116,7 +117,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	scriptCommand := scriptArgs || opts.Automation != nil || opts.Trigger != nil || opts.Permissions != nil
+	scriptCommand := scriptArgs || opts.Automation != nil || opts.Trigger != nil
 
 	if opts.ShowVersion {
 		_, err := fmt.Fprintln(a.Stdout, Version)
@@ -167,7 +168,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 	if opts.ShowStatus {
 		return a.runStatus(ctx, cfg)
 	}
-	if opts.Automation != nil || opts.Trigger != nil || opts.Permissions != nil {
+	if opts.Automation != nil || opts.Trigger != nil {
 		return a.runScriptCommand(ctx, opts, cfg)
 	}
 	if err := ensureRuntimeConfigured(a.Stdin, a.Stdout, cfg); err != nil {
@@ -200,7 +201,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	catalogLoader := func() (extensions.Catalog, error) {
+	catalogLoader := func() (skillcatalog.Catalog, error) {
 		return extensions.LoadCatalog(cfg.Paths.GlobalRoot, workspaceRoot)
 	}
 	catalog, err := catalogLoader()
@@ -262,8 +263,6 @@ func (a App) runScriptCommand(ctx context.Context, opts Options, cfg config.Conf
 		runErr = runAutomationCommand(ctx, a.Stdout, runtimeClient, *opts.Automation)
 	case opts.Trigger != nil:
 		runErr = runTriggerCommand(ctx, a.Stdout, runtimeClient, *opts.Trigger)
-	case opts.Permissions != nil:
-		runErr = runPermissionsCommand(ctx, a.Stdout, runtimeClient, *opts.Permissions)
 	default:
 		runErr = errors.New("unknown script command")
 	}
@@ -289,7 +288,7 @@ func isScriptCommandArgs(args []string) bool {
 		return false
 	}
 	switch strings.TrimSpace(args[0]) {
-	case "automation", "trigger", "incident", "permissions":
+	case "automation", "trigger", "incident":
 		return true
 	default:
 		return false

@@ -38,11 +38,6 @@ type TriggerCommand struct {
 	StateFile    string
 }
 
-type PermissionCommand struct {
-	Action    string
-	RequestID string
-}
-
 type SetupCommand struct {
 	Action string
 	Scope  string
@@ -63,7 +58,6 @@ type Options struct {
 	Skill          *SkillCommand
 	Automation     *AutomationCommand
 	Trigger        *TriggerCommand
-	Permissions    *PermissionCommand
 	Setup          *SetupCommand
 	Daemon         *DaemonCommand
 }
@@ -86,7 +80,7 @@ func ParseOptions(args []string) (Options, error) {
 		case "incident":
 			return Options{}, fmt.Errorf("incident commands are removed in hard cutover")
 		case "permissions":
-			return parsePermissionOptions(args[1:])
+			return Options{}, fmt.Errorf("permissions commands are removed; runtime permissions default to trusted_local")
 		}
 	}
 
@@ -288,26 +282,6 @@ func parseTriggerOptions(args []string) (Options, error) {
 	}
 
 	return Options{Trigger: cmd}, nil
-}
-
-func parsePermissionOptions(args []string) (Options, error) {
-	if len(args) == 0 {
-		return Options{}, fmt.Errorf("usage: sesame permissions pending [request_id]")
-	}
-
-	cmd := &PermissionCommand{Action: strings.ToLower(strings.TrimSpace(args[0]))}
-	switch cmd.Action {
-	case "pending":
-	default:
-		return Options{}, fmt.Errorf("unknown permissions command %q", cmd.Action)
-	}
-	if len(args[1:]) > 1 {
-		return Options{}, fmt.Errorf("usage: sesame permissions pending [request_id]")
-	}
-	if len(args) == 2 {
-		cmd.RequestID = strings.TrimSpace(args[1])
-	}
-	return Options{Permissions: cmd}, nil
 }
 
 func reorderInterspersedArgs(args []string) []string {

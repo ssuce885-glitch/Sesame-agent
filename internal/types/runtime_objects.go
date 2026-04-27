@@ -7,7 +7,6 @@ type PlanState string
 type TaskState string
 type ToolRunState string
 type WorktreeState string
-type PermissionRequestStatus string
 
 const (
 	RunStatePending     RunState = "pending"
@@ -34,25 +33,17 @@ const (
 )
 
 const (
-	ToolRunStatePending           ToolRunState = "pending"
-	ToolRunStateRunning           ToolRunState = "running"
-	ToolRunStateWaitingPermission ToolRunState = "waiting_permission"
-	ToolRunStateCompleted         ToolRunState = "completed"
-	ToolRunStateFailed            ToolRunState = "failed"
-	ToolRunStateCancelled         ToolRunState = "cancelled"
+	ToolRunStatePending   ToolRunState = "pending"
+	ToolRunStateRunning   ToolRunState = "running"
+	ToolRunStateCompleted ToolRunState = "completed"
+	ToolRunStateFailed    ToolRunState = "failed"
+	ToolRunStateCancelled ToolRunState = "cancelled"
 )
 
 const (
 	WorktreeStateActive   WorktreeState = "active"
 	WorktreeStateDetached WorktreeState = "detached"
 	WorktreeStateRemoved  WorktreeState = "removed"
-)
-
-const (
-	PermissionRequestStatusRequested PermissionRequestStatus = "requested"
-	PermissionRequestStatusApproved  PermissionRequestStatus = "approved"
-	PermissionRequestStatusDenied    PermissionRequestStatus = "denied"
-	PermissionRequestStatusCancelled PermissionRequestStatus = "cancelled"
 )
 
 type Run struct {
@@ -98,22 +89,21 @@ type Task struct {
 type TaskRecord = Task
 
 type ToolRun struct {
-	ID                  string       `json:"id"`
-	RunID               string       `json:"run_id"`
-	TaskID              string       `json:"task_id,omitempty"`
-	State               ToolRunState `json:"state"`
-	ToolName            string       `json:"tool_name"`
-	ToolCallID          string       `json:"tool_call_id,omitempty"`
-	InputJSON           string       `json:"input_json,omitempty"`
-	OutputJSON          string       `json:"output_json,omitempty"`
-	Error               string       `json:"error,omitempty"`
-	PermissionRequestID string       `json:"permission_request_id,omitempty"`
-	ResourceKeys        []string     `json:"resource_keys,omitempty"`
-	LockWaitMs          int64        `json:"lock_wait_ms,omitempty"`
-	StartedAt           time.Time    `json:"started_at,omitempty"`
-	CompletedAt         time.Time    `json:"completed_at,omitempty"`
-	CreatedAt           time.Time    `json:"created_at"`
-	UpdatedAt           time.Time    `json:"updated_at"`
+	ID           string       `json:"id"`
+	RunID        string       `json:"run_id"`
+	TaskID       string       `json:"task_id,omitempty"`
+	State        ToolRunState `json:"state"`
+	ToolName     string       `json:"tool_name"`
+	ToolCallID   string       `json:"tool_call_id,omitempty"`
+	InputJSON    string       `json:"input_json,omitempty"`
+	OutputJSON   string       `json:"output_json,omitempty"`
+	Error        string       `json:"error,omitempty"`
+	ResourceKeys []string     `json:"resource_keys,omitempty"`
+	LockWaitMs   int64        `json:"lock_wait_ms,omitempty"`
+	StartedAt    time.Time    `json:"started_at,omitempty"`
+	CompletedAt  time.Time    `json:"completed_at,omitempty"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
 }
 
 type Worktree struct {
@@ -125,25 +115,6 @@ type Worktree struct {
 	WorktreeBranch string        `json:"worktree_branch,omitempty"`
 	CreatedAt      time.Time     `json:"created_at"`
 	UpdatedAt      time.Time     `json:"updated_at"`
-}
-
-type PermissionRequest struct {
-	ID               string                  `json:"id"`
-	SessionID        string                  `json:"session_id"`
-	TurnID           string                  `json:"turn_id"`
-	RunID            string                  `json:"run_id,omitempty"`
-	TaskID           string                  `json:"task_id,omitempty"`
-	ToolRunID        string                  `json:"tool_run_id,omitempty"`
-	ToolCallID       string                  `json:"tool_call_id,omitempty"`
-	ToolName         string                  `json:"tool_name,omitempty"`
-	RequestedProfile string                  `json:"requested_profile"`
-	Reason           string                  `json:"reason,omitempty"`
-	Status           PermissionRequestStatus `json:"status"`
-	Decision         string                  `json:"decision,omitempty"`
-	DecisionScope    string                  `json:"decision_scope,omitempty"`
-	ResolvedAt       time.Time               `json:"resolved_at,omitempty"`
-	CreatedAt        time.Time               `json:"created_at"`
-	UpdatedAt        time.Time               `json:"updated_at"`
 }
 
 type RuntimeDiagnostic struct {
@@ -162,11 +133,10 @@ type RuntimeDiagnostic struct {
 }
 
 type RuntimeGraph struct {
-	Runs               []Run                `json:"runs"`
-	Plans              []Plan               `json:"plans"`
-	Tasks              []Task               `json:"tasks"`
-	ToolRuns           []ToolRun            `json:"tool_runs"`
-	Worktrees          []Worktree           `json:"worktrees"`
-	PermissionRequests []PermissionRequest  `json:"permission_requests"`
-	Diagnostics        []RuntimeDiagnostic  `json:"diagnostics"`
+	Runs        []Run               `json:"runs"`
+	Plans       []Plan              `json:"plans"`
+	Tasks       []Task              `json:"tasks"`
+	ToolRuns    []ToolRun           `json:"tool_runs"`
+	Worktrees   []Worktree          `json:"worktrees"`
+	Diagnostics []RuntimeDiagnostic `json:"diagnostics"`
 }

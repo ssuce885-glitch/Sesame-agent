@@ -26,20 +26,46 @@ func (r *Runtime) PrepareRequest(plan WorkingSet, head *types.ProviderCacheHead,
 	}
 
 	hasUserItem := userItem.Kind != ""
+	carryForwardItems := plan.CarryForwardItems
+	if hasUserItem && userItem.Kind == model.ConversationItemUserMessage {
+		carryForwardItems = stripFreshTurnProviderContinuationItems(carryForwardItems, caps)
+		recentRawItems = stripFreshTurnProviderContinuationItems(recentRawItems, caps)
+	}
 	req := model.Request{
 		UserMessage:  userItem.Text,
 		Instructions: instructions,
-		Items:        BuildReinjectedPromptItems(plan.Summaries, plan.CarryForwardItems, recentRawItems, userItem),
+		Items:        BuildReinjectedPromptItems(plan.Summaries, carryForwardItems, recentRawItems, userItem),
 	}
 
 	return r.applyCachePlan(req, plan, head, caps, userItem, hasUserItem)
 }
 
+func stripFreshTurnProviderContinuationItems(items []model.ConversationItem, caps model.ProviderCapabilities) []model.ConversationItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]model.ConversationItem, 0, len(items))
+	for _, item := range items {
+		if item.Kind == model.ConversationItemAssistantThinking {
+			continue
+		}
+		if caps.RequiresThinkingForToolContinuation && isToolContinuationItem(item) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func isToolContinuationItem(item model.ConversationItem) bool {
+	return item.Kind == model.ConversationItemToolCall || item.Kind == model.ConversationItemToolResult
+}
+
 func BuildReinjectedPromptItems(bundle SummaryBundle, carryForward []model.ConversationItem, recentRaw []model.ConversationItem, userItem model.ConversationItem) []model.ConversationItem {
 	hasUserItem := userItem.Kind != ""
 	out := make([]model.ConversationItem, 0, 2+len(bundle.Rolling)+len(carryForward)+len(recentRaw)+map[bool]int{true: 1, false: 0}[hasUserItem])
-	if bundle.HeadMemory != nil {
-		summary := cloneSummary(*bundle.HeadMemory)
+	if bundle.ContextHeadSummary != nil {
+		summary := cloneSummary(*bundle.ContextHeadSummary)
 		out = append(out, model.ConversationItem{
 			Kind:    model.ConversationItemSummary,
 			Summary: &summary,

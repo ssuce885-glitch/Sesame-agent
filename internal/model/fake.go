@@ -101,6 +101,10 @@ func (f *FakeStreaming) LastRequest() Request {
 	return f.requests[len(f.requests)-1]
 }
 
+func (f *FakeStreaming) RequestCount() int {
+	return len(f.requests)
+}
+
 func cloneRequest(req Request) Request {
 	cloned := req
 	cloned.Items = cloneConversationItems(req.Items)

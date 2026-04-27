@@ -54,7 +54,7 @@ func (m *Model) renderFooter() string {
 			Padding(0, 1).
 			Render(m.footerHintText()),
 	}
-	if pushBar := m.renderMailboxPushBar(); trim(pushBar) != "" {
+	if pushBar := m.renderReportPushBar(); trim(pushBar) != "" {
 		parts = append(parts, pushBar)
 	}
 	parts = append(parts, StyleInputFocused.Width(m.width).Render(m.textarea.View()))
@@ -63,8 +63,8 @@ func (m *Model) renderFooter() string {
 
 func (m *Model) footerHintText() string {
 	parts := []string{m.activeView.title()}
-	if m.pendingReportCount > 0 {
-		parts = append(parts, fmt.Sprintf("Mailbox %d", m.pendingReportCount))
+	if m.queuedReportCount > 0 {
+		parts = append(parts, fmt.Sprintf("Reports %d", m.queuedReportCount))
 	}
 	if flash := trim(m.statusFlash); flash != "" {
 		parts = append(parts, flash)
@@ -77,8 +77,8 @@ func (m *Model) renderViewTabs() string {
 	tabs := make([]string, 0, len(orderedViews()))
 	for _, view := range orderedViews() {
 		label := view.title()
-		if view == ViewMailbox && m.pendingReportCount > 0 {
-			label += fmt.Sprintf(" %d", m.pendingReportCount)
+		if view == ViewReports && m.queuedReportCount > 0 {
+			label += fmt.Sprintf(" %d", m.queuedReportCount)
 		}
 		style := StyleTabInactive
 		if view == m.activeView {
@@ -90,15 +90,15 @@ func (m *Model) renderViewTabs() string {
 }
 
 func orderedViews() []View {
-	return []View{ViewChat, ViewSubagents, ViewMailbox, ViewCron}
+	return []View{ViewChat, ViewSubagents, ViewReports, ViewCron}
 }
 
 func (v View) title() string {
 	switch v {
 	case ViewSubagents:
 		return "Subagents"
-	case ViewMailbox:
-		return "Mailbox"
+	case ViewReports:
+		return "Reports"
 	case ViewCron:
 		return "Cron"
 	default:

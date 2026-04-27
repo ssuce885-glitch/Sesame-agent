@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"go-agent/internal/config"
+	"go-agent/internal/skillcatalog"
 )
 
 type catalogCacheKey struct {
@@ -18,7 +19,7 @@ type catalogCacheKey struct {
 
 type catalogCacheEntry struct {
 	signature string
-	catalog   Catalog
+	catalog   skillcatalog.Catalog
 }
 
 var globalCatalogCache = struct {
@@ -28,10 +29,10 @@ var globalCatalogCache = struct {
 	entries: make(map[catalogCacheKey]catalogCacheEntry),
 }
 
-func loadCatalogWithCache(paths config.Paths) (Catalog, error) {
+func loadCatalogWithCache(paths config.Paths) (skillcatalog.Catalog, error) {
 	signature, err := catalogSignature(paths)
 	if err != nil {
-		return Catalog{}, err
+		return skillcatalog.Catalog{}, err
 	}
 	key := catalogCacheKey{
 		globalRoot:    strings.TrimSpace(paths.GlobalRoot),
@@ -47,7 +48,7 @@ func loadCatalogWithCache(paths config.Paths) (Catalog, error) {
 
 	catalog, err := Discover(paths.GlobalRoot, paths.WorkspaceRoot)
 	if err != nil {
-		return Catalog{}, err
+		return skillcatalog.Catalog{}, err
 	}
 
 	globalCatalogCache.mu.Lock()
@@ -73,18 +74,18 @@ func InvalidateCatalogCache(globalRoot, workspaceRoot string) {
 	globalCatalogCache.mu.Unlock()
 }
 
-func cloneCatalog(src Catalog) Catalog {
-	out := Catalog{
-		Skills: make([]Skill, 0, len(src.Skills)),
-		Tools:  make([]ToolAsset, 0, len(src.Tools)),
-		SkillDirs: SkillDirectories{
+func cloneCatalog(src skillcatalog.Catalog) skillcatalog.Catalog {
+	out := skillcatalog.Catalog{
+		Skills: make([]skillcatalog.SkillSpec, 0, len(src.Skills)),
+		Tools:  make([]skillcatalog.ToolAsset, 0, len(src.Tools)),
+		SkillDirs: skillcatalog.SkillDirectories{
 			System:    src.SkillDirs.System,
 			Global:    src.SkillDirs.Global,
 			Workspace: src.SkillDirs.Workspace,
 		},
 	}
 	for _, skill := range src.Skills {
-		out.Skills = append(out.Skills, Skill{
+		out.Skills = append(out.Skills, skillcatalog.SkillSpec{
 			Name:         skill.Name,
 			Description:  skill.Description,
 			Path:         skill.Path,
@@ -97,7 +98,7 @@ func cloneCatalog(src Catalog) Catalog {
 		})
 	}
 	for _, tool := range src.Tools {
-		out.Tools = append(out.Tools, ToolAsset{
+		out.Tools = append(out.Tools, skillcatalog.ToolAsset{
 			Name:        tool.Name,
 			Path:        tool.Path,
 			Scope:       tool.Scope,

@@ -6,7 +6,7 @@ import type {
   Workspace,
   ContextHistoryResponse,
   ContextHead,
-  WorkspaceMailboxResponse,
+  WorkspaceReportsResponse,
   WorkspaceRuntimeGraphResponse,
   RoleListResponse,
   RoleSpec,
@@ -115,18 +115,6 @@ export function submitMessage(
   });
 }
 
-export function submitPermission(
-  sessionId: string,
-  requestId: string,
-  decision: string,
-): Promise<{ request: unknown; turn_id: string; resumed: boolean }> {
-  return apiFetch(`/v1/permissions/decide`, {
-    method: "POST",
-    headers: contextBindingHeaders(sessionId),
-    body: JSON.stringify({ request_id: requestId, decision, session_id: sessionId }),
-  });
-}
-
 export function fileContentUrl(sessionId: string, path: string): string {
   const params = new URLSearchParams({ path });
   return `${BASE_URL}/v1/session/files/content?${params.toString()}`;
@@ -162,8 +150,8 @@ export function getWorkspaceRuntimeGraph(): Promise<WorkspaceRuntimeGraphRespons
   return apiFetch<WorkspaceRuntimeGraphResponse>("/v1/runtime_graph");
 }
 
-export function getWorkspaceMailbox(): Promise<WorkspaceMailboxResponse> {
-  return apiFetch<WorkspaceMailboxResponse>("/v1/mailbox");
+export function getWorkspaceReports(): Promise<WorkspaceReportsResponse> {
+  return apiFetch<WorkspaceReportsResponse>("/v1/reports");
 }
 
 // ─── Roles ────────────────────────────────────────────────────────────────────

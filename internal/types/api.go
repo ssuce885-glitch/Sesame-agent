@@ -18,21 +18,6 @@ type SubmitTurnRequest struct {
 	Message      string `json:"message"`
 }
 
-type PermissionDecisionRequest struct {
-	RequestID string `json:"request_id"`
-	Decision  string `json:"decision"`
-}
-
-type PermissionDecisionResponse struct {
-	Request PermissionRequest `json:"request"`
-	TurnID  string            `json:"turn_id"`
-	Resumed bool              `json:"resumed"`
-}
-
-type ListPendingAutomationPermissionsResponse struct {
-	Pending []PendingAutomationPermission `json:"pending"`
-}
-
 type ListContextHistoryResponse struct {
 	Entries       []HistoryEntry `json:"entries"`
 	CurrentHeadID string         `json:"current_head_id,omitempty"`

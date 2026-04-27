@@ -23,6 +23,11 @@ func normalizeTimelineBlocks(items []types.ConversationTimelineItem, events []ty
 
 	ensureAssistant := func(id string, turnID string) *types.TimelineBlock {
 		if currentAssistant != nil {
+			if currentAssistant.TurnID != "" && turnID != "" && currentAssistant.TurnID != turnID {
+				flushAssistant()
+			}
+		}
+		if currentAssistant != nil {
 			if currentAssistant.TurnID == "" && turnID != "" {
 				currentAssistant.TurnID = turnID
 			}
@@ -112,57 +117,20 @@ func normalizeTimelineBlocks(items []types.ConversationTimelineItem, events []ty
 				Kind:   "notice",
 				Text:   payload.Text,
 			})
-		case types.EventHeadMemoryFailed:
-			var payload types.HeadMemoryEventPayload
+		case types.EventContextHeadSummaryFailed:
+			var payload types.ContextHeadSummaryEventPayload
 			if err := json.Unmarshal(event.Payload, &payload); err != nil {
 				continue
 			}
-			text := "Head memory refresh failed."
+			text := "Context head summary refresh failed."
 			if payload.Message != "" {
-				text = "Head memory refresh failed: " + payload.Message
+				text = "Context head summary refresh failed: " + payload.Message
 			}
 			blocks = append(blocks, types.TimelineBlock{
-				ID:     "head_memory_failed_" + strconv.FormatInt(event.Seq, 10),
+				ID:     "context_head_summary_failed_" + strconv.FormatInt(event.Seq, 10),
 				TurnID: event.TurnID,
 				Kind:   "notice",
 				Text:   text,
-			})
-		case types.EventPermissionRequested:
-			var payload types.PermissionRequestedPayload
-			if err := json.Unmarshal(event.Payload, &payload); err != nil {
-				continue
-			}
-			blocks = append(blocks, types.TimelineBlock{
-				ID:                  firstNonEmpty(payload.RequestID, "permission_"+strconv.FormatInt(event.Seq, 10)),
-				TurnID:              event.TurnID,
-				Kind:                "permission_block",
-				Status:              string(types.PermissionRequestStatusRequested),
-				ToolCallID:          payload.ToolCallID,
-				ToolRunID:           payload.ToolRunID,
-				ToolName:            payload.ToolName,
-				PermissionRequestID: payload.RequestID,
-				RequestedProfile:    payload.RequestedProfile,
-				Reason:              payload.Reason,
-				Text:                clampPreview("Requested " + payload.RequestedProfile + " · " + payload.Reason),
-			})
-		case types.EventPermissionResolved:
-			var payload types.PermissionResolvedPayload
-			if err := json.Unmarshal(event.Payload, &payload); err != nil {
-				continue
-			}
-			blocks = append(blocks, types.TimelineBlock{
-				ID:                  firstNonEmpty(payload.RequestID, "permission_resolved_"+strconv.FormatInt(event.Seq, 10)),
-				TurnID:              event.TurnID,
-				Kind:                "permission_block",
-				Status:              payload.Decision,
-				ToolCallID:          payload.ToolCallID,
-				ToolRunID:           payload.ToolRunID,
-				ToolName:            payload.ToolName,
-				PermissionRequestID: payload.RequestID,
-				RequestedProfile:    payload.RequestedProfile,
-				Decision:            payload.Decision,
-				DecisionScope:       payload.DecisionScope,
-				Text:                clampPreview("Resolved " + payload.Decision + " · " + payload.RequestedProfile),
 			})
 		case types.EventTaskResultReady:
 			var block types.TimelineBlock
@@ -214,7 +182,7 @@ func marshalPreviewJSON(value any) string {
 }
 
 func buildRuntimeTimelineBlocks(graph types.RuntimeGraph) []types.TimelineBlock {
-	blocks := make([]types.TimelineBlock, 0, len(graph.Plans)+len(graph.Tasks)+len(graph.ToolRuns)+len(graph.Worktrees)+len(graph.PermissionRequests))
+	blocks := make([]types.TimelineBlock, 0, len(graph.Plans)+len(graph.Tasks)+len(graph.ToolRuns)+len(graph.Worktrees))
 	for _, plan := range graph.Plans {
 		blocks = append(blocks, types.TimelineBlockFromPlan(plan))
 	}
@@ -226,9 +194,6 @@ func buildRuntimeTimelineBlocks(graph types.RuntimeGraph) []types.TimelineBlock 
 	}
 	for _, worktree := range graph.Worktrees {
 		blocks = append(blocks, types.TimelineBlockFromWorktree(worktree))
-	}
-	for _, request := range graph.PermissionRequests {
-		blocks = append(blocks, types.TimelineBlockFromPermissionRequest(request))
 	}
 	return blocks
 }
@@ -296,18 +261,6 @@ func mergeTimelineBlock(current types.TimelineBlock, update types.TimelineBlock)
 	}
 	if update.WorktreeID != "" {
 		merged.WorktreeID = update.WorktreeID
-	}
-	if update.PermissionRequestID != "" {
-		merged.PermissionRequestID = update.PermissionRequestID
-	}
-	if update.RequestedProfile != "" {
-		merged.RequestedProfile = update.RequestedProfile
-	}
-	if update.Decision != "" {
-		merged.Decision = update.Decision
-	}
-	if update.DecisionScope != "" {
-		merged.DecisionScope = update.DecisionScope
 	}
 	if update.Reason != "" {
 		merged.Reason = update.Reason

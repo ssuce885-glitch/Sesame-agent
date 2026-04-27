@@ -21,6 +21,10 @@ type currentContextHeadStore interface {
 	GetCurrentContextHeadID(context.Context) (string, bool, error)
 }
 
+type runtimeTimelineEventStore interface {
+	AppendEventWithState(context.Context, types.Event) (types.Event, error)
+}
+
 func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -41,7 +45,7 @@ func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		sess, found, err := deps.Store.GetSession(r.Context(), sessionID)
+		_, found, err := deps.Store.GetSession(r.Context(), sessionID)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
@@ -50,11 +54,6 @@ func handleSubmitTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		if sess.State == types.SessionStateAwaitingPermission {
-			http.Error(w, "session is awaiting permission; use /approve or /deny before sending another prompt", http.StatusConflict)
-			return
-		}
-
 		now := time.Now().UTC()
 		turn := types.Turn{
 			ID:           types.NewID("turn"),
@@ -159,4 +158,23 @@ func handleInterruptTurn(deps Dependencies, sessionID string) http.HandlerFunc {
 
 		w.WriteHeader(http.StatusAccepted)
 	}
+}
+
+func appendRuntimeTimelineEvent(ctx context.Context, deps Dependencies, sessionID, turnID, eventType string, payload any) error {
+	store, ok := deps.Store.(runtimeTimelineEventStore)
+	if !ok {
+		return nil
+	}
+	event, err := types.NewEvent(sessionID, turnID, eventType, payload)
+	if err != nil {
+		return err
+	}
+	persisted, err := store.AppendEventWithState(ctx, event)
+	if err != nil {
+		return err
+	}
+	if deps.Bus != nil {
+		deps.Bus.Publish(persisted)
+	}
+	return nil
 }

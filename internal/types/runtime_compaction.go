@@ -72,15 +72,17 @@ type ConversationCompaction struct {
 }
 
 type CompactionBoundaryMetadata struct {
-	Version               int    `json:"version"`
-	PromptLayoutVersion   int    `json:"prompt_layout_version"`
-	Generation            int    `json:"generation"`
-	CompactedStart        int    `json:"compacted_start"`
-	CompactedEnd          int    `json:"compacted_end"`
-	PreservedRecentStart  int    `json:"preserved_recent_start"`
-	HeadMemoryUpTo        int64  `json:"head_memory_up_to,omitempty"`
-	SourceItemCount       int    `json:"source_item_count"`
-	Reason                string `json:"reason"`
-	ProviderProfile       string `json:"provider_profile"`
-	HasRecentMicrocompact bool   `json:"has_recent_microcompact"`
+	Version                   int    `json:"version"`
+	PromptLayoutVersion       int    `json:"prompt_layout_version"`
+	Generation                int    `json:"generation"`
+	CompactedStart            int    `json:"compacted_start"`
+	CompactedEnd              int    `json:"compacted_end"`
+	PreservedRecentStart      int    `json:"preserved_recent_start"`
+	PreservedUserMessageCount int    `json:"preserved_user_message_count,omitempty"`
+	IsPreTurn                 bool   `json:"is_pre_turn,omitempty"`
+	ContextHeadSummaryUpTo    int64  `json:"context_head_summary_up_to,omitempty"`
+	SourceItemCount           int    `json:"source_item_count"`
+	Reason                    string `json:"reason"`
+	ProviderProfile           string `json:"provider_profile"`
+	HasRecentMicrocompact     bool   `json:"has_recent_microcompact"`
 }

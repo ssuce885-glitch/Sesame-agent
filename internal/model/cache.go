@@ -8,11 +8,12 @@ const (
 )
 
 type ProviderCapabilities struct {
-	Profile              CapabilityProfile
-	SupportsSessionCache bool
-	SupportsPrefixCache  bool
-	CachesToolResults    bool
-	RotatesSessionRef    bool
+	Profile                             CapabilityProfile
+	SupportsSessionCache                bool
+	SupportsPrefixCache                 bool
+	CachesToolResults                   bool
+	RotatesSessionRef                   bool
+	RequiresThinkingForToolContinuation bool
 }
 
 type CacheMode string

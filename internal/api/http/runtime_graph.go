@@ -99,11 +99,6 @@ func filterRuntimeGraphForSession(graph types.RuntimeGraph, sessionID string) ty
 			filtered.Worktrees = append(filtered.Worktrees, worktree)
 		}
 	}
-	for _, request := range graph.PermissionRequests {
-		if _, ok := runIDs[request.RunID]; ok || request.SessionID == sessionID {
-			filtered.PermissionRequests = append(filtered.PermissionRequests, request)
-		}
-	}
 	return filtered
 }
 

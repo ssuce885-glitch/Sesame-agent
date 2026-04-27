@@ -2,9 +2,7 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
-	"time"
 
 	rolectx "go-agent/internal/roles"
 	"go-agent/internal/session"
@@ -14,7 +12,7 @@ import (
 	"go-agent/internal/workspace"
 )
 
-func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *session.Manager) error {
+func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *session.Manager, reportEnqueue ...reportTurnEnqueuer) error {
 	sessions, err := store.ListSessions(ctx)
 	if err != nil {
 		return err
@@ -24,25 +22,14 @@ func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *sess
 			manager.RegisterSession(sessionRow)
 		}
 	}
-	resumedTurns, err := resumeResolvedContinuations(ctx, store, manager)
-	if err != nil {
-		return err
-	}
-
 	running, err := store.ListRunningTurns(ctx)
 	if err != nil {
 		return err
 	}
 
 	for _, turn := range running {
-		if _, ok := resumedTurns[turn.ID]; ok {
-			continue
-		}
-		if turn.State == types.TurnStateAwaitingPermission {
-			continue
-		}
-		if turn.Kind == types.TurnKindChildReportBatch {
-			if err := store.RequeueClaimedChildReportsForTurn(ctx, turn.ID); err != nil {
+		if turn.Kind == types.TurnKindReportBatch {
+			if err := store.RequeueClaimedReportDeliveriesForTurn(ctx, turn.ID); err != nil {
 				return err
 			}
 		}
@@ -61,7 +48,14 @@ func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *sess
 		}
 	}
 
-	return recoverQueuedCreatedTurns(ctx, store, manager, sessions)
+	if err := recoverQueuedCreatedTurns(ctx, store, manager, sessions); err != nil {
+		return err
+	}
+	var enqueuer reportTurnEnqueuer
+	if len(reportEnqueue) > 0 {
+		enqueuer = reportEnqueue[0]
+	}
+	return recoverQueuedReportTurns(ctx, store, manager, sessions, enqueuer)
 }
 
 func recoverQueuedCreatedTurns(ctx context.Context, store *sqlite.Store, manager *session.Manager, sessions []types.Session) error {
@@ -150,126 +144,59 @@ func interruptUnrecoverableCreatedTurn(ctx context.Context, store *sqlite.Store,
 	return err
 }
 
-func resumeResolvedContinuations(ctx context.Context, store *sqlite.Store, manager *session.Manager) (map[string]struct{}, error) {
-	resumed := make(map[string]struct{})
-	if store == nil || manager == nil {
-		return resumed, nil
+func recoverQueuedReportTurns(ctx context.Context, store *sqlite.Store, manager *session.Manager, sessions []types.Session, enqueuer reportTurnEnqueuer) error {
+	if store == nil || manager == nil || enqueuer == nil {
+		return nil
 	}
-
-	continuations, err := store.ListPendingTurnContinuations(ctx)
-	if err != nil {
-		return nil, err
+	for _, sessionRow := range sessions {
+		sessionID := strings.TrimSpace(sessionRow.ID)
+		if sessionID == "" {
+			continue
+		}
+		queuedCount, err := store.CountQueuedReportDeliveries(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		if queuedCount == 0 {
+			continue
+		}
+		if hasRuntimeReportTurn(manager, sessionID) {
+			continue
+		}
+		hasCreatedReportTurn, err := hasCreatedReportBatchTurn(ctx, store, sessionID)
+		if err != nil {
+			return err
+		}
+		if hasCreatedReportTurn {
+			continue
+		}
+		if err := enqueuer.enqueueSyntheticReportTurn(ctx, sessionID); err != nil {
+			return err
+		}
 	}
-
-	for _, continuation := range continuations {
-		if strings.TrimSpace(continuation.PermissionRequestID) == "" {
-			continue
-		}
-		request, ok, err := store.GetPermissionRequest(ctx, continuation.PermissionRequestID)
-		if err != nil {
-			return nil, err
-		}
-		if !ok || request.Status == types.PermissionRequestStatusRequested || strings.TrimSpace(request.Decision) == "" {
-			continue
-		}
-
-		turn, ok, err := store.GetTurn(ctx, continuation.TurnID)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		sessionRow, ok, err := store.GetSession(ctx, continuation.SessionID)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-
-		effectiveProfile := sessionRow.PermissionProfile
-		if types.PermissionDecisionGrantsProfile(request.Decision) && strings.TrimSpace(request.RequestedProfile) != "" {
-			effectiveProfile = request.RequestedProfile
-		}
-		decisionScope := strings.TrimSpace(request.DecisionScope)
-		if decisionScope == "" {
-			decisionScope = request.Decision
-		}
-		resume := &types.TurnResume{
-			ContinuationID:             continuation.ID,
-			PermissionRequestID:        request.ID,
-			ToolRunID:                  continuation.ToolRunID,
-			ToolCallID:                 continuation.ToolCallID,
-			ToolName:                   continuation.ToolName,
-			RequestedProfile:           continuation.RequestedProfile,
-			Reason:                     continuation.Reason,
-			Decision:                   request.Decision,
-			DecisionScope:              decisionScope,
-			EffectivePermissionProfile: effectiveProfile,
-			RunID:                      continuation.RunID,
-			TaskID:                     continuation.TaskID,
-		}
-		specialistRoleID, err := store.ResolveSpecialistRoleID(ctx, sessionRow.ID, sessionRow.WorkspaceRoot)
-		if err != nil {
-			return nil, err
-		}
-		resumeCtx := workspace.WithWorkspaceRoot(
-			rolectx.WithSpecialistRoleID(ctx, specialistRoleID),
-			sessionRow.WorkspaceRoot,
-		)
-		if _, err := manager.ResumeTurn(resumeCtx, sessionRow.ID, session.ResumeTurnInput{
-			Turn:   turn,
-			Resume: resume,
-		}); err != nil {
-			return nil, err
-		}
-
-		now := time.Now().UTC()
-		continuation.State = types.TurnContinuationStateResumed
-		continuation.Decision = request.Decision
-		continuation.DecisionScope = decisionScope
-		continuation.UpdatedAt = now
-		var resumedToolRun *types.ToolRun
-		if strings.TrimSpace(continuation.ToolRunID) != "" {
-			toolRun, found, err := store.GetToolRun(ctx, continuation.ToolRunID)
-			if err != nil {
-				return nil, err
-			}
-			if found {
-				toolRun.PermissionRequestID = request.ID
-				toolRun.UpdatedAt = now
-				toolRun.CompletedAt = now
-				toolRun.OutputJSON = marshalRecoveredPermissionToolRunOutput(request, effectiveProfile)
-				if request.Decision == types.PermissionDecisionDeny {
-					toolRun.State = types.ToolRunStateFailed
-					toolRun.Error = "permission denied"
-				} else {
-					toolRun.State = types.ToolRunStateCompleted
-					toolRun.Error = ""
-				}
-				resumedToolRun = &toolRun
-			}
-		}
-		if err := store.CommitPermissionResume(ctx, sessionRow.ID, turn.ID, continuation, resumedToolRun); err != nil {
-			manager.InterruptTurn(sessionRow.ID, turn.ID)
-			return nil, err
-		}
-
-		resumed[turn.ID] = struct{}{}
-	}
-
-	return resumed, nil
+	return nil
 }
 
-func marshalRecoveredPermissionToolRunOutput(request types.PermissionRequest, effectiveProfile string) string {
-	payload, _ := json.Marshal(map[string]any{
-		"status":                       request.Status,
-		"decision":                     request.Decision,
-		"decision_scope":               request.DecisionScope,
-		"requested_profile":            request.RequestedProfile,
-		"effective_permission_profile": effectiveProfile,
-		"reason":                       request.Reason,
-	})
-	return string(payload)
+func hasRuntimeReportTurn(manager *session.Manager, sessionID string) bool {
+	if manager == nil {
+		return false
+	}
+	state, ok := manager.GetRuntimeState(sessionID)
+	if !ok {
+		return false
+	}
+	return state.ActiveTurnKind == types.TurnKindReportBatch || state.QueuedReportBatches > 0
+}
+
+func hasCreatedReportBatchTurn(ctx context.Context, store *sqlite.Store, sessionID string) (bool, error) {
+	turns, err := store.ListTurnsBySession(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	for _, turn := range turns {
+		if turn.State == types.TurnStateCreated && turn.Kind == types.TurnKindReportBatch {
+			return true, nil
+		}
+	}
+	return false, nil
 }

@@ -19,7 +19,7 @@ func buildTimelineResponse(ctx context.Context, deps Dependencies, sessionID str
 	if err != nil {
 		return types.SessionTimelineResponse{}, err
 	}
-	pendingReportCount, err := timelinePendingReportCount(ctx, deps.Store, sessionID)
+	queuedReportCount, err := timelineQueuedReportCount(ctx, deps.Store, sessionID)
 	if err != nil {
 		return types.SessionTimelineResponse{}, err
 	}
@@ -38,29 +38,29 @@ func buildTimelineResponse(ctx context.Context, deps Dependencies, sessionID str
 	}
 
 	return types.SessionTimelineResponse{
-		Blocks:             blocks,
-		LatestSeq:          latestSeq,
-		PendingReportCount: pendingReportCount,
-		Queue:              queueSummary,
+		Blocks:            blocks,
+		LatestSeq:         latestSeq,
+		QueuedReportCount: queuedReportCount,
+		Queue:             queueSummary,
 	}, nil
 }
 
-func timelinePendingReportCount(ctx context.Context, store Store, sessionID string) (int, error) {
-	mailboxStore, ok := store.(reportMailboxStore)
+func timelineQueuedReportCount(ctx context.Context, store Store, sessionID string) (int, error) {
+	reportStore, ok := store.(reportDeliveryStore)
 	if !ok {
 		return 0, nil
 	}
-	return mailboxStore.CountPendingReportMailboxItems(ctx, sessionID)
+	return reportStore.CountQueuedReportDeliveries(ctx, sessionID)
 }
 
 func timelineQueueSummary(ctx context.Context, deps Dependencies, sessionID string) (types.SessionQueueSummary, error) {
 	summary := types.SessionQueueSummary{}
-	if childReportStore, ok := deps.Store.(childReportCountStore); ok {
-		pendingChildReports, err := childReportStore.CountPendingChildReports(ctx, sessionID)
+	if reportStore, ok := deps.Store.(reportDeliveryStore); ok {
+		queuedReports, err := reportStore.CountQueuedReportDeliveries(ctx, sessionID)
 		if err != nil {
 			return types.SessionQueueSummary{}, err
 		}
-		summary.PendingChildReports = pendingChildReports
+		summary.QueuedReports = queuedReports
 	}
 	if manager, ok := deps.Manager.(queueSummaryProvider); ok {
 		if payload, ok := manager.QueuePayload(sessionID); ok {
@@ -68,7 +68,7 @@ func timelineQueueSummary(ctx context.Context, deps Dependencies, sessionID stri
 			summary.ActiveTurnKind = payload.ActiveTurnKind
 			summary.QueueDepth = payload.QueueDepth
 			summary.QueuedUserTurns = payload.QueuedUserTurns
-			summary.QueuedChildReportBatches = payload.QueuedChildReportBatches
+			summary.QueuedReportBatches = payload.QueuedReportBatches
 		}
 	}
 	return summary, nil

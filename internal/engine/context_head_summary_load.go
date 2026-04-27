@@ -8,19 +8,19 @@ import (
 	"go-agent/internal/types"
 )
 
-func loadHeadMemorySummary(ctx context.Context, store ConversationStore, sessionID, contextHeadID string) (model.Summary, bool, error) {
+func loadContextHeadSummary(ctx context.Context, store ConversationStore, sessionID, contextHeadID string) (model.Summary, bool, error) {
 	if store == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(contextHeadID) == "" {
 		return model.Summary{}, false, nil
 	}
 
-	memory, ok, err := store.GetHeadMemory(ctx, sessionID, contextHeadID)
+	memory, ok, err := store.GetContextHeadSummary(ctx, sessionID, contextHeadID)
 	if err != nil || !ok {
 		return model.Summary{}, false, err
 	}
-	return decodeSessionMemorySummary(memory.SummaryPayload)
+	return decodeContextHeadSummaryPayload(memory.SummaryPayload)
 }
 
-func loadHeadMemoryBundle(ctx context.Context, store ConversationStore, sessionID, contextHeadID string) (SummaryBundle, []types.ConversationCompaction, error) {
+func loadContextHeadSummaryBundle(ctx context.Context, store ConversationStore, sessionID, contextHeadID string) (SummaryBundle, []types.ConversationCompaction, error) {
 	if store == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(contextHeadID) == "" {
 		return SummaryBundle{}, nil, nil
 	}
@@ -29,25 +29,25 @@ func loadHeadMemoryBundle(ctx context.Context, store ConversationStore, sessionI
 	if err != nil {
 		return SummaryBundle{}, nil, err
 	}
-	headMemory, hasHeadMemory, err := loadHeadMemorySummary(ctx, store, sessionID, contextHeadID)
+	contextHeadSummary, hasContextHeadSummary, err := loadContextHeadSummary(ctx, store, sessionID, contextHeadID)
 	if err != nil {
 		return SummaryBundle{}, nil, err
 	}
 
-	var headMemorySummary *model.Summary
-	if hasHeadMemory {
-		value := cloneSummaryForSessionMemory(headMemory)
-		headMemorySummary = &value
+	var contextHeadSummaryValue *model.Summary
+	if hasContextHeadSummary {
+		value := cloneSummaryForContextHeadSummary(contextHeadSummary)
+		contextHeadSummaryValue = &value
 	}
 
 	if boundarySummary, ok, err := activeBoundarySummary(compactions); err != nil {
 		return SummaryBundle{}, nil, err
 	} else if ok {
 		value := normalizeSummaryForPrompt(boundarySummary)
-		return selectPromptSummaryBundle(headMemorySummary, &value, nil), compactions, nil
+		return selectPromptSummaryBundle(contextHeadSummaryValue, &value, nil), compactions, nil
 	}
 
-	return selectPromptSummaryBundle(headMemorySummary, nil, nil), compactions, nil
+	return selectPromptSummaryBundle(contextHeadSummaryValue, nil, nil), compactions, nil
 }
 
 func activeBoundarySummary(compactions []types.ConversationCompaction) (model.Summary, bool, error) {
@@ -72,7 +72,7 @@ func resolveConversationReadContextHeadID(ctx context.Context, store Conversatio
 	return strings.TrimSpace(current), nil
 }
 
-func headMemoryStartIndexForUpToItemID(items []types.ConversationTimelineItem, upToItemID int64) int {
+func contextHeadSummaryStartIndexForUpToItemID(items []types.ConversationTimelineItem, upToItemID int64) int {
 	if upToItemID <= 0 || len(items) == 0 {
 		return 0
 	}

@@ -29,11 +29,11 @@ func (delegateToRoleTool) IsEnabled(execCtx ExecContext) bool {
 func (delegateToRoleTool) Definition() Definition {
 	return Definition{
 		Name:        "delegate_to_role",
-		Description: "Hand off work to a background role task. Use this instead of task_create when transferring ownership to main_parent or an installed specialist role id.",
+		Description: "Terminally hand off work from main_parent to an installed specialist role task. After this succeeds, end the turn; do not wait, sleep, poll, or inspect the delegated task because its result returns through reports.",
 		InputSchema: objectSchema(map[string]any{
 			"target_role": map[string]any{
 				"type":        "string",
-				"description": "The role id that should own the work (main_parent or an installed specialist role id).",
+				"description": "The installed specialist role id that should own the work.",
 			},
 			"message": map[string]any{
 				"type":        "string",
@@ -53,6 +53,8 @@ func (delegateToRoleTool) Definition() Definition {
 }
 
 func (delegateToRoleTool) IsConcurrencySafe() bool { return false }
+
+func (delegateToRoleTool) CompletesTurnOnSuccess() bool { return true }
 
 func (delegateToRoleTool) Decode(call Call) (DecodedCall, error) {
 	targetRole, err := validateRoleID(call.StringInput("target_role"))
@@ -112,7 +114,7 @@ func (delegateToRoleTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 	}
 	text := mustJSON(output)
 	modelText := fmt.Sprintf(
-		"Delegated to %s via background task %s. Continue this turn and wait for child reports instead of taking over here.",
+		"Delegated to %s via background task %s. This turn is complete. Do not call task_wait, task_get, task_output, task_result, or shell sleep to wait for it; the result will return through a queued child report.",
 		output.TargetRole,
 		output.TaskID,
 	)
@@ -123,6 +125,12 @@ func (delegateToRoleTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 		},
 		Data:        output,
 		PreviewText: fmt.Sprintf("Delegated to %s", output.TargetRole),
+		Metadata: map[string]any{
+			"delegated_task_id": output.TaskID,
+			"target_role":       output.TargetRole,
+			"turn_handoff":      true,
+		},
+		CompleteTurn: true,
 	}, nil
 }
 

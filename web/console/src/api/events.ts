@@ -6,10 +6,8 @@ import type {
   ToolEventPayload,
   DeltaPayload,
   FailurePayload,
-  PermissionRequestPayload,
-  PermissionResolvedPayload,
   NoticePayload,
-  SessionMemoryPayload,
+  ContextHeadSummaryPayload,
 } from "./types";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -23,8 +21,7 @@ export interface ChatMessage {
     | "assistant_message"
     | "tool_call"
     | "notice"
-    | "error"
-    | "permission_block";
+    | "error";
   text?: string;
   streaming?: boolean;
   status?: string;
@@ -33,10 +30,7 @@ export interface ChatMessage {
   argsPreview?: string;
   resultPreview?: string;
   isError?: boolean;
-  permissionRequestId?: string;
-  requestedProfile?: string;
   reason?: string;
-  decision?: string;
   usage?: {
     input_tokens: number;
     output_tokens: number;
@@ -45,7 +39,7 @@ export interface ChatMessage {
   };
 }
 
-export interface SessionMemory {
+export interface ContextHeadSummaryStatus {
   phase: "idle" | "running" | "updated" | "failed";
   text: string;
 }
@@ -54,7 +48,7 @@ export interface ChatState {
   messages: ChatMessage[];
   latestSeq: number;
   connection: "idle" | "connecting" | "open" | "reconnecting" | "error";
-  sessionMemory: SessionMemory;
+  contextHeadSummary: ContextHeadSummaryStatus;
 }
 
 export type ChatAction =
@@ -66,7 +60,7 @@ export const initialState: ChatState = {
   messages: [],
   latestSeq: 0,
   connection: "idle",
-  sessionMemory: { phase: "idle", text: "" },
+  contextHeadSummary: { phase: "idle", text: "" },
 };
 
 // ─── Reducer ──────────────────────────────────────────────────────────────────
@@ -114,13 +108,6 @@ function sameLogicalMessage(a: ChatMessage, b: ChatMessage): boolean {
     return true;
   }
   if (a.kind === "tool_call" && a.toolCallId && a.toolCallId === b.toolCallId) {
-    return true;
-  }
-  if (
-    a.kind === "permission_block" &&
-    a.permissionRequestId &&
-    a.permissionRequestId === b.permissionRequestId
-  ) {
     return true;
   }
   return a.kind === "user_message" && a.text === b.text;
@@ -244,45 +231,6 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       return { ...state, messages: msgs, latestSeq: nextSeq };
     }
 
-    case "permission.requested": {
-      const p = event.payload as PermissionRequestPayload;
-      const text = p.reason
-        ? `Permission needed: ${p.requested_profile}. Reason: ${p.reason}`
-        : `Permission needed: ${p.requested_profile}`;
-      const msgs = [...state.messages];
-      msgs.push({
-        id: `perm_${p.request_id ?? event.seq}`,
-        seq: event.seq,
-        turnId: event.turn_id,
-        kind: "permission_block",
-        permissionRequestId: p.request_id,
-        requestedProfile: p.requested_profile,
-        reason: p.reason,
-        text,
-        status: "requested",
-      });
-      return { ...state, messages: msgs, latestSeq: nextSeq };
-    }
-
-    case "permission.resolved": {
-      const p = event.payload as PermissionResolvedPayload;
-      const msgs = [...state.messages];
-      const idx = msgs.findIndex(
-        (m) =>
-          m.kind === "permission_block" && m.permissionRequestId === p.request_id,
-      );
-      if (idx >= 0) {
-        msgs[idx] = {
-          ...msgs[idx],
-          seq: event.seq,
-          status: p.decision,
-          text: `Permission ${p.decision}: ${p.requested_profile}`,
-          decision: p.decision,
-        };
-      }
-      return { ...state, messages: msgs, latestSeq: nextSeq };
-    }
-
     case "system.notice": {
       const p = event.payload as NoticePayload;
       const msgs = [...state.messages];
@@ -321,15 +269,15 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       return { ...state, messages: msgs, latestSeq: nextSeq };
     }
 
-    case "session_memory.started":
+    case "context_head_summary.started":
       return {
         ...state,
         latestSeq: nextSeq,
-        sessionMemory: { phase: "running", text: "Summarizing session memory..." },
+        contextHeadSummary: { phase: "running", text: "Summarizing context head..." },
       };
 
-    case "session_memory.completed": {
-      const p = event.payload as SessionMemoryPayload;
+    case "context_head_summary.completed": {
+      const p = event.payload as ContextHeadSummaryPayload;
       const parts: string[] = [];
       if (p.workspace_entries_upserted) parts.push(`+${p.workspace_entries_upserted} workspace`);
       if (p.global_entries_upserted) parts.push(`+${p.global_entries_upserted} global`);
@@ -337,21 +285,21 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       return {
         ...state,
         latestSeq: nextSeq,
-        sessionMemory: {
+        contextHeadSummary: {
           phase: "updated",
-          text: parts.length > 0 ? `Memory updated: ${parts.join(" / ")}` : "Session memory updated",
+          text: parts.length > 0 ? `Context summary updated: ${parts.join(" / ")}` : "Context summary updated",
         },
       };
     }
 
-    case "session_memory.failed": {
-      const p = event.payload as SessionMemoryPayload;
+    case "context_head_summary.failed": {
+      const p = event.payload as ContextHeadSummaryPayload;
       return {
         ...state,
         latestSeq: nextSeq,
-        sessionMemory: {
+        contextHeadSummary: {
           phase: "failed",
-          text: p.message ?? "Session memory refresh failed",
+          text: p.message ?? "Context summary refresh failed",
         },
       };
     }
@@ -390,19 +338,6 @@ export function timelineToMessages(
         resultPreview: b.result_preview,
         status: b.status,
         isError: b.status === "failed",
-      };
-    }
-    if (b.kind === "permission_block") {
-      return {
-        id: `tl_${b.permission_request_id ?? b.id}`,
-        turnId: b.turn_id,
-        kind: "permission_block",
-        permissionRequestId: b.permission_request_id,
-        requestedProfile: b.requested_profile,
-        reason: b.reason,
-        text: b.text,
-        status: b.status,
-        decision: b.decision,
       };
     }
     const text = firstTimelineText(b);
@@ -504,12 +439,6 @@ export function useSessionEvents(
     es.addEventListener("tool.completed", (e: MessageEvent) => {
       dispatchEvent(e);
     });
-    es.addEventListener("permission.requested", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("permission.resolved", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
     es.addEventListener("system.notice", (e: MessageEvent) => {
       dispatchEvent(e);
     });
@@ -519,13 +448,13 @@ export function useSessionEvents(
     es.addEventListener("turn.interrupted", (e: MessageEvent) => {
       dispatchEvent(e);
     });
-    es.addEventListener("session_memory.started", (e: MessageEvent) => {
+    es.addEventListener("context_head_summary.started", (e: MessageEvent) => {
       dispatchEvent(e);
     });
-    es.addEventListener("session_memory.completed", (e: MessageEvent) => {
+    es.addEventListener("context_head_summary.completed", (e: MessageEvent) => {
       dispatchEvent(e);
     });
-    es.addEventListener("session_memory.failed", (e: MessageEvent) => {
+    es.addEventListener("context_head_summary.failed", (e: MessageEvent) => {
       dispatchEvent(e);
     });
     es.addEventListener("context.compacted", (e: MessageEvent) => {

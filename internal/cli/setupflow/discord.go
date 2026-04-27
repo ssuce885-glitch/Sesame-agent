@@ -96,7 +96,7 @@ func collectDiscordSetupState(reader *bufio.Reader, w io.Writer, cfg config.Conf
 		}
 	} else {
 		state.TokenMode = discordTokenEnv
-		state.BotTokenEnv, err = readTextInput(reader, w, "Bot Token Environment Variable Name", state.BotTokenEnv)
+		state.BotTokenEnv, err = readDiscordBotTokenEnvInput(reader, w, state.BotTokenEnv)
 		if err != nil {
 			return discordSetupState{}, err
 		}
@@ -128,6 +128,15 @@ func collectDiscordSetupState(reader *bufio.Reader, w io.Writer, cfg config.Conf
 		return discordSetupState{}, err
 	}
 	state.AllowedUserIDs = allowedUserIDs
+
+	advancedIdx, err := chooseArrowOption(reader, w, "Advanced Discord options", []string{"Use defaults/current values and save", "Customize"}, 0)
+	if err != nil {
+		return discordSetupState{}, err
+	}
+	if advancedIdx == 0 {
+		return state, nil
+	}
+
 	state.RequireMention, err = readBoolChoice(reader, w, "Require Mention", "Enabled", "Disabled", state.RequireMention)
 	if err != nil {
 		return discordSetupState{}, err
@@ -154,6 +163,48 @@ func collectDiscordSetupState(reader *bufio.Reader, w io.Writer, cfg config.Conf
 	}
 
 	return state, nil
+}
+
+func readDiscordBotTokenEnvInput(reader *bufio.Reader, w io.Writer, defaultValue string) (string, error) {
+	for {
+		value, err := readTextInput(reader, w, "Bot Token Environment Variable Name (example DISCORD_BOT_TOKEN, not token value)", defaultValue)
+		if err != nil {
+			return "", err
+		}
+		if isValidEnvVarName(value) {
+			return value, nil
+		}
+		if looksLikeDiscordBotToken(value) {
+			fmt.Fprintln(w, "That looks like a Discord bot token, not an environment variable name. Enter a name like DISCORD_BOT_TOKEN.")
+			continue
+		}
+		fmt.Fprintf(w, "Invalid environment variable name %q. Use letters, numbers, and underscores; do not start with a number.\n", value)
+	}
+}
+
+func isValidEnvVarName(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for i, r := range value {
+		if i == 0 {
+			if r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				continue
+			}
+			return false
+		}
+		if r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func looksLikeDiscordBotToken(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.Count(value, ".") >= 2 && len(value) >= 40
 }
 
 func readRequiredCommaSeparatedList(reader *bufio.Reader, w io.Writer, label, defaultValue string) ([]string, error) {
@@ -271,6 +322,9 @@ func validateDiscordSetupState(state discordSetupState) error {
 	case discordTokenEnv:
 		if strings.TrimSpace(state.BotTokenEnv) == "" {
 			return errors.New("discord bot token environment variable name is required")
+		}
+		if !isValidEnvVarName(state.BotTokenEnv) {
+			return errors.New("discord bot token environment variable name is invalid")
 		}
 	default:
 		return fmt.Errorf("unsupported discord token mode: %q", state.TokenMode)

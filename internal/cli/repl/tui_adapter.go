@@ -40,20 +40,6 @@ func (a tuiClientAdapter) InterruptTurn(ctx context.Context) error {
 	return a.client.InterruptTurn(ctx)
 }
 
-func (a tuiClientAdapter) DecidePermission(ctx context.Context, req tuiv2.PermissionDecisionRequest) (tuiv2.PermissionDecisionResponse, error) {
-	resp, err := a.client.DecidePermission(ctx, types.PermissionDecisionRequest{
-		RequestID: req.RequestID,
-		Decision:  req.Decision,
-	})
-	if err != nil {
-		return tuiv2.PermissionDecisionResponse{}, err
-	}
-	return tuiv2.PermissionDecisionResponse{
-		Request: tuiv2.PermissionRequestInfo{ID: resp.Request.ID},
-		Resumed: resp.Resumed,
-	}, nil
-}
-
 func (a tuiClientAdapter) StreamEvents(ctx context.Context, afterSeq int64) (<-chan tuiv2.Event, error) {
 	events, err := a.client.StreamEvents(ctx, afterSeq)
 	if err != nil {
@@ -105,12 +91,12 @@ func (a tuiClientAdapter) LoadContextHistory(ctx context.Context, headID string)
 	return adaptTUIContextHead(head), nil
 }
 
-func (a tuiClientAdapter) GetWorkspaceMailbox(ctx context.Context) (tuiv2.MailboxResponse, error) {
-	resp, err := a.client.GetWorkspaceMailbox(ctx)
+func (a tuiClientAdapter) GetWorkspaceReports(ctx context.Context) (tuiv2.ReportsResponse, error) {
+	resp, err := a.client.GetWorkspaceReports(ctx)
 	if err != nil {
-		return tuiv2.MailboxResponse{}, err
+		return tuiv2.ReportsResponse{}, err
 	}
-	return adaptTUIMailbox(resp), nil
+	return adaptTUIReports(resp), nil
 }
 
 func (a tuiClientAdapter) GetRuntimeGraph(ctx context.Context) (tuiv2.RuntimeGraphResponse, error) {
@@ -215,26 +201,25 @@ func adaptTUITimeline(resp types.SessionTimelineResponse) tuiv2.SessionTimelineR
 			})
 		}
 		blocks = append(blocks, tuiv2.TimelineBlock{
-			Kind:                block.Kind,
-			Text:                block.Text,
-			Title:               block.Title,
-			Path:                block.Path,
-			Status:              block.Status,
-			Content:             content,
-			PermissionRequestID: block.PermissionRequestID,
+			Kind:    block.Kind,
+			Text:    block.Text,
+			Title:   block.Title,
+			Path:    block.Path,
+			Status:  block.Status,
+			Content: content,
 		})
 	}
 	return tuiv2.SessionTimelineResponse{
-		Blocks:             blocks,
-		LatestSeq:          resp.LatestSeq,
-		PendingReportCount: resp.PendingReportCount,
+		Blocks:            blocks,
+		LatestSeq:         resp.LatestSeq,
+		QueuedReportCount: resp.QueuedReportCount,
 		Queue: tuiv2.QueueSummary{
-			ActiveTurnID:             resp.Queue.ActiveTurnID,
-			ActiveTurnKind:           string(resp.Queue.ActiveTurnKind),
-			QueueDepth:               resp.Queue.QueueDepth,
-			QueuedUserTurns:          resp.Queue.QueuedUserTurns,
-			QueuedChildReportBatches: resp.Queue.QueuedChildReportBatches,
-			PendingChildReports:      resp.Queue.PendingChildReports,
+			ActiveTurnID:        resp.Queue.ActiveTurnID,
+			ActiveTurnKind:      string(resp.Queue.ActiveTurnKind),
+			QueueDepth:          resp.Queue.QueueDepth,
+			QueuedUserTurns:     resp.Queue.QueuedUserTurns,
+			QueuedReportBatches: resp.Queue.QueuedReportBatches,
+			QueuedReports:       resp.Queue.QueuedReports,
 		},
 	}
 }
@@ -257,8 +242,8 @@ func adaptTUIContextHead(head types.ContextHead) tuiv2.ContextHead {
 	return tuiv2.ContextHead{ID: head.ID}
 }
 
-func adaptTUIMailbox(resp types.WorkspaceReportMailboxResponse) tuiv2.MailboxResponse {
-	items := make([]tuiv2.MailboxItem, 0, len(resp.Items))
+func adaptTUIReports(resp types.WorkspaceReportsResponse) tuiv2.ReportsResponse {
+	items := make([]tuiv2.ReportDeliveryItem, 0, len(resp.Items))
 	for _, item := range resp.Items {
 		sections := make([]tuiv2.ReportSection, 0, len(item.Envelope.Sections))
 		for _, section := range item.Envelope.Sections {
@@ -268,12 +253,12 @@ func adaptTUIMailbox(resp types.WorkspaceReportMailboxResponse) tuiv2.MailboxRes
 				Items: append([]string(nil), section.Items...),
 			})
 		}
-		items = append(items, tuiv2.MailboxItem{
+		items = append(items, tuiv2.ReportDeliveryItem{
 			ID:             item.ID,
 			SourceKind:     string(item.SourceKind),
 			InjectedTurnID: item.InjectedTurnID,
 			ObservedAt:     item.ObservedAt,
-			Envelope: tuiv2.MailboxEnvelope{
+			Envelope: tuiv2.ReportEnvelope{
 				Title:    item.Envelope.Title,
 				Summary:  item.Envelope.Summary,
 				Status:   item.Envelope.Status,
@@ -283,22 +268,21 @@ func adaptTUIMailbox(resp types.WorkspaceReportMailboxResponse) tuiv2.MailboxRes
 			},
 		})
 	}
-	return tuiv2.MailboxResponse{
-		Items:        items,
-		PendingCount: resp.PendingCount,
-		Reports:      len(resp.Reports),
-		Deliveries:   len(resp.Deliveries),
+	return tuiv2.ReportsResponse{
+		Items:       items,
+		QueuedCount: resp.QueuedCount,
+		Reports:     len(resp.Reports),
+		Deliveries:  len(resp.Deliveries),
 	}
 }
 
 func adaptTUIRuntimeGraph(resp types.WorkspaceRuntimeGraphResponse) tuiv2.RuntimeGraphResponse {
 	graph := tuiv2.RuntimeGraph{
-		Runs:               make([]tuiv2.Run, 0, len(resp.Graph.Runs)),
-		Diagnostics:        make([]tuiv2.RuntimeDiagnostic, 0, len(resp.Graph.Diagnostics)),
-		Tasks:              make([]tuiv2.Task, 0, len(resp.Graph.Tasks)),
-		ToolRuns:           make([]tuiv2.ToolRun, 0, len(resp.Graph.ToolRuns)),
-		Worktrees:          make([]tuiv2.Worktree, 0, len(resp.Graph.Worktrees)),
-		PermissionRequests: make([]tuiv2.PermissionRequest, 0, len(resp.Graph.PermissionRequests)),
+		Runs:        make([]tuiv2.Run, 0, len(resp.Graph.Runs)),
+		Diagnostics: make([]tuiv2.RuntimeDiagnostic, 0, len(resp.Graph.Diagnostics)),
+		Tasks:       make([]tuiv2.Task, 0, len(resp.Graph.Tasks)),
+		ToolRuns:    make([]tuiv2.ToolRun, 0, len(resp.Graph.ToolRuns)),
+		Worktrees:   make([]tuiv2.Worktree, 0, len(resp.Graph.Worktrees)),
 	}
 	for _, run := range resp.Graph.Runs {
 		graph.Runs = append(graph.Runs, tuiv2.Run{
@@ -351,16 +335,6 @@ func adaptTUIRuntimeGraph(resp types.WorkspaceRuntimeGraphResponse) tuiv2.Runtim
 			State:          string(worktree.State),
 			WorktreeBranch: worktree.WorktreeBranch,
 			WorktreePath:   worktree.WorktreePath,
-		})
-	}
-	for _, request := range resp.Graph.PermissionRequests {
-		graph.PermissionRequests = append(graph.PermissionRequests, tuiv2.PermissionRequest{
-			ID:               request.ID,
-			Status:           string(request.Status),
-			ToolName:         request.ToolName,
-			RequestedProfile: request.RequestedProfile,
-			Decision:         request.Decision,
-			Reason:           request.Reason,
 		})
 	}
 	return tuiv2.RuntimeGraphResponse{Graph: graph}

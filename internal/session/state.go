@@ -7,12 +7,11 @@ import (
 )
 
 type RuntimeState struct {
-	ActiveTurnID             string
-	ActiveTurnKind           types.TurnKind
-	QueueDepth               int
-	QueuedUserTurns          int
-	QueuedChildReportBatches int
-	RunPermissions           map[string]string
+	ActiveTurnID        string
+	ActiveTurnKind      types.TurnKind
+	QueueDepth          int
+	QueuedUserTurns     int
+	QueuedReportBatches int
 
 	queue  []queuedTurn
 	cancel context.CancelFunc

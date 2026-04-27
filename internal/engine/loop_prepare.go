@@ -59,7 +59,7 @@ type preparedLoopState struct {
 	sessionID          string
 	turnMessage        string
 	turnKind           types.TurnKind
-	childReports       []types.ChildReport
+	reports            []types.ReportDeliveryItem
 	turnCtx            *runtimegraph.TurnContext
 	toolExecCtx        tools.ExecContext
 	toolRuntime        *tools.Runtime
@@ -98,12 +98,6 @@ func prepareLoopState(ctx context.Context, e *Engine, in Input, emitter loopEmit
 		CurrentTurnID:    in.Turn.ID,
 		CurrentTaskID:    strings.TrimSpace(in.TaskID),
 	}
-	if in.Resume != nil {
-		turnCtx.CurrentRunID = strings.TrimSpace(in.Resume.RunID)
-		if turnCtx.CurrentTaskID == "" {
-			turnCtx.CurrentTaskID = strings.TrimSpace(in.Resume.TaskID)
-		}
-	}
 
 	toolExecCtx := tools.ExecContext{
 		WorkspaceRoot:            in.Session.WorkspaceRoot,
@@ -125,9 +119,9 @@ func prepareLoopState(ctx context.Context, e *Engine, in Input, emitter loopEmit
 		return nil, emitter.Fail(ctx, err)
 	}
 	turnKind := normalizeTurnKind(in.Turn.Kind)
-	var childReports []types.ChildReport
-	if turnKind == types.TurnKindChildReportBatch {
-		childReports, err = loadPendingChildReports(ctx, e.store, sessionID, in.Turn.ID)
+	var reports []types.ReportDeliveryItem
+	if turnKind == types.TurnKindReportBatch {
+		reports, err = loadQueuedReports(ctx, e.store, sessionID, in.Turn.ID)
 		if err != nil {
 			return nil, emitter.Fail(ctx, err)
 		}
@@ -168,7 +162,7 @@ func prepareLoopState(ctx context.Context, e *Engine, in Input, emitter loopEmit
 		turnMessage,
 		baseInstructions,
 		specialistSpec,
-		childReports,
+		reports,
 	)
 	if err != nil {
 		return nil, emitter.Fail(ctx, err)
@@ -202,7 +196,7 @@ func prepareLoopState(ctx context.Context, e *Engine, in Input, emitter loopEmit
 		sessionID:          sessionID,
 		turnMessage:        turnMessage,
 		turnKind:           turnKind,
-		childReports:       childReports,
+		reports:            reports,
 		turnCtx:            turnCtx,
 		toolExecCtx:        toolExecCtx,
 		toolRuntime:        toolRuntime,
@@ -255,7 +249,7 @@ func buildLoopSkillsAndInstructions(
 	turnMessage string,
 	baseInstructions string,
 	specialistSpec *rolectx.Spec,
-	childReports []types.ChildReport,
+	reports []types.ReportDeliveryItem,
 ) (skills.Catalog, []skills.ActivatedSkill, []tools.Definition, map[string]string, string, []string, error) {
 	skillCatalog, err := skills.LoadCatalog(e.globalConfigRoot, in.Session.WorkspaceRoot)
 	if err != nil {
@@ -269,41 +263,28 @@ func buildLoopSkillsAndInstructions(
 	if err != nil {
 		return skills.Catalog{}, nil, nil, nil, "", nil, err
 	}
-	instructionBundle := instructions.Compile(instructions.CompileInput{
+	instructionBundle := instructions.Render(instructions.RenderInput{
 		BaseText:     baseInstructions,
 		Catalog:      skillCatalog,
 		Message:      turnMessage,
 		ActiveSkills: activeSkills,
 	})
-	renderedInstructions := appendChildReportPromptSection(instructionBundle.Render(), childReports)
+	renderedInstructions := appendReportPromptSection(instructionBundle.Render(), reports)
 	return skillCatalog, activeSkills, visibleDefs, injectedEnv, renderedInstructions, instructionBundle.Notices, nil
 }
 
 func persistInitialLoopItems(ctx context.Context, e *Engine, in Input, emitter loopEmitter, state *preparedLoopState) error {
-	if in.Resume == nil && state.turnKind == types.TurnKindUserMessage {
+	if state.turnKind == types.TurnKindUserMessage {
 		userItem := model.UserMessageItem(in.Turn.UserMessage)
 		if err := persistConversationItem(ctx, e.store, state.sessionID, in.Turn.ContextHeadID, in.Turn.ID, state.nextPosition, userItem); err != nil {
 			return emitter.Fail(ctx, err)
 		}
-		state.nextPosition++
-		return nil
-	}
-	if in.Resume != nil {
-		toolResultItem, toolResult := resumeToolResultItem(in.Resume)
-		if err := persistConversationItem(ctx, e.store, state.sessionID, in.Turn.ContextHeadID, in.Turn.ID, state.nextPosition, toolResultItem); err != nil {
-			return emitter.Fail(ctx, err)
-		}
-		state.req.Items = append(state.req.Items, toolResultItem)
-		state.req.ToolResults = append(state.req.ToolResults, toolResult)
 		state.nextPosition++
 	}
 	return nil
 }
 
 func effectivePermissionEngine(base *permissions.Engine, in Input) *permissions.Engine {
-	if in.Resume != nil && strings.TrimSpace(in.Resume.EffectivePermissionProfile) != "" {
-		return permissions.NewEngine(in.Resume.EffectivePermissionProfile)
-	}
 	if strings.TrimSpace(in.Session.PermissionProfile) != "" {
 		return permissions.NewEngine(in.Session.PermissionProfile)
 	}

@@ -16,7 +16,7 @@ func (taskGetTool) IsEnabled(execCtx ExecContext) bool { return execCtx.TaskMana
 func (taskGetTool) Definition() Definition {
 	return Definition{
 		Name:        "task_get",
-		Description: "Read one task's current state and details. Use this to inspect status directly instead of inferring from a task_wait timeout.",
+		Description: "Read one task's current state and details. For agent tasks, use this only for a single status check when the user asks; if still running, answer with the current state and stop instead of polling.",
 		InputSchema: objectSchema(map[string]any{
 			"task_id": map[string]any{
 				"type":        "string",
@@ -67,7 +67,7 @@ func (taskGetTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execCt
 	text := mustJSON(got)
 	modelText := text
 	if got.Type == task.TaskTypeAgent {
-		modelText = text + "\n\nThis is an agent task. Do not call task_wait. Continue the turn and wait for child reports unless you need to inspect logs or the final result with task_output/task_result."
+		modelText = text + "\n\nThis is an agent task. If it is still running, do not call task_wait, repeat task_get/task_output/task_result, or use shell_command sleep to wait. Tell the user the current state and stop; the result returns through reports."
 	}
 	return ToolExecutionResult{
 		Result: Result{Text: text, ModelText: modelText},
@@ -179,7 +179,7 @@ func (taskOutputTool) IsEnabled(execCtx ExecContext) bool { return execCtx.TaskM
 func (taskOutputTool) Definition() Definition {
 	return Definition{
 		Name:        "task_output",
-		Description: "Read raw task output logs to inspect what a running task is doing. This is not a final-result channel.",
+		Description: "Read raw task output logs to inspect what a running task is doing. This is not a final-result channel; do not use it repeatedly to poll an agent task.",
 		InputSchema: objectSchema(map[string]any{
 			"task_id": map[string]any{
 				"type":        "string",
@@ -225,8 +225,13 @@ func (taskOutputTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, exe
 		return ToolExecutionResult{}, err
 	}
 
+	modelText := output
+	if got, err := getTaskForWorkspace(manager, input.TaskID, execCtx.WorkspaceRoot); err == nil && got.Type == task.TaskTypeAgent && got.Status != task.TaskStatusCompleted {
+		modelText = output + "\n\nThis is a running agent task. Do not poll it or sleep waiting for it. Report this progress and stop; the final result returns through reports."
+	}
+
 	return ToolExecutionResult{
-		Result: Result{Text: output, ModelText: output},
+		Result: Result{Text: output, ModelText: modelText},
 		Data: TaskOutputResult{
 			TaskID: input.TaskID,
 			Output: output,
@@ -246,7 +251,7 @@ func (taskWaitTool) IsEnabled(execCtx ExecContext) bool { return execCtx.TaskMan
 func (taskWaitTool) Definition() Definition {
 	return Definition{
 		Name:        "task_wait",
-		Description: "Wait for a non-agent task as a transport-level poll. `timed_out=true` only means this wait call stopped waiting; it does not mean the task failed. `task_wait` is not supported for agent tasks; inspect them with task_get/task_output/task_result or continue and wait for child reports.",
+		Description: "Wait for a non-agent task as a transport-level poll. Never use task_wait for agent or delegated role tasks; their results return through reports.",
 		InputSchema: objectSchema(map[string]any{
 			"task_id": map[string]any{
 				"type":        "string",
@@ -308,7 +313,7 @@ func (taskWaitTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, exe
 	}
 	if current.Type == task.TaskTypeAgent {
 		return ToolExecutionResult{}, fmt.Errorf(
-			"task_wait is not supported for agent tasks; use task_get/task_output/task_result or continue and wait for child reports",
+			"task_wait is not supported for agent tasks; do not poll or sleep waiting for it. Tell the user the current state and stop because the result returns through reports",
 		)
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(input.TimeoutMS)*time.Millisecond)
@@ -349,7 +354,7 @@ func (taskResultTool) IsEnabled(execCtx ExecContext) bool { return execCtx.TaskM
 func (taskResultTool) Definition() Definition {
 	return Definition{
 		Name:        "task_result",
-		Description: "Read the final result of an agent task once it is ready. Unlike task_output, this is the final-result channel.",
+		Description: "Read the final result of an agent task only when it is expected to be ready. If not ready, stop after reporting that the result is pending; do not poll.",
 		InputSchema: objectSchema(map[string]any{
 			"task_id": map[string]any{
 				"type":        "string",
@@ -401,7 +406,7 @@ func (taskResultTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, exe
 		output := TaskResultOutput{TaskID: input.TaskID, Status: taskResultStatusMissing}
 		text := mustJSON(output)
 		return ToolExecutionResult{
-			Result:      Result{Text: text, ModelText: text},
+			Result:      Result{Text: text, ModelText: text + "\n\nThe final result is not ready. Do not poll or sleep waiting for it; report that it is pending and stop."},
 			Data:        output,
 			PreviewText: fmt.Sprintf("Task %s result not available", input.TaskID),
 		}, nil

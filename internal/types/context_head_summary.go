@@ -2,7 +2,7 @@ package types
 
 import "time"
 
-type HeadMemory struct {
+type ContextHeadSummary struct {
 	SessionID      string    `json:"session_id"`
 	ContextHeadID  string    `json:"context_head_id"`
 	WorkspaceRoot  string    `json:"workspace_root,omitempty"`

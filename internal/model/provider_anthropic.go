@@ -14,7 +14,7 @@ import (
 const (
 	defaultAnthropicBaseURL = "https://api.anthropic.com"
 	anthropicVersion        = "2023-06-01"
-	anthropicMaxTokens      = 1024
+	anthropicMaxTokens      = 1_000_000
 )
 
 type Config struct {
@@ -55,7 +55,10 @@ func NewAnthropicProvider(cfg Config) (*AnthropicProvider, error) {
 }
 
 func (p *AnthropicProvider) Capabilities() ProviderCapabilities {
-	return ProviderCapabilities{Profile: CapabilityProfileNone}
+	return ProviderCapabilities{
+		Profile:                             CapabilityProfileNone,
+		RequiresThinkingForToolContinuation: true,
+	}
 }
 
 func (p *AnthropicProvider) Stream(ctx context.Context, req Request) (<-chan StreamEvent, <-chan error) {
@@ -178,6 +181,14 @@ func (p *AnthropicProvider) stream(ctx context.Context, req Request, events chan
 				}); err != nil {
 					return err
 				}
+				if strings.TrimSpace(payload.ContentBlock.Signature) != "" {
+					if err := sendStreamEvent(ctx, events, StreamEvent{
+						Kind:              StreamEventThinkingSignature,
+						ThinkingSignature: payload.ContentBlock.Signature,
+					}); err != nil {
+						return err
+					}
+				}
 			}
 		case "content_block_delta":
 			switch payload.Delta.Type {
@@ -192,6 +203,16 @@ func (p *AnthropicProvider) stream(ctx context.Context, req Request, events chan
 				if err := sendStreamEvent(ctx, events, StreamEvent{
 					Kind:      StreamEventThinkingDelta,
 					TextDelta: payload.Delta.Thinking,
+				}); err != nil {
+					return err
+				}
+			case "signature_delta":
+				if strings.TrimSpace(payload.Delta.Signature) == "" {
+					continue
+				}
+				if err := sendStreamEvent(ctx, events, StreamEvent{
+					Kind:              StreamEventThinkingSignature,
+					ThinkingSignature: payload.Delta.Signature,
 				}); err != nil {
 					return err
 				}
@@ -218,21 +239,15 @@ func (p *AnthropicProvider) stream(ctx context.Context, req Request, events chan
 			if !ok {
 				continue
 			}
-			input := map[string]any{}
-			switch {
-			case strings.TrimSpace(state.Input.String()) != "":
-				if err := json.Unmarshal([]byte(state.Input.String()), &input); err != nil {
-					return fmt.Errorf("decode anthropic tool input: %w", err)
-				}
-			case state.HasInitialInput:
-				input = cloneToolCallInput(state.InitialInput)
-			}
+			input, inputRaw, inputRecovery := finalizeAnthropicToolInput(state)
 			if err := sendStreamEvent(ctx, events, StreamEvent{
 				Kind: StreamEventToolCallEnd,
 				ToolCall: ToolCallChunk{
-					ID:    state.ID,
-					Name:  state.Name,
-					Input: input,
+					ID:            state.ID,
+					Name:          state.Name,
+					Input:         input,
+					InputRaw:      inputRaw,
+					InputRecovery: inputRecovery,
 				},
 			}); err != nil {
 				return err
@@ -264,6 +279,7 @@ type anthropicContentBlock struct {
 	Type      string                `json:"type"`
 	Text      string                `json:"text,omitempty"`
 	Thinking  string                `json:"thinking,omitempty"`
+	Signature string                `json:"signature,omitempty"`
 	Source    *anthropicImageSource `json:"source,omitempty"`
 	ToolUseID string                `json:"tool_use_id,omitempty"`
 	Content   string                `json:"content,omitempty"`
@@ -271,6 +287,22 @@ type anthropicContentBlock struct {
 	ID        string                `json:"id,omitempty"`
 	Name      string                `json:"name,omitempty"`
 	Input     *map[string]any       `json:"input,omitempty"`
+}
+
+func (b anthropicContentBlock) MarshalJSON() ([]byte, error) {
+	if b.Type != "thinking" {
+		type wireBlock anthropicContentBlock
+		return json.Marshal(wireBlock(b))
+	}
+	return json.Marshal(struct {
+		Type      string `json:"type"`
+		Thinking  string `json:"thinking"`
+		Signature string `json:"signature,omitempty"`
+	}{
+		Type:      b.Type,
+		Thinking:  b.Thinking,
+		Signature: b.Signature,
+	})
 }
 
 type anthropicImageSource struct {
@@ -283,6 +315,7 @@ type anthropicDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text"`
 	Thinking    string `json:"thinking"`
+	Signature   string `json:"signature"`
 	PartialJSON string `json:"partial_json"`
 }
 
@@ -293,6 +326,27 @@ type anthropicToolCallState struct {
 	InitialInput    map[string]any
 	HasInitialInput bool
 	HasDelta        bool
+}
+
+func finalizeAnthropicToolInput(state *anthropicToolCallState) (map[string]any, string, string) {
+	if state == nil {
+		return map[string]any{}, "", ""
+	}
+	raw := strings.TrimSpace(state.Input.String())
+	if raw != "" {
+		input := map[string]any{}
+		if err := json.Unmarshal([]byte(raw), &input); err == nil {
+			return input, raw, ""
+		}
+		if state.HasInitialInput {
+			return cloneToolCallInput(state.InitialInput), raw, "used_initial_input_after_invalid_delta_json"
+		}
+		return map[string]any{}, raw, "invalid_delta_json"
+	}
+	if state.HasInitialInput {
+		return cloneToolCallInput(state.InitialInput), "", ""
+	}
+	return map[string]any{}, "", ""
 }
 
 func toAnthropicTools(tools []ToolSchema, choice string) []anthropicTool {
@@ -360,12 +414,13 @@ func toAnthropicMessages(items []ConversationItem) []anthropicMessage {
 				appendMessageBlock("user", block)
 			}
 		case ConversationItemAssistantThinking:
-			if strings.TrimSpace(item.Text) == "" {
+			if strings.TrimSpace(item.Text) == "" && strings.TrimSpace(item.ThinkingSignature) == "" {
 				continue
 			}
 			appendMessageBlock("assistant", anthropicContentBlock{
-				Type:     "thinking",
-				Thinking: item.Text,
+				Type:      "thinking",
+				Thinking:  item.Text,
+				Signature: item.ThinkingSignature,
 			})
 		case ConversationItemAssistantText:
 			if strings.TrimSpace(item.Text) == "" {

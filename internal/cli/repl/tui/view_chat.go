@@ -10,9 +10,9 @@ import (
 // renderChatContent renders the chat view with entries and queue info.
 func (m *Model) renderChatContent(width int) string {
 	parts := []string{}
-	if m.queueSummary.PendingChildReports > 0 {
+	if m.queueSummary.QueuedReports > 0 {
 		parts = append(parts, renderNoticeBlock(
-			fmt.Sprintf("%d child reports queued. See Subagents tab for details.", m.queueSummary.PendingChildReports),
+			fmt.Sprintf("%d reports queued. See Subagents tab for details.", m.queueSummary.QueuedReports),
 			width,
 		))
 	}
@@ -166,8 +166,8 @@ func renderNoticeBlock(text string, width int) string {
 func (m *Model) renderViewportContent() string {
 	contentWidth := max(20, m.viewport.Width-4)
 	switch m.activeView {
-	case ViewMailbox:
-		return m.renderMailboxContent(contentWidth)
+	case ViewReports:
+		return m.renderReportsContent(contentWidth)
 	case ViewCron:
 		return m.renderCronContent(contentWidth)
 	case ViewSubagents:

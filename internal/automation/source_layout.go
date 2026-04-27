@@ -17,7 +17,7 @@ type RoleBoundSourceLayout struct {
 }
 
 func CanonicalRoleBoundAutomationDir(workspaceRoot, owner, automationID string) string {
-	roleID := strings.TrimSpace(strings.TrimPrefix(types.NormalizeAutomationOwner(owner), "role:"))
+	roleID := strings.TrimSpace(strings.TrimPrefix(types.NormalizeRoleAutomationOwner(owner), "role:"))
 	if roleID == "" || strings.TrimSpace(workspaceRoot) == "" || strings.TrimSpace(automationID) == "" {
 		return ""
 	}
@@ -25,7 +25,7 @@ func CanonicalRoleBoundAutomationDir(workspaceRoot, owner, automationID string) 
 }
 
 func CanonicalRoleBoundWatchScriptSelector(owner, automationID string) string {
-	roleID := strings.TrimSpace(strings.TrimPrefix(types.NormalizeAutomationOwner(owner), "role:"))
+	roleID := strings.TrimSpace(strings.TrimPrefix(types.NormalizeRoleAutomationOwner(owner), "role:"))
 	if roleID == "" || strings.TrimSpace(automationID) == "" {
 		return ""
 	}
@@ -33,7 +33,7 @@ func CanonicalRoleBoundWatchScriptSelector(owner, automationID string) string {
 }
 
 func ValidateRoleBoundAutomationSpec(spec types.AutomationSpec) error {
-	if !strings.HasPrefix(types.NormalizeAutomationOwner(spec.Owner), "role:") {
+	if !strings.HasPrefix(types.NormalizeRoleAutomationOwner(spec.Owner), "role:") {
 		return nil
 	}
 	wantSelector := CanonicalRoleBoundWatchScriptSelector(spec.Owner, spec.ID)
@@ -60,7 +60,7 @@ type roleBoundWatchScriptSource struct {
 }
 
 func MaterializeRoleBoundSimpleAutomationSource(workspaceRoot string, input types.SimpleAutomationBuilderInput) (RoleBoundSourceLayout, error) {
-	roleID := strings.TrimSpace(strings.TrimPrefix(types.NormalizeAutomationOwner(input.Owner), "role:"))
+	roleID := strings.TrimSpace(strings.TrimPrefix(types.NormalizeRoleAutomationOwner(input.Owner), "role:"))
 	if roleID == "" {
 		return RoleBoundSourceLayout{}, fmt.Errorf("role-owned automation requires role owner")
 	}
@@ -126,13 +126,13 @@ func roleBoundWatchScriptSourceFromInput(workspaceRoot, watchScript string) (rol
 }
 
 func writeRoleBoundAutomationYAML(path, selector string, input types.SimpleAutomationBuilderInput) error {
-	reportTarget := strings.TrimSpace(input.ReportTarget)
-	if reportTarget == "" {
-		reportTarget = types.NormalizeAutomationOwner(input.Owner)
+	reportTarget, err := normalizeSimpleAutomationMainAgentTarget("report_target", input.ReportTarget)
+	if err != nil {
+		return err
 	}
-	escalationTarget := strings.TrimSpace(input.EscalationTarget)
-	if escalationTarget == "" {
-		escalationTarget = "main_agent"
+	escalationTarget, err := normalizeSimpleAutomationMainAgentTarget("escalation_target", input.EscalationTarget)
+	if err != nil {
+		return err
 	}
 	onSuccess := strings.TrimSpace(input.SimplePolicy.OnSuccess)
 	if onSuccess == "" {
@@ -164,7 +164,7 @@ func writeRoleBoundAutomationYAML(path, selector string, input types.SimpleAutom
 		"automation_id":         strings.TrimSpace(input.AutomationID),
 		"title":                 title,
 		"state":                 "active",
-		"owner":                 types.NormalizeAutomationOwner(input.Owner),
+		"owner":                 types.NormalizeRoleAutomationOwner(input.Owner),
 		"report_target":         reportTarget,
 		"escalation_target":     escalationTarget,
 		"mode":                  "simple",

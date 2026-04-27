@@ -23,7 +23,7 @@ func (automationCreateSimpleTool) IsConcurrencySafe() bool { return false }
 func (automationCreateSimpleTool) Definition() Definition {
 	return Definition{
 		Name:        "automation_create_simple",
-		Description: "Preferred high-level builder for watcher-driven simple automation: watcher script -> pause watcher after dispatch -> owner task -> owner report -> policy-driven watcher resume. Compiles and persists a valid simple-mode automation spec.",
+		Description: "Preferred high-level builder for role-owned watcher automation: role watcher script -> pause watcher after dispatch -> owner role task -> main_agent report -> policy-driven watcher resume. Compiles and persists a valid simple-mode automation spec.",
 		InputSchema: objectSchema(map[string]any{
 			"automation_id": map[string]any{
 				"type":        "string",
@@ -31,7 +31,7 @@ func (automationCreateSimpleTool) Definition() Definition {
 			},
 			"owner": map[string]any{
 				"type":        "string",
-				"description": "Owner target for simple runtime task dispatch. Must be main_agent or role:<role_id>. If owner is role:<role_id>, this tool must be called from that owning specialist role session.",
+				"description": "Owner role for automation source and task dispatch. Must be role:<role_id>, and this tool must be called from that owning specialist role session.",
 			},
 			"watch_script": map[string]any{
 				"type":        "string",
@@ -50,14 +50,6 @@ func (automationCreateSimpleTool) Definition() Definition {
 			"timeout_seconds": map[string]any{
 				"type":        "integer",
 				"description": "Optional watcher command timeout in seconds (default 30).",
-			},
-			"report_target": map[string]any{
-				"type":        "string",
-				"description": "Optional report delivery target. Defaults to owner.",
-			},
-			"escalation_target": map[string]any{
-				"type":        "string",
-				"description": "Optional escalation target. Defaults to main_agent.",
 			},
 			"simple_policy": map[string]any{
 				"type": "object",
@@ -124,17 +116,18 @@ func (automationCreateSimpleTool) ExecuteDecoded(ctx context.Context, decoded De
 	if err := requireOwningRoleAutomationContext(ctx, input.Owner); err != nil {
 		return ToolExecutionResult{}, err
 	}
+	if _, err := automation.CompileSimpleAutomationBuilder(input, execCtx.WorkspaceRoot); err != nil {
+		return ToolExecutionResult{}, err
+	}
 	// Validate the user-provided watcher before writing role-bound source files.
 	if err := automation.ValidateWatcherContract(ctx, input.WatchScript, execCtx.WorkspaceRoot); err != nil {
 		return ToolExecutionResult{}, err
 	}
-	if strings.HasPrefix(types.NormalizeAutomationOwner(input.Owner), "role:") {
-		layout, err := automation.MaterializeRoleBoundSimpleAutomationSource(execCtx.WorkspaceRoot, input)
-		if err != nil {
-			return ToolExecutionResult{}, err
-		}
-		input.WatchScript = layout.Selector
+	layout, err := automation.MaterializeRoleBoundSimpleAutomationSource(execCtx.WorkspaceRoot, input)
+	if err != nil {
+		return ToolExecutionResult{}, err
 	}
+	input.WatchScript = layout.Selector
 	spec, err := automation.CompileSimpleAutomationBuilder(input, execCtx.WorkspaceRoot)
 	if err != nil {
 		return ToolExecutionResult{}, err
@@ -178,9 +171,9 @@ func isAutomationOwnerTaskMode(execCtx ExecContext) bool {
 }
 
 func requireOwningRoleAutomationContext(ctx context.Context, owner string) error {
-	normalizedOwner := types.NormalizeAutomationOwner(owner)
+	normalizedOwner := types.NormalizeRoleAutomationOwner(owner)
 	if !strings.HasPrefix(normalizedOwner, "role:") {
-		return nil
+		return fmt.Errorf("role-owned automation owner must be role:<role_id>")
 	}
 	ownerRoleID := strings.TrimSpace(strings.TrimPrefix(normalizedOwner, "role:"))
 	currentRoleID := strings.TrimSpace(rolectx.SpecialistRoleIDFromContext(ctx))

@@ -39,12 +39,13 @@ type ArtifactRef struct {
 
 type ToolExecutionResult struct {
 	Result
-	Data        any
-	PreviewText string
-	Artifacts   []ArtifactRef
-	Metadata    map[string]any
-	NewItems    []model.ConversationItem
-	Interrupt   *ToolInterrupt
+	Data         any
+	PreviewText  string
+	Artifacts    []ArtifactRef
+	Metadata     map[string]any
+	NewItems     []model.ConversationItem
+	Interrupt    *ToolInterrupt
+	CompleteTurn bool
 }
 
 type ModelToolResult struct {
@@ -156,4 +157,13 @@ type permissionAwareTool interface {
 
 type modelResultMapper interface {
 	MapModelResult(ToolExecutionResult) ModelToolResult
+}
+
+type turnCompletingTool interface {
+	CompletesTurnOnSuccess() bool
+}
+
+func CompletesTurnOnSuccess(tool Tool) bool {
+	terminal, ok := tool.(turnCompletingTool)
+	return ok && terminal.CompletesTurnOnSuccess()
 }

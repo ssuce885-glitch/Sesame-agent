@@ -14,7 +14,7 @@ import (
 )
 
 func durableWorkspaceMemoryID(workspaceRoot string) string {
-	return durableWorkspaceOverviewID(workspaceRoot)
+	return durableWorkspaceOverviewID(workspaceRoot, "")
 }
 
 func durableWorkspaceMemoryPrefix(workspaceRoot string) string {
@@ -42,20 +42,28 @@ func findMemoryEntry(entries []types.MemoryEntry, scope types.MemoryScope, kind 
 	return types.MemoryEntry{}, false
 }
 
-func buildMemoryRefs(entries []types.MemoryEntry, sessionMemoryPresent bool, workspaceRoot string, query string) []string {
+func buildMemoryRefs(entries []types.MemoryEntry, contextHeadSummaryPresent bool, workspaceRoot string, query string) []string {
+	refs, _ := buildMemoryRefsAndUsage(entries, contextHeadSummaryPresent, workspaceRoot, query)
+	return refs
+}
+
+func buildMemoryRefsAndUsage(entries []types.MemoryEntry, contextHeadSummaryPresent bool, workspaceRoot string, query string) ([]string, []string) {
 	recalled := memory.Recall(query, entries, memoryRecallCandidateLimit)
 	out := make([]string, 0, 1+workspaceDetailRecallMaxCount+globalMemoryRecallMaxCount)
 	seen := map[string]struct{}{}
+	usedMemoryIDs := make([]string, 0, len(recalled)+1)
+	seenMemoryIDs := map[string]struct{}{}
 	workspaceDetailTokens := 0
 	globalTokens := 0
 	workspaceDetailCount := 0
 	globalCount := 0
 
-	if !sessionMemoryPresent {
+	if !contextHeadSummaryPresent {
 		if workspaceMemory, ok := findMemoryEntry(entries, types.MemoryScopeWorkspace, types.MemoryKindWorkspaceOverview, workspaceRoot); ok {
 			ref := strings.TrimSpace(workspaceMemory.Content)
 			if allowMemoryRef(ref, seen, 0, workspaceOverviewTokenBudget) {
 				out = append(out, ref)
+				usedMemoryIDs = appendMemoryUsageID(usedMemoryIDs, seenMemoryIDs, workspaceMemory)
 			}
 		}
 	}
@@ -68,11 +76,12 @@ func buildMemoryRefs(entries []types.MemoryEntry, sessionMemoryPresent bool, wor
 
 		switch {
 		case entry.Scope == types.MemoryScopeWorkspace && entry.Kind == types.MemoryKindWorkspaceOverview:
-			if sessionMemoryPresent {
+			if contextHeadSummaryPresent {
 				continue
 			}
 			if allowMemoryRef(ref, seen, 0, workspaceOverviewTokenBudget) {
 				out = append(out, ref)
+				usedMemoryIDs = appendMemoryUsageID(usedMemoryIDs, seenMemoryIDs, entry)
 			}
 		case entry.Scope == types.MemoryScopeGlobal && entry.Kind == types.MemoryKindGlobalPreference:
 			if globalCount >= globalMemoryRecallMaxCount {
@@ -87,6 +96,7 @@ func buildMemoryRefs(entries []types.MemoryEntry, sessionMemoryPresent bool, wor
 			}
 			seen[ref] = struct{}{}
 			out = append(out, ref)
+			usedMemoryIDs = appendMemoryUsageID(usedMemoryIDs, seenMemoryIDs, entry)
 			globalCount++
 			globalTokens += cost
 		case entry.Scope == types.MemoryScopeWorkspace && isWorkspaceDetailMemoryKind(entry.Kind):
@@ -102,12 +112,25 @@ func buildMemoryRefs(entries []types.MemoryEntry, sessionMemoryPresent bool, wor
 			}
 			seen[ref] = struct{}{}
 			out = append(out, ref)
+			usedMemoryIDs = appendMemoryUsageID(usedMemoryIDs, seenMemoryIDs, entry)
 			workspaceDetailCount++
 			workspaceDetailTokens += cost
 		}
 	}
 
-	return dedupeSummaryStrings(out)
+	return dedupeSummaryStrings(out), usedMemoryIDs
+}
+
+func appendMemoryUsageID(ids []string, seen map[string]struct{}, entry types.MemoryEntry) []string {
+	id := strings.TrimSpace(entry.ID)
+	if id == "" {
+		return ids
+	}
+	if _, ok := seen[id]; ok {
+		return ids
+	}
+	seen[id] = struct{}{}
+	return append(ids, id)
 }
 
 func allowMemoryRef(ref string, seen map[string]struct{}, usedTokens int, tokenBudget int) bool {
@@ -133,7 +156,7 @@ func estimateMemoryRefTokens(ref string) int {
 	return contextstate.EstimatePromptTokens("", nil, SummaryBundle{}, []string{ref})
 }
 
-func buildWorkspaceDurableMemory(memoryRecord types.HeadMemory, summary model.Summary) (types.MemoryEntry, bool) {
+func buildWorkspaceDurableMemory(memoryRecord types.ContextHeadSummary, summary model.Summary, roleID string) (types.MemoryEntry, bool) {
 	workspaceRoot := strings.TrimSpace(memoryRecord.WorkspaceRoot)
 	if workspaceRoot == "" || isZeroSummary(summary) {
 		return types.MemoryEntry{}, false
@@ -146,12 +169,15 @@ func buildWorkspaceDurableMemory(memoryRecord types.HeadMemory, summary model.Su
 
 	now := time.Now().UTC()
 	return types.MemoryEntry{
-		ID:                  durableWorkspaceOverviewID(workspaceRoot),
+		ID:                  durableWorkspaceOverviewID(workspaceRoot, roleID),
 		Scope:               types.MemoryScopeWorkspace,
 		Kind:                types.MemoryKindWorkspaceOverview,
 		WorkspaceID:         workspaceRoot,
 		SourceSessionID:     memoryRecord.SessionID,
 		SourceContextHeadID: memoryRecord.ContextHeadID,
+		OwnerRoleID:         roleID,
+		Visibility:          types.MemoryVisibilityShared,
+		Status:              types.MemoryStatusActive,
 		Content:             content,
 		SourceRefs:          dedupeSummaryStrings([]string{"session:" + memoryRecord.SessionID, "head:" + memoryRecord.ContextHeadID, "turn:" + memoryRecord.SourceTurnID}),
 		Confidence:          0.85,
@@ -160,7 +186,7 @@ func buildWorkspaceDurableMemory(memoryRecord types.HeadMemory, summary model.Su
 	}, true
 }
 
-func buildWorkspaceDetailMemories(memoryRecord types.HeadMemory, summary model.Summary) []types.MemoryEntry {
+func buildWorkspaceDetailMemories(memoryRecord types.ContextHeadSummary, summary model.Summary, roleID string) []types.MemoryEntry {
 	workspaceRoot := strings.TrimSpace(memoryRecord.WorkspaceRoot)
 	if workspaceRoot == "" || isZeroSummary(summary) {
 		return nil
@@ -190,13 +216,25 @@ func buildWorkspaceDetailMemories(memoryRecord types.HeadMemory, summary model.S
 			if content == "" {
 				continue
 			}
+			detailVisibility := types.MemoryVisibilityShared
+			if roleID != "" {
+				// Detail memories (file focus, open threads, tool outcomes) are
+				// role-private by default: a specialist's internal observations
+				// should not leak into another role's context. The workspace
+				// overview (buildWorkspaceDurableMemory) remains shared so that
+				// main_parent and peer roles see a summary, but not raw details.
+				detailVisibility = types.MemoryVisibilityPrivate
+			}
 			out = append(out, types.MemoryEntry{
-				ID:                  durableWorkspaceDetailID(workspaceRoot, bucket.kind, content),
+				ID:                  durableWorkspaceDetailID(workspaceRoot, roleID, bucket.kind, content),
 				Scope:               types.MemoryScopeWorkspace,
 				Kind:                durableWorkspaceDetailKind(bucket.kind),
 				WorkspaceID:         workspaceRoot,
 				SourceSessionID:     memoryRecord.SessionID,
 				SourceContextHeadID: memoryRecord.ContextHeadID,
+				OwnerRoleID:         roleID,
+				Visibility:          detailVisibility,
+				Status:              types.MemoryStatusActive,
 				Content:             bucket.prefix + content,
 				SourceRefs:          dedupeSummaryStrings([]string{"session:" + memoryRecord.SessionID, "head:" + memoryRecord.ContextHeadID, "turn:" + memoryRecord.SourceTurnID}),
 				Confidence:          0.8,
@@ -232,21 +270,34 @@ func formatWorkspaceDurableMemory(summary model.Summary) string {
 	return "[Workspace durable memory]\n" + strings.Join(parts, "\n")
 }
 
-func durableWorkspaceOverviewID(workspaceRoot string) string {
-	prefix := durableWorkspaceMemoryPrefix(workspaceRoot)
+func durableWorkspaceOverviewID(workspaceRoot string, roleID string) string {
+	prefix := durableWorkspaceOwnerPrefix(workspaceRoot, roleID)
 	if prefix == "" {
 		return ""
 	}
 	return prefix + "_overview"
 }
 
-func durableWorkspaceDetailID(workspaceRoot string, kind string, content string) string {
-	prefix := durableWorkspaceMemoryPrefix(workspaceRoot)
+func durableWorkspaceDetailID(workspaceRoot string, roleID string, kind string, content string) string {
+	prefix := durableWorkspaceOwnerPrefix(workspaceRoot, roleID)
 	if prefix == "" {
 		return ""
 	}
 	sum := sha1.Sum([]byte(strings.TrimSpace(strings.ToLower(content))))
 	return prefix + "_" + kind + "_" + hex.EncodeToString(sum[:6])
+}
+
+func durableWorkspaceOwnerPrefix(workspaceRoot string, roleID string) string {
+	prefix := durableWorkspaceMemoryPrefix(workspaceRoot)
+	if prefix == "" {
+		return ""
+	}
+	roleID = strings.TrimSpace(roleID)
+	if roleID == "" {
+		return prefix
+	}
+	sum := sha1.Sum([]byte(roleID))
+	return prefix + "_role_" + hex.EncodeToString(sum[:6])
 }
 
 func durableWorkspaceDetailKind(kind string) types.MemoryKind {
@@ -287,7 +338,7 @@ func isWorkspaceDetailMemoryKind(kind types.MemoryKind) bool {
 	}
 }
 
-func buildGlobalDurableMemories(memoryRecord types.HeadMemory, summary model.Summary) []types.MemoryEntry {
+func buildGlobalDurableMemories(memoryRecord types.ContextHeadSummary, summary model.Summary, roleID string) []types.MemoryEntry {
 	candidates := durableGlobalCandidates(summary)
 	if len(candidates) == 0 {
 		return nil
@@ -309,6 +360,9 @@ func buildGlobalDurableMemories(memoryRecord types.HeadMemory, summary model.Sum
 			WorkspaceID:         "",
 			SourceSessionID:     memoryRecord.SessionID,
 			SourceContextHeadID: memoryRecord.ContextHeadID,
+			OwnerRoleID:         "",
+			Visibility:          types.MemoryVisibilityShared,
+			Status:              types.MemoryStatusActive,
 			Content:             "[Global durable memory] " + candidate,
 			SourceRefs:          dedupeSummaryStrings([]string{"session:" + memoryRecord.SessionID, "head:" + memoryRecord.ContextHeadID, "turn:" + memoryRecord.SourceTurnID}),
 			Confidence:          0.9,
@@ -319,13 +373,18 @@ func buildGlobalDurableMemories(memoryRecord types.HeadMemory, summary model.Sum
 	return out
 }
 
-func pruneWorkspaceDurableMemories(ctx context.Context, store ConversationStore, workspaceRoot string, desired []types.MemoryEntry) (int, error) {
+type visibleMemoryStore interface {
+	ListVisibleMemoryEntries(context.Context, string, string) ([]types.MemoryEntry, error)
+	DeleteMemoryEntries(context.Context, []string) error
+}
+
+func pruneWorkspaceDurableMemories(ctx context.Context, store visibleMemoryStore, workspaceRoot, roleID string, desired []types.MemoryEntry) (int, error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if store == nil || workspaceRoot == "" {
 		return 0, nil
 	}
 
-	existing, err := store.ListMemoryEntriesByWorkspace(ctx, workspaceRoot)
+	existing, err := store.ListVisibleMemoryEntries(ctx, workspaceRoot, roleID)
 	if err != nil {
 		return 0, err
 	}
@@ -340,6 +399,9 @@ func pruneWorkspaceDurableMemories(ctx context.Context, store ConversationStore,
 
 	stale := make([]string, 0, len(existing))
 	for _, entry := range existing {
+		if strings.TrimSpace(entry.OwnerRoleID) != strings.TrimSpace(roleID) {
+			continue
+		}
 		if !isWorkspaceDurableMemoryEntry(entry, workspaceRoot) {
 			continue
 		}

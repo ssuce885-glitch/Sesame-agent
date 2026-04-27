@@ -7,16 +7,17 @@ import (
 
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/model"
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/types"
 )
 
-func maybeRefreshHeadMemory(ctx context.Context, e *Engine, in Input) error {
-	_, err := refreshHeadMemory(ctx, e, in)
+func maybeRefreshContextHeadSummary(ctx context.Context, e *Engine, in Input) error {
+	_, err := refreshContextHeadSummary(ctx, e, in)
 	return err
 }
 
-func refreshHeadMemory(ctx context.Context, e *Engine, in Input) (headMemoryRefreshReport, error) {
-	report := headMemoryRefreshReport{}
+func refreshContextHeadSummary(ctx context.Context, e *Engine, in Input) (contextHeadSummaryRefreshReport, error) {
+	report := contextHeadSummaryRefreshReport{}
 	if e == nil || e.store == nil || e.compactor == nil {
 		return report, nil
 	}
@@ -53,7 +54,7 @@ func refreshHeadMemory(ctx context.Context, e *Engine, in Input) (headMemoryRefr
 	timelineItems = timelineItems[:safeEnd]
 	items = items[:safeEnd]
 
-	existing, hasExisting, err := e.store.GetHeadMemory(ctx, sessionID, contextHeadID)
+	existing, hasExisting, err := e.store.GetContextHeadSummary(ctx, sessionID, contextHeadID)
 	if err != nil {
 		return report, err
 	}
@@ -64,11 +65,11 @@ func refreshHeadMemory(ctx context.Context, e *Engine, in Input) (headMemoryRefr
 		if existing.UpToItemID < 0 {
 			hasExisting = false
 		} else {
-			start = headMemoryStartIndexForUpToItemID(timelineItems, existing.UpToItemID)
+			start = contextHeadSummaryStartIndexForUpToItemID(timelineItems, existing.UpToItemID)
 			if existing.UpToItemID > 0 && start == 0 && timelineItems[0].ItemID > existing.UpToItemID {
 				hasExisting = false
 			}
-			if summary, ok, err := decodeSessionMemorySummary(existing.SummaryPayload); err != nil {
+			if summary, ok, err := decodeContextHeadSummaryPayload(existing.SummaryPayload); err != nil {
 				return report, err
 			} else if ok {
 				existingSummary = &summary
@@ -77,11 +78,11 @@ func refreshHeadMemory(ctx context.Context, e *Engine, in Input) (headMemoryRefr
 	}
 
 	freshItems := cloneConversationItemsForPrompt(items[start:])
-	if !shouldRefreshSessionMemory(hasExisting, freshItems) {
+	if !shouldRefreshContextHeadSummary(hasExisting, freshItems) {
 		return report, nil
 	}
 
-	compactInput := buildSessionMemoryCompactionInput(existingSummary, freshItems)
+	compactInput := buildContextHeadSummaryCompactionInput(existingSummary, freshItems)
 	if len(compactInput) == 0 {
 		return report, nil
 	}
@@ -94,26 +95,26 @@ func refreshHeadMemory(ctx context.Context, e *Engine, in Input) (headMemoryRefr
 		return report, nil
 	}
 	if strings.TrimSpace(summary.RangeLabel) == "" {
-		summary.RangeLabel = sessionMemoryRangeLabel
+		summary.RangeLabel = contextHeadSummaryRangeLabel
 	}
 	upToItemID := timelineItems[len(timelineItems)-1].ItemID
 
 	now := time.Now().UTC()
-	record := types.HeadMemory{
+	record := types.ContextHeadSummary{
 		SessionID:      sessionID,
 		ContextHeadID:  contextHeadID,
 		WorkspaceRoot:  in.Session.WorkspaceRoot,
 		SourceTurnID:   in.Turn.ID,
 		UpToItemID:     upToItemID,
 		ItemCount:      safeEnd,
-		SummaryPayload: encodeSessionMemorySummary(summary),
+		SummaryPayload: encodeContextHeadSummaryPayload(summary),
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
 	if hasExisting && !existing.CreatedAt.IsZero() {
 		record.CreatedAt = existing.CreatedAt
 	}
-	if err := e.store.UpsertHeadMemory(ctx, record); err != nil {
+	if err := e.store.UpsertContextHeadSummary(ctx, record); err != nil {
 		return report, err
 	}
 	report.Updated = true
@@ -126,21 +127,23 @@ func refreshHeadMemory(ctx context.Context, e *Engine, in Input) (headMemoryRefr
 		return report, nil
 	}
 
+	roleID := resolveMemoryRoleID(ctx, in)
+
 	workspaceEntries := make([]types.MemoryEntry, 0, 1+durableWorkspaceDetailCapPerKind*4)
-	if workspaceMemory, ok := buildWorkspaceDurableMemory(record, summary); ok {
+	if workspaceMemory, ok := buildWorkspaceDurableMemory(record, summary, roleID); ok {
 		workspaceEntries = append(workspaceEntries, workspaceMemory)
 	}
-	workspaceEntries = append(workspaceEntries, buildWorkspaceDetailMemories(record, summary)...)
+	workspaceEntries = append(workspaceEntries, buildWorkspaceDetailMemories(record, summary, roleID)...)
 	for _, entry := range workspaceEntries {
 		if err := e.store.UpsertMemoryEntry(ctx, entry); err == nil {
 			report.WorkspaceEntriesUpserted++
 		}
 	}
-	if pruned, err := pruneWorkspaceDurableMemories(ctx, e.store, record.WorkspaceRoot, workspaceEntries); err == nil {
+	if pruned, err := pruneWorkspaceDurableMemories(ctx, e.store, record.WorkspaceRoot, roleID, workspaceEntries); err == nil {
 		report.WorkspaceEntriesPruned = pruned
 	}
 
-	for _, globalMemory := range buildGlobalDurableMemories(record, summary) {
+	for _, globalMemory := range buildGlobalDurableMemories(record, summary, roleID) {
 		if err := e.store.UpsertMemoryEntry(ctx, globalMemory); err == nil {
 			report.GlobalEntriesUpserted++
 		}
@@ -154,31 +157,31 @@ func shouldPromoteHeadToDurableMemory(headID string, canonicalHeadID string) boo
 	return headID != "" && headID == canonicalHeadID
 }
 
-func shouldRefreshSessionMemory(hasExisting bool, freshItems []model.ConversationItem) bool {
+func shouldRefreshContextHeadSummary(hasExisting bool, freshItems []model.ConversationItem) bool {
 	if len(freshItems) == 0 {
 		return false
 	}
 
 	estimatedTokens := contextstate.EstimatePromptTokens("", freshItems, SummaryBundle{}, nil)
-	signals := countSessionMemorySignals(freshItems)
+	signals := countContextHeadSummarySignals(freshItems)
 	if hasExisting {
-		return len(freshItems) >= sessionMemoryUpdateMinItems ||
-			estimatedTokens >= sessionMemoryUpdateMinTokens ||
-			signals >= sessionMemorySignalThreshold
+		return len(freshItems) >= contextHeadSummaryUpdateMinItems ||
+			estimatedTokens >= contextHeadSummaryUpdateMinTokens ||
+			signals >= contextHeadSummarySignalThreshold
 	}
-	return len(freshItems) >= sessionMemoryBootstrapMinItems ||
-		estimatedTokens >= sessionMemoryBootstrapMinTokens ||
-		signals >= sessionMemorySignalThreshold
+	return len(freshItems) >= contextHeadSummaryBootstrapMinItems ||
+		estimatedTokens >= contextHeadSummaryBootstrapMinTokens ||
+		signals >= contextHeadSummarySignalThreshold
 }
 
-func countSessionMemorySignals(items []model.ConversationItem) int {
+func countContextHeadSummarySignals(items []model.ConversationItem) int {
 	signals := 0
 	for _, item := range items {
 		switch item.Kind {
 		case model.ConversationItemToolCall, model.ConversationItemToolResult, model.ConversationItemSummary:
 			signals++
 		case model.ConversationItemAssistantText, model.ConversationItemAssistantThinking:
-			if len(strings.TrimSpace(item.Text)) >= sessionMemoryLongAssistantChars {
+			if len(strings.TrimSpace(item.Text)) >= contextHeadSummaryLongAssistantChars {
 				signals++
 			}
 		}
@@ -186,10 +189,10 @@ func countSessionMemorySignals(items []model.ConversationItem) int {
 	return signals
 }
 
-func buildSessionMemoryCompactionInput(existing *model.Summary, freshItems []model.ConversationItem) []model.ConversationItem {
+func buildContextHeadSummaryCompactionInput(existing *model.Summary, freshItems []model.ConversationItem) []model.ConversationItem {
 	out := make([]model.ConversationItem, 0, len(freshItems)+1)
 	if existing != nil && !isZeroSummary(*existing) {
-		summary := cloneSummaryForSessionMemory(*existing)
+		summary := cloneSummaryForContextHeadSummary(*existing)
 		out = append(out, model.ConversationItem{
 			Kind:    model.ConversationItemSummary,
 			Summary: &summary,
@@ -207,7 +210,7 @@ func sessionIDForInput(in Input) string {
 	return strings.TrimSpace(in.Session.ID)
 }
 
-func headMemoryKeyForInput(in Input) string {
+func contextHeadSummaryKeyForInput(in Input) string {
 	sessionID := sessionIDForInput(in)
 	headID := strings.TrimSpace(in.Turn.ContextHeadID)
 	if sessionID == "" || headID == "" {
@@ -216,17 +219,17 @@ func headMemoryKeyForInput(in Input) string {
 	return sessionID + ":" + headID
 }
 
-func runObservedHeadMemoryRefresh(ctx context.Context, e *Engine, in Input, async bool) error {
+func runObservedContextHeadSummaryRefresh(ctx context.Context, e *Engine, in Input, async bool) error {
 	ctx = context.WithoutCancel(ctx)
-	_ = emitHeadMemoryEvent(ctx, in, types.EventHeadMemoryStarted, types.HeadMemoryEventPayload{
+	_ = emitContextHeadSummaryEvent(ctx, in, types.EventContextHeadSummaryStarted, types.ContextHeadSummaryEventPayload{
 		SourceTurnID:  in.Turn.ID,
 		WorkspaceRoot: in.Session.WorkspaceRoot,
 		Async:         async,
 	})
 
-	report, err := refreshHeadMemory(ctx, e, in)
+	report, err := refreshContextHeadSummary(ctx, e, in)
 	if err != nil {
-		_ = emitHeadMemoryEvent(ctx, in, types.EventHeadMemoryFailed, types.HeadMemoryEventPayload{
+		_ = emitContextHeadSummaryEvent(ctx, in, types.EventContextHeadSummaryFailed, types.ContextHeadSummaryEventPayload{
 			SourceTurnID:  in.Turn.ID,
 			WorkspaceRoot: in.Session.WorkspaceRoot,
 			Async:         async,
@@ -235,7 +238,7 @@ func runObservedHeadMemoryRefresh(ctx context.Context, e *Engine, in Input, asyn
 		return err
 	}
 
-	_ = emitHeadMemoryEvent(ctx, in, types.EventHeadMemoryCompleted, types.HeadMemoryEventPayload{
+	_ = emitContextHeadSummaryEvent(ctx, in, types.EventContextHeadSummaryCompleted, types.ContextHeadSummaryEventPayload{
 		SourceTurnID:             in.Turn.ID,
 		WorkspaceRoot:            in.Session.WorkspaceRoot,
 		Async:                    async,
@@ -247,7 +250,7 @@ func runObservedHeadMemoryRefresh(ctx context.Context, e *Engine, in Input, asyn
 	return nil
 }
 
-func emitHeadMemoryEvent(ctx context.Context, in Input, eventType string, payload types.HeadMemoryEventPayload) error {
+func emitContextHeadSummaryEvent(ctx context.Context, in Input, eventType string, payload types.ContextHeadSummaryEventPayload) error {
 	if in.Sink == nil {
 		return nil
 	}
@@ -258,47 +261,58 @@ func emitHeadMemoryEvent(ctx context.Context, in Input, eventType string, payloa
 	return in.Sink.Emit(ctx, event)
 }
 
-func startAsyncHeadMemoryRefresh(ctx context.Context, e *Engine, in Input) {
+func startAsyncContextHeadSummaryRefresh(ctx context.Context, e *Engine, in Input) {
 	if e == nil {
 		return
 	}
-	headKey := headMemoryKeyForInput(in)
+	headKey := contextHeadSummaryKeyForInput(in)
 	if headKey == "" {
 		return
 	}
 
-	e.headMemoryMu.Lock()
-	if e.headMemoryRunning == nil {
-		e.headMemoryRunning = make(map[string]bool)
+	e.contextHeadSummaryMu.Lock()
+	if e.contextHeadSummaryRunning == nil {
+		e.contextHeadSummaryRunning = make(map[string]bool)
 	}
-	if e.headMemoryPending == nil {
-		e.headMemoryPending = make(map[string]Input)
+	if e.contextHeadSummaryPending == nil {
+		e.contextHeadSummaryPending = make(map[string]Input)
 	}
-	if e.headMemoryRunning[headKey] {
-		e.headMemoryPending[headKey] = in
-		e.headMemoryMu.Unlock()
+	if e.contextHeadSummaryRunning[headKey] {
+		e.contextHeadSummaryPending[headKey] = in
+		e.contextHeadSummaryMu.Unlock()
 		return
 	}
-	e.headMemoryRunning[headKey] = true
-	e.headMemoryMu.Unlock()
+	e.contextHeadSummaryRunning[headKey] = true
+	e.contextHeadSummaryMu.Unlock()
 
-	e.headMemoryWG.Add(1)
+	e.contextHeadSummaryWG.Add(1)
 	go func(current Input) {
-		defer e.headMemoryWG.Done()
+		defer e.contextHeadSummaryWG.Done()
 		for {
-			_ = runObservedHeadMemoryRefresh(ctx, e, current, true)
+			_ = runObservedContextHeadSummaryRefresh(ctx, e, current, true)
 
-			e.headMemoryMu.Lock()
-			next, ok := e.headMemoryPending[headKey]
+			e.contextHeadSummaryMu.Lock()
+			next, ok := e.contextHeadSummaryPending[headKey]
 			if ok {
-				delete(e.headMemoryPending, headKey)
-				e.headMemoryMu.Unlock()
+				delete(e.contextHeadSummaryPending, headKey)
+				e.contextHeadSummaryMu.Unlock()
 				current = next
 				continue
 			}
-			delete(e.headMemoryRunning, headKey)
-			e.headMemoryMu.Unlock()
+			delete(e.contextHeadSummaryRunning, headKey)
+			e.contextHeadSummaryMu.Unlock()
 			return
 		}
 	}(in)
+}
+
+// resolveMemoryRoleID returns the role ID that should own new memory entries.
+// For specialist sessions, the role ID comes from the context (set by the daemon
+// when it dispatches a task to a role). For main_parent sessions, memory is
+// written with workspace/global scope and no role owner.
+func resolveMemoryRoleID(ctx context.Context, in Input) string {
+	if specialistID := rolectx.SpecialistRoleIDFromContext(ctx); specialistID != "" {
+		return specialistID
+	}
+	return ""
 }

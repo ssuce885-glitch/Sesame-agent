@@ -15,9 +15,9 @@ type Message struct {
 }
 
 type SummaryBundle struct {
-	HeadMemory *model.Summary  `json:"head_memory,omitempty"`
-	Boundary   *model.Summary  `json:"boundary,omitempty"`
-	Rolling    []model.Summary `json:"rolling,omitempty"`
+	ContextHeadSummary *model.Summary  `json:"context_head_summary,omitempty"`
+	Boundary           *model.Summary  `json:"boundary,omitempty"`
+	Rolling            []model.Summary `json:"rolling,omitempty"`
 }
 
 type WorkingContext struct {
@@ -85,10 +85,10 @@ func cloneSummaries(summaries []model.Summary) []model.Summary {
 }
 
 func cloneSummaryBundle(bundle SummaryBundle) SummaryBundle {
-	var headMemory *model.Summary
-	if bundle.HeadMemory != nil {
-		summary := cloneSummary(*bundle.HeadMemory)
-		headMemory = &summary
+	var contextHeadSummary *model.Summary
+	if bundle.ContextHeadSummary != nil {
+		summary := cloneSummary(*bundle.ContextHeadSummary)
+		contextHeadSummary = &summary
 	}
 
 	var boundary *model.Summary
@@ -98,16 +98,16 @@ func cloneSummaryBundle(bundle SummaryBundle) SummaryBundle {
 	}
 
 	return SummaryBundle{
-		HeadMemory: headMemory,
-		Boundary:   boundary,
-		Rolling:    cloneSummaries(bundle.Rolling),
+		ContextHeadSummary: contextHeadSummary,
+		Boundary:           boundary,
+		Rolling:            cloneSummaries(bundle.Rolling),
 	}
 }
 
 func flattenSummaryBundle(bundle SummaryBundle) []model.Summary {
 	out := make([]model.Summary, 0, 2+len(bundle.Rolling))
-	if bundle.HeadMemory != nil {
-		out = append(out, cloneSummary(*bundle.HeadMemory))
+	if bundle.ContextHeadSummary != nil {
+		out = append(out, cloneSummary(*bundle.ContextHeadSummary))
 	}
 	if bundle.Boundary != nil {
 		out = append(out, cloneSummary(*bundle.Boundary))

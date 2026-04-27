@@ -39,11 +39,15 @@ func (s *Store) EnsureRoleSession(ctx context.Context, workspaceRoot string, rol
 func (s *Store) EnsureSpecialistSession(ctx context.Context, workspaceRoot, roleID, systemPrompt string, skillNames []string) (types.Session, types.ContextHead, bool, error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	roleID = normalizeSpecialistRoleID(roleID)
+	systemPrompt = strings.TrimSpace(systemPrompt)
 	if workspaceRoot == "" {
 		return types.Session{}, types.ContextHead{}, false, errors.New("workspace root is required")
 	}
 	if roleID == "" {
 		return types.Session{}, types.ContextHead{}, false, errors.New("specialist role id is required")
+	}
+	if systemPrompt == "" {
+		return types.Session{}, types.ContextHead{}, false, errors.New("specialist role prompt is required")
 	}
 	_ = skillNames
 

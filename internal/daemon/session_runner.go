@@ -13,7 +13,6 @@ import (
 	"go-agent/internal/session"
 	"go-agent/internal/sessionbinding"
 	"go-agent/internal/sessionrole"
-	"go-agent/internal/store/sqlite"
 	"go-agent/internal/task"
 	"go-agent/internal/types"
 	"go-agent/internal/workspace"
@@ -22,10 +21,17 @@ import (
 type sessionRunnerAdapter struct {
 	engine   *engine.Engine
 	sink     storeAndBusSink
-	store    *sqlite.Store
+	store    sessionRunnerStore
 	tasker   *task.Manager
 	notifier *taskTerminalNotifier
 	now      func() time.Time
+}
+
+type sessionRunnerStore interface {
+	ResolveSessionRole(context.Context, string, string) (types.SessionRole, error)
+	ResolveSpecialistRoleID(context.Context, string, string) (string, error)
+	GetCurrentContextHeadID(context.Context) (string, bool, error)
+	GetTurn(context.Context, string) (types.Turn, bool, error)
 }
 
 type taskEventSink struct {
@@ -87,11 +93,11 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 			in.Turn.ContextHeadID = strings.TrimSpace(headID)
 		}
 	}
-	if resumeTaskObserver, ok, err := a.taskObserverForResume(in.Resume); err != nil {
-		return err
-	} else if ok {
-		taskObserver = resumeTaskObserver
-		observers = append(observers, taskObserver)
+	if in.TaskObserver != nil {
+		if taskObserver == nil {
+			taskObserver = in.TaskObserver
+		}
+		observers = append(observers, in.TaskObserver)
 	}
 	if len(observers) > 0 {
 		observer := task.AgentTaskObserver(multiTaskObserver{observers: observers})
@@ -104,20 +110,18 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 	}
 
 	err = a.engine.RunTurn(runCtx, engine.Input{
-		Session:     in.Session,
-		SessionRole: sessionrole.Normalize(string(role)),
-		Turn:        in.Turn,
-		TaskID:      firstNonEmptyTrimmed(taskIDFromResume(in.Resume)),
-		Sink:        sink,
-		Resume:      in.Resume,
+		Session:             in.Session,
+		SessionRole:         sessionrole.Normalize(string(role)),
+		Turn:                in.Turn,
+		TaskID:              strings.TrimSpace(in.TaskID),
+		Sink:                sink,
+		ActivatedSkillNames: append([]string(nil), in.ActivatedSkillNames...),
 	})
 	if observerSink != nil && len(observers) > 0 && err == nil {
 		finalObserverText = strings.TrimSpace(observerSink.FinalText())
-		if in.Resume != nil && finalObserverText != "" {
-			taskCompleted = true
-		} else if turn, ok, turnErr := a.store.GetTurn(runCtx, in.Turn.ID); turnErr != nil {
+		if _, ok, turnErr := a.store.GetTurn(runCtx, in.Turn.ID); turnErr != nil {
 			return turnErr
-		} else if ok && turn.State != types.TurnStateAwaitingPermission {
+		} else if ok {
 			taskCompleted = true
 		}
 	}
@@ -136,14 +140,6 @@ func (a sessionRunnerAdapter) RunTurn(ctx context.Context, in session.RunInput) 
 			return err
 		}
 	}
-	if taskObserver != nil {
-		if notifyErr := a.notifyResumedTaskTerminal(runCtx, in.Resume, in.Session.WorkspaceRoot); notifyErr != nil {
-			if err != nil {
-				return errors.Join(err, notifyErr)
-			}
-			return notifyErr
-		}
-	}
 	return err
 }
 
@@ -160,21 +156,6 @@ func (s *taskEventSink) Emit(_ context.Context, event types.Event) error {
 			}
 		}
 		s.currentText.WriteString(payload.Text)
-		return nil
-	case types.EventPermissionRequested:
-		var payload types.PermissionRequestedPayload
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		if s.observer != nil {
-			summary := strings.TrimSpace(payload.Reason)
-			if summary == "" {
-				summary = "approval required"
-			}
-			if err := s.observer.SetOutcome(types.ChildAgentOutcomeBlocked, summary); err != nil {
-				return err
-			}
-		}
 		return nil
 	case types.EventToolStarted:
 		s.currentText.Reset()
@@ -285,36 +266,6 @@ func (o multiTaskObserver) SetRunContext(sessionID, turnID string) error {
 		}
 	}
 	return nil
-}
-
-func (a sessionRunnerAdapter) taskObserverForResume(resume *types.TurnResume) (task.AgentTaskObserver, bool, error) {
-	taskID := taskIDFromResume(resume)
-	if a.tasker == nil || taskID == "" {
-		return nil, false, nil
-	}
-	return managerTaskObserver{
-		manager: a.tasker,
-		taskID:  taskID,
-	}, true, nil
-}
-
-func (a sessionRunnerAdapter) notifyResumedTaskTerminal(ctx context.Context, resume *types.TurnResume, workspaceRoot string) error {
-	taskID := taskIDFromResume(resume)
-	if a.tasker == nil || a.notifier == nil || taskID == "" {
-		return nil
-	}
-	completed, ok, err := a.tasker.Get(taskID, workspaceRoot)
-	if err != nil || !ok {
-		return err
-	}
-	return a.notifier.NotifyTaskTerminal(ctx, completed)
-}
-
-func taskIDFromResume(resume *types.TurnResume) string {
-	if resume == nil {
-		return ""
-	}
-	return strings.TrimSpace(resume.TaskID)
 }
 
 func (a sessionRunnerAdapter) currentTime() time.Time {

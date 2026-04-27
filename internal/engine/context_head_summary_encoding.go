@@ -7,7 +7,7 @@ import (
 	"go-agent/internal/model"
 )
 
-func encodeSessionMemorySummary(summary model.Summary) string {
+func encodeContextHeadSummaryPayload(summary model.Summary) string {
 	raw, err := json.Marshal(summary)
 	if err != nil {
 		return ""
@@ -15,7 +15,7 @@ func encodeSessionMemorySummary(summary model.Summary) string {
 	return string(raw)
 }
 
-func decodeSessionMemorySummary(raw string) (model.Summary, bool, error) {
+func decodeContextHeadSummaryPayload(raw string) (model.Summary, bool, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return model.Summary{}, false, nil
@@ -24,12 +24,12 @@ func decodeSessionMemorySummary(raw string) (model.Summary, bool, error) {
 	var summary model.Summary
 	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
 		return model.Summary{
-			RangeLabel:  sessionMemoryRangeLabel,
+			RangeLabel:  contextHeadSummaryRangeLabel,
 			OpenThreads: []string{raw},
 		}, true, nil
 	}
 	if strings.TrimSpace(summary.RangeLabel) == "" {
-		summary.RangeLabel = sessionMemoryRangeLabel
+		summary.RangeLabel = contextHeadSummaryRangeLabel
 	}
 	return summary, true, nil
 }

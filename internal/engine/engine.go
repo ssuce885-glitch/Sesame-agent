@@ -21,7 +21,6 @@ type Input struct {
 	Turn                types.Turn
 	TaskID              string
 	Sink                EventSink
-	Resume              *types.TurnResume
 	ActivatedSkillNames []string
 }
 
@@ -36,15 +35,15 @@ type ConversationStore interface {
 	ListConversationTimelineItemsByContextHead(context.Context, string, string) ([]types.ConversationTimelineItem, error)
 	ListConversationItemsByContextHead(context.Context, string, string) ([]model.ConversationItem, error)
 	ListConversationCompactionsByStoredContextHead(context.Context, string, string) ([]types.ConversationCompaction, error)
-	GetHeadMemory(context.Context, string, string) (types.HeadMemory, bool, error)
+	GetContextHeadSummary(context.Context, string, string) (types.ContextHeadSummary, bool, error)
 	InsertConversationItem(context.Context, string, string, int, model.ConversationItem) error
 	InsertConversationItemWithContextHead(context.Context, string, string, string, int, model.ConversationItem) error
 	GetConversationItemIDByContextHeadAndPosition(context.Context, string, string, int) (int64, bool, error)
 	UpsertTurnUsage(context.Context, types.TurnUsage) error
-	UpsertHeadMemory(context.Context, types.HeadMemory) error
+	UpsertContextHeadSummary(context.Context, types.ContextHeadSummary) error
 	UpsertMemoryEntry(context.Context, types.MemoryEntry) error
 	DeleteMemoryEntries(context.Context, []string) error
-	ListMemoryEntriesByWorkspace(context.Context, string) ([]types.MemoryEntry, error)
+	ListVisibleMemoryEntries(context.Context, string, string) ([]types.MemoryEntry, error)
 	GetProviderCacheHead(context.Context, string, string, string) (types.ProviderCacheHead, bool, error)
 	UpsertProviderCacheHead(context.Context, types.ProviderCacheHead) error
 	InsertProviderCacheEntry(context.Context, types.ProviderCacheEntry) error
@@ -52,37 +51,37 @@ type ConversationStore interface {
 	InsertConversationCompactionWithContextHead(context.Context, types.ConversationCompaction) error
 }
 
-type HeadMemoryWorker interface {
+type ContextHeadSummaryWorker interface {
 	Enqueue(context.Context, *Engine, Input)
 	Wait()
 }
 
 type Engine struct {
-	model                    model.StreamingClient
-	registry                 *tools.Registry
-	permission               *permissions.Engine
-	store                    ConversationStore
-	ctxManager               *contextstate.Manager
-	compactor                contextstate.Compactor
-	runtime                  *contextstate.Runtime
-	meta                     RuntimeMetadata
-	basePrompt               string
-	globalConfigRoot         string
-	maxWorkspacePromptBytes  int
-	activeSkillTokenBudget   int
-	maxToolSteps             int
-	automationService        tools.AutomationService
-	roleService              tools.RoleService
-	sessionDelegationService session.RoleDelegationService
-	taskManager              *task.Manager
-	runtimeService           *runtimegraph.Service
-	schedulerService         *scheduler.Service
-	headMemoryAsync          bool
-	headMemoryWorker         HeadMemoryWorker
-	headMemoryWG             sync.WaitGroup
-	headMemoryMu             sync.Mutex
-	headMemoryRunning        map[string]bool
-	headMemoryPending        map[string]Input
+	model                     model.StreamingClient
+	registry                  *tools.Registry
+	permission                *permissions.Engine
+	store                     ConversationStore
+	ctxManager                *contextstate.Manager
+	compactor                 contextstate.Compactor
+	runtime                   *contextstate.Runtime
+	meta                      RuntimeMetadata
+	basePrompt                string
+	globalConfigRoot          string
+	maxWorkspacePromptBytes   int
+	activeSkillTokenBudget    int
+	maxToolSteps              int
+	automationService         tools.AutomationService
+	roleService               tools.RoleService
+	sessionDelegationService  session.RoleDelegationService
+	taskManager               *task.Manager
+	runtimeService            *runtimegraph.Service
+	schedulerService          *scheduler.Service
+	contextHeadSummaryAsync   bool
+	contextHeadSummaryWorker  ContextHeadSummaryWorker
+	contextHeadSummaryWG      sync.WaitGroup
+	contextHeadSummaryMu      sync.Mutex
+	contextHeadSummaryRunning map[string]bool
+	contextHeadSummaryPending map[string]Input
 }
 
 const defaultActiveSkillTokenBudget = 2048
@@ -211,26 +210,26 @@ func (e *Engine) SetSchedulerService(service *scheduler.Service) {
 	e.schedulerService = service
 }
 
-func (e *Engine) SetHeadMemoryAsync(enabled bool) {
+func (e *Engine) SetContextHeadSummaryAsync(enabled bool) {
 	if e == nil {
 		return
 	}
-	e.headMemoryAsync = enabled
-	if enabled && e.headMemoryWorker == nil {
-		e.headMemoryWorker = NewInProcessHeadMemoryWorker()
+	e.contextHeadSummaryAsync = enabled
+	if enabled && e.contextHeadSummaryWorker == nil {
+		e.contextHeadSummaryWorker = NewInProcessContextHeadSummaryWorker()
 	}
 	if !enabled {
-		e.headMemoryWorker = nil
+		e.contextHeadSummaryWorker = nil
 	}
 }
 
-func (e *Engine) SetHeadMemoryWorker(worker HeadMemoryWorker) {
+func (e *Engine) SetContextHeadSummaryWorker(worker ContextHeadSummaryWorker) {
 	if e == nil {
 		return
 	}
-	e.headMemoryWorker = worker
+	e.contextHeadSummaryWorker = worker
 	if worker != nil {
-		e.headMemoryAsync = true
+		e.contextHeadSummaryAsync = true
 	}
 }
 
@@ -238,8 +237,8 @@ func (e *Engine) waitBackgroundTasks() {
 	if e == nil {
 		return
 	}
-	if e.headMemoryWorker != nil {
-		e.headMemoryWorker.Wait()
+	if e.contextHeadSummaryWorker != nil {
+		e.contextHeadSummaryWorker.Wait()
 	}
-	e.headMemoryWG.Wait()
+	e.contextHeadSummaryWG.Wait()
 }

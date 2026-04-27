@@ -6,65 +6,15 @@ import (
 	"strings"
 
 	"go-agent/internal/extensions"
+	skillcatalog "go-agent/internal/skillcatalog"
 )
 
-type SkillSpec struct {
-	Name         string
-	Description  string
-	Path         string
-	Scope        string
-	Body         string
-	Triggers     []string
-	AllowedTools []string
-	Policy       SkillPolicy
-	Agent        AgentSpec
-}
-
-type SkillPolicy struct {
-	AllowImplicitActivation bool
-	AllowFullInjection      bool
-	CapabilityTags          []string
-	PreferredTools          []string
-}
-
-type AgentSpec struct {
-	Type         string
-	Description  string
-	Instructions string
-	Tools        []string
-}
-
-type ToolAsset struct {
-	Name        string
-	Path        string
-	Scope       string
-	Description string
-}
-
-type SkillDirectories struct {
-	System    string
-	Global    string
-	Workspace string
-}
-
-type Catalog struct {
-	Skills    []SkillSpec
-	Tools     []ToolAsset
-	SkillDirs SkillDirectories
-}
-
-func (c Catalog) SkillNames() []string {
-	if len(c.Skills) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(c.Skills))
-	for _, skill := range c.Skills {
-		if trimmed := strings.TrimSpace(skill.Name); trimmed != "" {
-			names = append(names, trimmed)
-		}
-	}
-	return names
-}
+type SkillSpec = skillcatalog.SkillSpec
+type SkillPolicy = skillcatalog.SkillPolicy
+type AgentSpec = skillcatalog.AgentSpec
+type ToolAsset = skillcatalog.ToolAsset
+type SkillDirectories = skillcatalog.SkillDirectories
+type Catalog = skillcatalog.Catalog
 
 type ActivationReason string
 
@@ -80,55 +30,7 @@ type ActivatedSkill struct {
 }
 
 func LoadCatalog(globalRoot, workspaceRoot string) (Catalog, error) {
-	catalog, err := extensions.LoadCatalog(globalRoot, workspaceRoot)
-	if err != nil {
-		return Catalog{}, err
-	}
-	return FromExtensionsCatalog(catalog), nil
-}
-
-func FromExtensionsCatalog(src extensions.Catalog) Catalog {
-	out := Catalog{
-		Skills: make([]SkillSpec, 0, len(src.Skills)),
-		Tools:  make([]ToolAsset, 0, len(src.Tools)),
-		SkillDirs: SkillDirectories{
-			System:    src.SkillDirs.System,
-			Global:    src.SkillDirs.Global,
-			Workspace: src.SkillDirs.Workspace,
-		},
-	}
-	for _, skill := range src.Skills {
-		out.Skills = append(out.Skills, SkillSpec{
-			Name:         skill.Name,
-			Description:  skill.Description,
-			Path:         skill.Path,
-			Scope:        skill.Scope,
-			Body:         skill.Body,
-			Triggers:     append([]string(nil), skill.Triggers...),
-			AllowedTools: append([]string(nil), skill.AllowedTools...),
-			Policy: SkillPolicy{
-				AllowImplicitActivation: skill.Policy.AllowImplicitActivation,
-				AllowFullInjection:      skill.Policy.AllowFullInjection,
-				CapabilityTags:          append([]string(nil), skill.Policy.CapabilityTags...),
-				PreferredTools:          append([]string(nil), skill.Policy.PreferredTools...),
-			},
-			Agent: AgentSpec{
-				Type:         skill.Agent.Type,
-				Description:  skill.Agent.Description,
-				Instructions: skill.Agent.Instructions,
-				Tools:        append([]string(nil), skill.Agent.Tools...),
-			},
-		})
-	}
-	for _, tool := range src.Tools {
-		out.Tools = append(out.Tools, ToolAsset{
-			Name:        tool.Name,
-			Path:        tool.Path,
-			Scope:       tool.Scope,
-			Description: tool.Description,
-		})
-	}
-	return out
+	return extensions.LoadCatalog(globalRoot, workspaceRoot)
 }
 
 func ActivationNotices(activated []ActivatedSkill) []string {

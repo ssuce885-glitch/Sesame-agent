@@ -4,23 +4,33 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"go-agent/internal/types"
 )
 
-func (s *Store) GetHeadMemory(ctx context.Context, sessionID, contextHeadID string) (types.HeadMemory, bool, error) {
+var ErrContextHeadIDRequired = errors.New("context_head_id is required")
+
+func validateStoredContextHeadID(contextHeadID string) error {
+	if strings.TrimSpace(contextHeadID) == "" {
+		return ErrContextHeadIDRequired
+	}
+	return nil
+}
+
+func (s *Store) GetContextHeadSummary(ctx context.Context, sessionID, contextHeadID string) (types.ContextHeadSummary, bool, error) {
 	if err := validateStoredContextHeadID(contextHeadID); err != nil {
-		return types.HeadMemory{}, false, err
+		return types.ContextHeadSummary{}, false, err
 	}
 
-	var memory types.HeadMemory
+	var memory types.ContextHeadSummary
 	var createdAt string
 	var updatedAt string
 
 	err := s.db.QueryRowContext(ctx, `
 		select session_id, context_head_id, workspace_root, source_turn_id, up_to_item_id, item_count, summary_payload, created_at, updated_at
-		from head_memories
+		from context_head_summaries
 		where session_id = ? and context_head_id = ?
 	`, sessionID, contextHeadID).Scan(
 		&memory.SessionID,
@@ -34,25 +44,25 @@ func (s *Store) GetHeadMemory(ctx context.Context, sessionID, contextHeadID stri
 		&updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return types.HeadMemory{}, false, nil
+		return types.ContextHeadSummary{}, false, nil
 	}
 	if err != nil {
-		return types.HeadMemory{}, false, err
+		return types.ContextHeadSummary{}, false, err
 	}
 
 	memory.CreatedAt, err = time.Parse(timeLayout, createdAt)
 	if err != nil {
-		return types.HeadMemory{}, false, err
+		return types.ContextHeadSummary{}, false, err
 	}
 	memory.UpdatedAt, err = time.Parse(timeLayout, updatedAt)
 	if err != nil {
-		return types.HeadMemory{}, false, err
+		return types.ContextHeadSummary{}, false, err
 	}
 
 	return memory, true, nil
 }
 
-func (s *Store) UpsertHeadMemory(ctx context.Context, record types.HeadMemory) error {
+func (s *Store) UpsertContextHeadSummary(ctx context.Context, record types.ContextHeadSummary) error {
 	if err := validateStoredContextHeadID(record.ContextHeadID); err != nil {
 		return err
 	}
@@ -66,7 +76,7 @@ func (s *Store) UpsertHeadMemory(ctx context.Context, record types.HeadMemory) e
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		insert into head_memories (
+		insert into context_head_summaries (
 			session_id, context_head_id, workspace_root, source_turn_id, up_to_item_id, item_count, summary_payload, created_at, updated_at
 		) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(session_id, context_head_id) do update set

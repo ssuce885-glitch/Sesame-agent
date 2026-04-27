@@ -11,6 +11,14 @@ import (
 )
 
 type scheduleReportTool struct{}
+type scheduleQueryTool struct{}
+
+type scheduleQueryMode string
+
+const (
+	scheduleQueryModeGet  scheduleQueryMode = "get"
+	scheduleQueryModeList scheduleQueryMode = "list"
+)
 
 type ScheduleReportInput struct {
 	Name                    string `json:"name,omitempty"`
@@ -34,8 +42,24 @@ type ScheduleReportOutput struct {
 	Job types.ScheduledJob `json:"job"`
 }
 
+type ScheduleQueryInput struct {
+	Mode          scheduleQueryMode `json:"mode"`
+	JobID         string            `json:"job_id,omitempty"`
+	WorkspaceRoot string            `json:"workspace_root,omitempty"`
+}
+
+type ScheduleQueryOutput struct {
+	Mode scheduleQueryMode    `json:"mode"`
+	Job  *types.ScheduledJob  `json:"job,omitempty"`
+	Jobs []types.ScheduledJob `json:"jobs,omitempty"`
+}
+
 func (scheduleReportTool) IsEnabled(execCtx ExecContext) bool {
 	return execCtx.SchedulerService != nil && strings.TrimSpace(currentSessionID(execCtx)) != ""
+}
+
+func (scheduleQueryTool) IsEnabled(execCtx ExecContext) bool {
+	return execCtx.SchedulerService != nil
 }
 
 func (scheduleReportTool) Definition() Definition {
@@ -113,7 +137,47 @@ func (scheduleReportTool) Definition() Definition {
 	}
 }
 
+func (scheduleQueryTool) Definition() Definition {
+	return Definition{
+		Name:        "schedule_query",
+		Description: "Read-only scheduled report query surface. Use this for jobs created by schedule_report; do not use automation_query for scheduled reports.",
+		InputSchema: objectSchema(map[string]any{
+			"mode": map[string]any{
+				"type":        "string",
+				"enum":        scheduleQueryModeEnum(),
+				"description": "Query mode: get one scheduled report job or list jobs.",
+			},
+			"job_id": map[string]any{
+				"type":        "string",
+				"description": "Scheduled report job id. Required for mode=get.",
+			},
+			"workspace_root": map[string]any{
+				"type":        "string",
+				"description": "Optional workspace filter for mode=list. Defaults to current workspace when omitted.",
+			},
+		}, "mode"),
+		OutputSchema: objectSchema(map[string]any{
+			"mode": map[string]any{
+				"type": "string",
+				"enum": scheduleQueryModeEnum(),
+			},
+			"job": map[string]any{
+				"type":                 "object",
+				"additionalProperties": true,
+			},
+			"jobs": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": true,
+				},
+			},
+		}, "mode"),
+	}
+}
+
 func (scheduleReportTool) IsConcurrencySafe() bool { return false }
+func (scheduleQueryTool) IsConcurrencySafe() bool  { return true }
 
 func (scheduleReportTool) Decode(call Call) (DecodedCall, error) {
 	input := ScheduleReportInput{
@@ -225,7 +289,32 @@ func (scheduleReportTool) Decode(call Call) (DecodedCall, error) {
 	return DecodedCall{Call: normalized, Input: input}, nil
 }
 
+func (scheduleQueryTool) Decode(call Call) (DecodedCall, error) {
+	mode, err := decodeScheduleQueryMode(call.StringInput("mode"))
+	if err != nil {
+		return DecodedCall{}, err
+	}
+	input := ScheduleQueryInput{
+		Mode:          mode,
+		JobID:         strings.TrimSpace(call.StringInput("job_id")),
+		WorkspaceRoot: strings.TrimSpace(call.StringInput("workspace_root")),
+	}
+	if input.Mode == scheduleQueryModeGet && input.JobID == "" {
+		return DecodedCall{}, fmt.Errorf("job_id is required for mode=get")
+	}
+	return DecodedCall{Call: call, Input: input}, nil
+}
+
 func (t scheduleReportTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
+	decoded, err := t.Decode(call)
+	if err != nil {
+		return Result{}, err
+	}
+	output, err := t.ExecuteDecoded(ctx, decoded, execCtx)
+	return output.Result, err
+}
+
+func (t scheduleQueryTool) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
 	decoded, err := t.Decode(call)
 	if err != nil {
 		return Result{}, err
@@ -298,7 +387,50 @@ func (scheduleReportTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 	}, nil
 }
 
+func (scheduleQueryTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, execCtx ExecContext) (ToolExecutionResult, error) {
+	service, err := requireSchedulerService(execCtx)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+	input, _ := decoded.Input.(ScheduleQueryInput)
+	switch input.Mode {
+	case scheduleQueryModeGet:
+		job, ok, err := service.GetJob(ctx, input.JobID)
+		if err != nil {
+			return ToolExecutionResult{}, err
+		}
+		if !ok {
+			return ToolExecutionResult{}, fmt.Errorf("scheduled report job %q not found", input.JobID)
+		}
+		output := ScheduleQueryOutput{Mode: input.Mode, Job: &job}
+		return ToolExecutionResult{
+			Result: Result{Text: mustJSON(output), ModelText: mustJSON(output)},
+			Data:   output,
+		}, nil
+	case scheduleQueryModeList:
+		workspaceRoot := input.WorkspaceRoot
+		if workspaceRoot == "" {
+			workspaceRoot = execCtx.WorkspaceRoot
+		}
+		jobs, err := service.ListJobs(ctx, workspaceRoot)
+		if err != nil {
+			return ToolExecutionResult{}, err
+		}
+		output := ScheduleQueryOutput{Mode: input.Mode, Jobs: jobs}
+		return ToolExecutionResult{
+			Result: Result{Text: mustJSON(output), ModelText: mustJSON(output)},
+			Data:   output,
+		}, nil
+	default:
+		return ToolExecutionResult{}, fmt.Errorf("unsupported mode %q", input.Mode)
+	}
+}
+
 func (scheduleReportTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
+	return defaultStructuredModelResult(output)
+}
+
+func (scheduleQueryTool) MapModelResult(output ToolExecutionResult) ModelToolResult {
 	return defaultStructuredModelResult(output)
 }
 
@@ -332,4 +464,18 @@ func scheduleReportPreview(job types.ScheduledJob) string {
 		parts = append(parts, "next "+job.NextRunAt.Format(time.RFC3339))
 	}
 	return strings.Join(parts, " · ")
+}
+
+func scheduleQueryModeEnum() []string {
+	return []string{string(scheduleQueryModeGet), string(scheduleQueryModeList)}
+}
+
+func decodeScheduleQueryMode(raw string) (scheduleQueryMode, error) {
+	mode := scheduleQueryMode(strings.ToLower(strings.TrimSpace(raw)))
+	switch mode {
+	case scheduleQueryModeGet, scheduleQueryModeList:
+		return mode, nil
+	default:
+		return "", fmt.Errorf(`invalid mode %q; must be one of get, list`, strings.TrimSpace(raw))
+	}
 }

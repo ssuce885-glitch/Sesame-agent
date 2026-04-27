@@ -26,21 +26,37 @@ func (s *Store) UpsertMemoryEntry(ctx context.Context, entry types.MemoryEntry) 
 	if entry.UpdatedAt.IsZero() {
 		entry.UpdatedAt = now
 	}
+	if entry.LastUsedAt.IsZero() {
+		entry.LastUsedAt = now
+	}
+	if entry.Visibility == "" {
+		entry.Visibility = types.MemoryVisibilityShared
+	}
+	if entry.Status == "" {
+		entry.Status = types.MemoryStatusActive
+	}
 
 	_, err = s.db.ExecContext(ctx, `
 		insert into memory_entries (
-			id, scope, workspace_id, kind, source_session_id, source_context_head_id, content, source_refs, confidence, created_at, updated_at
+			id, scope, workspace_id, kind, source_session_id, source_context_head_id,
+			owner_role_id, visibility, status, content, source_refs, confidence,
+			last_used_at, usage_count, created_at, updated_at
 		)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set
 			scope = excluded.scope,
 			workspace_id = excluded.workspace_id,
 			kind = excluded.kind,
 			source_session_id = excluded.source_session_id,
 			source_context_head_id = excluded.source_context_head_id,
+			owner_role_id = excluded.owner_role_id,
+			visibility = excluded.visibility,
+			status = excluded.status,
 			content = excluded.content,
 			source_refs = excluded.source_refs,
 			confidence = excluded.confidence,
+			last_used_at = excluded.last_used_at,
+			usage_count = excluded.usage_count,
 			updated_at = excluded.updated_at`,
 		entry.ID,
 		entry.Scope,
@@ -48,9 +64,14 @@ func (s *Store) UpsertMemoryEntry(ctx context.Context, entry types.MemoryEntry) 
 		entry.Kind,
 		entry.SourceSessionID,
 		entry.SourceContextHeadID,
+		entry.OwnerRoleID,
+		entry.Visibility,
+		entry.Status,
 		entry.Content,
 		string(rawRefs),
 		entry.Confidence,
+		entry.LastUsedAt.UTC().Format(timeLayout),
+		entry.UsageCount,
 		entry.CreatedAt.UTC().Format(timeLayout),
 		entry.UpdatedAt.UTC().Format(timeLayout),
 	)
@@ -58,16 +79,32 @@ func (s *Store) UpsertMemoryEntry(ctx context.Context, entry types.MemoryEntry) 
 	return err
 }
 
-func (s *Store) ListMemoryEntriesByWorkspace(ctx context.Context, workspaceID string) ([]types.MemoryEntry, error) {
+// ListVisibleMemoryEntries returns workspace-scoped and global memory entries
+// that are visible to the given role. Visibility rules:
+//
+//	roleID == "" (main agent): unowned + shared + promoted entries only
+//	roleID != "" (role agent): unowned + own (any visibility) + shared + promoted
+//
+// Global-scope entries are always included (they have no role ownership by
+// convention). Superseded and deprecated entries are excluded.
+func (s *Store) ListVisibleMemoryEntries(ctx context.Context, workspaceID, roleID string) ([]types.MemoryEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select id, scope, workspace_id, kind, source_session_id, source_context_head_id, content, source_refs, confidence, created_at, updated_at
+		select id, scope, workspace_id, kind, source_session_id, source_context_head_id,
+			owner_role_id, visibility, status, content, source_refs, confidence,
+			last_used_at, usage_count, created_at, updated_at
 		from memory_entries
-		where workspace_id = ? or scope = ?
+		where (workspace_id = ? or scope = ?)
+			and status = ?
+			and (
+				owner_role_id = ''
+				or owner_role_id = ?
+				or visibility in (?, ?)
+			)
 		order by
 			case when scope = ? then 0 else 1 end,
 			updated_at desc,
 			created_at desc
-	`, workspaceID, types.MemoryScopeGlobal, types.MemoryScopeGlobal)
+	`, workspaceID, types.MemoryScopeGlobal, types.MemoryStatusActive, roleID, types.MemoryVisibilityShared, types.MemoryVisibilityPromoted, types.MemoryScopeGlobal)
 	if err != nil {
 		return nil, err
 	}
@@ -80,18 +117,35 @@ func (s *Store) ListMemoryEntriesByWorkspace(ctx context.Context, workspaceID st
 		var kind string
 		var sourceSessionID string
 		var sourceContextHeadID string
+		var ownerRoleID string
+		var visibility string
+		var status string
 		var rawRefs string
+		var lastUsedAt string
+		var usageCount int
 		var createdAt string
 		var updatedAt string
-		if err := rows.Scan(&entry.ID, &scope, &entry.WorkspaceID, &kind, &sourceSessionID, &sourceContextHeadID, &entry.Content, &rawRefs, &entry.Confidence, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&entry.ID, &scope, &entry.WorkspaceID, &kind, &sourceSessionID, &sourceContextHeadID,
+			&ownerRoleID, &visibility, &status, &entry.Content, &rawRefs, &entry.Confidence,
+			&lastUsedAt, &usageCount, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		entry.Scope = types.MemoryScope(scope)
 		entry.Kind = types.MemoryKind(kind)
 		entry.SourceSessionID = sourceSessionID
 		entry.SourceContextHeadID = sourceContextHeadID
+		entry.OwnerRoleID = ownerRoleID
+		entry.Visibility = types.MemoryVisibility(visibility)
+		entry.Status = types.MemoryStatus(status)
+		entry.UsageCount = usageCount
 		if err := json.Unmarshal([]byte(rawRefs), &entry.SourceRefs); err != nil {
 			return nil, err
+		}
+		if lastUsedAt != "" {
+			entry.LastUsedAt, err = time.Parse(timeLayout, lastUsedAt)
+			if err != nil {
+				return nil, err
+			}
 		}
 		entry.CreatedAt, err = time.Parse(timeLayout, createdAt)
 		if err != nil {
@@ -107,24 +161,40 @@ func (s *Store) ListMemoryEntriesByWorkspace(ctx context.Context, workspaceID st
 	return out, rows.Err()
 }
 
+func (s *Store) MarkMemoryEntriesUsed(ctx context.Context, ids []string, usedAt time.Time) error {
+	filtered := uniqueTrimmedMemoryIDs(ids)
+	if len(filtered) == 0 {
+		return nil
+	}
+	if usedAt.IsZero() {
+		usedAt = time.Now().UTC()
+	}
+
+	args := make([]any, 0, 1+len(filtered))
+	placeholders := make([]string, 0, len(filtered))
+	args = append(args, usedAt.UTC().Format(timeLayout))
+	for _, id := range filtered {
+		args = append(args, id)
+		placeholders = append(placeholders, "?")
+	}
+
+	_, err := s.db.ExecContext(ctx,
+		fmt.Sprintf(`
+			update memory_entries
+			set last_used_at = ?,
+				usage_count = usage_count + 1
+			where id in (%s)`, strings.Join(placeholders, ", ")),
+		args...,
+	)
+	return err
+}
+
 func (s *Store) DeleteMemoryEntries(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
 
-	filtered := make([]string, 0, len(ids))
-	seen := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		filtered = append(filtered, id)
-	}
+	filtered := uniqueTrimmedMemoryIDs(ids)
 	if len(filtered) == 0 {
 		return nil
 	}
@@ -141,4 +211,21 @@ func (s *Store) DeleteMemoryEntries(ctx context.Context, ids []string) error {
 		args...,
 	)
 	return err
+}
+
+func uniqueTrimmedMemoryIDs(ids []string) []string {
+	filtered := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		filtered = append(filtered, id)
+	}
+	return filtered
 }

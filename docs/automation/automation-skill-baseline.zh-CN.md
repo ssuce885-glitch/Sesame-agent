@@ -13,7 +13,7 @@
 
 simple chain 为：
 
-`watcher signal -> owner task -> report`
+`watcher signal -> owner role task -> main agent report`
 
 ## 模式边界
 
@@ -31,7 +31,8 @@ simple chain 为：
 这个模式用于 watcher 命中后的运行时执行。
 
 - 执行 `automation_goal` 定义的业务动作。
-- 按要求格式回报结果。
+- 将结果作为 owner role 的最终回复返回；runtime 会把它投递到 main agent report stream。
+- 不要调用 `delegate_to_role` 向 `main_parent` 回报结果。
 - 不要在这里创建或修改 automation。
 - 不要在这里修 watcher 脚本或 role 配置。
 
@@ -76,20 +77,13 @@ simple chain 为：
 
 ## 为什么要这样做
 
-之前的四个 automation skill：
-
-- `automation-standard-behavior`
-- `automation-intake`
-- `automation-normalizer`
-- `automation-dispatch-planner`
-
-职责重叠太多，模型更容易把不同模式拼在一起，出现：
+之前计划把 intake、behavior、normalization、dispatch 拆开，职责重叠太多，模型更容易把不同模式拼在一起，出现：
 
 - 模式混用
 - supervision routing 偏移
 - watcher payload 不符合 runtime 协议却仍被接受
 
-新的两 skill 基线更清楚：
+当前落地的两 skill 基线更清楚：
 
 - 一个管行为和边界
 - 一个管归一化和硬规则
