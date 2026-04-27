@@ -291,6 +291,11 @@ func compileWatcherSignals(spec types.AutomationSpec) ([]compiledWatcherSignal, 
 		if cooldown == 0 && retrigger.CooldownSeconds > 0 {
 			cooldown = retrigger.CooldownSeconds
 		}
+		if cooldown == 0 &&
+			strings.EqualFold(strings.TrimSpace(string(spec.Mode)), string(types.AutomationModeSimple)) &&
+			strings.EqualFold(strings.TrimSpace(lifecycle.AfterDispatch), "continue") {
+			cooldown = 3600
+		}
 		out = append(out, compiledWatcherSignal{
 			Key:             fmt.Sprintf("%s:%d:%s", strings.TrimSpace(signal.Kind), idx, command),
 			Command:         command,

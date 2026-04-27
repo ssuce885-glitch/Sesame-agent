@@ -14,13 +14,12 @@ type roleListTool struct{}
 type roleUpdateTool struct{}
 
 type RoleOutput struct {
-	RoleID      string         `json:"role_id"`
-	DisplayName string         `json:"display_name"`
-	Description string         `json:"description"`
-	Prompt      string         `json:"prompt"`
-	Skills      []string       `json:"skills"`
-	Policy      map[string]any `json:"policy"`
-	Version     int            `json:"version"`
+	RoleID      string   `json:"role_id"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	Prompt      string   `json:"prompt"`
+	Skills      []string `json:"skills"`
+	Version     int      `json:"version"`
 }
 
 type RoleDiagnosticOutput struct {
@@ -43,12 +42,11 @@ type RoleListInput struct {
 }
 
 type RoleUpsertInput struct {
-	RoleID      string         `json:"role_id"`
-	DisplayName string         `json:"display_name"`
-	Description string         `json:"description"`
-	Prompt      string         `json:"prompt"`
-	Skills      []string       `json:"skills"`
-	Policy      map[string]any `json:"policy"`
+	RoleID      string   `json:"role_id"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	Prompt      string   `json:"prompt"`
+	Skills      []string `json:"skills"`
 }
 
 func (roleCreateTool) IsEnabled(execCtx ExecContext) bool { return execCtx.RoleService != nil }
@@ -68,7 +66,7 @@ func (roleCreateTool) Definition() Definition {
 		InputSchema: roleUpsertInputSchema(),
 		OutputSchema: objectSchema(
 			roleOutputProperties(),
-			"role_id", "display_name", "description", "prompt", "skills", "policy", "version",
+			"role_id", "display_name", "description", "prompt", "skills", "version",
 		),
 	}
 }
@@ -76,7 +74,7 @@ func (roleCreateTool) Definition() Definition {
 func (roleGetTool) Definition() Definition {
 	return Definition{
 		Name:        "role_get",
-		Description: "Fetch a single installed role by role id, including prompt, skills, policy, and current version.",
+		Description: "Fetch a single installed role by role id, including prompt, skills, and current version.",
 		InputSchema: objectSchema(map[string]any{
 			"role_id": map[string]any{
 				"type":        "string",
@@ -85,7 +83,7 @@ func (roleGetTool) Definition() Definition {
 		}, "role_id"),
 		OutputSchema: objectSchema(
 			roleOutputProperties(),
-			"role_id", "display_name", "description", "prompt", "skills", "policy", "version",
+			"role_id", "display_name", "description", "prompt", "skills", "version",
 		),
 	}
 }
@@ -103,7 +101,7 @@ func (roleListTool) Definition() Definition {
 		OutputSchema: objectSchema(map[string]any{
 			"roles": map[string]any{
 				"type":  "array",
-				"items": objectSchema(roleOutputProperties(), "role_id", "display_name", "description", "prompt", "skills", "policy", "version"),
+				"items": objectSchema(roleOutputProperties(), "role_id", "display_name", "description", "prompt", "skills", "version"),
 			},
 			"diagnostics": map[string]any{
 				"type": "array",
@@ -124,7 +122,7 @@ func (roleUpdateTool) Definition() Definition {
 		InputSchema: roleUpsertInputSchema(),
 		OutputSchema: objectSchema(
 			roleOutputProperties(),
-			"role_id", "display_name", "description", "prompt", "skills", "policy", "version",
+			"role_id", "display_name", "description", "prompt", "skills", "version",
 		),
 	}
 }
@@ -184,7 +182,6 @@ func (roleCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		Description: input.Description,
 		Prompt:      input.Prompt,
 		SkillNames:  input.Skills,
-		Policy:      input.Policy,
 	})
 	if err != nil {
 		return ToolExecutionResult{}, err
@@ -215,7 +212,7 @@ func (roleGetTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, exec
 	return ToolExecutionResult{
 		Result: Result{
 			Text:      mustJSON(output),
-			ModelText: fmt.Sprintf("Loaded role %s with its current prompt, skills, policy, and version.", output.RoleID),
+			ModelText: fmt.Sprintf("Loaded role %s with its current prompt, skills, and version.", output.RoleID),
 		},
 		Data:        output,
 		PreviewText: fmt.Sprintf("Loaded role %s", output.RoleID),
@@ -270,7 +267,6 @@ func (roleUpdateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		Description: input.Description,
 		Prompt:      input.Prompt,
 		SkillNames:  input.Skills,
-		Policy:      input.Policy,
 	})
 	if err != nil {
 		return ToolExecutionResult{}, err
@@ -295,9 +291,6 @@ func mergeRoleUpdateWithCurrent(input RoleUpsertInput, current roles.Spec) RoleU
 	}
 	if input.Skills == nil {
 		input.Skills = append([]string(nil), current.SkillNames...)
-	}
-	if input.Policy == nil {
-		input.Policy = clonePolicyMap(current.Policy)
 	}
 	return input
 }
@@ -365,11 +358,6 @@ func roleUpsertInputSchema() map[string]any {
 			"description": "Optional installed skill names for this role.",
 			"items":       map[string]any{"type": "string"},
 		},
-		"policy": map[string]any{
-			"type":                 "object",
-			"description":          "Optional role policy object persisted in role.yaml.",
-			"additionalProperties": true,
-		},
 	}, "role_id", "prompt")
 }
 
@@ -382,10 +370,6 @@ func roleOutputProperties() map[string]any {
 		"skills": map[string]any{
 			"type":  "array",
 			"items": map[string]any{"type": "string"},
-		},
-		"policy": map[string]any{
-			"type":                 "object",
-			"additionalProperties": true,
 		},
 		"version": map[string]any{"type": "integer"},
 	}
@@ -432,17 +416,12 @@ func decodeRoleUpsertCall(call Call) (DecodedCall, error) {
 	if err != nil {
 		return DecodedCall{}, err
 	}
-	policy, err := decodePolicyField(call.Input["policy"])
-	if err != nil {
-		return DecodedCall{}, err
-	}
 	input := RoleUpsertInput{
 		RoleID:      strings.TrimSpace(call.StringInput("role_id")),
 		DisplayName: strings.TrimSpace(call.StringInput("display_name")),
 		Description: strings.TrimSpace(call.StringInput("description")),
 		Prompt:      strings.TrimSpace(call.StringInput("prompt")),
 		Skills:      skills,
-		Policy:      policy,
 	}
 	if input.RoleID == "" {
 		return DecodedCall{}, fmt.Errorf("role_id is required")
@@ -459,7 +438,6 @@ func decodeRoleUpsertCall(call Call) (DecodedCall, error) {
 				"description":  input.Description,
 				"prompt":       input.Prompt,
 				"skills":       append([]string(nil), input.Skills...),
-				"policy":       clonePolicyMap(input.Policy),
 			},
 		},
 		Input: input,
@@ -488,28 +466,6 @@ func decodeStringArrayField(raw any, field string) ([]string, error) {
 	}
 }
 
-func decodePolicyField(raw any) (map[string]any, error) {
-	if raw == nil {
-		return nil, nil
-	}
-	policy, ok := raw.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("policy must be an object")
-	}
-	return clonePolicyMap(policy), nil
-}
-
-func clonePolicyMap(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return map[string]any{}
-	}
-	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = cloneAny(value)
-	}
-	return out
-}
-
 func roleOutputFromSpec(spec roles.Spec) RoleOutput {
 	return RoleOutput{
 		RoleID:      spec.RoleID,
@@ -517,7 +473,6 @@ func roleOutputFromSpec(spec roles.Spec) RoleOutput {
 		Description: spec.Description,
 		Prompt:      spec.Prompt,
 		Skills:      append([]string(nil), spec.SkillNames...),
-		Policy:      clonePolicyMap(spec.Policy),
 		Version:     spec.Version,
 	}
 }

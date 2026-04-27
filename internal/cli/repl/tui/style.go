@@ -10,35 +10,35 @@ import (
 
 const (
 	// Base
-	colorBg           = "17"   // deep slate #0d1117
-	colorSurface      = "59"   // raised surface #1c2128
-	colorBorder       = "60"   // subtle border
+	colorBg      = "17" // deep slate #0d1117
+	colorSurface = "59" // raised surface #1c2128
+	colorBorder  = "60" // subtle border
 
 	// Brand & identity
-	colorTitle        = "79"   // teal #39d0c0 — Sesame brand
-	colorTitleDim    = "67"   // dimmer teal for secondary
+	colorTitle    = "79" // teal #39d0c0 — Sesame brand
+	colorTitleDim = "67" // dimmer teal for secondary
 
 	// Entry kinds — warm on dark
-	colorUser        = "210"  // coral #ff7b72 — user messages
-	colorUserDim     = "124"  // muted red for secondary text
-	colorAssistant   = "110"  // mint green #88d9a0 — assistant
-	colorAssistantDim= "114"  // dimmer mint for secondary
-	colorTool        = "215"  // amber #ffb347 — tools/actions
-	colorToolDim     = "137"  // warm olive for detail
-	colorToolTarget  = "230"  // near-white for tool target
+	colorUser         = "210" // coral #ff7b72 — user messages
+	colorUserDim      = "124" // muted red for secondary text
+	colorAssistant    = "110" // mint green #88d9a0 — assistant
+	colorAssistantDim = "114" // dimmer mint for secondary
+	colorTool         = "215" // amber #ffb347 — tools/actions
+	colorToolDim      = "137" // warm olive for detail
+	colorToolTarget   = "230" // near-white for tool target
 
 	// Semantic
-	colorNotice      = "221"  // warm yellow #f0e68c
-	colorError       = "203"  // soft red #ff6b6b
-	colorActivity    = "102"  // cool slate #9aa5ce
+	colorNotice      = "221" // warm yellow #f0e68c
+	colorError       = "203" // soft red #ff6b6b
+	colorActivity    = "102" // cool slate #9aa5ce
 	colorActivityDim = "68"  // dimmed activity
 
 	// Status
 	colorTabActive   = "79"
-	colorTabInactive  = "240"
-	colorTabBgActive  = "59"
-	colorRunning      = "215"  // amber running dot
-	colorQueue        = "110"  // mint for queue
+	colorTabInactive = "240"
+	colorTabBgActive = "59"
+	colorRunning     = "215" // amber running dot
+	colorQueue       = "110" // mint for queue
 
 	// Input
 	colorInputText   = "252"
@@ -46,9 +46,9 @@ const (
 	colorInputBorder = "67"
 
 	// Metadata
-	colorMeta        = "68"   // muted gray
-	colorStatus      = "68"
-	colorHighlight   = "79"   // teal highlight
+	colorMeta      = "68" // muted gray
+	colorStatus    = "68"
+	colorHighlight = "79" // teal highlight
 )
 
 // Base styles
@@ -89,10 +89,10 @@ var (
 			BorderForeground(lipgloss.Color(colorTabActive))
 
 	StyleTabInactive = lipgloss.NewStyle().
-			Padding(0, 1).
-			Foreground(lipgloss.Color(colorTabInactive)).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color(colorTabInactive))
+				Padding(0, 1).
+				Foreground(lipgloss.Color(colorTabInactive)).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color(colorTabInactive))
 
 	// Entry styles — label + body pair
 	StyleEntryUser = lipgloss.NewStyle().
@@ -100,14 +100,14 @@ var (
 			Foreground(lipgloss.Color(colorUser))
 
 	StyleEntryUserDim = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorUserDim))
+				Foreground(lipgloss.Color(colorUserDim))
 
 	StyleEntryAssistant = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color(colorAssistant))
+				Bold(true).
+				Foreground(lipgloss.Color(colorAssistant))
 
 	StyleEntryAssistantDim = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAssistantDim))
+				Foreground(lipgloss.Color(colorAssistantDim))
 
 	StyleEntryToolAction = lipgloss.NewStyle().
 				Bold(true).
@@ -127,23 +127,23 @@ var (
 				Foreground(lipgloss.Color(colorAssistant))
 
 	StyleToolFailed = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color(colorError))
+			Bold(true).
+			Foreground(lipgloss.Color(colorError))
 
 	StyleEntryNotice = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color(colorNotice))
+				Bold(true).
+				Foreground(lipgloss.Color(colorNotice))
 
 	StyleEntryError = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color(colorError))
 
 	StyleEntryActivity = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color(colorActivity))
+				Bold(true).
+				Foreground(lipgloss.Color(colorActivity))
 
 	StyleEntryActivityDim = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorActivityDim))
+				Foreground(lipgloss.Color(colorActivityDim))
 
 	// General text
 	StyleBody = lipgloss.NewStyle()
@@ -164,10 +164,10 @@ var (
 			Foreground(lipgloss.Color(colorHighlight))
 
 	StylePushBarText = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorToolTarget))
+				Foreground(lipgloss.Color(colorToolTarget))
 
 	StylePushBarHint = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorMeta))
+				Foreground(lipgloss.Color(colorMeta))
 
 	// Running indicator
 	StyleRunning = lipgloss.NewStyle().
@@ -193,9 +193,9 @@ var (
 
 	// Surface panel for activity blocks
 	StyleSurfacePanel = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color(colorBorder)).
-			Padding(0, 1)
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color(colorBorder)).
+				Padding(0, 1)
 )
 
 // Helper functions

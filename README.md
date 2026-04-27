@@ -247,7 +247,6 @@ cd web/console
 npm run build
 ```
 
-If your local checkout includes ignored test files, run the relevant package tests before publishing changes.
 
 ## License
 

@@ -45,7 +45,6 @@ func normalizeUpsertInput(in UpsertInput) (UpsertInput, error) {
 		Description: strings.TrimSpace(in.Description),
 		Prompt:      strings.TrimSpace(in.Prompt),
 		SkillNames:  dedupeStrings(in.SkillNames),
-		Policy:      normalizePolicyMap(in.Policy),
 	}, nil
 }
 
@@ -57,15 +56,4 @@ func validateUpsertInput(in UpsertInput) error {
 		return errors.New("prompt is required")
 	}
 	return nil
-}
-
-func normalizePolicyMap(policy map[string]any) map[string]any {
-	if len(policy) == 0 {
-		return map[string]any{}
-	}
-	out := make(map[string]any, len(policy))
-	for key, value := range policy {
-		out[key] = value
-	}
-	return out
 }

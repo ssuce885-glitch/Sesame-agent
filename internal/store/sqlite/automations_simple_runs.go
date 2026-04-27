@@ -41,7 +41,15 @@ func claimSimpleAutomationRunWithExec(ctx context.Context, execer execContexter,
 			automation_id, dedupe_key, owner, task_id, last_status, last_summary, payload, created_at, updated_at
 		)
 		values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		on conflict(automation_id, dedupe_key) do nothing
+		on conflict(automation_id, dedupe_key) do update set
+			owner = excluded.owner,
+			task_id = excluded.task_id,
+			last_status = excluded.last_status,
+			last_summary = excluded.last_summary,
+			payload = excluded.payload,
+			created_at = excluded.created_at,
+			updated_at = excluded.updated_at
+			where lower(trim(automation_simple_runs.last_status)) <> 'running'
 	`,
 		run.AutomationID,
 		run.DedupeKey,

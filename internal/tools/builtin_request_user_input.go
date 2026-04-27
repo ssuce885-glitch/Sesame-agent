@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"unicode/utf8"
 	"strings"
+	"unicode/utf8"
 )
 
 const (

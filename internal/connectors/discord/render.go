@@ -3,7 +3,7 @@ package discord
 import "strings"
 
 const (
-	defaultMaxOutputChars = 1800
+	defaultMaxOutputChars  = 1800
 	outboundTruncateMarker = "[truncated: full result is available in Sesame console]"
 )
 
@@ -17,9 +17,9 @@ type discordMessageReference struct {
 }
 
 type discordOutboundMessage struct {
-	Content          string                  `json:"content"`
+	Content          string                   `json:"content"`
 	MessageReference *discordMessageReference `json:"message_reference,omitempty"`
-	AllowedMentions  discordAllowedMentions  `json:"allowed_mentions"`
+	AllowedMentions  discordAllowedMentions   `json:"allowed_mentions"`
 }
 
 func outboundAllowedMentions() discordAllowedMentions {

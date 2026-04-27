@@ -16,7 +16,6 @@ type Spec struct {
 	Description string
 	Prompt      string
 	SkillNames  []string
-	Policy      map[string]any
 	Version     int
 }
 
@@ -27,21 +26,19 @@ type Catalog struct {
 }
 
 type roleConfig struct {
-	DisplayName string         `yaml:"display_name"`
-	Description string         `yaml:"description"`
-	Skills      []string       `yaml:"skills"`
-	Policy      map[string]any `yaml:"policy"`
-	Version     int            `yaml:"version"`
+	DisplayName string   `yaml:"display_name"`
+	Description string   `yaml:"description"`
+	Skills      []string `yaml:"skills"`
+	Version     int      `yaml:"version"`
 }
 
 type roleSnapshot struct {
-	RoleID      string         `yaml:"role_id"`
-	DisplayName string         `yaml:"display_name"`
-	Description string         `yaml:"description"`
-	Prompt      string         `yaml:"prompt"`
-	SkillNames  []string       `yaml:"skills"`
-	Policy      map[string]any `yaml:"policy"`
-	Version     int            `yaml:"version"`
+	RoleID      string   `yaml:"role_id"`
+	DisplayName string   `yaml:"display_name"`
+	Description string   `yaml:"description"`
+	Prompt      string   `yaml:"prompt"`
+	SkillNames  []string `yaml:"skills"`
+	Version     int      `yaml:"version"`
 }
 
 func LoadCatalog(workspaceRoot string) (Catalog, error) {
@@ -167,7 +164,6 @@ func loadRoleSpec(root, roleID string) (Spec, error) {
 		Description: strings.TrimSpace(cfg.Description),
 		Prompt:      prompt,
 		SkillNames:  normalizeSkillNames(cfg.Skills),
-		Policy:      normalizePolicyMap(cfg.Policy),
 		Version:     normalizeRoleVersion(cfg.Version),
 	}, nil
 }
@@ -191,7 +187,6 @@ func loadRoleVersionSnapshot(path string) (Spec, error) {
 		Description: strings.TrimSpace(snapshot.Description),
 		Prompt:      strings.TrimSpace(snapshot.Prompt),
 		SkillNames:  normalizeSkillNames(snapshot.SkillNames),
-		Policy:      normalizePolicyMap(snapshot.Policy),
 		Version:     normalizeRoleVersion(snapshot.Version),
 	}, nil
 }

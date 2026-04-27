@@ -45,10 +45,10 @@ type TimelineContentBlock struct {
 }
 
 type SessionTimelineResponse struct {
-	Blocks             []TimelineBlock     `json:"blocks"`
-	LatestSeq          int64               `json:"latest_seq"`
+	Blocks            []TimelineBlock     `json:"blocks"`
+	LatestSeq         int64               `json:"latest_seq"`
 	QueuedReportCount int                 `json:"queued_report_count"`
-	Queue              SessionQueueSummary `json:"queue"`
+	Queue             SessionQueueSummary `json:"queue"`
 }
 
 type SessionQueueSummary struct {
@@ -57,7 +57,7 @@ type SessionQueueSummary struct {
 	QueueDepth          int      `json:"queue_depth"`
 	QueuedUserTurns     int      `json:"queued_user_turns"`
 	QueuedReportBatches int      `json:"queued_report_batches"`
-	QueuedReports      int      `json:"queued_reports"`
+	QueuedReports       int      `json:"queued_reports"`
 }
 
 type ConversationTimelineItem struct {

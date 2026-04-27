@@ -127,22 +127,20 @@ func handleRoleByID(deps Dependencies) http.HandlerFunc {
 }
 
 type roleResponse struct {
-	RoleID      string         `json:"role_id"`
-	DisplayName string         `json:"display_name"`
-	Description string         `json:"description"`
-	Prompt      string         `json:"prompt"`
-	SkillNames  []string       `json:"skills"`
-	Policy      map[string]any `json:"policy"`
-	Version     int            `json:"version"`
+	RoleID      string   `json:"role_id"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	Prompt      string   `json:"prompt"`
+	SkillNames  []string `json:"skills"`
+	Version     int      `json:"version"`
 }
 
 type roleSummaryResponse struct {
-	RoleID      string         `json:"role_id"`
-	DisplayName string         `json:"display_name"`
-	Description string         `json:"description"`
-	SkillNames  []string       `json:"skills"`
-	Policy      map[string]any `json:"policy"`
-	Version     int            `json:"version"`
+	RoleID      string   `json:"role_id"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	SkillNames  []string `json:"skills"`
+	Version     int      `json:"version"`
 }
 
 type roleDiagnosticResponse struct {
@@ -158,7 +156,6 @@ func toRoleResponse(spec roles.Spec) roleResponse {
 		Description: spec.Description,
 		Prompt:      spec.Prompt,
 		SkillNames:  normalizeSkillsForResponse(spec.SkillNames),
-		Policy:      normalizePolicyForResponse(spec.Policy),
 		Version:     spec.Version,
 	}
 }
@@ -174,7 +171,6 @@ func toRoleSummaryResponseList(specs []roles.Spec) []roleSummaryResponse {
 			DisplayName: spec.DisplayName,
 			Description: spec.Description,
 			SkillNames:  normalizeSkillsForResponse(spec.SkillNames),
-			Policy:      normalizePolicyForResponse(spec.Policy),
 			Version:     spec.Version,
 		})
 	}
@@ -212,13 +208,6 @@ func normalizeSkillsForResponse(skills []string) []string {
 		return []string{}
 	}
 	return skills
-}
-
-func normalizePolicyForResponse(policy map[string]any) map[string]any {
-	if len(policy) == 0 {
-		return map[string]any{}
-	}
-	return policy
 }
 
 func decodeStrictJSONBody(r *http.Request, dst any) error {

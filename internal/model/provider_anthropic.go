@@ -172,7 +172,7 @@ func (p *AnthropicProvider) stream(ctx context.Context, req Request, events chan
 				}
 				toolCalls[payload.Index] = state
 			case "thinking":
-				if payload.ContentBlock.Thinking == "" {
+				if payload.ContentBlock.Thinking == "" && strings.TrimSpace(payload.ContentBlock.Signature) == "" {
 					continue
 				}
 				if err := sendStreamEvent(ctx, events, StreamEvent{
@@ -417,9 +417,13 @@ func toAnthropicMessages(items []ConversationItem) []anthropicMessage {
 			if strings.TrimSpace(item.Text) == "" && strings.TrimSpace(item.ThinkingSignature) == "" {
 				continue
 			}
+			thinking := item.Text
+			if strings.TrimSpace(thinking) == "" && strings.TrimSpace(item.ThinkingSignature) != "" {
+				thinking = "(signature only)"
+			}
 			appendMessageBlock("assistant", anthropicContentBlock{
 				Type:      "thinking",
-				Thinking:  item.Text,
+				Thinking:  thinking,
 				Signature: item.ThinkingSignature,
 			})
 		case ConversationItemAssistantText:

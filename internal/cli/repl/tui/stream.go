@@ -15,7 +15,7 @@ const (
 
 // Streamer manages the SSE event stream from the daemon.
 type Streamer struct {
-	client RuntimeClient
+	client    RuntimeClient
 	sessionID string
 	afterSeq  int64
 	ctx       context.Context
@@ -49,7 +49,7 @@ func (s *Streamer) StreamCmd() tea.Cmd {
 		go s.run(s.ctx, ch)
 		return tuiStreamReadyMsg{
 			SessionID: s.sessionID,
-			Ch:       ch,
+			Ch:        ch,
 			Cancel:    s.cancel,
 		}
 	}

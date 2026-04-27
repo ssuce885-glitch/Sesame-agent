@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,16 +68,16 @@ func allowedReadRoots(execCtx ExecContext) []string {
 }
 
 func pathWithinRoot(root, target string) (bool, error) {
-	absRoot, err := filepath.Abs(root)
+	resolvedRoot, err := resolvePathForAccessBoundary(root)
 	if err != nil {
 		return false, err
 	}
-	absTarget, err := filepath.Abs(target)
+	resolvedTarget, err := resolvePathForAccessBoundary(target)
 	if err != nil {
 		return false, err
 	}
 
-	rel, err := filepath.Rel(absRoot, absTarget)
+	rel, err := filepath.Rel(resolvedRoot, resolvedTarget)
 	if err != nil {
 		return false, err
 	}
@@ -87,6 +88,41 @@ func pathWithinRoot(root, target string) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+func resolvePathForAccessBoundary(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err == nil {
+		return resolved, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+
+	missing := []string{}
+	current := absPath
+	for {
+		resolved, evalErr := filepath.EvalSymlinks(current)
+		if evalErr == nil {
+			for idx := len(missing) - 1; idx >= 0; idx-- {
+				resolved = filepath.Join(resolved, missing[idx])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !errors.Is(evalErr, os.ErrNotExist) {
+			return "", evalErr
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 func expandUserPath(path string) string {

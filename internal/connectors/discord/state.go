@@ -12,6 +12,7 @@ import (
 const ingressTimeLayout = time.RFC3339Nano
 
 var errDiscordIngressNotFound = errors.New("discord ingress message not found")
+
 type IngressRecord struct {
 	DiscordMessageID string
 	GuildID          string

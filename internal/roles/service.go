@@ -17,12 +17,11 @@ import (
 )
 
 type UpsertInput struct {
-	RoleID      string         `json:"role_id"`
-	DisplayName string         `json:"display_name"`
-	Description string         `json:"description"`
-	Prompt      string         `json:"prompt"`
-	SkillNames  []string       `json:"skills"`
-	Policy      map[string]any `json:"policy"`
+	RoleID      string   `json:"role_id"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	Prompt      string   `json:"prompt"`
+	SkillNames  []string `json:"skills"`
 }
 
 type AutomationCleanupService interface {
@@ -430,7 +429,6 @@ func writeRoleFilesToDir(roleDir string, in UpsertInput, version int) error {
 		"display_name": strings.TrimSpace(in.DisplayName),
 		"description":  strings.TrimSpace(in.Description),
 		"skills":       dedupeStrings(in.SkillNames),
-		"policy":       normalizePolicyMap(in.Policy),
 		"version":      normalizeRoleVersion(version),
 	})
 	if err != nil {
@@ -453,7 +451,6 @@ func writeRoleSnapshotToDir(roleDir string, spec Spec) error {
 		Description: spec.Description,
 		Prompt:      spec.Prompt,
 		SkillNames:  normalizeSkillNames(spec.SkillNames),
-		Policy:      normalizePolicyMap(spec.Policy),
 		Version:     normalizeRoleVersion(spec.Version),
 	})
 	if err != nil {
@@ -473,7 +470,6 @@ func specFromUpsertInput(in UpsertInput, version int) Spec {
 		Description: strings.TrimSpace(in.Description),
 		Prompt:      strings.TrimSpace(in.Prompt),
 		SkillNames:  normalizeSkillNames(in.SkillNames),
-		Policy:      normalizePolicyMap(in.Policy),
 		Version:     normalizeRoleVersion(version),
 	}
 }

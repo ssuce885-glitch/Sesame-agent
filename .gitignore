@@ -27,7 +27,6 @@ tmp/
 *.db-wal
 *.log
 coverage.out
-*_test.go
 *.test.ts
 *.test.tsx
 *.test.js
