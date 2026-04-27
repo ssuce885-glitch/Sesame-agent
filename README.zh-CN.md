@@ -220,11 +220,19 @@ Sesame 正在继续收敛到更明确的 workspace runtime 模型：
 
 ## 路线图
 
+### Runtime 与架构
 - 继续围绕 workspace、task、report 和 context-head 简化 runtime spine
 - 改进长时间运行 workspace 的 memory 和 history compaction
 - 扩展 console 中的 runtime inspection 和 repair 流程
 - 强化 role versioning、policy 边界和 diagnostics
 - 在同一套本地 runtime 模型上增加更多外部入口
+
+### 多模态 / 视觉支持
+- **视觉能力工具化**：新增 `analyze_image` 工具，将图片理解委托给独立配置的视觉模型，
+  与主文本模型解耦。工具返回文本描述供主模型消费，无需改动 engine 循环或对话管道。
+- **Provider 无关的视觉配置**：在 `~/.sesame/config.json` 中新增 `vision` 配置块，
+  支持独立的 API key、base URL 和模型选择，视觉模型可以与主模型来自不同供应商。
+- **Web Console 图片支持**：SSE 事件类型支持图片内容、前端图片渲染、以及用户在聊天中上传/粘贴图片。
 
 ## 开发
 

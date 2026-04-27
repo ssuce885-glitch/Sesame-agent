@@ -220,11 +220,23 @@ The project is already usable for local operational workflows, but the architect
 
 ## Roadmap
 
+### Runtime & Architecture
 - Continue simplifying the runtime spine around workspace, task, report, and context-head primitives
 - Improve memory and history compaction for longer-running workspaces
 - Expand runtime inspection and repair workflows in the console
 - Strengthen role versioning, policy boundaries, and diagnostics
 - Add more external entrypoints on top of the same local runtime model
+
+### Multi-Modal / Vision Support
+- **Vision as a tool**: Introduce an `analyze_image` tool that delegates image understanding to a
+  separately configured vision model, independent of the main text model. The tool returns a text
+  description that the main model consumes — no changes needed to the engine loop or conversation
+  pipeline. Supports Anthropic Messages API and OpenAI-compatible providers.
+- **Provider-agnostic vision config**: Support per-provider API keys, base URLs, and model
+  selection under a dedicated `vision` config block in `~/.sesame/config.json`, so the vision
+  model can be from a different vendor than the main model.
+- **Web console image support**: SSE event types for image content, frontend image rendering,
+  and user image upload/paste in the chat composer.
 
 ## Development
 
