@@ -12,8 +12,8 @@ import (
 )
 
 type simpleRuntimeStore interface {
+	ClaimSimpleAutomationRun(context.Context, types.SimpleAutomationRun) (bool, error)
 	UpsertSimpleAutomationRun(context.Context, types.SimpleAutomationRun) error
-	GetSimpleAutomationRun(context.Context, string, string) (types.SimpleAutomationRun, bool, error)
 }
 
 type simpleRuntimeTaskManager interface {
@@ -54,19 +54,29 @@ func (r *SimpleRuntime) HandleMatch(ctx context.Context, spec types.AutomationSp
 			Message: "owner must be role:<role_id> for simple mode automations",
 		}
 	}
-
-	detector, hasDetector := parseSimpleRuntimeDetectorSignal(trigger.Payload)
-	dedupeKey := resolveSimpleRunDedupeKey(trigger, detector, hasDetector, automationID)
-	if existing, ok, err := r.store.GetSimpleAutomationRun(ctx, automationID, dedupeKey); err != nil {
-		return err
-	} else if ok && !shouldDispatchSimpleAutomationRun(spec, existing) {
-		return nil
-	}
-
-	summary, facts := resolveSimpleRunSignalData(trigger, detector, hasDetector)
 	targetRole, err := resolveSimpleAutomationTargetRole(owner)
 	if err != nil {
 		return err
+	}
+
+	detector, hasDetector := parseSimpleRuntimeDetectorSignal(trigger.Payload)
+	dedupeKey := resolveSimpleRunDedupeKey(trigger, detector, hasDetector, automationID)
+	summary, facts := resolveSimpleRunSignalData(trigger, detector, hasDetector)
+	now := r.currentTime()
+	claimed, err := r.store.ClaimSimpleAutomationRun(ctx, types.SimpleAutomationRun{
+		AutomationID: automationID,
+		DedupeKey:    dedupeKey,
+		Owner:        owner,
+		LastStatus:   "running",
+		LastSummary:  summary,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return nil
 	}
 
 	taskPrompt := buildSimpleAutomationPrompt(spec, summary, dedupeKey, facts)
@@ -81,10 +91,18 @@ func (r *SimpleRuntime) HandleMatch(ctx context.Context, spec types.AutomationSp
 		Start:         true,
 	})
 	if err != nil {
+		_ = r.store.UpsertSimpleAutomationRun(ctx, types.SimpleAutomationRun{
+			AutomationID: automationID,
+			DedupeKey:    dedupeKey,
+			Owner:        owner,
+			LastStatus:   "failure",
+			LastSummary:  err.Error(),
+			CreatedAt:    now,
+			UpdatedAt:    r.currentTime(),
+		})
 		return err
 	}
 
-	now := r.currentTime()
 	return r.store.UpsertSimpleAutomationRun(ctx, types.SimpleAutomationRun{
 		AutomationID: automationID,
 		DedupeKey:    dedupeKey,
@@ -95,27 +113,6 @@ func (r *SimpleRuntime) HandleMatch(ctx context.Context, spec types.AutomationSp
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	})
-}
-
-func shouldDispatchSimpleAutomationRun(spec types.AutomationSpec, existing types.SimpleAutomationRun) bool {
-	if strings.TrimSpace(existing.AutomationID) == "" {
-		return true
-	}
-
-	switch strings.ToLower(strings.TrimSpace(existing.LastStatus)) {
-	case "":
-		return false
-	case "running":
-		return false
-	case "success":
-		return !strings.EqualFold(strings.TrimSpace(spec.SimplePolicy.OnSuccess), "pause")
-	case "failure":
-		return strings.EqualFold(strings.TrimSpace(spec.SimplePolicy.OnFailure), "continue")
-	case "blocked":
-		return strings.EqualFold(strings.TrimSpace(spec.SimplePolicy.OnBlocked), "continue")
-	default:
-		return false
-	}
 }
 
 func (r *SimpleRuntime) currentTime() time.Time {

@@ -18,6 +18,51 @@ func (t runtimeTx) UpsertSimpleAutomationRun(ctx context.Context, run types.Simp
 	return upsertSimpleAutomationRunWithExec(ctx, t.tx, run)
 }
 
+func (s *Store) ClaimSimpleAutomationRun(ctx context.Context, run types.SimpleAutomationRun) (bool, error) {
+	return claimSimpleAutomationRunWithExec(ctx, s.db, run)
+}
+
+func (t runtimeTx) ClaimSimpleAutomationRun(ctx context.Context, run types.SimpleAutomationRun) (bool, error) {
+	return claimSimpleAutomationRunWithExec(ctx, t.tx, run)
+}
+
+func claimSimpleAutomationRunWithExec(ctx context.Context, execer execContexter, run types.SimpleAutomationRun) (bool, error) {
+	run = normalizeSimpleAutomationRunForStore(run)
+	if run.AutomationID == "" || run.DedupeKey == "" {
+		return false, nil
+	}
+	payload, err := json.Marshal(run)
+	if err != nil {
+		return false, err
+	}
+
+	result, err := execer.ExecContext(ctx, `
+		insert into automation_simple_runs (
+			automation_id, dedupe_key, owner, task_id, last_status, last_summary, payload, created_at, updated_at
+		)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		on conflict(automation_id, dedupe_key) do nothing
+	`,
+		run.AutomationID,
+		run.DedupeKey,
+		run.Owner,
+		run.TaskID,
+		run.LastStatus,
+		run.LastSummary,
+		string(payload),
+		run.CreatedAt.UTC().Format(timeLayout),
+		run.UpdatedAt.UTC().Format(timeLayout),
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
+}
+
 func upsertSimpleAutomationRunWithExec(ctx context.Context, execer execContexter, run types.SimpleAutomationRun) error {
 	run = normalizeSimpleAutomationRunForStore(run)
 	if run.AutomationID == "" || run.DedupeKey == "" {
