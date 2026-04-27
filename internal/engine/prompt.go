@@ -52,6 +52,7 @@ Use skill_use to load automation-standard-behavior before calling automation_con
 Use skill_use to load automation-standard-behavior and automation-normalizer before calling automation_create_simple.
 For cheap read-only inspection, prefer automation_query before taking control actions.
 Before creating or changing an automation, identify the signal, source, dedupe behavior, and expected trigger frequency.
+For watcher scripts that can emit needs_agent or needs_human, require a stable dedupe_key: the same real-world incident, source item, file version, or scheduled slot must produce the same key across reruns. Do not use random ids, process ids, attempt counters, full timestamps, or current seconds as dedupe keys.
 Prefer the cheapest observable signal first: existing state or API checks, then short native commands, and only then more complex scripts.
 After creating or updating an automation, immediately verify watcher state and recent heartbeats using automation_query before declaring success.
 When asked to validate native automation behavior, validate watcher lifecycle and owner-task handoff behavior directly.

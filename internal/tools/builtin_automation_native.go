@@ -35,7 +35,7 @@ func (automationCreateSimpleTool) Definition() Definition {
 			},
 			"watch_script": map[string]any{
 				"type":        "string",
-				"description": "Shell command/script that emits one detector JSON object for trigger_on=script_status. The runtime pauses the watcher after a needs_agent dispatch and resumes it after the owner task according to simple_policy. No match example: {\"status\":\"healthy\",\"summary\":\"no files found\",\"facts\":{\"count\":0}}. Match example: {\"status\":\"needs_agent\",\"summary\":\"found files to clean\",\"facts\":{\"count\":2}}. Do not output triggered/found/NO_MATCH or wrap inside script_status.",
+				"description": "Shell command/script that emits one detector JSON object for trigger_on=script_status. The runtime pauses the watcher after a needs_agent dispatch and resumes it after the owner task according to simple_policy. needs_agent/needs_human outputs must include a stable dedupe_key: the same incident, item, file version, or scheduled slot must produce the same key across reruns. Do not use random ids, process ids, attempt counters, or current seconds. No match example: {\"status\":\"healthy\",\"summary\":\"no files found\",\"facts\":{\"count\":0}}. Match example: {\"status\":\"needs_agent\",\"summary\":\"found files to clean\",\"dedupe_key\":\"box-cleaner:txt-files:2026-04-27T04\",\"facts\":{\"count\":2}}. Do not output triggered/found/NO_MATCH or wrap inside script_status.",
 			},
 			"interval_seconds": map[string]any{
 				"type":        "integer",

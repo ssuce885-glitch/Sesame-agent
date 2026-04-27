@@ -22,7 +22,7 @@ Keep the simple chain explicit:
 2. Stay inside that mode's boundary.
 3. Gather only the inputs needed for the simple chain.
 4. Create or update using `automation_create_simple` when the turn is actually an automation-definition turn.
-5. Summarize trigger signal, owner routing, report target, escalation target, and simple policy in user language.
+5. Summarize trigger signal, stable dedupe key strategy, owner routing, report target, escalation target, and simple policy in user language.
 6. Verify runtime-visible state using `automation_query` when stored spec, watcher state, or recent heartbeats matter.
 
 ## Modes
@@ -36,6 +36,7 @@ Use this mode when the user is defining, updating, replacing, or explicitly aski
 - Keep detector logic in the watcher script or watcher command contract, not in improvised shell prose.
 - If the user wants the automation to start immediately, require a runnable watcher command and interval now.
 - If a role is meant to own the automation, delegate to that owning role and have that role create it. Do not create role-owned automations from `main_agent`.
+- For watcher outputs that can dispatch owner work, define a stable `dedupe_key` strategy before creation. The same incident, feed item, file version, or scheduled slot must map to the same key across watcher reruns.
 
 ### 2. Owner Task Mode
 
@@ -65,6 +66,7 @@ Use this mode when the user asks for current status, progress, explanation, or d
 - Do not recommend `automation_apply` or managed detector/incident/dispatch builder tools.
 - Do not propose `while true`, infinite polling shells, or background shell hacks as the automation implementation.
 - Simple watchers pause after a dispatch; owner task completion resumes the watcher only when `simple_policy` says to continue.
+- Do not use random ids, process ids, attempt counters, full timestamps, or current seconds as watcher `dedupe_key` values.
 
 ## Cross-Mode Prohibitions
 
