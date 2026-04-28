@@ -3,6 +3,7 @@ package memory
 import (
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -108,6 +109,18 @@ func scoreRecallEntry(normalizedQuery string, queryTerms []string, entry types.M
 	}
 
 	score += matches * matches
+	age := time.Since(entry.LastUsedAt)
+	if entry.LastUsedAt.IsZero() {
+		age = time.Since(entry.CreatedAt)
+	}
+	if entry.LastUsedAt.IsZero() && entry.CreatedAt.IsZero() {
+		age = 0
+	}
+	decay := DecayFactor(age, DefaultHalfLife)
+	score = int(float64(score) * decay)
+	if score <= 0 {
+		return 0
+	}
 	if entry.Confidence > 0 {
 		score += int(entry.Confidence * 10)
 	}

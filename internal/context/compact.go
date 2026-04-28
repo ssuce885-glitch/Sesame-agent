@@ -80,13 +80,28 @@ func estimateTextTokens(text string) int {
 }
 
 func chooseCompactionAction(items []model.ConversationItem, recentStart int, estimated int, cfg Config) CompactionAction {
+	if cfg.ModelContextWindow > 0 && estimated > cfg.ForcedArchiveTokenThreshold() {
+		return CompactionAction{Kind: CompactionActionArchive, RangeStart: 0, RangeEnd: recentStart}
+	}
+	if cfg.CircuitBreakerOpen && recentStart > 0 {
+		return CompactionAction{Kind: CompactionActionArchive, RangeStart: 0, RangeEnd: recentStart}
+	}
+
 	if estimated <= cfg.MaxEstimatedTokens && len(items) <= cfg.CompactionThreshold {
 		return CompactionAction{Kind: CompactionActionNone}
 	}
 
 	var micro []int
 	if cfg.MicrocompactBytesThreshold > 0 {
-		for i := 0; i < recentStart; i++ {
+		maxScan := recentStart
+		if cfg.MaxCompactionBatchItems > 0 && maxScan > cfg.MaxCompactionBatchItems {
+			maxScan = cfg.MaxCompactionBatchItems
+		}
+		scanStart := recentStart - maxScan
+		if scanStart < 0 {
+			scanStart = 0
+		}
+		for i := scanStart; i < recentStart; i++ {
 			item := items[i]
 			if item.Kind == model.ConversationItemToolResult && item.Result != nil && len(item.Result.Content) >= cfg.MicrocompactBytesThreshold {
 				micro = append(micro, i)

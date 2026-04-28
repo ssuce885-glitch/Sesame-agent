@@ -35,6 +35,8 @@ type Config struct {
 	ProviderCacheProfile       string
 	CacheExpirySeconds         int
 	MicrocompactBytesThreshold int
+	MaxCompactionBatchItems    int
+	MaxToolResultStoreBytes    int
 	LogLevel                   string
 	PermissionProfile          string
 	MaxToolSteps               int
@@ -45,6 +47,7 @@ type Config struct {
 	MaxRecentItems               int
 	CompactionThreshold          int
 	MaxEstimatedTokens           int
+	ModelContextWindow           int
 	MaxCompactionPasses          int
 	SystemPrompt                 string
 	SystemPromptFile             string
@@ -198,7 +201,9 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		VisionModel:                  visionModel,
 		ProviderCacheProfile:         firstNonEmpty(envOrDefault("SESAME_PROVIDER_CACHE_PROFILE", ""), defaultProviderCacheProfile(modelProvider, uc, genericBaseURL), "none"),
 		CacheExpirySeconds:           intEnvOrDefault("SESAME_CACHE_EXPIRY_SECONDS", 86400),
-		MicrocompactBytesThreshold:   intEnvOrDefaultWithFallback("SESAME_MICROCOMPACT_BYTES_THRESHOLD", uc.MicrocompactBytesThreshold, 8192),
+		MicrocompactBytesThreshold:   intEnvOrDefaultWithFallback("SESAME_MICROCOMPACT_BYTES_THRESHOLD", uc.MicrocompactBytesThreshold, 4096),
+		MaxCompactionBatchItems:      intEnvOrDefaultWithFallback("SESAME_MAX_COMPACTION_BATCH_ITEMS", uc.MaxCompactionBatchItems, 500),
+		MaxToolResultStoreBytes:      intEnvOrDefault("SESAME_MAX_TOOL_RESULT_STORE_BYTES", 16384),
 		LogLevel:                     envOrDefault("SESAME_LOG_LEVEL", "info"),
 		PermissionProfile:            firstNonEmpty(strings.TrimSpace(overrides.PermissionMode), envOrDefaultWithFallback("SESAME_PERMISSION_PROFILE", uc.PermissionProfile, "trusted_local")),
 		MaxToolSteps:                 intEnvOrDefaultWithFallback("SESAME_MAX_TOOL_STEPS", uc.MaxToolSteps, 100),
@@ -208,6 +213,7 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		MaxRecentItems:               intEnvOrDefaultWithFallback("SESAME_MAX_RECENT_ITEMS", uc.MaxRecentItems, 12),
 		CompactionThreshold:          intEnvOrDefaultWithFallback("SESAME_COMPACTION_THRESHOLD", uc.CompactionThreshold, 32),
 		MaxEstimatedTokens:           intEnvOrDefaultWithFallback("SESAME_MAX_ESTIMATED_TOKENS", uc.MaxEstimatedTokens, 16000),
+		ModelContextWindow:           intEnvOrDefaultWithFallback("SESAME_MODEL_CONTEXT_WINDOW", uc.ModelContextWindow, 200000),
 		MaxCompactionPasses:          intEnvOrDefaultWithFallback("SESAME_MAX_COMPACTION_PASSES", uc.MaxCompactionPasses, 1),
 		SystemPrompt:                 envOrDefaultWithFallback("SESAME_SYSTEM_PROMPT", uc.SystemPrompt, ""),
 		SystemPromptFile:             envOrDefaultWithFallback("SESAME_SYSTEM_PROMPT_FILE", uc.SystemPromptFile, ""),
@@ -248,7 +254,10 @@ func (c Config) Fingerprint() string {
 		MaxRecentItems               int    `json:"max_recent_items"`
 		CompactionThreshold          int    `json:"compaction_threshold"`
 		MaxEstimatedTokens           int    `json:"max_estimated_tokens"`
+		ModelContextWindow           int    `json:"model_context_window"`
 		MaxCompactionPasses          int    `json:"max_compaction_passes"`
+		MaxCompactionBatchItems      int    `json:"max_compaction_batch_items"`
+		MaxToolResultStoreBytes      int    `json:"max_tool_result_store_bytes"`
 		SystemPrompt                 string `json:"system_prompt"`
 		SystemPromptFile             string `json:"system_prompt_file"`
 		MaxWorkspacePromptBytes      int    `json:"max_workspace_prompt_bytes"`
@@ -280,7 +289,10 @@ func (c Config) Fingerprint() string {
 		MaxRecentItems:               c.MaxRecentItems,
 		CompactionThreshold:          c.CompactionThreshold,
 		MaxEstimatedTokens:           c.MaxEstimatedTokens,
+		ModelContextWindow:           c.ModelContextWindow,
 		MaxCompactionPasses:          c.MaxCompactionPasses,
+		MaxCompactionBatchItems:      c.MaxCompactionBatchItems,
+		MaxToolResultStoreBytes:      c.MaxToolResultStoreBytes,
 		SystemPrompt:                 c.SystemPrompt,
 		SystemPromptFile:             c.SystemPromptFile,
 		MaxWorkspacePromptBytes:      c.MaxWorkspacePromptBytes,

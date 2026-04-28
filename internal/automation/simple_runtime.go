@@ -192,6 +192,7 @@ func buildSimpleAutomationPrompt(spec types.AutomationSpec, summary, dedupeKey s
 		"Do not call automation_create_simple or automation_control.",
 		"Execute automation_goal using the detector facts.",
 		"Return the result as your final assistant response; the runtime delivers that response to the main agent report stream.",
+		"Keep your final response concise: summarize findings and actions taken.",
 		"Do not call delegate_to_role to report the result.",
 		"",
 		"Simple automation task",

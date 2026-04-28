@@ -14,8 +14,9 @@ data-local/
 attachments/
 automations/
 mailbox/
-memory/
+/memory/
 notices/
+qdb/
 resources/
 rules/
 runs/
@@ -62,3 +63,7 @@ web/console/node_modules/
 .vscode/
 *.swp
 *.swo
+
+# Dev tools
+lifecycle-test
+qdb/

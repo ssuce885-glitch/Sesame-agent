@@ -108,8 +108,10 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 		buildMaxToolSteps(cfg),
 	)
 	runner.SetGlobalConfigRoot(cfg.Paths.GlobalRoot)
+	runner.SetArchiver(wiring.archiver)
 	runner.SetContextHeadSummaryAsync(true)
 	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
+	runner.SetMaxToolResultStoreBytes(cfg.MaxToolResultStoreBytes)
 	runner.SetRuntimeService(runtimeService)
 	runner.SetAutomationService(automationService)
 	roleService := rolectx.NewServiceWithGlobalRoot(cfg.Paths.GlobalRoot)
@@ -161,6 +163,9 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	}
 	if taskNotifier != nil {
 		taskNotifier.manager = sessionManager
+		sessionManager.SetIdleNotifier(func(sessionID string) {
+			_ = taskNotifier.EnqueueSyntheticReportTurn(context.Background(), sessionID)
+		})
 	}
 	runner.SetSessionDelegationService(session.NewDelegationService(store, taskManager))
 
@@ -168,6 +173,9 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	if taskNotifier != nil && taskNotifier.reporting != nil {
 		reportingService = taskNotifier.reporting
 	}
+	reportingService.SetColdStore(store)
+	reportingService.SetCleanupStore(store)
+	reportingService.SetWorkspaceRoot(cfg.Paths.WorkspaceRoot)
 
 	return &Runtime{
 		Store:             store,

@@ -55,6 +55,7 @@ func (s *Service) Tick(ctx context.Context) error {
 		return nil
 	}
 	now := s.currentTime()
+	s.cleanupOldRows(ctx, now)
 	groups, err := s.store.ListReportGroups(ctx)
 	if err != nil {
 		return err
@@ -77,6 +78,46 @@ func (s *Service) Tick(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+const (
+	reportingCleanupInterval                 = time.Hour
+	deprecatedMemoryRetention                = 90 * 24 * time.Hour
+	reportRetention                          = 30 * 24 * time.Hour
+	digestRecordRetention                    = 30 * 24 * time.Hour
+	reportDeliveryRetention                  = 14 * 24 * time.Hour
+	childAgentResultRetention                = 60 * 24 * time.Hour
+	conversationCompactionRetentionKeepCount = 10
+)
+
+func (s *Service) cleanupOldRows(ctx context.Context, now time.Time) {
+	if s == nil || s.cleanupStore == nil {
+		return
+	}
+	now = now.UTC()
+	if !s.lastCleanupAt.IsZero() && now.Sub(s.lastCleanupAt) <= reportingCleanupInterval {
+		return
+	}
+
+	affected, err := s.cleanupStore.CleanupDeprecatedMemories(ctx, now.Add(-deprecatedMemoryRetention))
+	logCleanupError("deprecated memories", affected, err)
+	affected, err = s.cleanupStore.CleanupOldReports(ctx, s.workspaceRoot, now.Add(-reportRetention))
+	logCleanupError("old reports", affected, err)
+	affected, err = s.cleanupStore.CleanupOldDigestRecords(ctx, s.workspaceRoot, now.Add(-digestRecordRetention))
+	logCleanupError("old digest records", affected, err)
+	affected, err = s.cleanupStore.CleanupOldReportDeliveries(ctx, s.workspaceRoot, now.Add(-reportDeliveryRetention))
+	logCleanupError("old report deliveries", affected, err)
+	affected, err = s.cleanupStore.CleanupOldChildAgentResults(ctx, now.Add(-childAgentResultRetention))
+	logCleanupError("old child agent results", affected, err)
+	affected, err = s.cleanupStore.CleanupOldConversationCompactions(ctx, conversationCompactionRetentionKeepCount)
+	logCleanupError("old conversation compactions", affected, err)
+	s.lastCleanupAt = now
+}
+
+func logCleanupError(name string, _ int64, err error) {
+	if err != nil {
+		slog.Warn("reporting cleanup failed", "target", name, "error", err)
+	}
 }
 
 func scheduleConfigured(schedule types.ScheduleSpec) bool {

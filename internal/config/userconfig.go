@@ -29,8 +29,10 @@ type UserConfig struct {
 	MaxRecentItems                 int                 `json:"max_recent_items"`
 	CompactionThreshold            int                 `json:"compaction_threshold"`
 	MaxEstimatedTokens             int                 `json:"max_estimated_tokens"`
+	ModelContextWindow             int                 `json:"model_context_window"`
 	MicrocompactBytesThreshold     int                 `json:"microcompact_bytes_threshold"`
 	MaxCompactionPasses            int                 `json:"max_compaction_passes"`
+	MaxCompactionBatchItems        int                 `json:"max_compaction_batch_items"`
 	ResetAnthropic                 bool                `json:"-"`
 	ResetOpenAI                    bool                `json:"-"`
 	ResetVision                    bool                `json:"-"`

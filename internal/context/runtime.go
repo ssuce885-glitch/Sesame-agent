@@ -100,7 +100,8 @@ func (r *Runtime) applyCachePlan(req model.Request, plan WorkingSet, head *types
 
 	prefixCompactionRequested := plan.CompactionApplied ||
 		plan.Action.Kind == CompactionActionMicrocompact ||
-		plan.Action.Kind == CompactionActionRolling
+		plan.Action.Kind == CompactionActionRolling ||
+		plan.Action.Kind == CompactionActionArchive
 
 	if caps.SupportsPrefixCache && shouldRotatePrefix(prefixCompactionRequested, head, r.maxCompactionPasses) {
 		req.Cache = &model.CacheDirective{

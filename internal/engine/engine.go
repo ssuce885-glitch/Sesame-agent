@@ -32,6 +32,7 @@ type RuntimeMetadata struct {
 type ConversationStore interface {
 	GetCurrentContextHeadID(context.Context) (string, bool, error)
 	ListConversationItems(context.Context, string) ([]model.ConversationItem, error)
+	MaxConversationPosition(context.Context, string) (int, bool, error)
 	ListConversationTimelineItemsByContextHead(context.Context, string, string) ([]types.ConversationTimelineItem, error)
 	ListConversationItemsByContextHead(context.Context, string, string) ([]model.ConversationItem, error)
 	ListConversationCompactionsByStoredContextHead(context.Context, string, string) ([]types.ConversationCompaction, error)
@@ -49,6 +50,12 @@ type ConversationStore interface {
 	InsertProviderCacheEntry(context.Context, types.ProviderCacheEntry) error
 	InsertConversationCompaction(context.Context, types.ConversationCompaction) error
 	InsertConversationCompactionWithContextHead(context.Context, types.ConversationCompaction) error
+	InsertConversationArchiveEntry(context.Context, types.ConversationArchiveEntry) error
+	ListConversationArchiveEntries(context.Context, string) ([]types.ConversationArchiveEntry, error)
+	SearchConversationArchiveEntries(context.Context, string, string) ([]types.ConversationArchiveEntry, error)
+	InsertColdIndexEntry(context.Context, types.ColdIndexEntry) error
+	SearchColdIndex(context.Context, types.ColdSearchQuery) ([]types.ColdIndexEntry, int, error)
+	GetColdIndexEntry(context.Context, string) (types.ColdIndexEntry, bool, error)
 }
 
 type ContextHeadSummaryWorker interface {
@@ -57,34 +64,39 @@ type ContextHeadSummaryWorker interface {
 }
 
 type Engine struct {
-	model                     model.StreamingClient
-	registry                  *tools.Registry
-	permission                *permissions.Engine
-	store                     ConversationStore
-	ctxManager                *contextstate.Manager
-	compactor                 contextstate.Compactor
-	runtime                   *contextstate.Runtime
-	meta                      RuntimeMetadata
-	basePrompt                string
-	globalConfigRoot          string
-	maxWorkspacePromptBytes   int
-	activeSkillTokenBudget    int
-	maxToolSteps              int
-	automationService         tools.AutomationService
-	roleService               tools.RoleService
-	sessionDelegationService  session.RoleDelegationService
-	taskManager               *task.Manager
-	runtimeService            *runtimegraph.Service
-	schedulerService          *scheduler.Service
-	contextHeadSummaryAsync   bool
-	contextHeadSummaryWorker  ContextHeadSummaryWorker
-	contextHeadSummaryWG      sync.WaitGroup
-	contextHeadSummaryMu      sync.Mutex
-	contextHeadSummaryRunning map[string]bool
-	contextHeadSummaryPending map[string]Input
+	model                         model.StreamingClient
+	registry                      *tools.Registry
+	permission                    *permissions.Engine
+	store                         ConversationStore
+	ctxManager                    *contextstate.Manager
+	compactor                     contextstate.Compactor
+	archiver                      *contextstate.ArchiveCompactor
+	runtime                       *contextstate.Runtime
+	meta                          RuntimeMetadata
+	basePrompt                    string
+	globalConfigRoot              string
+	maxWorkspacePromptBytes       int
+	activeSkillTokenBudget        int
+	maxToolSteps                  int
+	maxToolResultStoreBytes       int
+	automationService             tools.AutomationService
+	roleService                   tools.RoleService
+	sessionDelegationService      session.RoleDelegationService
+	taskManager                   *task.Manager
+	runtimeService                *runtimegraph.Service
+	schedulerService              *scheduler.Service
+	contextHeadSummaryAsync       bool
+	contextHeadSummaryWorker      ContextHeadSummaryWorker
+	contextHeadSummaryWG          sync.WaitGroup
+	compactionFailureMu           sync.Mutex
+	consecutiveCompactionFailures int
+	contextHeadSummaryMu          sync.Mutex
+	contextHeadSummaryRunning     map[string]bool
+	contextHeadSummaryPending     map[string]Input
 }
 
 const defaultActiveSkillTokenBudget = 2048
+const defaultMaxToolResultStoreBytes = 16384
 
 func New(
 	modelClient model.StreamingClient,
@@ -123,16 +135,17 @@ func NewWithRuntime(
 		runtime = contextstate.NewRuntime(86400, 3)
 	}
 	return &Engine{
-		model:                  modelClient,
-		registry:               registry,
-		permission:             permission,
-		store:                  store,
-		ctxManager:             ctxManager,
-		runtime:                runtime,
-		compactor:              compactor,
-		meta:                   meta,
-		activeSkillTokenBudget: defaultActiveSkillTokenBudget,
-		maxToolSteps:           maxToolSteps,
+		model:                   modelClient,
+		registry:                registry,
+		permission:              permission,
+		store:                   store,
+		ctxManager:              ctxManager,
+		runtime:                 runtime,
+		compactor:               compactor,
+		meta:                    meta,
+		activeSkillTokenBudget:  defaultActiveSkillTokenBudget,
+		maxToolSteps:            maxToolSteps,
+		maxToolResultStoreBytes: defaultMaxToolResultStoreBytes,
 	}
 }
 
@@ -166,6 +179,20 @@ func (e *Engine) SetActiveSkillTokenBudget(n int) {
 		return
 	}
 	e.activeSkillTokenBudget = n
+}
+
+func (e *Engine) SetArchiver(archiver *contextstate.ArchiveCompactor) {
+	if e == nil {
+		return
+	}
+	e.archiver = archiver
+}
+
+func (e *Engine) SetMaxToolResultStoreBytes(n int) {
+	if e == nil || n <= 0 {
+		return
+	}
+	e.maxToolResultStoreBytes = n
 }
 
 func (e *Engine) SetTaskManager(manager *task.Manager) {
@@ -208,6 +235,37 @@ func (e *Engine) SetSchedulerService(service *scheduler.Service) {
 		return
 	}
 	e.schedulerService = service
+}
+
+func (e *Engine) compactionCircuitOpen() bool {
+	if e == nil {
+		return false
+	}
+	e.compactionFailureMu.Lock()
+	defer e.compactionFailureMu.Unlock()
+	return e.consecutiveCompactionFailures >= 3
+}
+
+func (e *Engine) recordSummaryCompactionResult(err error) {
+	if e == nil {
+		return
+	}
+	e.compactionFailureMu.Lock()
+	defer e.compactionFailureMu.Unlock()
+	if err != nil {
+		e.consecutiveCompactionFailures++
+		return
+	}
+	e.consecutiveCompactionFailures = 0
+}
+
+func (e *Engine) resetCompactionCircuit() {
+	if e == nil {
+		return
+	}
+	e.compactionFailureMu.Lock()
+	defer e.compactionFailureMu.Unlock()
+	e.consecutiveCompactionFailures = 0
 }
 
 func (e *Engine) SetContextHeadSummaryAsync(enabled bool) {

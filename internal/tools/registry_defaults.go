@@ -57,12 +57,19 @@ func (r *Registry) registerTaskTools() {
 }
 
 func (r *Registry) registerRuntimeTools() {
+	r.registerArchiveTool()
 	r.Register(analyzeImageTool{})
+	r.Register(memoryWriteTool{})
 	r.Register(requestUserInputTool{})
 	r.Register(shellTool{})
 	r.Register(skillUseTool{})
 	r.Register(viewImageTool{})
 	r.Register(webFetchTool{})
+}
+
+func (r *Registry) registerArchiveTool() {
+	r.Register(recallArchiveTool{})
+	r.Register(loadContextTool{})
 }
 
 func (r *Registry) registerWorkspaceTools() {

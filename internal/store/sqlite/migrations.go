@@ -108,6 +108,31 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists cold_index (
+			id text primary key,
+			workspace_id text not null,
+			owner_role_id text not null default '',
+			visibility text not null default 'shared',
+			source_type text not null,
+			source_id text not null,
+			search_text text not null default '',
+			summary_line text not null default '',
+			files_changed text not null default '[]',
+			tools_used text not null default '[]',
+			error_types text not null default '[]',
+			occurred_at text not null,
+			created_at text not null,
+			context_ref text not null default '{}'
+		);`,
+		`create index if not exists idx_cold_index_workspace_role
+			on cold_index(workspace_id, owner_role_id);`,
+		`create index if not exists idx_cold_index_occurred
+			on cold_index(workspace_id, occurred_at);`,
+		`create virtual table if not exists cold_index_fts using fts5(
+			search_text,
+			content='cold_index',
+			content_rowid='rowid'
+		);`,
 		`create table if not exists context_head_summaries (
 			session_id text not null,
 			context_head_id text not null,
@@ -412,6 +437,10 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 
+	if err := s.migrateConversationArchiveEntries(ctx); err != nil {
+		return err
+	}
+
 	if err := s.ensureColumn(ctx, "sessions", "system_prompt", `alter table sessions add column system_prompt text not null default ''`); err != nil {
 		return err
 	}
@@ -535,6 +564,35 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+func (s *Store) migrateConversationArchiveEntries(ctx context.Context) error {
+	stmts := []string{
+		`create table if not exists conversation_archive_entries (
+			id text primary key,
+			session_id text not null,
+			range_label text not null default '',
+			turn_start integer not null default 0,
+			turn_end integer not null default 0,
+			item_count integer not null default 0,
+			summary text not null default '',
+			decisions text not null default '[]',
+			files_changed text not null default '[]',
+			errors_and_fixes text not null default '[]',
+			tools_used text not null default '[]',
+			keywords text not null default '[]',
+			is_computed integer not null default 0,
+			created_at text not null
+		);`,
+		`create index if not exists conversation_archive_entries_session_created_idx
+			on conversation_archive_entries(session_id, created_at desc, id asc);`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

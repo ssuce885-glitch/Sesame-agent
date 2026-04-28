@@ -8,24 +8,12 @@ const (
 	ConversationCompactionKindMicro   ConversationCompactionKind = "micro"
 	ConversationCompactionKindRolling ConversationCompactionKind = "rolling"
 	ConversationCompactionKindFull    ConversationCompactionKind = "full"
+	ConversationCompactionKindArchive ConversationCompactionKind = "archive"
 )
 
 type ProviderCacheKind string
 
-const (
-	ProviderCacheKindSession ProviderCacheKind = "session"
-	ProviderCacheKindPrefix  ProviderCacheKind = "prefix"
-)
-
 type ProviderCacheStatus string
-
-const (
-	ProviderCacheStatusActive     ProviderCacheStatus = "active"
-	ProviderCacheStatusSuperseded ProviderCacheStatus = "superseded"
-	ProviderCacheStatusExpired    ProviderCacheStatus = "expired"
-	ProviderCacheStatusFailed     ProviderCacheStatus = "failed"
-	ProviderCacheStatusDeleted    ProviderCacheStatus = "deleted"
-)
 
 type ProviderCacheHead struct {
 	SessionID         string    `json:"session_id"`

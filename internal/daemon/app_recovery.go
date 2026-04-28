@@ -170,7 +170,7 @@ func recoverQueuedReportTurns(ctx context.Context, store *sqlite.Store, manager 
 		if hasCreatedReportTurn {
 			continue
 		}
-		if err := enqueuer.enqueueSyntheticReportTurn(ctx, sessionID); err != nil {
+		if err := enqueuer.EnqueueSyntheticReportTurn(ctx, sessionID); err != nil {
 			return err
 		}
 	}

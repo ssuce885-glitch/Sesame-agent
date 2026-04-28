@@ -25,12 +25,28 @@ type Store interface {
 	ListDigestRecordsBySessionAndGroup(context.Context, string, string) ([]types.DigestRecord, error)
 }
 
+type coldStore interface {
+	InsertColdIndexEntry(context.Context, types.ColdIndexEntry) error
+}
+
+type cleanupStore interface {
+	CleanupOldReports(context.Context, string, time.Time) (int64, error)
+	CleanupOldDigestRecords(context.Context, string, time.Time) (int64, error)
+	CleanupOldReportDeliveries(context.Context, string, time.Time) (int64, error)
+	CleanupOldChildAgentResults(context.Context, time.Time) (int64, error)
+	CleanupDeprecatedMemories(context.Context, time.Time) (int64, error)
+	CleanupOldConversationCompactions(context.Context, int) (int64, error)
+}
+
 type Service struct {
 	store           Store
+	coldStore       coldStore
+	cleanupStore    cleanupStore
 	now             func() time.Time
 	pollInterval    time.Duration
 	reportReadySink func(context.Context, string, string, types.ReportDeliveryItem) error
 	workspaceRoot   string
+	lastCleanupAt   time.Time
 }
 
 const reportingRunErrorBackoff = 25 * time.Millisecond
@@ -40,6 +56,27 @@ func NewService(store Store) *Service {
 		store:        store,
 		now:          func() time.Time { return time.Now().UTC() },
 		pollInterval: time.Second,
+	}
+}
+
+func (s *Service) SetColdStore(cs interface {
+	InsertColdIndexEntry(context.Context, types.ColdIndexEntry) error
+}) {
+	if s != nil {
+		s.coldStore = cs
+	}
+}
+
+func (s *Service) SetCleanupStore(cs interface {
+	CleanupOldReports(context.Context, string, time.Time) (int64, error)
+	CleanupOldDigestRecords(context.Context, string, time.Time) (int64, error)
+	CleanupOldReportDeliveries(context.Context, string, time.Time) (int64, error)
+	CleanupOldChildAgentResults(context.Context, time.Time) (int64, error)
+	CleanupDeprecatedMemories(context.Context, time.Time) (int64, error)
+	CleanupOldConversationCompactions(context.Context, int) (int64, error)
+}) {
+	if s != nil {
+		s.cleanupStore = cs
 	}
 }
 
@@ -65,4 +102,15 @@ func (s *Service) SetReportReadySink(fn func(context.Context, string, string, ty
 	if s != nil {
 		s.reportReadySink = fn
 	}
+}
+
+func truncateRunes(value string, max int) string {
+	if max <= 0 || value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= max {
+		return value
+	}
+	return string(runes[:max])
 }

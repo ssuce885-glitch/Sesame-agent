@@ -468,6 +468,9 @@ func applyExecutedToolResult(
 	} else if strings.TrimSpace(result.ModelText) != "" {
 		modelToolResultText = result.ModelText
 	}
+	if e.maxToolResultStoreBytes > 0 && len(modelToolResultText) > e.maxToolResultStoreBytes {
+		modelToolResultText = modelToolResultText[:e.maxToolResultStoreBytes] + "...[truncated]"
+	}
 
 	payload := types.ToolEventPayload{
 		ToolCallID:        call.ID,

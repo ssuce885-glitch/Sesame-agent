@@ -26,6 +26,7 @@ type runtimeWiring struct {
 	contextManagerConfig contextstate.Config
 	runtime              *contextstate.Runtime
 	compactor            contextstate.Compactor
+	archiver             *contextstate.ArchiveCompactor
 }
 
 func (s combinedEventSink) Emit(ctx context.Context, event types.Event) error {
@@ -100,8 +101,10 @@ func buildContextManagerConfig(cfg config.Config) contextstate.Config {
 	return contextstate.Config{
 		MaxRecentItems:             cfg.MaxRecentItems,
 		MaxEstimatedTokens:         cfg.MaxEstimatedTokens,
+		ModelContextWindow:         cfg.ModelContextWindow,
 		CompactionThreshold:        cfg.CompactionThreshold,
 		MicrocompactBytesThreshold: cfg.MicrocompactBytesThreshold,
+		MaxCompactionBatchItems:    cfg.MaxCompactionBatchItems,
 	}
 }
 
@@ -124,5 +127,6 @@ func buildRuntimeWiring(cfg config.Config, modelClient model.StreamingClient) ru
 		contextManagerConfig: buildContextManagerConfig(cfg),
 		runtime:              contextstate.NewRuntime(cfg.CacheExpirySeconds, cfg.MaxCompactionPasses),
 		compactor:            contextstate.NewPromptedCompactor(modelClient, cfg.Model),
+		archiver:             contextstate.NewArchiveCompactor(modelClient, cfg.Model),
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"go-agent/internal/reporting"
@@ -23,14 +24,18 @@ type storeAndBusSink struct {
 }
 
 type taskTerminalNotifier struct {
-	store     taskTerminalStore
-	bus       *stream.Bus
-	watcher   simpleAutomationWatcherInstaller
-	scheduler *scheduler.Service
-	reporting *reporting.Service
-	manager   *session.Manager
-	now       func() time.Time
+	store             taskTerminalStore
+	bus               *stream.Bus
+	watcher           simpleAutomationWatcherInstaller
+	scheduler         *scheduler.Service
+	reporting         *reporting.Service
+	manager           *session.Manager
+	now               func() time.Time
+	reportBatchMu     sync.Mutex
+	lastReportBatchAt time.Time
 }
+
+const reportBatchCooldown = 5 * time.Minute
 
 type eventSinkStore interface {
 	AppendEventWithState(context.Context, types.Event) (types.Event, error)
@@ -80,6 +85,8 @@ func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus, workspaceRo
 		return nil
 	}
 	reportingService := reporting.NewService(store)
+	reportingService.SetColdStore(store)
+	reportingService.SetCleanupStore(store)
 	reportingService.SetWorkspaceRoot(workspaceRoot)
 	reportingService.SetReportReadySink(func(ctx context.Context, sessionID, turnID string, item types.ReportDeliveryItem) error {
 		sessionID = strings.TrimSpace(sessionID)
@@ -100,8 +107,8 @@ func buildTaskTerminalNotifier(store *sqlite.Store, bus *stream.Bus, workspaceRo
 	}
 }
 
-func (n taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed task.Task) error {
-	if n.store == nil || strings.TrimSpace(completed.ID) == "" {
+func (n *taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed task.Task) error {
+	if n == nil || n.store == nil || strings.TrimSpace(completed.ID) == "" {
 		return nil
 	}
 
@@ -177,14 +184,14 @@ func (n taskTerminalNotifier) NotifyTaskTerminal(ctx context.Context, completed 
 	return eventSink.Emit(ctx, noticeEvent)
 }
 
-func (n taskTerminalNotifier) currentTime() time.Time {
-	if n.now != nil {
+func (n *taskTerminalNotifier) currentTime() time.Time {
+	if n != nil && n.now != nil {
 		return n.now().UTC()
 	}
 	return time.Now().UTC()
 }
 
-func (n taskTerminalNotifier) reconcileSimpleAutomationTask(ctx context.Context, completed task.Task) error {
+func (n *taskTerminalNotifier) reconcileSimpleAutomationTask(ctx context.Context, completed task.Task) error {
 	if n.store == nil || strings.TrimSpace(completed.ID) == "" {
 		return nil
 	}
@@ -243,7 +250,7 @@ func (n taskTerminalNotifier) reconcileSimpleAutomationTask(ctx context.Context,
 	return n.deliverSimpleAutomationReport(ctx, completed, workspaceRoot, escalationTarget, now)
 }
 
-func (n taskTerminalNotifier) resumeSimpleAutomationWatcher(ctx context.Context, spec types.AutomationSpec) error {
+func (n *taskTerminalNotifier) resumeSimpleAutomationWatcher(ctx context.Context, spec types.AutomationSpec) error {
 	if n.watcher == nil {
 		return nil
 	}
@@ -267,7 +274,7 @@ func shouldResumeSimpleAutomationWatcher(spec types.AutomationSpec, status strin
 	}
 }
 
-func (n taskTerminalNotifier) deliverSimpleAutomationReport(ctx context.Context, completed task.Task, workspaceRoot, reportTarget string, now time.Time) error {
+func (n *taskTerminalNotifier) deliverSimpleAutomationReport(ctx context.Context, completed task.Task, workspaceRoot, reportTarget string, now time.Time) error {
 	if n.store == nil {
 		return nil
 	}
@@ -278,7 +285,7 @@ func (n taskTerminalNotifier) deliverSimpleAutomationReport(ctx context.Context,
 	return n.deliverTaskReport(ctx, completed, sessionID, "", now)
 }
 
-func (n taskTerminalNotifier) deliverTaskReport(ctx context.Context, completed task.Task, targetSessionID, targetRoleID string, now time.Time) error {
+func (n *taskTerminalNotifier) deliverTaskReport(ctx context.Context, completed task.Task, targetSessionID, targetRoleID string, now time.Time) error {
 	if n.store == nil || strings.TrimSpace(targetSessionID) == "" {
 		return nil
 	}
@@ -318,10 +325,10 @@ func (n taskTerminalNotifier) deliverTaskReport(ctx context.Context, completed t
 	if err := n.emitReportReady(ctx, targetSessionID, completed.ParentTurnID, item); err != nil {
 		return err
 	}
-	return n.enqueueSyntheticReportTurn(ctx, targetSessionID)
+	return n.EnqueueSyntheticReportTurn(ctx, targetSessionID)
 }
 
-func (n taskTerminalNotifier) emitReportReady(ctx context.Context, sessionID, turnID string, item types.ReportDeliveryItem) error {
+func (n *taskTerminalNotifier) emitReportReady(ctx context.Context, sessionID, turnID string, item types.ReportDeliveryItem) error {
 	if n.store == nil || n.bus == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
@@ -333,7 +340,7 @@ func (n taskTerminalNotifier) emitReportReady(ctx context.Context, sessionID, tu
 	return eventSink.Emit(ctx, event)
 }
 
-func (n taskTerminalNotifier) resolveSimpleAutomationTargetSession(ctx context.Context, workspaceRoot, target string) (string, error) {
+func (n *taskTerminalNotifier) resolveSimpleAutomationTargetSession(ctx context.Context, workspaceRoot, target string) (string, error) {
 	if n.store == nil {
 		return "", nil
 	}
@@ -355,7 +362,7 @@ func (n taskTerminalNotifier) resolveSimpleAutomationTargetSession(ctx context.C
 	return strings.TrimSpace(sessionRow.ID), nil
 }
 
-func (n taskTerminalNotifier) resolveMainAgentReportSession(ctx context.Context, completed task.Task) (string, error) {
+func (n *taskTerminalNotifier) resolveMainAgentReportSession(ctx context.Context, completed task.Task) (string, error) {
 	if n.store == nil {
 		return "", nil
 	}
@@ -485,7 +492,7 @@ func reportAudienceForTargetRole(targetRoleID string) types.ReportAudience {
 	return types.ReportAudienceRole
 }
 
-func (n taskTerminalNotifier) resolveTaskSourceSessionID(ctx context.Context, completed task.Task, workspaceRoot string) (string, error) {
+func (n *taskTerminalNotifier) resolveTaskSourceSessionID(ctx context.Context, completed task.Task, workspaceRoot string) (string, error) {
 	if n.store == nil {
 		return "", nil
 	}
@@ -529,10 +536,24 @@ func loadInstalledSpecialistRole(workspaceRoot, roleID string) (rolectx.Spec, er
 	return spec, nil
 }
 
-func (n taskTerminalNotifier) enqueueSyntheticReportTurn(ctx context.Context, sessionID string) error {
-	if n.store == nil || n.manager == nil || strings.TrimSpace(sessionID) == "" {
+func (n *taskTerminalNotifier) EnqueueSyntheticReportTurn(ctx context.Context, sessionID string) error {
+	if n == nil || n.store == nil || n.manager == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
+	now := n.currentTime()
+	n.reportBatchMu.Lock()
+	defer n.reportBatchMu.Unlock()
+	if !n.lastReportBatchAt.IsZero() && now.Sub(n.lastReportBatchAt) < reportBatchCooldown {
+		remaining := reportBatchCooldown - now.Sub(n.lastReportBatchAt)
+		if remaining > 0 {
+			sessionID := strings.TrimSpace(sessionID)
+			time.AfterFunc(remaining, func() {
+				_ = n.EnqueueSyntheticReportTurn(context.Background(), sessionID)
+			})
+		}
+		return nil
+	}
+
 	sessionRow, ok, err := n.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return err
@@ -546,9 +567,11 @@ func (n taskTerminalNotifier) enqueueSyntheticReportTurn(ctx context.Context, se
 		if state.QueuedReportBatches > 0 {
 			return nil
 		}
+		if state.ActiveTurnKind != "" {
+			return nil
+		}
 	}
 
-	now := n.currentTime()
 	turn := types.Turn{
 		ID:        types.NewID("turn"),
 		SessionID: sessionID,
@@ -563,8 +586,11 @@ func (n taskTerminalNotifier) enqueueSyntheticReportTurn(ctx context.Context, se
 	if err := n.store.InsertTurn(ctx, turn); err != nil {
 		return err
 	}
-	_, err = n.manager.SubmitTurn(ctx, sessionID, session.SubmitTurnInput{Turn: turn})
-	return err
+	if _, err := n.manager.SubmitTurn(ctx, sessionID, session.SubmitTurnInput{Turn: turn}); err != nil {
+		return err
+	}
+	n.lastReportBatchAt = now
+	return nil
 }
 
 func clampTaskResultPreview(text string) string {

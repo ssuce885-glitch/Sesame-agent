@@ -2,10 +2,12 @@ package engine
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
 	contextstate "go-agent/internal/context"
+	"go-agent/internal/memory"
 	"go-agent/internal/model"
 	rolectx "go-agent/internal/roles"
 	"go-agent/internal/types"
@@ -148,7 +150,65 @@ func refreshContextHeadSummary(ctx context.Context, e *Engine, in Input) (contex
 			report.GlobalEntriesUpserted++
 		}
 	}
+	deprecateLowScoringMemories(e.store, record.WorkspaceRoot, roleID, time.Now().UTC())
 	return report, nil
+}
+
+func deprecateLowScoringMemories(store ConversationStore, workspaceRoot string, roleID string, now time.Time) {
+	if store == nil {
+		return
+	}
+	deprecationStore, ok := store.(interface {
+		DeprecateMemoryEntries(context.Context, []string) error
+	})
+	if !ok {
+		return
+	}
+	ctx := context.Background()
+	entries, err := store.ListVisibleMemoryEntries(ctx, workspaceRoot, roleID)
+	if err != nil {
+		return
+	}
+	deprecated := make([]string, 0)
+	for _, entry := range entries {
+		if memory.EffectiveScore(entry, now) >= memory.DeprecationThreshold {
+			continue
+		}
+		if err := store.InsertColdIndexEntry(ctx, types.ColdIndexEntry{
+			ID:           "cold_memory_deprecated_" + entry.ID,
+			WorkspaceID:  workspaceRoot,
+			OwnerRoleID:  entry.OwnerRoleID,
+			Visibility:   entry.Visibility,
+			SourceType:   "memory_deprecated",
+			SourceID:     entry.ID,
+			SearchText:   entry.Content,
+			SummaryLine:  truncateToRunes(entry.Content, 200),
+			FilesChanged: entry.SourceRefs,
+			OccurredAt:   entry.CreatedAt,
+			CreatedAt:    now,
+			ContextRef: types.ColdContextRef{
+				SessionID:     entry.SourceSessionID,
+				ContextHeadID: entry.SourceContextHeadID,
+				ItemCount:     0,
+			},
+		}); err != nil {
+			slog.Warn("cold index insert failed, skipping deprecation", "memory_id", entry.ID, "error", err)
+			continue
+		}
+		deprecated = append(deprecated, entry.ID)
+	}
+	_ = deprecationStore.DeprecateMemoryEntries(ctx, deprecated)
+}
+
+func truncateToRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max])
 }
 
 func shouldPromoteHeadToDurableMemory(headID string, canonicalHeadID string) bool {
@@ -165,9 +225,9 @@ func shouldRefreshContextHeadSummary(hasExisting bool, freshItems []model.Conver
 	estimatedTokens := contextstate.EstimatePromptTokens("", freshItems, SummaryBundle{}, nil)
 	signals := countContextHeadSummarySignals(freshItems)
 	if hasExisting {
-		return len(freshItems) >= contextHeadSummaryUpdateMinItems ||
-			estimatedTokens >= contextHeadSummaryUpdateMinTokens ||
-			signals >= contextHeadSummarySignalThreshold
+		return len(freshItems) >= contextHeadSummaryCooldownMinItems ||
+			estimatedTokens >= contextHeadSummaryUpdateMinTokens*2 ||
+			signals >= contextHeadSummarySignalThreshold*2
 	}
 	return len(freshItems) >= contextHeadSummaryBootstrapMinItems ||
 		estimatedTokens >= contextHeadSummaryBootstrapMinTokens ||

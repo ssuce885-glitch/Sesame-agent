@@ -109,6 +109,9 @@ func prepareLoopState(ctx context.Context, e *Engine, in Input, emitter loopEmit
 		TaskManager:              e.taskManager,
 		RuntimeService:           e.runtimeService,
 		SchedulerService:         e.schedulerService,
+		ArchiveStore:             e.store,
+		ColdIndexStore:           coldIndexStoreFromConversationStore(e.store),
+		MemoryStore:              e.store,
 		TurnContext:              turnCtx,
 		EventSink:                in.Sink,
 	}
@@ -281,7 +284,32 @@ func persistInitialLoopItems(ctx context.Context, e *Engine, in Input, emitter l
 		}
 		state.nextPosition++
 	}
+	if state.turnKind == types.TurnKindReportBatch {
+		reportItems := buildReportConversationItems(state.reports)
+		for _, item := range reportItems {
+			if err := persistConversationItem(ctx, e.store, state.sessionID, in.Turn.ContextHeadID, in.Turn.ID, state.nextPosition, item); err != nil {
+				return emitter.Fail(ctx, err)
+			}
+			state.nextPosition++
+		}
+		insertReportItemsBeforeTurnEntry(&state.req, reportItems)
+	}
 	return nil
+}
+
+func insertReportItemsBeforeTurnEntry(req *model.Request, reportItems []model.ConversationItem) {
+	if req == nil || len(reportItems) == 0 {
+		return
+	}
+	insertAt := len(req.Items)
+	if insertAt > 0 {
+		insertAt--
+	}
+	items := make([]model.ConversationItem, 0, len(req.Items)+len(reportItems))
+	items = append(items, req.Items[:insertAt]...)
+	items = append(items, reportItems...)
+	items = append(items, req.Items[insertAt:]...)
+	req.Items = items
 }
 
 func effectivePermissionEngine(base *permissions.Engine, in Input) *permissions.Engine {

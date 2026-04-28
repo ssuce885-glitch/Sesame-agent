@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -112,46 +113,7 @@ func (s *Store) ListVisibleMemoryEntries(ctx context.Context, workspaceID, roleI
 
 	var out []types.MemoryEntry
 	for rows.Next() {
-		var entry types.MemoryEntry
-		var scope string
-		var kind string
-		var sourceSessionID string
-		var sourceContextHeadID string
-		var ownerRoleID string
-		var visibility string
-		var status string
-		var rawRefs string
-		var lastUsedAt string
-		var usageCount int
-		var createdAt string
-		var updatedAt string
-		if err := rows.Scan(&entry.ID, &scope, &entry.WorkspaceID, &kind, &sourceSessionID, &sourceContextHeadID,
-			&ownerRoleID, &visibility, &status, &entry.Content, &rawRefs, &entry.Confidence,
-			&lastUsedAt, &usageCount, &createdAt, &updatedAt); err != nil {
-			return nil, err
-		}
-		entry.Scope = types.MemoryScope(scope)
-		entry.Kind = types.MemoryKind(kind)
-		entry.SourceSessionID = sourceSessionID
-		entry.SourceContextHeadID = sourceContextHeadID
-		entry.OwnerRoleID = ownerRoleID
-		entry.Visibility = types.MemoryVisibility(visibility)
-		entry.Status = types.MemoryStatus(status)
-		entry.UsageCount = usageCount
-		if err := json.Unmarshal([]byte(rawRefs), &entry.SourceRefs); err != nil {
-			return nil, err
-		}
-		if lastUsedAt != "" {
-			entry.LastUsedAt, err = time.Parse(timeLayout, lastUsedAt)
-			if err != nil {
-				return nil, err
-			}
-		}
-		entry.CreatedAt, err = time.Parse(timeLayout, createdAt)
-		if err != nil {
-			return nil, err
-		}
-		entry.UpdatedAt, err = time.Parse(timeLayout, updatedAt)
+		entry, err := scanMemoryEntry(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -161,8 +123,81 @@ func (s *Store) ListVisibleMemoryEntries(ctx context.Context, workspaceID, roleI
 	return out, rows.Err()
 }
 
+func (s *Store) GetMemoryEntry(ctx context.Context, id string) (types.MemoryEntry, bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		select id, scope, workspace_id, kind, source_session_id, source_context_head_id,
+			owner_role_id, visibility, status, content, source_refs, confidence,
+			last_used_at, usage_count, created_at, updated_at
+		from memory_entries
+		where id = ?
+	`, strings.TrimSpace(id))
+
+	entry, err := scanMemoryEntry(row)
+	if err == sql.ErrNoRows {
+		return types.MemoryEntry{}, false, nil
+	}
+	if err != nil {
+		return types.MemoryEntry{}, false, err
+	}
+	return entry, true, nil
+}
+
+type memoryEntryScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanMemoryEntry(scanner memoryEntryScanner) (types.MemoryEntry, error) {
+	var entry types.MemoryEntry
+	var scope string
+	var kind string
+	var sourceSessionID string
+	var sourceContextHeadID string
+	var ownerRoleID string
+	var visibility string
+	var status string
+	var rawRefs string
+	var lastUsedAt string
+	var usageCount int
+	var createdAt string
+	var updatedAt string
+	if err := scanner.Scan(&entry.ID, &scope, &entry.WorkspaceID, &kind, &sourceSessionID, &sourceContextHeadID,
+		&ownerRoleID, &visibility, &status, &entry.Content, &rawRefs, &entry.Confidence,
+		&lastUsedAt, &usageCount, &createdAt, &updatedAt); err != nil {
+		return types.MemoryEntry{}, err
+	}
+	entry.Scope = types.MemoryScope(scope)
+	entry.Kind = types.MemoryKind(kind)
+	entry.SourceSessionID = sourceSessionID
+	entry.SourceContextHeadID = sourceContextHeadID
+	entry.OwnerRoleID = ownerRoleID
+	entry.Visibility = types.MemoryVisibility(visibility)
+	entry.Status = types.MemoryStatus(status)
+	entry.UsageCount = usageCount
+	if err := json.Unmarshal([]byte(rawRefs), &entry.SourceRefs); err != nil {
+		return types.MemoryEntry{}, err
+	}
+	if lastUsedAt != "" {
+		parsed, err := time.Parse(timeLayout, lastUsedAt)
+		if err != nil {
+			return types.MemoryEntry{}, err
+		}
+		entry.LastUsedAt = parsed
+	}
+	created, err := time.Parse(timeLayout, createdAt)
+	if err != nil {
+		return types.MemoryEntry{}, err
+	}
+	entry.CreatedAt = created
+	updated, err := time.Parse(timeLayout, updatedAt)
+	if err != nil {
+		return types.MemoryEntry{}, err
+	}
+	entry.UpdatedAt = updated
+	return entry, nil
+}
+
 func (s *Store) MarkMemoryEntriesUsed(ctx context.Context, ids []string, usedAt time.Time) error {
-	filtered := uniqueTrimmedMemoryIDs(ids)
+	filtered := uniqueTrimmedStrings(ids)
 	if len(filtered) == 0 {
 		return nil
 	}
@@ -189,12 +224,31 @@ func (s *Store) MarkMemoryEntriesUsed(ctx context.Context, ids []string, usedAt 
 	return err
 }
 
+func (s *Store) DeprecateMemoryEntries(ctx context.Context, ids []string) error {
+	filtered := uniqueTrimmedStrings(ids)
+	if len(filtered) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(filtered)+1)
+	placeholders := make([]string, 0, len(filtered))
+	args = append(args, time.Now().UTC().Format(timeLayout))
+	for _, id := range filtered {
+		args = append(args, id)
+		placeholders = append(placeholders, "?")
+	}
+	_, err := s.db.ExecContext(ctx,
+		fmt.Sprintf("update memory_entries set status = 'deprecated', updated_at = ? where id in (%s)", strings.Join(placeholders, ", ")),
+		args...,
+	)
+	return err
+}
+
 func (s *Store) DeleteMemoryEntries(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
 
-	filtered := uniqueTrimmedMemoryIDs(ids)
+	filtered := uniqueTrimmedStrings(ids)
 	if len(filtered) == 0 {
 		return nil
 	}
@@ -211,21 +265,4 @@ func (s *Store) DeleteMemoryEntries(ctx context.Context, ids []string) error {
 		args...,
 	)
 	return err
-}
-
-func uniqueTrimmedMemoryIDs(ids []string) []string {
-	filtered := make([]string, 0, len(ids))
-	seen := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		filtered = append(filtered, id)
-	}
-	return filtered
 }

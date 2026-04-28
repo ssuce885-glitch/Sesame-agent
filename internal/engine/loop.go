@@ -9,6 +9,7 @@ import (
 
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/model"
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/types"
 )
 
@@ -91,13 +92,15 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 
 	persistedMicroItems := activeMicrocompactItems(compactions)
 	recentWindowItems, recentWindowOverride := recentRawItemsForCompactionWindow(items, compactions)
+	e.ctxManager.SetCircuitBreakerOpen(e.compactionCircuitOpen())
 	working := e.ctxManager.Build(turnMessage, items, summaryBundle, memoryRefs)
 	working = setPromptItems(working, persistedMicroItems, recentWindowItems, recentWindowOverride, turnMessage)
-	if e.compactor != nil {
+	if e.compactor != nil || working.Action.Kind == contextstate.CompactionActionArchive {
 		working, summaryBundle, err = runCompactionPasses(
 			ctx,
 			e,
 			sessionID,
+			in.Session.WorkspaceRoot,
 			contextHeadID,
 			turnMessage,
 			items,
@@ -135,6 +138,7 @@ func runCompactionPasses(
 	ctx context.Context,
 	e *Engine,
 	sessionID string,
+	workspaceRoot string,
 	turnContextHeadID string,
 	userMessage string,
 	items []model.ConversationItem,
@@ -146,8 +150,28 @@ func runCompactionPasses(
 	working contextstate.WorkingSet,
 ) (contextstate.WorkingSet, SummaryBundle, error) {
 	switch working.Action.Kind {
+	case contextstate.CompactionActionArchive:
+		return applyTrackedArchiveCompaction(
+			ctx,
+			e,
+			sessionID,
+			workspaceRoot,
+			turnContextHeadID,
+			userMessage,
+			items,
+			summaryBundle,
+			memoryRefs,
+			compactions,
+			contextHeadSummaryUpTo,
+			working,
+			len(compactions)+1,
+			"forced_archive_eviction",
+		)
 	case contextstate.CompactionActionRolling:
-		return applySummaryCompaction(
+		if e.compactionCircuitOpen() {
+			return working, summaryBundle, nil
+		}
+		return applyTrackedSummaryCompaction(
 			ctx,
 			e,
 			sessionID,
@@ -164,6 +188,9 @@ func runCompactionPasses(
 			"rolling_summary",
 		)
 	case contextstate.CompactionActionMicrocompact:
+		if e.compactionCircuitOpen() {
+			return working, summaryBundle, nil
+		}
 		nextWorking, nextBundle, nextCompactions, _, err := applyMicrocompactPass(
 			ctx,
 			e,
@@ -183,7 +210,7 @@ func runCompactionPasses(
 		if !shouldApplyBoundaryCompaction(nextWorking, e.ctxManager.Config()) {
 			return nextWorking, nextBundle, nil
 		}
-		return applySummaryCompaction(
+		return applyTrackedSummaryCompaction(
 			ctx,
 			e,
 			sessionID,
@@ -202,6 +229,81 @@ func runCompactionPasses(
 	default:
 		return working, summaryBundle, nil
 	}
+}
+
+func applyTrackedSummaryCompaction(
+	ctx context.Context,
+	e *Engine,
+	sessionID string,
+	turnContextHeadID string,
+	userMessage string,
+	items []model.ConversationItem,
+	summaryBundle SummaryBundle,
+	memoryRefs []string,
+	compactions []types.ConversationCompaction,
+	contextHeadSummaryUpTo int64,
+	working contextstate.WorkingSet,
+	generation int,
+	kind types.ConversationCompactionKind,
+	reason string,
+) (contextstate.WorkingSet, SummaryBundle, error) {
+	nextWorking, nextBundle, err := applySummaryCompaction(
+		ctx,
+		e,
+		sessionID,
+		turnContextHeadID,
+		userMessage,
+		items,
+		summaryBundle,
+		memoryRefs,
+		compactions,
+		contextHeadSummaryUpTo,
+		working,
+		generation,
+		kind,
+		reason,
+	)
+	e.recordSummaryCompactionResult(err)
+	return nextWorking, nextBundle, err
+}
+
+func applyTrackedArchiveCompaction(
+	ctx context.Context,
+	e *Engine,
+	sessionID string,
+	workspaceRoot string,
+	turnContextHeadID string,
+	userMessage string,
+	items []model.ConversationItem,
+	summaryBundle SummaryBundle,
+	memoryRefs []string,
+	compactions []types.ConversationCompaction,
+	contextHeadSummaryUpTo int64,
+	working contextstate.WorkingSet,
+	generation int,
+	reason string,
+) (contextstate.WorkingSet, SummaryBundle, error) {
+	nextWorking, nextBundle, err := applyArchiveCompaction(
+		ctx,
+		e,
+		sessionID,
+		workspaceRoot,
+		turnContextHeadID,
+		userMessage,
+		items,
+		summaryBundle,
+		memoryRefs,
+		compactions,
+		contextHeadSummaryUpTo,
+		working,
+		generation,
+		reason,
+	)
+	e.resetCompactionCircuit()
+	if e != nil && e.ctxManager != nil {
+		e.ctxManager.SetCircuitBreakerOpen(false)
+	}
+	return nextWorking, nextBundle, err
 }
 
 func applyMicrocompactPass(
@@ -267,7 +369,152 @@ func applyMicrocompactPass(
 }
 
 func shouldApplyBoundaryCompaction(working contextstate.WorkingSet, cfg contextstate.Config) bool {
-	return working.EstimatedTokens > cfg.MaxEstimatedTokens
+	return working.EstimatedTokens > cfg.EffectiveMaxEstimatedTokens()
+}
+
+func applyArchiveCompaction(
+	ctx context.Context,
+	e *Engine,
+	sessionID string,
+	workspaceRoot string,
+	turnContextHeadID string,
+	userMessage string,
+	items []model.ConversationItem,
+	summaryBundle SummaryBundle,
+	memoryRefs []string,
+	compactions []types.ConversationCompaction,
+	contextHeadSummaryUpTo int64,
+	working contextstate.WorkingSet,
+	generation int,
+	reason string,
+) (contextstate.WorkingSet, SummaryBundle, error) {
+	cutoff := working.Action.RangeEnd
+	if cutoff <= 0 {
+		cutoff = working.CompactionStart
+	}
+	if cutoff < 0 {
+		cutoff = 0
+	}
+	if cutoff > len(items) {
+		cutoff = len(items)
+	}
+	cutoff = model.NearestSafeConversationBoundary(items, cutoff)
+	if cutoff == 0 {
+		return working, summaryBundle, nil
+	}
+
+	archiveItems := items[:cutoff]
+	extraction := contextstate.ArchiveExtraction{}
+	var extractErr error
+	if e.archiver != nil {
+		extraction, extractErr = e.archiver.ExtractArchive(ctx, archiveItems)
+	}
+	if e.archiver == nil || extractErr != nil {
+		extraction = contextstate.ComputedArchiveFallback(archiveItems)
+	}
+
+	contextHeadID, err := resolveConversationWriteContextHeadID(ctx, e.store, turnContextHeadID)
+	if err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, err
+	}
+	startPosition := 0
+	endPosition := cutoff
+	startItemID, endItemID, err := resolveConversationCompactionItemIDBounds(ctx, e.store, sessionID, contextHeadID, startPosition, endPosition)
+	if err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, err
+	}
+
+	createdAt := time.Now().UTC()
+	archiveEntry := types.ConversationArchiveEntry{
+		ID:             types.NewID("archive"),
+		SessionID:      sessionID,
+		RangeLabel:     extraction.RangeLabel,
+		TurnStart:      1,
+		TurnEnd:        cutoff,
+		ItemCount:      len(archiveItems),
+		Summary:        extraction.Summary,
+		Decisions:      extraction.Decisions,
+		FilesChanged:   extraction.FilesChanged,
+		ErrorsAndFixes: extraction.ErrorsAndFixes,
+		ToolsUsed:      extraction.ToolsUsed,
+		Keywords:       extraction.Keywords,
+		IsComputed:     extraction.IsComputed,
+		CreatedAt:      createdAt.Format(time.RFC3339Nano),
+	}
+	if err := e.store.InsertConversationArchiveEntry(ctx, archiveEntry); err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, err
+	}
+	workspaceID := strings.TrimSpace(workspaceRoot)
+	if workspaceID == "" {
+		workspaceID = sessionID
+	}
+	if err := e.store.InsertColdIndexEntry(ctx, types.ColdIndexEntry{
+		ID:           "cold_archive_" + archiveEntry.ID,
+		WorkspaceID:  workspaceID,
+		OwnerRoleID:  rolectx.SpecialistRoleIDFromContext(ctx),
+		Visibility:   types.MemoryVisibilityShared,
+		SourceType:   "archive",
+		SourceID:     archiveEntry.ID,
+		SearchText:   buildColdSearchText(extraction),
+		SummaryLine:  buildColdSummaryLine(extraction),
+		FilesChanged: extraction.FilesChanged,
+		ToolsUsed:    extraction.ToolsUsed,
+		ErrorTypes:   extractColdErrorTypes(extraction.ErrorsAndFixes),
+		OccurredAt:   createdAt,
+		CreatedAt:    createdAt,
+		ContextRef: types.ColdContextRef{
+			SessionID:     sessionID,
+			ContextHeadID: contextHeadID,
+			TurnStartPos:  startPosition,
+			TurnEndPos:    endPosition,
+			ItemCount:     len(archiveItems),
+		},
+	}); err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, err
+	}
+
+	providerProfile := providerProfileForEngine(e)
+	if err := e.store.InsertConversationCompactionWithContextHead(ctx, types.ConversationCompaction{
+		ID:             types.NewID("compact"),
+		SessionID:      sessionID,
+		ContextHeadID:  contextHeadID,
+		Kind:           types.ConversationCompactionKindArchive,
+		Generation:     generation,
+		StartItemID:    startItemID,
+		EndItemID:      endItemID,
+		StartPosition:  startPosition,
+		EndPosition:    endPosition,
+		SummaryPayload: marshalArchiveExtraction(extraction),
+		MetadataJSON: encodeBoundaryMetadata(newBoundaryMetadata(
+			generation,
+			cutoff,
+			contextHeadSummaryUpTo,
+			len(items),
+			reason,
+			providerProfile,
+			len(activeMicrocompactItems(compactions)) > 0,
+			items,
+		)),
+		Reason:          reason,
+		ProviderProfile: providerProfile,
+		CreatedAt:       createdAt,
+	}); err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, err
+	}
+
+	if e.ctxManager != nil {
+		e.ctxManager.SetCircuitBreakerOpen(false)
+	}
+	summaryBundle, compactions, err = loadContextHeadSummaryBundle(ctx, e.store, sessionID, contextHeadID)
+	if err != nil {
+		return contextstate.WorkingSet{}, SummaryBundle{}, err
+	}
+	persistedMicroItems := activeMicrocompactItems(compactions)
+	recentWindowItems, recentWindowOverride := recentRawItemsForCompactionWindow(items, compactions)
+	working = e.ctxManager.Build(userMessage, items, summaryBundle, memoryRefs)
+	working = setPromptItems(working, persistedMicroItems, recentWindowItems, recentWindowOverride, userMessage)
+	working.CompactionApplied = true
+	return working, summaryBundle, nil
 }
 
 func applySummaryCompaction(
@@ -292,6 +539,14 @@ func applySummaryCompaction(
 	}
 	if cutoff > len(items) {
 		cutoff = len(items)
+	}
+	if e.ctxManager != nil {
+		maxBatch := e.ctxManager.Config().MaxCompactionBatchItems
+		lastCompactedEnd := lastBoundaryCompactionEnd(compactions)
+		maxCompactionEnd := lastCompactedEnd + maxBatch
+		if maxBatch > 0 && cutoff > maxCompactionEnd {
+			cutoff = maxCompactionEnd
+		}
 	}
 	cutoff = model.NearestSafeConversationBoundary(items, cutoff)
 	if cutoff == 0 {
@@ -382,6 +637,113 @@ func marshalCompactionSummary(summary model.Summary) string {
 		return summary.RangeLabel
 	}
 	return string(raw)
+}
+
+func marshalArchiveExtraction(extraction contextstate.ArchiveExtraction) string {
+	toolOutcomes := make([]string, 0, len(extraction.ToolsUsed)+len(extraction.ErrorsAndFixes))
+	for _, tool := range extraction.ToolsUsed {
+		tool = strings.TrimSpace(tool)
+		if tool != "" {
+			toolOutcomes = append(toolOutcomes, "Tool used: "+tool)
+		}
+	}
+	for _, note := range extraction.ErrorsAndFixes {
+		note = strings.TrimSpace(note)
+		if note != "" {
+			toolOutcomes = append(toolOutcomes, "Error/fix: "+note)
+		}
+	}
+
+	openThreads := make([]string, 0, 2)
+	if summary := strings.TrimSpace(extraction.Summary); summary != "" {
+		openThreads = append(openThreads, "Archive summary: "+summary)
+	}
+	if len(extraction.Keywords) > 0 {
+		openThreads = append(openThreads, "Keywords: "+strings.Join(extraction.Keywords, ", "))
+	}
+
+	return marshalCompactionSummary(model.Summary{
+		RangeLabel:       extraction.RangeLabel,
+		ImportantChoices: extraction.Decisions,
+		FilesTouched:     extraction.FilesChanged,
+		ToolOutcomes:     toolOutcomes,
+		OpenThreads:      openThreads,
+	})
+}
+
+func buildColdSearchText(extraction contextstate.ArchiveExtraction) string {
+	parts := []string{
+		extraction.RangeLabel,
+		extraction.Summary,
+		strings.Join(extraction.Decisions, " "),
+		strings.Join(extraction.FilesChanged, " "),
+		strings.Join(extraction.ToolsUsed, " "),
+		strings.Join(extraction.Keywords, " "),
+		strings.Join(extraction.ErrorsAndFixes, " "),
+	}
+	return strings.Join(parts, " ")
+}
+
+func buildColdSummaryLine(extraction contextstate.ArchiveExtraction) string {
+	summary := truncateColdSummary(extraction.Summary, 200)
+	rangeLabel := strings.TrimSpace(extraction.RangeLabel)
+	if rangeLabel == "" {
+		return summary
+	}
+	if summary == "" {
+		return "[" + rangeLabel + "]"
+	}
+	return "[" + rangeLabel + "] " + summary
+}
+
+func truncateColdSummary(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:maxRunes])) + "..."
+}
+
+func extractColdErrorTypes(errorsAndFixes []string) []string {
+	patterns := map[string][]string{
+		"permission_denied": {"permission denied", "access denied", "not permitted", "unauthorized", "forbidden"},
+		"timeout":           {"timeout", "timed out", "deadline exceeded"},
+		"not_found":         {"not found", "no such file", "does not exist", "missing"},
+		"failed":            {"failed", "failure", "error"},
+		"build_failed":      {"build failed", "compile failed", "compilation failed"},
+		"test_failed":       {"test failed", "tests failed", "failing test"},
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	for _, note := range errorsAndFixes {
+		note = strings.ToLower(strings.TrimSpace(note))
+		if note == "" {
+			continue
+		}
+		for errorType, needles := range patterns {
+			for _, needle := range needles {
+				if strings.Contains(note, needle) {
+					if _, ok := seen[errorType]; !ok {
+						seen[errorType] = struct{}{}
+						out = append(out, errorType)
+					}
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
+func providerProfileForEngine(e *Engine) string {
+	if e == nil || e.model == nil {
+		return ""
+	}
+	return string(e.model.Capabilities().Profile)
 }
 
 func setPromptItems(working contextstate.WorkingSet, carryForwardItems []model.ConversationItem, recentRawItems []model.ConversationItem, overrideRecentRaw bool, userMessage string) contextstate.WorkingSet {

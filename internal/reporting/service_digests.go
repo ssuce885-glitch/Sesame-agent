@@ -105,6 +105,7 @@ func (s *Service) emitDueDigestsForGroup(ctx context.Context, group types.Report
 		if err := s.store.UpsertDigestRecord(ctx, digest); err != nil {
 			return nil, err
 		}
+		s.indexDigestCold(ctx, digest)
 		if reportGroupDeliversToAgent(group) {
 			item, err := s.persistReportDeliveryItem(ctx, ReportFromDigestRecord(workspaceRoot, digest, now), now)
 			if err != nil {

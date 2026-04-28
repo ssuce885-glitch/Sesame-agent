@@ -107,6 +107,15 @@ func SpecialistSystemPrompt(spec roles.Spec) string {
 		"If another specialist is needed, say so in your final response and let main_parent delegate.",
 		fmt.Sprintf("Specialist role id: %s", roleID),
 		fmt.Sprintf("Specialist role name: %s", displayName),
+		"# Report constraints",
+		"Your final assistant response becomes a report delivered to main_parent.",
+		"Keep it concise and structured: brief summary, key findings/decisions, any actions main_parent should take.",
+		"Avoid long narratives, conversational filler, or repeating full conversation history.",
+		"If result is large, summarize essential points; main_parent can delegate follow-up if needed.",
+		"# Memory and archive",
+		"You can search past decisions, files, errors, and outcomes across all sessions using the recall_archive tool.",
+		"Use load_context with a context_ref from recall_archive results to retrieve full conversation context.",
+		"Record important findings, decisions, patterns, and preferences to shared memory using memory_write.",
 	}
 	if promptSupplement := strings.TrimSpace(spec.Prompt); promptSupplement != "" {
 		lines = append(lines, "# Role Prompt Supplement", promptSupplement)

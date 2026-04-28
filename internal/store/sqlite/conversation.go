@@ -91,6 +91,22 @@ func (s *Store) ListConversationItems(ctx context.Context, sessionID string) ([]
 	return out, rows.Err()
 }
 
+func (s *Store) MaxConversationPosition(ctx context.Context, sessionID string) (int, bool, error) {
+	var maxPos sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `
+		select max(position)
+		from conversation_items
+		where session_id = ?
+	`, sessionID).Scan(&maxPos)
+	if err != nil {
+		return 0, false, err
+	}
+	if !maxPos.Valid {
+		return 0, false, nil
+	}
+	return int(maxPos.Int64), true, nil
+}
+
 func (s *Store) ListConversationTimelineItems(ctx context.Context, sessionID string) ([]types.ConversationTimelineItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		select id, position, turn_id, payload

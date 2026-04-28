@@ -24,7 +24,7 @@ type turnResultFallbackSink struct {
 }
 
 type reportTurnEnqueuer interface {
-	enqueueSyntheticReportTurn(context.Context, string) error
+	EnqueueSyntheticReportTurn(context.Context, string) error
 }
 
 type turnResultStore interface {
@@ -70,7 +70,7 @@ func (s turnResultFallbackSink) HandleTurnResult(ctx context.Context, sess types
 			if turn.Kind == types.TurnKindReportBatch {
 				_ = s.store.RequeueClaimedReportDeliveriesForTurn(ctx, turnID)
 				if s.reportEnqueue != nil {
-					_ = s.reportEnqueue.enqueueSyntheticReportTurn(ctx, sess.ID)
+					_ = s.reportEnqueue.EnqueueSyntheticReportTurn(ctx, sess.ID)
 				}
 			}
 			eventType = types.EventTurnInterrupted

@@ -15,6 +15,11 @@ import (
 	"go-agent/internal/types"
 )
 
+const (
+	reportBodyRuneLimit       = 2000
+	reportBodyTruncatedSuffix = "... [truncated]"
+)
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
@@ -65,13 +70,108 @@ func buildReportPromptSection(reports []types.ReportDeliveryItem) string {
 		if summary := strings.TrimSpace(envelope.Summary); summary != "" {
 			lines = append(lines, "  summary: "+summary)
 		}
-		for _, section := range envelope.Sections {
-			if text := strings.TrimSpace(section.Text); text != "" {
-				lines = append(lines, "  "+firstNonEmpty(section.Title, "details")+": "+text)
-			}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildReportConversationItems(reports []types.ReportDeliveryItem) []model.ConversationItem {
+	if len(reports) == 0 {
+		return nil
+	}
+	if len(reports) == 1 {
+		return []model.ConversationItem{model.UserMessageItem(formatReport(reports[0]))}
+	}
+
+	items := []model.ConversationItem{model.UserMessageItem(formatReportDigest(reports))}
+	for _, report := range reports {
+		if len(reports) >= 6 && !isPriorityReportSeverity(report.Envelope.Severity) {
+			continue
+		}
+		items = append(items, model.UserMessageItem(formatReport(report)))
+	}
+	return items
+}
+
+func formatReportDigest(reports []types.ReportDeliveryItem) string {
+	sourceIDs := map[string]struct{}{}
+	for _, report := range reports {
+		if sourceID := firstNonEmpty(report.SourceID, report.ReportID, report.ID); sourceID != "" {
+			sourceIDs[sourceID] = struct{}{}
+		}
+	}
+	lines := []string{fmt.Sprintf("Digest: %d reports from %d sources", len(reports), len(sourceIDs))}
+	for _, report := range reports {
+		envelope := report.Envelope
+		sourceID := firstNonEmpty(report.SourceID, report.ReportID, report.ID)
+		line := fmt.Sprintf("- source_id=%s severity=%s status=%s title=%q",
+			sourceID,
+			envelope.Severity,
+			envelope.Status,
+			envelope.Title,
+		)
+		if summary := strings.TrimSpace(envelope.Summary); summary != "" {
+			line += " summary: " + summary
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatReport(report types.ReportDeliveryItem) string {
+	envelope := report.Envelope
+	title := firstNonEmpty(envelope.Title, report.SourceID, report.ReportID, "Report")
+	lines := []string{
+		fmt.Sprintf("--- Report: %s ---", title),
+		"Source: " + string(report.SourceKind),
+		"Status: " + envelope.Status,
+		"Severity: " + envelope.Severity,
+	}
+	if sourceID := firstNonEmpty(report.SourceID, report.ReportID, report.ID); sourceID != "" {
+		lines = append(lines, "Source ID: "+sourceID)
+	}
+	if summary := strings.TrimSpace(envelope.Summary); summary != "" {
+		lines = append(lines, "Summary: "+summary)
+	}
+	for _, section := range envelope.Sections {
+		if line := formatReportSection(section); line != "" {
+			lines = append(lines, line)
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func formatReportSection(section types.ReportSectionContent) string {
+	text := clampReportBody(section.Text)
+	if text == "" {
+		return ""
+	}
+	return firstNonEmpty(section.Title, "Details") + ": " + text
+}
+
+func isPriorityReportSeverity(severity string) bool {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "warning", "error":
+		return true
+	default:
+		return false
+	}
+}
+
+func clampReportBody(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= reportBodyRuneLimit {
+		return text
+	}
+	suffixRunes := []rune(reportBodyTruncatedSuffix)
+	keep := reportBodyRuneLimit - len(suffixRunes)
+	if keep < 0 {
+		keep = 0
+	}
+	return strings.TrimSpace(string(runes[:keep])) + reportBodyTruncatedSuffix
 }
 
 func appendReportPromptSection(text string, reports []types.ReportDeliveryItem) string {
@@ -106,11 +206,14 @@ func nextConversationPosition(ctx context.Context, store ConversationStore, sess
 	if store == nil {
 		return 1, nil
 	}
-	items, err := store.ListConversationItems(ctx, sessionID)
+	pos, ok, err := store.MaxConversationPosition(ctx, sessionID)
 	if err != nil {
 		return 0, err
 	}
-	return len(items) + 1, nil
+	if !ok {
+		return 1, nil
+	}
+	return pos + 1, nil
 }
 
 func activatedSkillNamesFromMetadata(metadata map[string]any) []string {
@@ -532,6 +635,17 @@ func toolRunStoreFromConversationStore(store ConversationStore) toolRunStore {
 		return nil
 	}
 	return runtimeStore
+}
+
+func coldIndexStoreFromConversationStore(store ConversationStore) tools.ColdIndexStore {
+	if store == nil {
+		return nil
+	}
+	coldStore, ok := any(store).(tools.ColdIndexStore)
+	if !ok {
+		return nil
+	}
+	return coldStore
 }
 
 func providerCacheOwnerForCapabilities(caps model.ProviderCapabilities) string {

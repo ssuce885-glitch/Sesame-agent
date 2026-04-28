@@ -1,12 +1,19 @@
 package contextstate
 
-import "go-agent/internal/model"
+import (
+	"sync"
+
+	"go-agent/internal/model"
+)
 
 type Config struct {
 	MaxRecentItems             int
 	MaxEstimatedTokens         int
+	ModelContextWindow         int
 	CompactionThreshold        int
 	MicrocompactBytesThreshold int
+	MaxCompactionBatchItems    int
+	CircuitBreakerOpen         bool
 }
 
 type CompactionActionKind string
@@ -15,6 +22,7 @@ const (
 	CompactionActionNone         CompactionActionKind = "none"
 	CompactionActionMicrocompact CompactionActionKind = "microcompact"
 	CompactionActionRolling      CompactionActionKind = "rolling"
+	CompactionActionArchive      CompactionActionKind = "archive"
 )
 
 type CompactionAction struct {
@@ -25,6 +33,7 @@ type CompactionAction struct {
 }
 
 type Manager struct {
+	mu  sync.Mutex
 	cfg Config
 }
 
@@ -36,7 +45,34 @@ func (m *Manager) Config() Config {
 	if m == nil {
 		return Config{}
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	return m.cfg
+}
+
+func (m *Manager) SetCircuitBreakerOpen(open bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cfg.CircuitBreakerOpen = open
+}
+
+func (cfg Config) ForcedArchiveTokenThreshold() int {
+	if cfg.ModelContextWindow <= 0 {
+		return 0
+	}
+	return cfg.ModelContextWindow * 9 / 10
+}
+
+func (cfg Config) EffectiveMaxEstimatedTokens() int {
+	if cfg.MaxEstimatedTokens > 0 {
+		return cfg.MaxEstimatedTokens
+	}
+	return cfg.ForcedArchiveTokenThreshold()
 }
 
 type WorkingSet struct {
@@ -50,8 +86,9 @@ type WorkingSet struct {
 }
 
 func (m *Manager) Build(userText string, items []model.ConversationItem, summaries SummaryBundle, memoryRefs []string) WorkingSet {
+	cfg := m.Config()
 	start := 0
-	if max := m.cfg.MaxRecentItems; max > 0 && len(items) > max {
+	if max := cfg.MaxRecentItems; max > 0 && len(items) > max {
 		start = len(items) - max
 	} else if max <= 0 {
 		start = len(items)
@@ -59,7 +96,7 @@ func (m *Manager) Build(userText string, items []model.ConversationItem, summari
 	start = model.NearestSafeConversationBoundary(items, start)
 	recentItems := cloneConversationItems(items[start:])
 	estimated := EstimatePromptTokens(userText, recentItems, summaries, memoryRefs)
-	action := chooseCompactionAction(items, start, estimated, m.cfg)
+	action := chooseCompactionAction(items, start, estimated, cfg)
 
 	return WorkingSet{
 		Instructions: userText,

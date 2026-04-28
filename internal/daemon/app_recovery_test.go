@@ -61,7 +61,7 @@ func TestRecoverRuntimeStateEnqueuesQueuedReportBatch(t *testing.T) {
 		now:     func() time.Time { return now },
 	}
 
-	if err := recoverRuntimeState(ctx, store, manager, notifier); err != nil {
+	if err := recoverRuntimeState(ctx, store, manager, &notifier); err != nil {
 		t.Fatal(err)
 	}
 
@@ -76,6 +76,146 @@ func TestRecoverRuntimeStateEnqueuesQueuedReportBatch(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for recovered child report batch turn")
 	}
+}
+
+type blockingSessionRunner struct {
+	started chan types.Turn
+	release chan struct{}
+}
+
+func (r *blockingSessionRunner) RunTurn(ctx context.Context, in session.RunInput) error {
+	r.started <- in.Turn
+	select {
+	case <-r.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestEnqueueSyntheticReportTurnHonorsCooldown(t *testing.T) {
+	ctx := context.Background()
+	store := newDaemonTestStore(t)
+	workspaceRoot := "/tmp/workspace"
+	sessionRow, _, _, err := store.EnsureRoleSession(ctx, workspaceRoot, types.SessionRoleMainParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, time.April, 24, 9, 0, 0, 0, time.UTC)
+	runner := recordingSessionRunner{started: make(chan types.Turn, 2)}
+	manager := session.NewManager(runner)
+	manager.RegisterSession(sessionRow)
+	notifier := &taskTerminalNotifier{
+		store:   store,
+		manager: manager,
+		now:     func() time.Time { return now },
+	}
+
+	if err := notifier.EnqueueSyntheticReportTurn(ctx, sessionRow.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first report batch turn")
+	}
+	waitRuntimeIdle(t, manager, sessionRow.ID)
+
+	now = now.Add(4 * time.Minute)
+	if err := notifier.EnqueueSyntheticReportTurn(ctx, sessionRow.ID); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := store.ListTurnsBySession(ctx, sessionRow.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countReportBatchTurns(turns); got != 1 {
+		t.Fatalf("report batch turns after cooldown skip = %d, want 1", got)
+	}
+}
+
+func TestEnqueueSyntheticReportTurnSkipsWhenActiveTurn(t *testing.T) {
+	tests := []struct {
+		name string
+		kind types.TurnKind
+	}{
+		{name: "user turn", kind: types.TurnKindUserMessage},
+		{name: "report batch", kind: types.TurnKindReportBatch},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := newDaemonTestStore(t)
+			sessionRow, _, _, err := store.EnsureRoleSession(ctx, "/tmp/workspace", types.SessionRoleMainParent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner := &blockingSessionRunner{
+				started: make(chan types.Turn, 1),
+				release: make(chan struct{}),
+			}
+			manager := session.NewManager(runner)
+			manager.RegisterSession(sessionRow)
+			notifier := &taskTerminalNotifier{
+				store:   store,
+				manager: manager,
+				now:     func() time.Time { return time.Date(2026, time.April, 24, 9, 5, 0, 0, time.UTC) },
+			}
+
+			_, err = manager.SubmitTurn(ctx, sessionRow.ID, session.SubmitTurnInput{Turn: types.Turn{
+				ID:        "turn_active",
+				SessionID: sessionRow.ID,
+				Kind:      tc.kind,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-runner.started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for active turn")
+			}
+
+			if err := notifier.EnqueueSyntheticReportTurn(ctx, sessionRow.ID); err != nil {
+				t.Fatal(err)
+			}
+			turns, err := store.ListTurnsBySession(ctx, sessionRow.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := countReportBatchTurns(turns); got != 0 {
+				t.Fatalf("report batch turns while active = %d, want 0", got)
+			}
+
+			close(runner.release)
+			waitRuntimeIdle(t, manager, sessionRow.ID)
+		})
+	}
+}
+
+func waitRuntimeIdle(t *testing.T, manager *session.Manager, sessionID string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		state, ok := manager.GetRuntimeState(sessionID)
+		if ok && state.ActiveTurnKind == "" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("session %s did not become idle", sessionID)
+}
+
+func countReportBatchTurns(turns []types.Turn) int {
+	count := 0
+	for _, turn := range turns {
+		if turn.Kind == types.TurnKindReportBatch {
+			count++
+		}
+	}
+	return count
 }
 
 type fakeTurnResultStore struct {
@@ -133,7 +273,7 @@ type fakeReportEnqueuer struct {
 	sessionIDs []string
 }
 
-func (e *fakeReportEnqueuer) enqueueSyntheticReportTurn(_ context.Context, sessionID string) error {
+func (e *fakeReportEnqueuer) EnqueueSyntheticReportTurn(_ context.Context, sessionID string) error {
 	e.sessionIDs = append(e.sessionIDs, sessionID)
 	return nil
 }

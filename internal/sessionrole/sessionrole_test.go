@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"go-agent/internal/roles"
 	"go-agent/internal/types"
 )
 
@@ -43,5 +44,19 @@ You are the primary user-facing persona of Sesame-agent.`
 	}
 	if ShouldRefreshDefaultSystemPrompt(types.SessionRoleMainParent, "custom prompt") {
 		t.Fatal("custom main parent prompt should not refresh")
+	}
+}
+
+func TestSpecialistSystemPromptMentionsMemoryAndArchiveTools(t *testing.T) {
+	prompt := SpecialistSystemPrompt(roles.Spec{RoleID: "analyst", DisplayName: "Analyst"})
+	for _, required := range []string{
+		"# Memory and archive",
+		"recall_archive",
+		"load_context",
+		"memory_write",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("specialist prompt missing %q:\n%s", required, prompt)
+		}
 	}
 }

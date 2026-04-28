@@ -74,6 +74,9 @@ type ExecContext struct {
 	TaskManager              *task.Manager
 	RuntimeService           *runtimegraph.Service
 	SchedulerService         *scheduler.Service
+	ArchiveStore             ArchiveStore
+	ColdIndexStore           ColdIndexStore
+	MemoryStore              MemoryStore
 	TurnContext              *runtimegraph.TurnContext
 	ToolRunID                string
 	EventSink                EventSink
@@ -101,6 +104,22 @@ type RoleService interface {
 	Get(string, string) (roles.Spec, error)
 	Create(string, roles.UpsertInput) (roles.Spec, error)
 	Update(string, roles.UpsertInput) (roles.Spec, error)
+}
+
+type ArchiveStore interface {
+	SearchConversationArchiveEntries(context.Context, string, string) ([]types.ConversationArchiveEntry, error)
+}
+
+type ColdIndexStore interface {
+	SearchColdIndex(context.Context, types.ColdSearchQuery) ([]types.ColdIndexEntry, int, error)
+	GetColdIndexEntry(context.Context, string) (types.ColdIndexEntry, bool, error)
+	GetSession(context.Context, string) (types.Session, bool, error)
+	ListConversationTimelineItems(context.Context, string) ([]types.ConversationTimelineItem, error)
+	ListConversationTimelineItemsByContextHead(context.Context, string, string) ([]types.ConversationTimelineItem, error)
+}
+
+type MemoryStore interface {
+	UpsertMemoryEntry(context.Context, types.MemoryEntry) error
 }
 
 type ResourceClaimMode string

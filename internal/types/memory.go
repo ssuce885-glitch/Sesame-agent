@@ -5,8 +5,6 @@ import "time"
 type MemoryScope string
 
 const (
-	MemoryScopeHead      MemoryScope = "head"
-	MemoryScopeRole      MemoryScope = "role"
 	MemoryScopeWorkspace MemoryScope = "workspace"
 	MemoryScopeGlobal    MemoryScope = "global"
 )
@@ -14,6 +12,10 @@ const (
 type MemoryKind string
 
 const (
+	MemoryKindFact                 MemoryKind = "fact"
+	MemoryKindDecision             MemoryKind = "decision"
+	MemoryKindPreference           MemoryKind = "preference"
+	MemoryKindPattern              MemoryKind = "pattern"
 	MemoryKindWorkspaceOverview    MemoryKind = "workspace_overview"
 	MemoryKindWorkspaceChoice      MemoryKind = "workspace_choice"
 	MemoryKindWorkspaceFileFocus   MemoryKind = "workspace_file_focus"
@@ -35,7 +37,6 @@ type MemoryStatus string
 const (
 	MemoryStatusActive     MemoryStatus = "active"
 	MemoryStatusDeprecated MemoryStatus = "deprecated"
-	MemoryStatusSuperseded MemoryStatus = "superseded"
 )
 
 type MemoryEntry struct {

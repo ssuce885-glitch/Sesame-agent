@@ -4,8 +4,8 @@ const (
 	contextHeadSummaryRangeLabel         = "context head summary"
 	contextHeadSummaryBootstrapMinItems  = 8
 	contextHeadSummaryBootstrapMinTokens = 320
-	contextHeadSummaryUpdateMinItems     = 6
 	contextHeadSummaryUpdateMinTokens    = 240
+	contextHeadSummaryCooldownMinItems   = 12
 	contextHeadSummarySignalThreshold    = 2
 	contextHeadSummaryLongAssistantChars = 320
 	contextHeadSummaryMaxCount           = 1

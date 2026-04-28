@@ -168,7 +168,7 @@ func buildWorkspaceDurableMemory(memoryRecord types.ContextHeadSummary, summary 
 	}
 
 	now := time.Now().UTC()
-	return types.MemoryEntry{
+	entry := types.MemoryEntry{
 		ID:                  durableWorkspaceOverviewID(workspaceRoot, roleID),
 		Scope:               types.MemoryScopeWorkspace,
 		Kind:                types.MemoryKindWorkspaceOverview,
@@ -180,10 +180,12 @@ func buildWorkspaceDurableMemory(memoryRecord types.ContextHeadSummary, summary 
 		Status:              types.MemoryStatusActive,
 		Content:             content,
 		SourceRefs:          dedupeSummaryStrings([]string{"session:" + memoryRecord.SessionID, "head:" + memoryRecord.ContextHeadID, "turn:" + memoryRecord.SourceTurnID}),
-		Confidence:          0.85,
+		Confidence:          0,
 		CreatedAt:           now,
 		UpdatedAt:           now,
-	}, true
+	}
+	entry.Confidence = memory.ComputeConfidence(entry, now)
+	return entry, true
 }
 
 func buildWorkspaceDetailMemories(memoryRecord types.ContextHeadSummary, summary model.Summary, roleID string) []types.MemoryEntry {
@@ -225,7 +227,7 @@ func buildWorkspaceDetailMemories(memoryRecord types.ContextHeadSummary, summary
 				// main_parent and peer roles see a summary, but not raw details.
 				detailVisibility = types.MemoryVisibilityPrivate
 			}
-			out = append(out, types.MemoryEntry{
+			entry := types.MemoryEntry{
 				ID:                  durableWorkspaceDetailID(workspaceRoot, roleID, bucket.kind, content),
 				Scope:               types.MemoryScopeWorkspace,
 				Kind:                durableWorkspaceDetailKind(bucket.kind),
@@ -237,10 +239,12 @@ func buildWorkspaceDetailMemories(memoryRecord types.ContextHeadSummary, summary
 				Status:              types.MemoryStatusActive,
 				Content:             bucket.prefix + content,
 				SourceRefs:          dedupeSummaryStrings([]string{"session:" + memoryRecord.SessionID, "head:" + memoryRecord.ContextHeadID, "turn:" + memoryRecord.SourceTurnID}),
-				Confidence:          0.8,
+				Confidence:          0,
 				CreatedAt:           now,
 				UpdatedAt:           now,
-			})
+			}
+			entry.Confidence = memory.ComputeConfidence(entry, now)
+			out = append(out, entry)
 		}
 	}
 	return out
@@ -353,7 +357,7 @@ func buildGlobalDurableMemories(memoryRecord types.ContextHeadSummary, summary m
 		if memory.Classify(memory.Candidate{Content: candidate}) != types.MemoryScopeGlobal {
 			continue
 		}
-		out = append(out, types.MemoryEntry{
+		entry := types.MemoryEntry{
 			ID:                  durableGlobalMemoryID(candidate),
 			Scope:               types.MemoryScopeGlobal,
 			Kind:                types.MemoryKindGlobalPreference,
@@ -365,10 +369,12 @@ func buildGlobalDurableMemories(memoryRecord types.ContextHeadSummary, summary m
 			Status:              types.MemoryStatusActive,
 			Content:             "[Global durable memory] " + candidate,
 			SourceRefs:          dedupeSummaryStrings([]string{"session:" + memoryRecord.SessionID, "head:" + memoryRecord.ContextHeadID, "turn:" + memoryRecord.SourceTurnID}),
-			Confidence:          0.9,
+			Confidence:          0,
 			CreatedAt:           now,
 			UpdatedAt:           now,
-		})
+		}
+		entry.Confidence = memory.ComputeConfidence(entry, now)
+		out = append(out, entry)
 	}
 	return out
 }

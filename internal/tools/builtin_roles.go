@@ -303,6 +303,9 @@ func appendRolePromptBaseline(prompt string) string {
 - Work only within your described specialist scope.
 - Do not create test data in the workspace unless explicitly asked.
 - Your final assistant response is the report back to main_parent; the runtime delivers it automatically.
+- Keep your final response concise: brief summary, key findings, recommended next actions for main_parent.
+- Avoid long narratives or repeating full conversation history in final response.
+- If result is large, summarize the essential points.
 - Do not call delegate_to_role to report outcomes.`))
 	}
 	if !strings.Contains(prompt, "Automation boundaries") {

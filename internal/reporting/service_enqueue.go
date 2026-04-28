@@ -3,11 +3,17 @@ package reporting
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"go-agent/internal/task"
 	"go-agent/internal/types"
+)
+
+const (
+	reportBodyRuneLimit       = 2000
+	reportBodyTruncatedSuffix = "... [truncated]"
 )
 
 func ShouldQueueTaskReport(completed task.Task) bool {
@@ -40,6 +46,7 @@ func (s *Service) EnqueueTaskReport(ctx context.Context, completed task.Task, no
 	if err := s.store.UpsertReport(ctx, report); err != nil {
 		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportDeliveryItem{}, false, err
 	}
+	s.indexReportCold(ctx, report)
 	if err := s.store.UpsertReportDelivery(ctx, delivery); err != nil {
 		return types.ReportRecord{}, types.ReportDelivery{}, types.ReportDeliveryItem{}, false, err
 	}
@@ -99,6 +106,7 @@ func (s *Service) EnqueueScheduledJobReport(ctx context.Context, completed task.
 		if err := s.store.UpsertDigestRecord(ctx, digest); err != nil {
 			return types.ChildAgentResult{}, nil, false, err
 		}
+		s.indexDigestCold(ctx, digest)
 		if !reportGroupDeliversToAgent(group) {
 			continue
 		}
@@ -164,7 +172,7 @@ func ReportFromTaskOutcome(workspaceRoot string, completed task.Task, now time.T
 		Title:    title,
 		Summary:  clampTaskResultPreview(summary),
 	}
-	body := firstNonEmptyTrimmed(resultText, completed.OutcomeSummary, completed.Error)
+	body := clampReportBody(firstNonEmptyTrimmed(resultText, completed.OutcomeSummary, completed.Error))
 	if body != "" {
 		envelope.Sections = []types.ReportSectionContent{{
 			ID:    "report_body",
@@ -228,7 +236,8 @@ func ChildAgentResultFromTask(completed task.Task, spec types.ChildAgentSpec, no
 	}
 
 	title := firstNonEmptyTrimmed(completed.Description, completed.Command, completed.ExecutionTaskID, completed.ID)
-	summary := clampTaskResultPreview(result.Text)
+	body := clampReportBody(result.Text)
+	summary := clampTaskResultPreview(body)
 	envelope := types.ReportEnvelope{
 		Source:   string(types.ReportSourceChildAgentResult),
 		Status:   "completed",
@@ -236,11 +245,11 @@ func ChildAgentResultFromTask(completed task.Task, spec types.ChildAgentSpec, no
 		Title:    title,
 		Summary:  summary,
 	}
-	if strings.TrimSpace(result.Text) != "" {
+	if body != "" {
 		envelope.Sections = []types.ReportSectionContent{{
 			ID:    "report_body",
 			Title: firstNonEmptyTrimmed(title, "Report"),
-			Text:  strings.TrimSpace(result.Text),
+			Text:  body,
 		}}
 	}
 
@@ -341,10 +350,88 @@ func (s *Service) persistReportDeliveryItem(ctx context.Context, report types.Re
 	if err := s.store.UpsertReport(ctx, report); err != nil {
 		return types.ReportDeliveryItem{}, err
 	}
+	s.indexReportCold(ctx, report)
 	if err := s.store.UpsertReportDelivery(ctx, delivery); err != nil {
 		return types.ReportDeliveryItem{}, err
 	}
 	return item, nil
+}
+
+func (s *Service) indexReportCold(ctx context.Context, report types.ReportRecord) {
+	if s == nil || s.coldStore == nil {
+		return
+	}
+	sourceID := strings.TrimSpace(report.ID)
+	searchText := reportEnvelopeSearchText(report.Envelope)
+	if err := s.coldStore.InsertColdIndexEntry(ctx, types.ColdIndexEntry{
+		ID:          "cold_report_" + sourceID,
+		WorkspaceID: strings.TrimSpace(report.WorkspaceRoot),
+		OwnerRoleID: strings.TrimSpace(report.SourceRoleID),
+		Visibility:  types.MemoryVisibilityShared,
+		SourceType:  "report",
+		SourceID:    sourceID,
+		SearchText:  searchText,
+		SummaryLine: truncateRunes(searchText, 200),
+		OccurredAt:  report.ObservedAt,
+		CreatedAt:   report.CreatedAt,
+		ContextRef: types.ColdContextRef{
+			SessionID:    strings.TrimSpace(report.SessionID),
+			TurnStartPos: 0,
+			TurnEndPos:   1,
+			ItemCount:    0,
+		},
+	}); err != nil {
+		slog.Warn("cold index insert failed for report", "report_id", report.ID, "error", err)
+	}
+}
+
+func (s *Service) indexDigestCold(ctx context.Context, digest types.DigestRecord) {
+	if s == nil || s.coldStore == nil {
+		return
+	}
+	sourceID := strings.TrimSpace(digest.DigestID)
+	searchText := reportEnvelopeSearchText(digest.Envelope)
+	if err := s.coldStore.InsertColdIndexEntry(ctx, types.ColdIndexEntry{
+		ID:          "cold_digest_" + sourceID,
+		WorkspaceID: strings.TrimSpace(s.workspaceRoot),
+		OwnerRoleID: "",
+		Visibility:  types.MemoryVisibilityShared,
+		SourceType:  "digest",
+		SourceID:    sourceID,
+		SearchText:  searchText,
+		SummaryLine: truncateRunes(searchText, 200),
+		OccurredAt:  digest.WindowEnd,
+		CreatedAt:   digest.CreatedAt,
+		ContextRef: types.ColdContextRef{
+			SessionID:    strings.TrimSpace(digest.SessionID),
+			TurnStartPos: 0,
+			TurnEndPos:   1,
+			ItemCount:    0,
+		},
+	}); err != nil {
+		slog.Warn("cold index insert failed for digest", "digest_id", digest.DigestID, "error", err)
+	}
+}
+
+func reportEnvelopeSearchText(envelope types.ReportEnvelope) string {
+	var parts []string
+	if title := strings.TrimSpace(envelope.Title); title != "" {
+		parts = append(parts, title)
+	}
+	if summary := strings.TrimSpace(envelope.Summary); summary != "" {
+		parts = append(parts, summary)
+	}
+	for _, section := range envelope.Sections {
+		if text := strings.TrimSpace(section.Text); text != "" {
+			parts = append(parts, text)
+		}
+		for _, item := range section.Items {
+			if item := strings.TrimSpace(item); item != "" {
+				parts = append(parts, item)
+			}
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func (s *Service) resolveWorkspaceRoot(ctx context.Context, sessionID, explicit string) string {
@@ -461,6 +548,23 @@ func clampTaskResultPreview(text string) string {
 		return text
 	}
 	return strings.TrimSpace(string(runes[:240])) + "..."
+}
+
+func clampReportBody(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= reportBodyRuneLimit {
+		return text
+	}
+	suffixRunes := []rune(reportBodyTruncatedSuffix)
+	keep := reportBodyRuneLimit - len(suffixRunes)
+	if keep < 0 {
+		keep = 0
+	}
+	return strings.TrimSpace(string(runes[:keep])) + reportBodyTruncatedSuffix
 }
 
 func firstNonEmptyTrimmed(values ...string) string {

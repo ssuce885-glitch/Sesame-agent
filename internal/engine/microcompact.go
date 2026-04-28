@@ -38,7 +38,7 @@ func activeMicrocompactItems(compactions []types.ConversationCompaction) []model
 			}
 			active = cloneConversationItemsForPrompt(payload.Items)
 			activeEnd = compaction.EndPosition
-		case types.ConversationCompactionKindRolling, types.ConversationCompactionKindFull:
+		case types.ConversationCompactionKindRolling, types.ConversationCompactionKindFull, types.ConversationCompactionKindArchive:
 			if compaction.EndPosition >= activeEnd {
 				active = nil
 				activeEnd = 0

@@ -52,6 +52,7 @@ type Manager struct {
 	mu             sync.Mutex
 	runner         Runner
 	turnResultSink TurnResultSink
+	idleNotifier   func(string)
 	sessions       map[string]types.Session
 	runtime        map[string]*RuntimeState
 }
@@ -75,6 +76,13 @@ func (m *Manager) RegisterSession(session types.Session) {
 
 	m.sessions[session.ID] = session
 	m.runtime[session.ID] = &RuntimeState{}
+}
+
+func (m *Manager) SetIdleNotifier(notifier func(string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.idleNotifier = notifier
 }
 
 func (m *Manager) UpdateSession(session types.Session) bool {
@@ -253,10 +261,15 @@ func (m *Manager) finishTurn(sessionID, turnID string) {
 
 	m.clearActiveTurnLocked(state)
 	next, runCtx, ok := m.dequeueAndActivateNextLocked(state)
+	idleNotifier := m.idleNotifier
 	m.mu.Unlock()
 
 	if ok {
 		m.runTurn(sessionID, runCtx, next)
+		return
+	}
+	if idleNotifier != nil {
+		idleNotifier(sessionID)
 	}
 }
 
