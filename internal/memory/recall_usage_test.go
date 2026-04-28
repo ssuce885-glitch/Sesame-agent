@@ -23,7 +23,7 @@ func TestRecallUsesUsageMetadataAsTieBreaker(t *testing.T) {
 			Content:    "project alpha decision",
 			Confidence: 0.8,
 			UsageCount: 4,
-			LastUsedAt: now.Add(-2 * time.Hour),
+			LastUsedAt: now.Add(-time.Hour),
 			UpdatedAt:  now,
 		},
 	}
