@@ -10,6 +10,7 @@ import (
 
 	"go-agent/internal/config"
 	"go-agent/internal/model"
+	rolectx "go-agent/internal/roles"
 	"go-agent/internal/skills"
 	"go-agent/internal/tools"
 	"go-agent/internal/types"
@@ -426,7 +427,30 @@ func persistTurnUsage(ctx context.Context, store ConversationStore, usage types.
 	return store.UpsertTurnUsage(ctx, usage)
 }
 
-func buildTurnUsage(hasUsage bool, turnID, sessionID, provider, modelName string, inputTokens, outputTokens, cachedTokens int) *types.TurnUsage {
+type turnCostStore interface {
+	UpsertTurnCost(context.Context, types.TurnCost) error
+}
+
+func persistTurnCost(ctx context.Context, store ConversationStore, in Input, usage *types.TurnUsage) error {
+	if store == nil || usage == nil {
+		return nil
+	}
+	costStore, ok := store.(turnCostStore)
+	if !ok {
+		return nil
+	}
+	return costStore.UpsertTurnCost(ctx, types.TurnCost{
+		TurnID:       in.Turn.ID,
+		SessionID:    usage.SessionID,
+		OwnerRoleID:  rolectx.SpecialistRoleIDFromContext(ctx),
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+		CostUSD:      usage.CostUSD,
+		CreatedAt:    usage.CreatedAt,
+	})
+}
+
+func buildTurnUsage(hasUsage bool, turnID, sessionID, provider, modelName string, inputTokens, outputTokens, cachedTokens int, costUSD float64) *types.TurnUsage {
 	if !hasUsage {
 		return nil
 	}
@@ -443,6 +467,7 @@ func buildTurnUsage(hasUsage bool, turnID, sessionID, provider, modelName string
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
 		CachedTokens: cachedTokens,
+		CostUSD:      costUSD,
 		CacheHitRate: cacheHitRate,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -501,6 +526,14 @@ func finalizeTurn(ctx context.Context, e *Engine, in Input, usage *types.TurnUsa
 			if err := in.Sink.Emit(ctx, event); err != nil {
 				return err
 			}
+		}
+	}
+	if e != nil && e.store != nil {
+		if err := persistTurnCost(context.WithoutCancel(ctx), e.store, in, usage); err != nil {
+			return err
+		}
+		if _, err := e.store.DeleteTurnCheckpoints(context.WithoutCancel(ctx), in.Turn.ID); err != nil {
+			return err
 		}
 	}
 

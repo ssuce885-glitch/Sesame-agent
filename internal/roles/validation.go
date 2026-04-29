@@ -45,6 +45,8 @@ func normalizeUpsertInput(in UpsertInput) (UpsertInput, error) {
 		Description: strings.TrimSpace(in.Description),
 		Prompt:      strings.TrimSpace(in.Prompt),
 		SkillNames:  dedupeStrings(in.SkillNames),
+		Policy:      normalizeRolePolicyConfig(in.Policy),
+		Budget:      normalizeRoleBudgetConfig(in.Budget),
 	}, nil
 }
 
@@ -56,4 +58,30 @@ func validateUpsertInput(in UpsertInput) error {
 		return errors.New("prompt is required")
 	}
 	return nil
+}
+
+func normalizeRolePolicyConfig(in *RolePolicyConfig) *RolePolicyConfig {
+	if in == nil {
+		return nil
+	}
+	out := cloneRolePolicyConfig(in)
+	out.Model = strings.TrimSpace(out.Model)
+	out.PermissionProfile = strings.TrimSpace(out.PermissionProfile)
+	out.DeniedTools = dedupeStrings(out.DeniedTools)
+	out.MemoryReadScope = strings.TrimSpace(out.MemoryReadScope)
+	out.MemoryWriteScope = strings.TrimSpace(out.MemoryWriteScope)
+	out.DefaultVisibility = strings.TrimSpace(out.DefaultVisibility)
+	out.OutputSchema = strings.TrimSpace(out.OutputSchema)
+	out.ReportAudience = dedupeStrings(out.ReportAudience)
+	out.AutomationOwnership = dedupeStrings(out.AutomationOwnership)
+	return out
+}
+
+func normalizeRoleBudgetConfig(in *RoleBudgetConfig) *RoleBudgetConfig {
+	if in == nil {
+		return nil
+	}
+	out := cloneRoleBudgetConfig(in)
+	out.MaxRuntime = strings.TrimSpace(out.MaxRuntime)
+	return out
 }

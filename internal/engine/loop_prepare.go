@@ -64,6 +64,8 @@ type preparedLoopState struct {
 	toolExecCtx        tools.ExecContext
 	toolRuntime        *tools.Runtime
 	nextPosition       int
+	nextCheckpointSeq  int
+	resumeCheckpoint   *types.TurnCheckpoint
 	req                model.Request
 	cacheHead          *types.ProviderCacheHead
 	nativeContinuation bool
@@ -71,6 +73,7 @@ type preparedLoopState struct {
 	skillCatalog       skills.Catalog
 	activeSkills       []skills.ActivatedSkill
 	visibleDefs        []tools.Definition
+	budget             *RoleBudgetTracker
 }
 
 func prepareLoopState(ctx context.Context, e *Engine, in Input, emitter loopEmitter) (*preparedLoopState, error) {
@@ -117,7 +120,20 @@ func prepareLoopState(ctx context.Context, e *Engine, in Input, emitter loopEmit
 	}
 	toolRuntime := tools.NewRuntime(e.registry, toolRunStoreFromConversationStore(e.store))
 
-	_, working, err := loadConversationState(ctx, e, in, sessionID, turnMessage)
+	roleCatalog, err := rolectx.LoadCatalog(in.Session.WorkspaceRoot)
+	if err != nil {
+		return nil, emitter.Fail(ctx, err)
+	}
+	specialistSpec, err := resolveSpecialistSpec(roleCatalog, rolectx.SpecialistRoleIDFromContext(ctx))
+	if err != nil {
+		return nil, emitter.Fail(ctx, err)
+	}
+	toolExecCtx.RoleSpec = specialistSpec
+	if specialistSpec != nil && specialistSpec.Policy != nil && strings.TrimSpace(specialistSpec.Policy.PermissionProfile) != "" {
+		toolExecCtx.PermissionEngine = permissions.NewEngine(specialistSpec.Policy.PermissionProfile)
+	}
+
+	_, working, err := loadConversationState(ctx, e, in, sessionID, turnMessage, specialistSpec)
 	if err != nil {
 		return nil, emitter.Fail(ctx, err)
 	}
@@ -143,15 +159,6 @@ func prepareLoopState(ctx context.Context, e *Engine, in Input, emitter loopEmit
 		cacheHead = &cacheHeadValue
 	}
 
-	roleCatalog, err := rolectx.LoadCatalog(in.Session.WorkspaceRoot)
-	if err != nil {
-		return nil, emitter.Fail(ctx, err)
-	}
-	specialistSpec, err := resolveSpecialistSpec(roleCatalog, rolectx.SpecialistRoleIDFromContext(ctx))
-	if err != nil {
-		return nil, emitter.Fail(ctx, err)
-	}
-
 	runtimeInstructions, baseInstructions, err := buildLoopInstructions(e, in, working, roleCatalog, specialistSpec)
 	if err != nil {
 		return nil, emitter.Fail(ctx, err)
@@ -175,13 +182,24 @@ func prepareLoopState(ctx context.Context, e *Engine, in Input, emitter loopEmit
 	runtimeInstructions.Text = renderedInstructions
 	runtimeInstructions.Notices = append(runtimeInstructions.Notices, notices...)
 
+	resumeCheckpoint, err := loadResumeCheckpoint(ctx, e.store, in.Turn.ID)
+	if err != nil {
+		return nil, emitter.Fail(ctx, err)
+	}
 	req := e.runtime.PrepareRequest(
 		working,
 		cacheHead,
 		caps,
-		turnEntryUserItem(in),
+		requestUserItemForCheckpoint(in, resumeCheckpoint),
 		runtimeInstructions.Text,
 	)
+	if err := applyCheckpointToRequest(&req, resumeCheckpoint); err != nil {
+		return nil, emitter.Fail(ctx, err)
+	}
+	if specialistSpec != nil && specialistSpec.Policy != nil && strings.TrimSpace(specialistSpec.Policy.Model) != "" {
+		req.Model = strings.TrimSpace(specialistSpec.Policy.Model)
+		usageModel = req.Model
+	}
 	for _, notice := range runtimeInstructions.Notices {
 		if err := emitter.Emit(ctx, types.EventSystemNotice, types.NoticePayload{Text: notice}); err != nil {
 			return nil, err
@@ -204,6 +222,8 @@ func prepareLoopState(ctx context.Context, e *Engine, in Input, emitter loopEmit
 		toolExecCtx:        toolExecCtx,
 		toolRuntime:        toolRuntime,
 		nextPosition:       nextPosition,
+		nextCheckpointSeq:  nextCheckpointSequence(resumeCheckpoint),
+		resumeCheckpoint:   resumeCheckpoint,
 		req:                req,
 		cacheHead:          cacheHead,
 		nativeContinuation: req.Cache != nil && caps.Profile != model.CapabilityProfileNone,
@@ -211,6 +231,7 @@ func prepareLoopState(ctx context.Context, e *Engine, in Input, emitter loopEmit
 		skillCatalog:       skillCatalog,
 		activeSkills:       activeSkills,
 		visibleDefs:        visibleDefs,
+		budget:             e.roleBudgetTrackerForSpec(specialistSpec),
 	}, nil
 }
 
@@ -262,6 +283,7 @@ func buildLoopSkillsAndInstructions(
 	activeSkills := append([]skills.ActivatedSkill(nil), resolution.Activated...)
 	toolExecCtx.ActiveSkillNames = activatedSkillNames(activeSkills)
 	visibleDefs := toolRuntime.VisibleDefinitions(toolExecCtx)
+	visibleDefs = applyRolePolicyToToolDefinitions(specialistSpec, visibleDefs)
 	injectedEnv, err := loadActivatedSkillEnv(e.globalConfigRoot, activeSkills)
 	if err != nil {
 		return skills.Catalog{}, nil, nil, nil, "", nil, err
@@ -277,6 +299,9 @@ func buildLoopSkillsAndInstructions(
 }
 
 func persistInitialLoopItems(ctx context.Context, e *Engine, in Input, emitter loopEmitter, state *preparedLoopState) error {
+	if state.resumeCheckpoint != nil {
+		return nil
+	}
 	if state.turnKind == types.TurnKindUserMessage {
 		userItem := model.UserMessageItem(in.Turn.UserMessage)
 		if err := persistConversationItem(ctx, e.store, state.sessionID, in.Turn.ContextHeadID, in.Turn.ID, state.nextPosition, userItem); err != nil {

@@ -43,6 +43,7 @@ export function RolesPage() {
 
   useEffect(() => {
     if (!roles.length) {
+      setEditorRole(null);
       return;
     }
     if (!selectedRoleID && !isCreatingNew) {
@@ -63,13 +64,9 @@ export function RolesPage() {
       return;
     }
     const detail = selectedRoleDetails.data;
-    if (!detail || detail.role_id !== selectedRoleID) {
-      return;
-    }
+    if (!detail || detail.role_id !== selectedRoleID) return;
     setEditorRole((current) => {
-      if (current?.role_id === detail.role_id) {
-        return current;
-      }
+      if (current?.role_id === detail.role_id) return current;
       return detail;
     });
   }, [isCreatingNew, selectedRoleID, selectedRoleDetails.data]);
@@ -99,9 +96,7 @@ export function RolesPage() {
   }
 
   async function handleDelete() {
-    if (!selectedRoleID || isCreatingNew) {
-      return;
-    }
+    if (!selectedRoleID || isCreatingNew) return;
     try {
       setErrorMessage(null);
       await deleteRole.mutateAsync(selectedRoleID);
@@ -139,45 +134,32 @@ export function RolesPage() {
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <RoleDiagnostics diagnostics={diagnostics} />
         {errorMessage ? (
-          <section
-            className="shrink-0 border-b px-4 py-3 text-sm md:px-6"
+          <div
+            className="shrink-0 px-5 py-2 text-xs flex items-center gap-2"
             role="alert"
-            style={{
-              backgroundColor: "rgba(220, 38, 38, 0.04)",
-              borderColor: "rgba(220, 38, 38, 0.18)",
-              color: "var(--color-error)",
-            }}
+            style={{ backgroundColor: "var(--color-error-dim)", color: "var(--color-error)", borderBottom: "1px solid rgba(239,68,68,0.1)" }}
           >
             {errorMessage}
-          </section>
+          </div>
         ) : null}
         {isLoadingSelectedRole ? (
-          <section className="flex-1 overflow-y-auto p-4 md:p-6" style={{ backgroundColor: "var(--color-bg)" }}>
-            <div
-              className="max-w-3xl rounded-xl p-5 text-sm"
-              style={{
-                backgroundColor: "var(--color-surface)",
-                border: "1px solid var(--color-border)",
-                color: "var(--color-text-muted)",
-              }}
-            >
-              {t("roles.loadingRole")}
-            </div>
-          </section>
+          <div className="flex-1 flex items-center justify-center">
+            <div className="animate-shimmer rounded-lg" style={{ width: 200, height: 16, backgroundColor: "var(--color-surface)" }} />
+          </div>
         ) : hasSelectedRoleLoadError ? (
-          <section className="flex-1 overflow-y-auto p-4 md:p-6" style={{ backgroundColor: "var(--color-bg)" }}>
+          <section className="flex-1 overflow-y-auto p-5" style={{ backgroundColor: "var(--color-bg)" }}>
             <div
-              className="max-w-3xl rounded-xl p-5 text-sm"
+              className="max-w-xl rounded-lg p-4 text-sm"
               style={{
-                backgroundColor: "rgba(220, 38, 38, 0.04)",
-                border: "1px solid rgba(220, 38, 38, 0.18)",
+                backgroundColor: "var(--color-error-dim)",
+                border: "1px solid rgba(239,68,68,0.15)",
                 color: "var(--color-error)",
               }}
             >
               <div role="alert">{t("roles.loadFailed", { roleID: selectedRoleID ?? "" })}</div>
               <button
                 type="button"
-                className="mt-3 rounded-md px-3 py-2 text-sm font-medium"
+                className="mt-3 rounded-md px-3 py-1.5 text-xs font-medium"
                 onClick={() => {
                   void selectedRoleDetails.refetch();
                 }}

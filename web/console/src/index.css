@@ -1,29 +1,39 @@
 @import "tailwindcss";
 
 @theme {
-  /* Backgrounds */
-  --color-bg: #06070b;
-  --color-surface: #0d0f16;
-  --color-surface-2: #161922;
-  --color-border: #252830;
+  /* ── Base palette ─────────────────────────────────────────────── */
+  --color-bg: #0b0d11;
+  --color-bg-elevated: #111318;
+  --color-surface: #161920;
+  --color-surface-hover: #1c2028;
+  --color-border: #252a33;
+  --color-border-strong: #303540;
 
-  /* Text */
-  --color-text: #f5f7fb;
-  --color-text-muted: #9aa4b2;
+  /* ── Text ─────────────────────────────────────────────────────── */
+  --color-text: #e8eaed;
+  --color-text-secondary: #9aa2b0;
+  --color-text-tertiary: #5c6370;
 
-  /* Semantic */
-  --color-user: #fb7185;
-  --color-assistant: #34d399;
+  /* ── Semantic ─────────────────────────────────────────────────── */
+  --color-accent: #3b82f6;
+  --color-accent-dim: rgba(59, 130, 246, 0.12);
+  --color-user: #f43f5e;
+  --color-user-dim: rgba(244, 63, 94, 0.10);
+  --color-assistant: #10b981;
+  --color-assistant-dim: rgba(16, 185, 129, 0.10);
   --color-tool: #f59e0b;
-  --color-accent: #06b6d4;
+  --color-tool-dim: rgba(245, 158, 11, 0.10);
   --color-success: #22c55e;
+  --color-success-dim: rgba(34, 197, 94, 0.12);
   --color-warning: #f59e0b;
-  --color-error: #f87171;
+  --color-warning-dim: rgba(245, 158, 11, 0.12);
+  --color-error: #ef4444;
+  --color-error-dim: rgba(239, 68, 68, 0.12);
   --color-running: #f59e0b;
 
-  /* Fonts */
-  --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --font-mono: "Fira Code", "Consolas", monospace;
+  /* ── Fonts ────────────────────────────────────────────────────── */
+  --font-sans: "Inter", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Consolas", monospace;
 }
 
 * {
@@ -42,49 +52,58 @@ body {
   color: var(--color-text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Scrollbar */
+/* ── Scrollbar ────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-border);
+  background: var(--color-border-strong);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-muted);
+  background: var(--color-text-tertiary);
 }
 
-/* Pulse animation for running indicator */
+/* ── Selection ────────────────────────────────────────────────── */
+::selection {
+  background: rgba(59, 130, 246, 0.25);
+  color: var(--color-text);
+}
+
+/* ── Pulse animation ──────────────────────────────────────────── */
 @keyframes pulse-ring {
-  0% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
-  100% {
-    opacity: 1;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
-
 .animate-pulse-amber {
   animation: pulse-ring 1.2s ease-in-out infinite;
-  color: var(--color-running);
 }
 
-/* Focus ring */
+/* ── Skeleton / Shimmer ───────────────────────────────────────── */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.animate-shimmer {
+  background: linear-gradient(90deg, var(--color-surface) 25%, var(--color-surface-hover) 50%, var(--color-surface) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* ── Focus ring ───────────────────────────────────────────────── */
 :focus-visible {
   outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
-/* Smooth scrolling */
+/* ── Smooth scrolling ─────────────────────────────────────────── */
 html {
   scroll-behavior: smooth;
 }
@@ -93,8 +112,110 @@ html {
   html {
     scroll-behavior: auto;
   }
-
-  .animate-pulse-amber {
+  .animate-pulse-amber,
+  .animate-shimmer {
     animation: none;
   }
+}
+
+/* ── Markdown rendered content overrides ──────────────────────── */
+.markdown-body h1 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 1rem 0 0.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.markdown-body h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0.85rem 0 0.4rem;
+  color: var(--color-text);
+}
+.markdown-body h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0.7rem 0 0.3rem;
+  color: var(--color-text-secondary);
+}
+.markdown-body p {
+  margin: 0.4rem 0;
+  line-height: 1.7;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.4rem 0;
+  padding-left: 1.25rem;
+}
+.markdown-body li {
+  margin: 0.15rem 0;
+  line-height: 1.6;
+}
+.markdown-body li::marker {
+  color: var(--color-text-tertiary);
+}
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.6rem 0;
+  font-size: 0.85rem;
+}
+.markdown-body th {
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--color-border-strong);
+}
+.markdown-body td {
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.markdown-body tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+.markdown-body blockquote {
+  margin: 0.6rem 0;
+  padding: 0.4rem 0.75rem;
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-accent-dim);
+  border-radius: 0 4px 4px 0;
+  color: var(--color-text-secondary);
+}
+.markdown-body blockquote p {
+  margin: 0;
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 0.75rem 0;
+}
+.markdown-body a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-body a:hover {
+  opacity: 0.8;
+}
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  background: var(--color-surface);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  color: var(--color-text-secondary);
+}
+.markdown-body pre {
+  margin: 0.5rem 0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.markdown-body pre > code {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  font-size: 0.8rem;
 }

@@ -6,8 +6,11 @@ import {
   getWorkspace,
   getWorkspaceReports,
   getWorkspaceRuntimeGraph,
+  getFileCheckpointDiff,
   loadContextHistory,
+  listFileCheckpoints,
   reopenContext,
+  rollbackFileCheckpoint,
   submitMessage,
   getMetricsOverview,
   getMetricsTimeseries,
@@ -72,6 +75,24 @@ export function useWorkspaceReports() {
   });
 }
 
+export function useFileCheckpoints(sessionId: string | null) {
+  return useQuery({
+    queryKey: ["file-checkpoints", sessionId],
+    queryFn: () => listFileCheckpoints(sessionId!),
+    enabled: !!sessionId,
+    staleTime: 10_000,
+  });
+}
+
+export function useFileCheckpointDiff(sessionId: string | null, checkpointId: string | null) {
+  return useQuery({
+    queryKey: ["file-checkpoints", sessionId, checkpointId, "diff"],
+    queryFn: () => getFileCheckpointDiff(sessionId!, checkpointId!),
+    enabled: !!sessionId && !!checkpointId,
+    staleTime: 30_000,
+  });
+}
+
 export function useReopenContext(sessionId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -89,6 +110,17 @@ export function useLoadContextHistory(sessionId: string) {
     mutationFn: (headId: string) => loadContextHistory(sessionId, headId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["history", sessionId] });
+      qc.invalidateQueries({ queryKey: ["timeline", sessionId] });
+    },
+  });
+}
+
+export function useRollbackFileCheckpoint(sessionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (checkpointId: string) => rollbackFileCheckpoint(sessionId, checkpointId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["file-checkpoints", sessionId] });
       qc.invalidateQueries({ queryKey: ["timeline", sessionId] });
     },
   });

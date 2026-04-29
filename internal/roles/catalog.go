@@ -7,8 +7,13 @@ import (
 	"sort"
 	"strings"
 
+	"go-agent/internal/types"
+
 	"gopkg.in/yaml.v3"
 )
+
+type RolePolicyConfig = types.RolePolicyConfig
+type RoleBudgetConfig = types.RoleBudgetConfig
 
 type Spec struct {
 	RoleID      string
@@ -17,6 +22,8 @@ type Spec struct {
 	Prompt      string
 	SkillNames  []string
 	Version     int
+	Policy      *RolePolicyConfig
+	Budget      *RoleBudgetConfig
 }
 
 type Catalog struct {
@@ -26,19 +33,23 @@ type Catalog struct {
 }
 
 type roleConfig struct {
-	DisplayName string   `yaml:"display_name"`
-	Description string   `yaml:"description"`
-	Skills      []string `yaml:"skills"`
-	Version     int      `yaml:"version"`
+	DisplayName string            `yaml:"display_name"`
+	Description string            `yaml:"description"`
+	Skills      []string          `yaml:"skills"`
+	Version     int               `yaml:"version"`
+	Policy      *RolePolicyConfig `yaml:"policy,omitempty"`
+	Budget      *RoleBudgetConfig `yaml:"budget,omitempty"`
 }
 
 type roleSnapshot struct {
-	RoleID      string   `yaml:"role_id"`
-	DisplayName string   `yaml:"display_name"`
-	Description string   `yaml:"description"`
-	Prompt      string   `yaml:"prompt"`
-	SkillNames  []string `yaml:"skills"`
-	Version     int      `yaml:"version"`
+	RoleID      string            `yaml:"role_id"`
+	DisplayName string            `yaml:"display_name"`
+	Description string            `yaml:"description"`
+	Prompt      string            `yaml:"prompt"`
+	SkillNames  []string          `yaml:"skills"`
+	Version     int               `yaml:"version"`
+	Policy      *RolePolicyConfig `yaml:"policy,omitempty"`
+	Budget      *RoleBudgetConfig `yaml:"budget,omitempty"`
 }
 
 func LoadCatalog(workspaceRoot string) (Catalog, error) {
@@ -165,6 +176,8 @@ func loadRoleSpec(root, roleID string) (Spec, error) {
 		Prompt:      prompt,
 		SkillNames:  normalizeSkillNames(cfg.Skills),
 		Version:     normalizeRoleVersion(cfg.Version),
+		Policy:      cloneRolePolicyConfig(cfg.Policy),
+		Budget:      cloneRoleBudgetConfig(cfg.Budget),
 	}, nil
 }
 
@@ -188,6 +201,8 @@ func loadRoleVersionSnapshot(path string) (Spec, error) {
 		Prompt:      strings.TrimSpace(snapshot.Prompt),
 		SkillNames:  normalizeSkillNames(snapshot.SkillNames),
 		Version:     normalizeRoleVersion(snapshot.Version),
+		Policy:      cloneRolePolicyConfig(snapshot.Policy),
+		Budget:      cloneRoleBudgetConfig(snapshot.Budget),
 	}, nil
 }
 
@@ -228,6 +243,38 @@ func normalizeRoleVersion(version int) int {
 		return 1
 	}
 	return version
+}
+
+func cloneRolePolicyConfig(in *RolePolicyConfig) *RolePolicyConfig {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.DeniedTools = cloneStringSlice(in.DeniedTools)
+	out.ReportAudience = cloneStringSlice(in.ReportAudience)
+	out.AutomationOwnership = cloneStringSlice(in.AutomationOwnership)
+	if in.CanDelegate != nil {
+		value := *in.CanDelegate
+		out.CanDelegate = &value
+	}
+	return &out
+}
+
+func cloneRoleBudgetConfig(in *RoleBudgetConfig) *RoleBudgetConfig {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
+func cloneStringSlice(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
 }
 
 func rejectInvalidRoleYAML(content []*yaml.Node) error {

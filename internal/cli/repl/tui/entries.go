@@ -26,10 +26,14 @@ type Entry struct {
 	Streaming  bool
 	ToolCallID string
 	Status     string
+	Count      int // merge count for identical consecutive entries
 }
 
 func (m *Model) appendEntry(entry Entry) {
 	entry.ID = fmt.Sprintf("entry_%d", len(m.entries)+1)
+	if entry.Count == 0 {
+		entry.Count = 1
+	}
 	m.entries = append(m.entries, entry)
 }
 
@@ -61,18 +65,38 @@ func (m *Model) appendToolEntry(kind EntryKind, title, body, toolCallID, status 
 }
 
 func (m *Model) appendNotice(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	last := len(m.entries) - 1
+	if last >= 0 && m.entries[last].Kind == EntryNotice && m.entries[last].Body == text {
+		m.entries[last].Count++
+		return
+	}
 	m.appendEntry(Entry{
 		Kind:  EntryNotice,
 		Title: "notice",
-		Body:  strings.TrimSpace(text),
+		Body:  text,
+		Count: 1,
 	})
 }
 
 func (m *Model) appendError(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	last := len(m.entries) - 1
+	if last >= 0 && m.entries[last].Kind == EntryError && m.entries[last].Body == text {
+		m.entries[last].Count++
+		return
+	}
 	m.appendEntry(Entry{
 		Kind:  EntryError,
 		Title: "error",
-		Body:  strings.TrimSpace(text),
+		Body:  text,
+		Count: 1,
 	})
 }
 

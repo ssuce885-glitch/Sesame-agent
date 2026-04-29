@@ -77,6 +77,7 @@ type ExecContext struct {
 	ArchiveStore             ArchiveStore
 	ColdIndexStore           ColdIndexStore
 	MemoryStore              MemoryStore
+	RoleSpec                 *roles.Spec
 	TurnContext              *runtimegraph.TurnContext
 	ToolRunID                string
 	EventSink                EventSink

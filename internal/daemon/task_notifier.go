@@ -11,6 +11,8 @@ import (
 	rolectx "go-agent/internal/roles"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
+	"go-agent/internal/sessionbinding"
+	"go-agent/internal/sessionrole"
 	"go-agent/internal/store/sqlite"
 	"go-agent/internal/stream"
 	"go-agent/internal/task"
@@ -540,14 +542,25 @@ func (n *taskTerminalNotifier) EnqueueSyntheticReportTurn(ctx context.Context, s
 	if n == nil || n.store == nil || n.manager == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
+	sessionID = strings.TrimSpace(sessionID)
 	now := n.currentTime()
 	n.reportBatchMu.Lock()
 	defer n.reportBatchMu.Unlock()
+	queuedCount, err := n.store.CountQueuedReportDeliveries(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if queuedCount == 0 {
+		return nil
+	}
 	if !n.lastReportBatchAt.IsZero() && now.Sub(n.lastReportBatchAt) < reportBatchCooldown {
 		remaining := reportBatchCooldown - now.Sub(n.lastReportBatchAt)
 		if remaining > 0 {
-			sessionID := strings.TrimSpace(sessionID)
 			time.AfterFunc(remaining, func() {
+				queuedCount, err := n.store.CountQueuedReportDeliveries(context.Background(), sessionID)
+				if err != nil || queuedCount == 0 {
+					return
+				}
 				_ = n.EnqueueSyntheticReportTurn(context.Background(), sessionID)
 			})
 		}
@@ -562,6 +575,8 @@ func (n *taskTerminalNotifier) EnqueueSyntheticReportTurn(ctx context.Context, s
 		return nil
 	}
 	ctx = workspace.WithWorkspaceRoot(ctx, strings.TrimSpace(sessionRow.WorkspaceRoot))
+	ctx = sessionbinding.WithContextBinding(ctx, sessionbinding.DefaultContextBinding)
+	ctx = sessionrole.WithSessionRole(ctx, types.SessionRoleMainParent)
 
 	if state, ok := n.manager.GetRuntimeState(sessionID); ok {
 		if state.QueuedReportBatches > 0 {
@@ -570,6 +585,13 @@ func (n *taskTerminalNotifier) EnqueueSyntheticReportTurn(ctx context.Context, s
 		if state.ActiveTurnKind != "" {
 			return nil
 		}
+	}
+	queuedCount, err = n.store.CountQueuedReportDeliveries(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if queuedCount == 0 {
+		return nil
 	}
 
 	turn := types.Turn{

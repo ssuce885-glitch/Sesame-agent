@@ -17,6 +17,7 @@ type Runtime struct {
 	Store             *sqlite.Store
 	Bus               *stream.Bus
 	Engine            *engine.Engine
+	FileCheckpoints   *engine.FileCheckpointService
 	SessionManager    *session.Manager
 	TaskManager       *task.Manager
 	RuntimeService    *runtimegraph.Service

@@ -25,6 +25,7 @@ const (
 	EventWorktreeUpdated             = "worktree.updated"
 	EventParentReplyCommitted        = "parent.reply_committed"
 	EventContextCompacted            = "context.compacted"
+	EventCompactionQACompleted       = "compaction.qa.completed"
 	EventContextHeadSummaryStarted   = "context_head_summary.started"
 	EventContextHeadSummaryCompleted = "context_head_summary.completed"
 	EventContextHeadSummaryFailed    = "context_head_summary.failed"
@@ -89,6 +90,20 @@ type ContextHeadSummaryEventPayload struct {
 	GlobalEntriesUpserted    int    `json:"global_entries_upserted,omitempty"`
 	WorkspaceEntriesPruned   int    `json:"workspace_entries_pruned,omitempty"`
 	Message                  string `json:"message,omitempty"`
+}
+
+type CompactionQAEventPayload struct {
+	CompactionID        string             `json:"compaction_id"`
+	SessionID           string             `json:"session_id"`
+	CompactionKind      string             `json:"compaction_kind"`
+	SourceItemCount     int                `json:"source_item_count"`
+	RetainedConstraints []string           `json:"retained_constraints,omitempty"`
+	LostConstraints     []string           `json:"lost_constraints,omitempty"`
+	HallucinationCheck  string             `json:"hallucination_check,omitempty"`
+	Confidence          float64            `json:"confidence"`
+	ReviewModel         string             `json:"review_model,omitempty"`
+	QAStatus            CompactionQAStatus `json:"qa_status"`
+	Message             string             `json:"message,omitempty"`
 }
 
 type SessionQueuePayload struct {

@@ -11,6 +11,7 @@ import (
 	"go-agent/internal/automation"
 	"go-agent/internal/config"
 	contextstate "go-agent/internal/context"
+	"go-agent/internal/engine"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
 	rolectx "go-agent/internal/roles"
@@ -74,22 +75,26 @@ func configureRuntimeGuardrails(cfg config.Config) {
 	tools.SetFileWriteMaxBytes(cfg.MaxFileWriteBytes)
 }
 
-func buildHTTPDependencies(cfg config.Config, store *sqlite.Store, bus *stream.Bus, manager *session.Manager, schedulerService *scheduler.Service, automationService *automation.Service) httpapi.Dependencies {
+func buildHTTPDependencies(cfg config.Config, store *sqlite.Store, bus *stream.Bus, manager *session.Manager, schedulerService *scheduler.Service, automationService *automation.Service, fileCheckpoints *engine.FileCheckpointService) httpapi.Dependencies {
 	if automationService == nil && store != nil {
 		automationService = automation.NewService(store)
+	}
+	if fileCheckpoints == nil && store != nil {
+		fileCheckpoints = engine.NewFileCheckpointService(store, cfg.Paths.WorkspaceRoot)
 	}
 	roleService := rolectx.NewServiceWithGlobalRoot(cfg.Paths.GlobalRoot)
 	roleService.SetAutomationCleanupService(automationService)
 	return httpapi.Dependencies{
-		Bus:           bus,
-		Store:         store,
-		Manager:       manager,
-		Scheduler:     schedulerService,
-		Automation:    automationService,
-		RoleService:   roleService,
-		Status:        buildStatusPayload(cfg),
-		ConsoleRoot:   filepath.Join("web", "console", "dist"),
-		WorkspaceRoot: cfg.Paths.WorkspaceRoot,
+		Bus:             bus,
+		Store:           store,
+		Manager:         manager,
+		Scheduler:       schedulerService,
+		Automation:      automationService,
+		RoleService:     roleService,
+		FileCheckpoints: fileCheckpoints,
+		Status:          buildStatusPayload(cfg),
+		ConsoleRoot:     filepath.Join("web", "console", "dist"),
+		WorkspaceRoot:   cfg.Paths.WorkspaceRoot,
 	}
 }
 

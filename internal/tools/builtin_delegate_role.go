@@ -29,7 +29,7 @@ func (delegateToRoleTool) IsEnabled(execCtx ExecContext) bool {
 func (delegateToRoleTool) Definition() Definition {
 	return Definition{
 		Name:        "delegate_to_role",
-		Description: "Terminally hand off work from main_parent to an installed specialist role task. After this succeeds, end the turn; do not wait, sleep, poll, or inspect the delegated task because its result returns through reports.",
+		Description: "Hand off work from main_parent to an installed specialist role task. After calling this tool, read the returned task_id, confirm the delegation in one sentence, then end the turn. Do not wait, sleep, poll, or inspect the delegated task — its result returns through reports.",
 		InputSchema: objectSchema(map[string]any{
 			"target_role": map[string]any{
 				"type":        "string",
@@ -54,7 +54,7 @@ func (delegateToRoleTool) Definition() Definition {
 
 func (delegateToRoleTool) IsConcurrencySafe() bool { return false }
 
-func (delegateToRoleTool) CompletesTurnOnSuccess() bool { return true }
+func (delegateToRoleTool) CompletesTurnOnSuccess() bool { return false }
 
 func (delegateToRoleTool) Decode(call Call) (DecodedCall, error) {
 	targetRole, err := validateRoleID(call.StringInput("target_role"))
@@ -95,6 +95,9 @@ func (delegateToRoleTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 	if execCtx.SessionDelegationService == nil {
 		return ToolExecutionResult{}, fmt.Errorf("session delegation service is not configured")
 	}
+	if execCtx.RoleSpec != nil && execCtx.RoleSpec.Policy != nil && execCtx.RoleSpec.Policy.CanDelegate != nil && !*execCtx.RoleSpec.Policy.CanDelegate {
+		return ToolExecutionResult{}, fmt.Errorf("role %s cannot delegate to other roles", strings.TrimSpace(execCtx.RoleSpec.RoleID))
+	}
 	input, _ := decoded.Input.(DelegateToRoleInput)
 	out, err := execCtx.SessionDelegationService.DelegateToRole(ctx, session.DelegateToRoleInput{
 		WorkspaceRoot:   execCtx.WorkspaceRoot,
@@ -114,7 +117,7 @@ func (delegateToRoleTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 	}
 	text := mustJSON(output)
 	modelText := fmt.Sprintf(
-		"Delegated to %s via background task %s. This turn is complete. Do not call task_wait, task_get, task_output, task_result, or shell sleep to wait for it; the result will return through a queued child report.",
+		"Work has been delegated to %s (background task %s). The result will return through a report.",
 		output.TargetRole,
 		output.TaskID,
 	)
@@ -130,7 +133,7 @@ func (delegateToRoleTool) ExecuteDecoded(ctx context.Context, decoded DecodedCal
 			"target_role":       output.TargetRole,
 			"turn_handoff":      true,
 		},
-		CompleteTurn: true,
+		CompleteTurn: false,
 	}, nil
 }
 

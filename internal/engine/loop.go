@@ -34,6 +34,20 @@ func runLoop(ctx context.Context, e *Engine, in Input) error {
 	if err != nil {
 		return err
 	}
+	if state.budget != nil {
+		if err := state.budget.CanStartTurn(); err != nil {
+			return emitter.Fail(ctx, err)
+		}
+		defer state.budget.FinishTurn()
+		if err := state.budget.CheckContextTokens(estimateRequestContextTokens(state.req)); err != nil {
+			return emitter.Fail(ctx, err)
+		}
+		if maxRuntime := state.budget.MaxRuntime(); maxRuntime > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, maxRuntime)
+			defer cancel()
+		}
+	}
 	if err := persistInitialLoopItems(ctx, e, in, emitter, state); err != nil {
 		return err
 	}
@@ -57,7 +71,7 @@ func turnEntryUserItem(in Input) model.ConversationItem {
 	return model.UserMessageItem(effectiveTurnMessage(in.Turn))
 }
 
-func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string, turnMessage string) (int, contextstate.WorkingSet, error) {
+func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID string, turnMessage string, specialistSpec *rolectx.Spec) (int, contextstate.WorkingSet, error) {
 	if e.store == nil || e.ctxManager == nil {
 		return 0, contextstate.WorkingSet{}, nil
 	}
@@ -84,6 +98,7 @@ func loadConversationState(ctx context.Context, e *Engine, in Input, sessionID s
 	if err != nil {
 		return 0, contextstate.WorkingSet{}, err
 	}
+	entries = applyRoleMemoryReadPolicy(entries, roleID, specialistSpec)
 
 	memoryRefs, usedMemoryIDs := buildMemoryRefsAndUsage(entries, hasContextHeadSummary, in.Session.WorkspaceRoot, turnMessage)
 	if err := markMemoryEntriesUsed(ctx, e.store, usedMemoryIDs); err != nil {
@@ -333,7 +348,7 @@ func applyMicrocompactPass(
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
 	}
-	if err := e.store.InsertConversationCompactionWithContextHead(ctx, types.ConversationCompaction{
+	compaction := types.ConversationCompaction{
 		ID:              types.NewID("compact"),
 		SessionID:       sessionID,
 		ContextHeadID:   contextHeadID,
@@ -347,8 +362,12 @@ func applyMicrocompactPass(
 		Reason:          "microcompact_tool_results",
 		ProviderProfile: string(e.model.Capabilities().Profile),
 		CreatedAt:       time.Now().UTC(),
-	}); err != nil {
+	}
+	if err := e.store.InsertConversationCompactionWithContextHead(ctx, compaction); err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, nil, false, err
+	}
+	if e.compactionQA != nil {
+		e.compactionQA.Enqueue(ctx, compaction, microcompactQASourceItems(items, candidatePayload.SourcePositions))
 	}
 
 	nextBundle, nextCompactions, err := loadContextHeadSummaryBundle(ctx, e.store, sessionID, contextHeadID)
@@ -474,7 +493,7 @@ func applyArchiveCompaction(
 	}
 
 	providerProfile := providerProfileForEngine(e)
-	if err := e.store.InsertConversationCompactionWithContextHead(ctx, types.ConversationCompaction{
+	compaction := types.ConversationCompaction{
 		ID:             types.NewID("compact"),
 		SessionID:      sessionID,
 		ContextHeadID:  contextHeadID,
@@ -498,8 +517,12 @@ func applyArchiveCompaction(
 		Reason:          reason,
 		ProviderProfile: providerProfile,
 		CreatedAt:       createdAt,
-	}); err != nil {
+	}
+	if err := e.store.InsertConversationCompactionWithContextHead(ctx, compaction); err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
+	}
+	if e.compactionQA != nil {
+		e.compactionQA.Enqueue(ctx, compaction, archiveItems)
 	}
 
 	if e.ctxManager != nil {
@@ -567,7 +590,8 @@ func applySummaryCompaction(
 	if err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
 	}
-	if err := e.store.InsertConversationCompactionWithContextHead(ctx, types.ConversationCompaction{
+	createdAt := time.Now().UTC()
+	compaction := types.ConversationCompaction{
 		ID:             types.NewID("compact"),
 		SessionID:      sessionID,
 		ContextHeadID:  contextHeadID,
@@ -590,9 +614,13 @@ func applySummaryCompaction(
 		)),
 		Reason:          reason,
 		ProviderProfile: string(e.model.Capabilities().Profile),
-		CreatedAt:       time.Now().UTC(),
-	}); err != nil {
+		CreatedAt:       createdAt,
+	}
+	if err := e.store.InsertConversationCompactionWithContextHead(ctx, compaction); err != nil {
 		return contextstate.WorkingSet{}, SummaryBundle{}, err
+	}
+	if e.compactionQA != nil {
+		e.compactionQA.Enqueue(ctx, compaction, items[:cutoff])
 	}
 
 	summaryBundle, compactions, err = loadContextHeadSummaryBundle(ctx, e.store, sessionID, contextHeadID)
@@ -789,6 +817,21 @@ func buildAppliedMicrocompact(items []model.ConversationItem, positions []int, r
 	}
 	promptItems := appendPromptItems(payload.Items, items[recentStart:])
 	return payload, promptItems, len(promptItems) > 0
+}
+
+func microcompactQASourceItems(items []model.ConversationItem, sourcePositions []int) []model.ConversationItem {
+	if len(items) == 0 || len(sourcePositions) == 0 {
+		return nil
+	}
+	out := make([]model.ConversationItem, 0, len(sourcePositions))
+	for _, position := range sourcePositions {
+		index := position - 1
+		if index < 0 || index >= len(items) {
+			continue
+		}
+		out = append(out, items[index])
+	}
+	return out
 }
 
 func firstPayloadPosition(payload persistedMicrocompactPayload) int {

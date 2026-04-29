@@ -127,20 +127,24 @@ func handleRoleByID(deps Dependencies) http.HandlerFunc {
 }
 
 type roleResponse struct {
-	RoleID      string   `json:"role_id"`
-	DisplayName string   `json:"display_name"`
-	Description string   `json:"description"`
-	Prompt      string   `json:"prompt"`
-	SkillNames  []string `json:"skills"`
-	Version     int      `json:"version"`
+	RoleID      string                  `json:"role_id"`
+	DisplayName string                  `json:"display_name"`
+	Description string                  `json:"description"`
+	Prompt      string                  `json:"prompt"`
+	SkillNames  []string                `json:"skills"`
+	Version     int                     `json:"version"`
+	Policy      *roles.RolePolicyConfig `json:"policy,omitempty"`
+	Budget      *roles.RoleBudgetConfig `json:"budget,omitempty"`
 }
 
 type roleSummaryResponse struct {
-	RoleID      string   `json:"role_id"`
-	DisplayName string   `json:"display_name"`
-	Description string   `json:"description"`
-	SkillNames  []string `json:"skills"`
-	Version     int      `json:"version"`
+	RoleID      string                  `json:"role_id"`
+	DisplayName string                  `json:"display_name"`
+	Description string                  `json:"description"`
+	SkillNames  []string                `json:"skills"`
+	Version     int                     `json:"version"`
+	Policy      *roles.RolePolicyConfig `json:"policy,omitempty"`
+	Budget      *roles.RoleBudgetConfig `json:"budget,omitempty"`
 }
 
 type roleDiagnosticResponse struct {
@@ -157,6 +161,8 @@ func toRoleResponse(spec roles.Spec) roleResponse {
 		Prompt:      spec.Prompt,
 		SkillNames:  normalizeSkillsForResponse(spec.SkillNames),
 		Version:     spec.Version,
+		Policy:      spec.Policy,
+		Budget:      spec.Budget,
 	}
 }
 
@@ -172,6 +178,8 @@ func toRoleSummaryResponseList(specs []roles.Spec) []roleSummaryResponse {
 			Description: spec.Description,
 			SkillNames:  normalizeSkillsForResponse(spec.SkillNames),
 			Version:     spec.Version,
+			Policy:      spec.Policy,
+			Budget:      spec.Budget,
 		})
 	}
 	return out

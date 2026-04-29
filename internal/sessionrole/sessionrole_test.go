@@ -60,3 +60,22 @@ func TestSpecialistSystemPromptMentionsMemoryAndArchiveTools(t *testing.T) {
 		}
 	}
 }
+
+func TestSpecialistSystemPromptIncludesOutputSchema(t *testing.T) {
+	schema := `{"type":"object","required":["summary"]}`
+	prompt := SpecialistSystemPrompt(roles.Spec{
+		RoleID: "analyst",
+		Policy: &roles.RolePolicyConfig{
+			OutputSchema: schema,
+		},
+	})
+	for _, required := range []string{
+		"# Output format",
+		"valid JSON matching this schema",
+		schema,
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("specialist prompt missing %q:\n%s", required, prompt)
+		}
+	}
+}

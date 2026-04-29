@@ -14,11 +14,11 @@ export function UsageChart({ data }: { data?: MetricsTimeseries }) {
   if (!data || data.points.length === 0) {
     return (
       <div
-        className="rounded-xl px-5 py-8 text-center text-sm"
+        className="rounded-lg px-5 py-8 text-center text-xs"
         style={{
           backgroundColor: "var(--color-surface)",
           border: "1px solid var(--color-border)",
-          color: "var(--color-text-muted)",
+          color: "var(--color-text-tertiary)",
         }}
       >
         No usage data yet.
@@ -38,13 +38,13 @@ export function UsageChart({ data }: { data?: MetricsTimeseries }) {
 
   return (
     <div
-      className="rounded-xl px-5 py-4"
+      className="rounded-lg px-4 py-3"
       style={{
         backgroundColor: "var(--color-surface)",
         border: "1px solid var(--color-border)",
       }}
     >
-      <div className="text-sm font-semibold mb-4" style={{ color: "var(--color-text)" }}>
+      <div className="text-xs font-semibold mb-3" style={{ color: "var(--color-text-secondary)" }}>
         Daily Token Usage
       </div>
       <ResponsiveContainer width="100%" height={240}>
@@ -52,12 +52,12 @@ export function UsageChart({ data }: { data?: MetricsTimeseries }) {
           <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 11, fill: "var(--color-text-muted)" }}
+            tick={{ fontSize: 11, fill: "var(--color-text-tertiary)" }}
             tickLine={false}
             axisLine={false}
           />
           <YAxis
-            tick={{ fontSize: 11, fill: "var(--color-text-muted)" }}
+            tick={{ fontSize: 11, fill: "var(--color-text-tertiary)" }}
             tickLine={false}
             axisLine={false}
             tickFormatter={(v: number) =>
@@ -66,16 +66,16 @@ export function UsageChart({ data }: { data?: MetricsTimeseries }) {
           />
           <Tooltip
             contentStyle={{
-              backgroundColor: "var(--color-surface)",
+              backgroundColor: "var(--color-bg-elevated)",
               border: "1px solid var(--color-border)",
-              borderRadius: 8,
+              borderRadius: 6,
               fontSize: 12,
               color: "var(--color-text)",
             }}
-            labelStyle={{ fontWeight: 600 }}
+            labelStyle={{ fontWeight: 600, color: "var(--color-text)" }}
           />
           <Legend
-            wrapperStyle={{ fontSize: 12, color: "var(--color-text-muted)" }}
+            wrapperStyle={{ fontSize: 11, color: "var(--color-text-tertiary)" }}
           />
           <Area
             type="monotone"
@@ -83,25 +83,25 @@ export function UsageChart({ data }: { data?: MetricsTimeseries }) {
             stackId="1"
             stroke="var(--color-accent)"
             fill="var(--color-accent)"
-            fillOpacity={0.7}
+            fillOpacity={0.15}
             name="Input"
           />
           <Area
             type="monotone"
             dataKey="output"
-            stackId="2"
+            stackId="1"
             stroke="var(--color-assistant)"
             fill="var(--color-assistant)"
-            fillOpacity={0.7}
+            fillOpacity={0.15}
             name="Output"
           />
           <Area
             type="monotone"
             dataKey="cached"
-            stackId="3"
-            stroke="var(--color-text-muted)"
-            fill="var(--color-text-muted)"
-            fillOpacity={0.3}
+            stackId="1"
+            stroke="var(--color-text-tertiary)"
+            fill="var(--color-text-tertiary)"
+            fillOpacity={0.1}
             name="Cached"
           />
         </AreaChart>

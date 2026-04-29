@@ -106,7 +106,7 @@ func Run(ctx context.Context) error {
 			})
 		}()
 	}
-	handler := httpapi.NewRouter(buildHTTPDependencies(cfg, runtime.Store, runtime.Bus, runtime.SessionManager, runtime.SchedulerService, runtime.AutomationService))
+	handler := httpapi.NewRouter(buildHTTPDependencies(cfg, runtime.Store, runtime.Bus, runtime.SessionManager, runtime.SchedulerService, runtime.AutomationService, runtime.FileCheckpoints))
 
 	slog.Info("sesame daemon listening", "addr", cfg.Addr)
 	return http.ListenAndServe(cfg.Addr, handler)

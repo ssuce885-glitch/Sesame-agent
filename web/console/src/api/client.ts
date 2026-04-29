@@ -8,6 +8,9 @@ import type {
   ContextHead,
   WorkspaceReportsResponse,
   WorkspaceRuntimeGraphResponse,
+  FileCheckpointDiffResponse,
+  FileCheckpointListResponse,
+  FileCheckpointRollbackResponse,
   RoleListResponse,
   RoleSpec,
   RoleVersionListResponse,
@@ -152,6 +155,34 @@ export function getWorkspaceRuntimeGraph(): Promise<WorkspaceRuntimeGraphRespons
 
 export function getWorkspaceReports(): Promise<WorkspaceReportsResponse> {
   return apiFetch<WorkspaceReportsResponse>("/v1/reports");
+}
+
+// ─── File checkpoints ─────────────────────────────────────────────────────────
+
+export function listFileCheckpoints(sessionId: string): Promise<FileCheckpointListResponse> {
+  return apiFetch<FileCheckpointListResponse>("/v1/session/checkpoints", {
+    headers: contextBindingHeaders(sessionId),
+  });
+}
+
+export function getFileCheckpointDiff(
+  sessionId: string,
+  checkpointId: string,
+): Promise<FileCheckpointDiffResponse> {
+  return apiFetch<FileCheckpointDiffResponse>(`/v1/session/checkpoints/${encodeURIComponent(checkpointId)}/diff`, {
+    headers: contextBindingHeaders(sessionId),
+  });
+}
+
+export function rollbackFileCheckpoint(
+  sessionId: string,
+  checkpointId: string,
+): Promise<FileCheckpointRollbackResponse> {
+  return apiFetch<FileCheckpointRollbackResponse>(`/v1/session/checkpoints/${encodeURIComponent(checkpointId)}/rollback`, {
+    method: "POST",
+    headers: contextBindingHeaders(sessionId),
+    body: JSON.stringify({}),
+  });
 }
 
 // ─── Roles ────────────────────────────────────────────────────────────────────

@@ -100,3 +100,54 @@ func TestServiceDeleteReturnsCleanupErrorAndKeepsRoleDir(t *testing.T) {
 		t.Fatalf("roleDir should remain on cleanup error: %v", err)
 	}
 }
+
+func TestServiceCreateRoundTripsPolicyAndBudget(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	canDelegate := false
+	service := NewService()
+
+	spec, err := service.Create(workspaceRoot, UpsertInput{
+		RoleID:      "cost_guarded",
+		DisplayName: "Cost Guarded",
+		Prompt:      "stay bounded",
+		Policy: &RolePolicyConfig{
+			Model:               "special-model",
+			PermissionProfile:   "sandbox",
+			DeniedTools:         []string{"shell_command"},
+			MemoryWriteScope:    "role_only",
+			DefaultVisibility:   "private",
+			CanDelegate:         &canDelegate,
+			OutputSchema:        `{"type":"object"}`,
+			ReportAudience:      []string{"main_parent"},
+			AutomationOwnership: []string{"cleanup_docs"},
+		},
+		Budget: &RoleBudgetConfig{
+			MaxRuntime:       "5m",
+			MaxToolCalls:     3,
+			MaxContextTokens: 1000,
+			MaxCost:          1.5,
+			MaxTurnsPerHour:  4,
+			MaxConcurrent:    1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if spec.Policy == nil || spec.Policy.Model != "special-model" || spec.Policy.CanDelegate == nil || *spec.Policy.CanDelegate {
+		t.Fatalf("Policy = %#v", spec.Policy)
+	}
+	if spec.Budget == nil || spec.Budget.MaxRuntime != "5m" || spec.Budget.MaxToolCalls != 3 || spec.Budget.MaxCost != 1.5 {
+		t.Fatalf("Budget = %#v", spec.Budget)
+	}
+
+	loaded, err := service.Get(workspaceRoot, "cost_guarded")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if loaded.Policy == nil || loaded.Policy.PermissionProfile != "sandbox" || len(loaded.Policy.DeniedTools) != 1 {
+		t.Fatalf("loaded Policy = %#v", loaded.Policy)
+	}
+	if loaded.Budget == nil || loaded.Budget.MaxContextTokens != 1000 || loaded.Budget.MaxTurnsPerHour != 4 {
+		t.Fatalf("loaded Budget = %#v", loaded.Budget)
+	}
+}

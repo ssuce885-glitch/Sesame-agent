@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { Check, X, Circle, ChevronDown, ChevronUp, Play } from "../Icon";
+import { Check, X, Circle, Play, ChevronDown, ChevronUp } from "../Icon";
 
 export function ToolCall({
   toolName,
@@ -21,108 +21,85 @@ export function ToolCall({
   const isCompleted = status === "completed";
   const isFailed = isError || status === "failed";
 
-  function StatusIcon() {
-    if (isRunning) {
-      return (
-        <Play
-          size={14}
-          color="var(--color-running)"
-          className="animate-pulse-amber"
-        />
-      );
-    }
-    if (isFailed) {
-      return <X size={14} color="var(--color-error)" />;
-    }
-    if (isCompleted) {
-      return <Check size={14} color="var(--color-success)" />;
-    }
-    return <Circle size={14} color="var(--color-text-muted)" />;
+  let statusIcon;
+  let statusColor;
+  if (isRunning) {
+    statusIcon = <Play size={12} color="var(--color-running)" className="animate-pulse-amber" />;
+    statusColor = "var(--color-running)";
+  } else if (isFailed) {
+    statusIcon = <X size={12} color="var(--color-error)" />;
+    statusColor = "var(--color-error)";
+  } else if (isCompleted) {
+    statusIcon = <Check size={12} color="var(--color-success)" />;
+    statusColor = "var(--color-success)";
+  } else {
+    statusIcon = <Circle size={12} color="var(--color-text-tertiary)" />;
+    statusColor = "var(--color-text-tertiary)";
   }
 
   return (
     <div
-      className="rounded-lg px-3 py-2 text-sm"
+      className="rounded-md overflow-hidden"
       style={{
-        backgroundColor: "var(--color-surface)",
+        backgroundColor: "var(--color-bg-elevated)",
         border: "1px solid var(--color-border)",
-        borderLeft: `3px solid ${
-          isFailed
-            ? "var(--color-error)"
-            : isRunning
-            ? "var(--color-running)"
-            : "var(--color-tool)"
-        }`,
-        transition: "border-color 0.15s",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "var(--color-text-muted)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "var(--color-border)";
+        borderLeft: `2px solid ${isFailed ? "var(--color-error)" : isRunning ? "var(--color-running)" : "var(--color-tool)"}`,
       }}
     >
-      {/* Inline header */}
+      {/* Header */}
       <button
         type="button"
         aria-expanded={expanded}
         aria-controls={detailsId}
-        aria-label={`${toolName} tool call`}
         onClick={() => setExpanded((v) => !v)}
-        className="w-full cursor-pointer text-left"
+        className="w-full cursor-pointer text-left flex items-center gap-2 px-3 py-2"
         style={{ backgroundColor: "transparent", border: "none" }}
       >
-        <div className="flex items-center gap-2">
-          <StatusIcon />
+        {statusIcon}
+        <span className="text-xs font-semibold" style={{ color: statusColor }}>
+          {toolName}
+        </span>
+        {argsPreview && (
           <span
-            className="font-medium"
-            style={{ color: "var(--color-tool)" }}
+            className="text-xs truncate flex-1"
+            style={{ color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}
           >
-            {toolName}
+            {argsPreview.length > 55 ? argsPreview.slice(0, 55) + "…" : argsPreview}
           </span>
-          {argsPreview && (
-            <span
-              className="text-xs truncate flex-1"
-              style={{ color: "var(--color-text-muted)", fontFamily: "var(--font-mono)" }}
-            >
-              {argsPreview.length > 60 ? argsPreview.slice(0, 60) + "…" : argsPreview}
-            </span>
-          )}
-          <span
-            className="text-xs"
-            style={{ color: "var(--color-text-muted)" }}
-          >
-            {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-          </span>
-        </div>
-
-        {!expanded && resultPreview && (
-          <div
-            className="mt-1 pl-4 text-xs truncate"
-            style={{ color: isFailed ? "var(--color-error)" : "var(--color-text-muted)" }}
-          >
-            {resultPreview.length > 80 ? resultPreview.slice(0, 80) + "…" : resultPreview}
-          </div>
         )}
+        <span style={{ color: "var(--color-text-tertiary)" }}>
+          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </span>
       </button>
 
-      {/* Expanded: full details */}
+      {/* Collapsed result preview */}
+      {!expanded && resultPreview && (
+        <div
+          className="px-3 pb-2 text-xs truncate"
+          style={{ color: isFailed ? "var(--color-error)" : "var(--color-text-tertiary)", paddingLeft: 30 }}
+        >
+          {resultPreview.length > 90 ? resultPreview.slice(0, 90) + "…" : resultPreview}
+        </div>
+      )}
+
+      {/* Expanded details */}
       {expanded && (
-        <div id={detailsId} className="mt-2 space-y-2 pl-4">
+        <div id={detailsId} className="px-3 pb-3 space-y-2" style={{ paddingLeft: 30 }}>
           {argsPreview && (
             <div>
-              <div className="text-xs font-medium mb-0.5" style={{ color: "var(--color-text-muted)" }}>
+              <div className="text-[11px] font-medium uppercase tracking-wide mb-1" style={{ color: "var(--color-text-tertiary)" }}>
                 Arguments
               </div>
               <pre
-                className="text-xs rounded px-2 py-1"
+                className="text-xs rounded px-2.5 py-2"
                 style={{
-                  backgroundColor: "var(--color-surface-2)",
+                  backgroundColor: "var(--color-surface)",
                   border: "1px solid var(--color-border)",
-                  color: "var(--color-text)",
+                  color: "var(--color-text-secondary)",
                   fontFamily: "var(--font-mono)",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-all",
+                  lineHeight: 1.5,
                 }}
               >
                 {argsPreview}
@@ -131,18 +108,19 @@ export function ToolCall({
           )}
           {resultPreview && (
             <div>
-              <div className="text-xs font-medium mb-0.5" style={{ color: "var(--color-text-muted)" }}>
+              <div className="text-[11px] font-medium uppercase tracking-wide mb-1" style={{ color: "var(--color-text-tertiary)" }}>
                 Result
               </div>
               <pre
-                className="text-xs rounded px-2 py-1"
+                className="text-xs rounded px-2.5 py-2"
                 style={{
-                  backgroundColor: isFailed ? "rgba(220,38,38,0.05)" : "var(--color-surface-2)",
-                  border: `1px solid ${isFailed ? "var(--color-error)" : "var(--color-border)"}`,
-                  color: isFailed ? "var(--color-error)" : "var(--color-text)",
+                  backgroundColor: isFailed ? "var(--color-error-dim)" : "var(--color-surface)",
+                  border: `1px solid ${isFailed ? "rgba(239,68,68,0.25)" : "var(--color-border)"}`,
+                  color: isFailed ? "var(--color-error)" : "var(--color-text-secondary)",
                   fontFamily: "var(--font-mono)",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-all",
+                  lineHeight: 1.5,
                 }}
               >
                 {resultPreview}

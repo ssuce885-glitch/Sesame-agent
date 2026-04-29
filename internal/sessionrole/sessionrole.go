@@ -120,6 +120,13 @@ func SpecialistSystemPrompt(spec roles.Spec) string {
 	if promptSupplement := strings.TrimSpace(spec.Prompt); promptSupplement != "" {
 		lines = append(lines, "# Role Prompt Supplement", promptSupplement)
 	}
+	if spec.Policy != nil && strings.TrimSpace(spec.Policy.OutputSchema) != "" {
+		lines = append(lines,
+			"# Output format",
+			"Your final assistant response must produce valid JSON matching this schema:",
+			strings.TrimSpace(spec.Policy.OutputSchema),
+		)
+	}
 	return strings.Join(lines, "\n\n")
 }
 

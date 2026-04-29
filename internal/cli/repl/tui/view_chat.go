@@ -21,18 +21,18 @@ func (m *Model) renderChatContent(width int) string {
 		return join(parts, "\n\n")
 	}
 	for _, entry := range m.entries {
-		parts = append(parts, renderEntry(entry, width))
+		parts = append(parts, m.renderEntry(entry, width))
 	}
 	return join(parts, "\n\n")
 }
 
 // renderEntry renders a single entry based on its kind.
-func renderEntry(entry Entry, width int) string {
+func (m *Model) renderEntry(entry Entry, width int) string {
 	switch entry.Kind {
 	case EntryUser:
 		return renderUserEntry(entry, width)
 	case EntryAssistant:
-		return renderAssistantEntry(entry, width)
+		return m.renderAssistantEntry(entry, width)
 	case EntryTool:
 		return renderToolEntry(entry, width)
 	case EntryNotice:
@@ -58,7 +58,7 @@ func renderUserEntry(entry Entry, width int) string {
 }
 
 // renderAssistantEntry: mint label + body, streaming has subtle pulse indicator
-func renderAssistantEntry(entry Entry, width int) string {
+func (m *Model) renderAssistantEntry(entry Entry, width int) string {
 	body := trim(entry.Body)
 	if body == "" {
 		return ""
@@ -67,7 +67,18 @@ func renderAssistantEntry(entry Entry, width int) string {
 	if entry.Streaming {
 		label += StyleMuted.Render(" ·")
 	}
-	bodyStyled := StyleBody.Width(width - 3).Render(body)
+
+	var bodyStyled string
+	if r := m.getGlamourRenderer(); r != nil {
+		rendered, err := r.Render(body)
+		if err == nil {
+			bodyStyled = rendered
+		}
+	}
+	if bodyStyled == "" {
+		bodyStyled = StyleBody.Width(width - 3).Render(body)
+	}
+
 	return label + "\n" + indentBlock(bodyStyled, "  ")
 }
 
@@ -76,9 +87,8 @@ func renderAssistantEntry(entry Entry, width int) string {
 func renderToolEntry(entry Entry, width int) string {
 	action := StyleEntryToolAction.Render(entry.Title)
 	target := trim(firstNonEmpty(entry.BodyLine(), "…"))
-	// Truncate long targets for single-line display
-	if len([]rune(target)) > 48 {
-		target = string([]rune(target)[:48]) + "…"
+	if len([]rune(target)) > 56 {
+		target = string([]rune(target)[:56]) + "…"
 	}
 	targetStyled := StyleEntryToolTarget.Render(target)
 	status := toolEntryStatusStyled(entry)
@@ -86,11 +96,15 @@ func renderToolEntry(entry Entry, width int) string {
 	header := join([]string{action, " ", targetStyled, "  ", status}, "")
 
 	remainder := trim(entry.BodyRemainder())
-	if remainder != "" {
-		detail := StyleMuted.Width(width - 3).Render(remainder)
-		return header + "\n" + indentBlock(detail, "  ")
+	if remainder == "" {
+		return header
 	}
-	return header
+
+	// Render remainder inside a subtle panel
+	detail := StyleToolPanel.Width(width - 4).Render(
+		StyleToolCode.Width(width - 6).Render(remainder),
+	)
+	return header + "\n" + indentBlock(detail, "  ")
 }
 
 // toolEntryStatusStyled returns a styled status indicator for a tool entry.
@@ -116,7 +130,17 @@ func renderNoticeEntry(entry Entry, width int) string {
 	if text == "" {
 		return ""
 	}
-	return StyleEntryNotice.Width(width).Render("▸ " + text)
+	badge := ""
+	if entry.Count > 1 {
+		badge = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorNotice)).
+			Bold(true).
+			Render(fmt.Sprintf(" ×%d", entry.Count))
+	}
+	line := StyleEntryNotice.Render("▸ "+text) + badge
+	return lipgloss.NewStyle().
+		Width(width).
+		Render(line)
 }
 
 // renderErrorEntry: error style
@@ -125,7 +149,17 @@ func renderErrorEntry(entry Entry, width int) string {
 	if text == "" {
 		return ""
 	}
-	return StyleEntryError.Width(width).Render("✗ " + text)
+	badge := ""
+	if entry.Count > 1 {
+		badge = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorError)).
+			Bold(true).
+			Render(fmt.Sprintf(" ×%d", entry.Count))
+	}
+	line := StyleEntryError.Render("✗ "+text) + badge
+	return lipgloss.NewStyle().
+		Width(width).
+		Render(line)
 }
 
 // renderActivityEntry: slate panel with muted body

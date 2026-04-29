@@ -60,6 +60,9 @@ func (r *Registry) executePreparedRich(ctx context.Context, prepared PreparedCal
 	if prepared.PrepareErr != nil {
 		return ToolExecutionResult{}, prepared.PrepareErr
 	}
+	if err := checkRoleToolPolicy(prepared.ResolvedName, prepared.Definition, execCtx); err != nil {
+		return ToolExecutionResult{}, err
+	}
 	interrupt, err := checkToolPermission(ctx, prepared.Tool, prepared.ResolvedName, prepared.Decoded, execCtx)
 	if err != nil {
 		return ToolExecutionResult{}, err
@@ -152,6 +155,45 @@ func checkToolPermission(ctx context.Context, tool Tool, resolvedName string, de
 		}
 	}
 	return nil, nil
+}
+
+func checkRoleToolPolicy(toolName string, def Definition, execCtx ExecContext) error {
+	if execCtx.RoleSpec == nil || execCtx.RoleSpec.Policy == nil {
+		return nil
+	}
+	policy := execCtx.RoleSpec.Policy
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return nil
+	}
+	if len(policy.DeniedTools) > 0 && toolDefinitionInList(toolName, def, policy.DeniedTools) {
+		return fmt.Errorf("tool %q denied by role policy denied_tools", toolName)
+	}
+	return nil
+}
+
+func toolDefinitionInList(toolName string, def Definition, names []string) bool {
+	wanted := map[string]struct{}{}
+	if name := strings.ToLower(strings.TrimSpace(toolName)); name != "" {
+		wanted[name] = struct{}{}
+	}
+	if name := strings.ToLower(strings.TrimSpace(def.Name)); name != "" {
+		wanted[name] = struct{}{}
+	}
+	for _, alias := range def.Aliases {
+		if name := strings.ToLower(strings.TrimSpace(alias)); name != "" {
+			wanted[name] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return false
+	}
+	for _, name := range names {
+		if _, ok := wanted[strings.ToLower(strings.TrimSpace(name))]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func toolConcurrencySafe(tool Tool, decoded DecodedCall, execCtx ExecContext) bool {

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"strings"
+	"time"
 
 	rolectx "go-agent/internal/roles"
 	"go-agent/internal/session"
@@ -27,9 +28,34 @@ func recoverRuntimeState(ctx context.Context, store *sqlite.Store, manager *sess
 		return err
 	}
 
+	resumedTurns := make(map[string]struct{})
+	checkpointedTurns, err := store.ListInterruptedTurnsWithCheckpoints(ctx)
+	if err != nil {
+		return err
+	}
+	for _, turnID := range checkpointedTurns {
+		checkpoint, found, err := store.GetLatestTurnCheckpoint(ctx, turnID)
+		if err != nil {
+			return err
+		}
+		if !found || checkpoint.State != types.TurnCheckpointStatePostToolBatch {
+			continue
+		}
+		resumed, err := resumeTurnFromCheckpoint(ctx, store, manager, checkpoint)
+		if err != nil {
+			return err
+		}
+		if resumed {
+			resumedTurns[turnID] = struct{}{}
+		}
+	}
+
 	for _, turn := range running {
+		if _, ok := resumedTurns[turn.ID]; ok {
+			continue
+		}
 		if turn.Kind == types.TurnKindReportBatch {
-			if err := store.RequeueClaimedReportDeliveriesForTurn(ctx, turn.ID); err != nil {
+			if _, err := store.RequeueClaimedReportDeliveriesForTurn(ctx, turn.ID); err != nil {
 				return err
 			}
 		}
@@ -193,8 +219,15 @@ func hasCreatedReportBatchTurn(ctx context.Context, store *sqlite.Store, session
 	if err != nil {
 		return false, err
 	}
+	now := time.Now().UTC()
 	for _, turn := range turns {
-		if turn.State == types.TurnStateCreated && turn.Kind == types.TurnKindReportBatch {
+		if turn.Kind != types.TurnKindReportBatch {
+			continue
+		}
+		if !isTurnTerminal(turn.State) {
+			return true, nil
+		}
+		if turn.State == types.TurnStateCompleted && now.Sub(turn.UpdatedAt) < reportBatchCooldown {
 			return true, nil
 		}
 	}

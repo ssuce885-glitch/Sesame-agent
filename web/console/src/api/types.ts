@@ -302,6 +302,37 @@ export interface WorkspaceReportsResponse {
   queued_count: number;
 }
 
+// ─── File Checkpoints ─────────────────────────────────────────────────────────
+
+export interface FileCheckpoint {
+  id: string;
+  session_id: string;
+  turn_id: string;
+  tool_call_id: string;
+  tool_name: string;
+  reason: string;
+  git_commit_hash: string;
+  files_changed: string[];
+  diff_summary: string;
+  parent_checkpoint_id: string;
+  created_at: string;
+}
+
+export interface FileCheckpointListResponse {
+  checkpoints: FileCheckpoint[];
+}
+
+export interface FileCheckpointDiffResponse {
+  checkpoint: FileCheckpoint;
+  parent?: FileCheckpoint;
+  diff: string;
+}
+
+export interface FileCheckpointRollbackResponse {
+  status: string;
+  checkpoint?: FileCheckpoint;
+}
+
 // ─── Roles ────────────────────────────────────────────────────────────────────
 
 export interface RoleSpec {
@@ -311,6 +342,7 @@ export interface RoleSpec {
   prompt: string;
   skills: string[];
   policy: Record<string, unknown>;
+  budget?: Record<string, unknown>;
   version: number;
 }
 
@@ -320,6 +352,7 @@ export interface RoleSummary {
   description: string;
   skills: string[];
   policy: Record<string, unknown>;
+  budget?: Record<string, unknown>;
   version: number;
 }
 

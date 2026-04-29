@@ -105,3 +105,58 @@ func TestMemoryWriteToolSpecialistOwnerAndCustomFields(t *testing.T) {
 		t.Fatalf("Visibility = %q", entry.Visibility)
 	}
 }
+
+func TestMemoryWriteToolRolePolicyForcesRoleOnlyPrivateWorkspace(t *testing.T) {
+	store := &memoryWriteStore{}
+	ctx := rolectx.WithSpecialistRoleID(context.Background(), "analyst")
+
+	_, err := (memoryWriteTool{}).ExecuteDecoded(ctx, DecodedCall{
+		Input: MemoryWriteInput{
+			Content:    "Private role note.",
+			Scope:      "global",
+			Visibility: "shared",
+		},
+	}, ExecContext{
+		WorkspaceRoot: "/workspace",
+		MemoryStore:   store,
+		RoleSpec: &rolectx.Spec{
+			RoleID: "analyst",
+			Policy: &rolectx.RolePolicyConfig{
+				MemoryWriteScope: "role_only",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("memory_write: %v", err)
+	}
+	entry := store.entries[0]
+	if entry.Scope != types.MemoryScopeWorkspace {
+		t.Fatalf("Scope = %q, want workspace", entry.Scope)
+	}
+	if entry.Visibility != types.MemoryVisibilityPrivate {
+		t.Fatalf("Visibility = %q, want private", entry.Visibility)
+	}
+}
+
+func TestMemoryWriteToolRolePolicyAppliesDefaultVisibility(t *testing.T) {
+	store := &memoryWriteStore{}
+
+	_, err := (memoryWriteTool{}).ExecuteDecoded(context.Background(), DecodedCall{
+		Input: MemoryWriteInput{Content: "Default private note."},
+	}, ExecContext{
+		WorkspaceRoot: "/workspace",
+		MemoryStore:   store,
+		RoleSpec: &rolectx.Spec{
+			RoleID: "analyst",
+			Policy: &rolectx.RolePolicyConfig{
+				DefaultVisibility: "private",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("memory_write: %v", err)
+	}
+	if got := store.entries[0].Visibility; got != types.MemoryVisibilityPrivate {
+		t.Fatalf("Visibility = %q, want private", got)
+	}
+}

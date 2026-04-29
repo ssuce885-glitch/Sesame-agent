@@ -14,15 +14,16 @@ import (
 )
 
 type Dependencies struct {
-	Bus           Bus
-	Store         Store
-	Manager       Manager
-	Scheduler     CronScheduler
-	Automation    AutomationService
-	RoleService   RoleService
-	Status        StatusPayload
-	ConsoleRoot   string
-	WorkspaceRoot string
+	Bus             Bus
+	Store           Store
+	Manager         Manager
+	Scheduler       CronScheduler
+	Automation      AutomationService
+	RoleService     RoleService
+	FileCheckpoints FileCheckpointService
+	Status          StatusPayload
+	ConsoleRoot     string
+	WorkspaceRoot   string
 }
 
 type noopRunner struct{}

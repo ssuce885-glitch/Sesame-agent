@@ -167,6 +167,18 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at text not null,
 			updated_at text not null
 		);`,
+		`create table if not exists turn_costs (
+			id text primary key,
+			turn_id text not null,
+			session_id text not null,
+			owner_role_id text not null default '',
+			input_tokens integer not null default 0,
+			output_tokens integer not null default 0,
+			cost_usd real not null default 0,
+			created_at text not null
+		);`,
+		`create index if not exists turn_costs_session_created_idx
+			on turn_costs(session_id, created_at desc, id asc);`,
 		`create unique index if not exists conversation_items_session_position_idx
 			on conversation_items(session_id, position);`,
 		`create table if not exists conversation_compactions (
@@ -185,6 +197,59 @@ func (s *Store) migrate(ctx context.Context) error {
 			provider_profile text not null,
 			created_at text not null
 		);`,
+		`create table if not exists compaction_qa (
+			id text primary key,
+			compaction_id text not null,
+			session_id text not null,
+			compaction_kind text not null,
+			source_item_count integer not null default 0,
+			summary_text text not null default '',
+			source_items_preview text not null default '',
+			retained_constraints text not null default '[]',
+			lost_constraints text not null default '[]',
+			hallucination_check text not null default '',
+			confidence real not null default 0,
+			review_model text not null default '',
+			qa_status text not null default 'pending',
+			created_at text not null
+		);`,
+		`create index if not exists idx_compaction_qa_compaction
+			on compaction_qa(compaction_id);`,
+		`create index if not exists idx_compaction_qa_session
+			on compaction_qa(session_id);`,
+		`create table if not exists turn_checkpoints (
+			id text primary key,
+			turn_id text not null,
+			session_id text not null,
+			sequence integer not null default 0,
+			state text not null default '',
+			tool_call_ids text not null default '[]',
+			tool_call_names text not null default '[]',
+			next_position integer not null default 0,
+			completed_tool_ids text not null default '[]',
+			tool_results_json text not null default '',
+			assistant_items_json text not null default '',
+			created_at text not null
+		);`,
+		`create index if not exists idx_turn_checkpoints_turn
+			on turn_checkpoints(turn_id, sequence);`,
+		`create table if not exists file_checkpoints (
+			id text primary key,
+			session_id text not null,
+			turn_id text not null,
+			tool_call_id text not null default '',
+			tool_name text not null default '',
+			reason text not null default '',
+			git_commit_hash text not null default '',
+			files_changed text not null default '[]',
+			diff_summary text not null default '',
+			parent_checkpoint_id text not null default '',
+			created_at text not null
+		);`,
+		`create index if not exists idx_file_checkpoints_session
+			on file_checkpoints(session_id);`,
+		`create index if not exists idx_file_checkpoints_turn
+			on file_checkpoints(turn_id);`,
 		`create table if not exists session_pending_confirmations (
 			session_id text primary key,
 			source_turn_id text not null default '',

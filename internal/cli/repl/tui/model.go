@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"go-agent/internal/skillcatalog"
@@ -88,6 +89,9 @@ type Model struct {
 	reportingLoaded   bool
 	reportingErr      string
 	reportingStale    bool
+
+	// Markdown renderer (cached)
+	glamourRenderer *glamour.TermRenderer
 }
 
 // QueueSummary mirrors SessionQueuePayload for view rendering.
@@ -158,6 +162,27 @@ func (m *Model) layout() {
 	m.viewport.Height = max(minVPHeight, m.height-headerHeight-footerHeight)
 
 	m.refreshViewport()
+}
+
+func (m *Model) getGlamourRenderer() *glamour.TermRenderer {
+	if m.glamourRenderer != nil {
+		return m.glamourRenderer
+	}
+
+	width := max(20, m.viewport.Width-8)
+	r, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return nil
+	}
+	m.glamourRenderer = r
+	return r
+}
+
+func (m *Model) resetGlamourRenderer() {
+	m.glamourRenderer = nil
 }
 
 func (m *Model) refreshViewport() {

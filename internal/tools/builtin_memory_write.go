@@ -79,22 +79,24 @@ func (memoryWriteTool) Decode(call Call) (DecodedCall, error) {
 	if err != nil {
 		return DecodedCall{}, err
 	}
-	visibility, err := decodeMemoryWriteVisibility(call.StringInput("visibility"))
-	if err != nil {
-		return DecodedCall{}, err
+	rawVisibility := strings.TrimSpace(call.StringInput("visibility"))
+	if rawVisibility != "" {
+		if _, err := decodeMemoryWriteVisibility(rawVisibility); err != nil {
+			return DecodedCall{}, err
+		}
 	}
 
 	normalized := Call{Name: call.Name, Input: map[string]any{
 		"content":    content,
 		"kind":       string(kind),
 		"scope":      string(scope),
-		"visibility": string(visibility),
+		"visibility": rawVisibility,
 	}}
 	return DecodedCall{Call: normalized, Input: MemoryWriteInput{
 		Content:    content,
 		Kind:       string(kind),
 		Scope:      string(scope),
-		Visibility: string(visibility),
+		Visibility: rawVisibility,
 	}}, nil
 }
 
@@ -124,9 +126,23 @@ func (memoryWriteTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, 
 	if err != nil {
 		return ToolExecutionResult{}, err
 	}
+	if execCtx.RoleSpec != nil && execCtx.RoleSpec.Policy != nil && strings.TrimSpace(input.Visibility) == "" && strings.TrimSpace(execCtx.RoleSpec.Policy.DefaultVisibility) != "" {
+		input.Visibility = strings.TrimSpace(execCtx.RoleSpec.Policy.DefaultVisibility)
+	}
 	visibility, err := decodeMemoryWriteVisibility(input.Visibility)
 	if err != nil {
 		return ToolExecutionResult{}, err
+	}
+	if execCtx.RoleSpec != nil && execCtx.RoleSpec.Policy != nil {
+		switch strings.TrimSpace(execCtx.RoleSpec.Policy.MemoryWriteScope) {
+		case "role_only":
+			scope = types.MemoryScopeWorkspace
+			visibility = types.MemoryVisibilityPrivate
+		case "workspace":
+			scope = types.MemoryScopeWorkspace
+		case "global":
+			scope = types.MemoryScopeGlobal
+		}
 	}
 	content := strings.TrimSpace(input.Content)
 	if content == "" {

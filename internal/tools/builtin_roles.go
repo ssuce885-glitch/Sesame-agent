@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -14,12 +15,14 @@ type roleListTool struct{}
 type roleUpdateTool struct{}
 
 type RoleOutput struct {
-	RoleID      string   `json:"role_id"`
-	DisplayName string   `json:"display_name"`
-	Description string   `json:"description"`
-	Prompt      string   `json:"prompt"`
-	Skills      []string `json:"skills"`
-	Version     int      `json:"version"`
+	RoleID      string                  `json:"role_id"`
+	DisplayName string                  `json:"display_name"`
+	Description string                  `json:"description"`
+	Prompt      string                  `json:"prompt"`
+	Skills      []string                `json:"skills"`
+	Version     int                     `json:"version"`
+	Policy      *roles.RolePolicyConfig `json:"policy,omitempty"`
+	Budget      *roles.RoleBudgetConfig `json:"budget,omitempty"`
 }
 
 type RoleDiagnosticOutput struct {
@@ -42,11 +45,13 @@ type RoleListInput struct {
 }
 
 type RoleUpsertInput struct {
-	RoleID      string   `json:"role_id"`
-	DisplayName string   `json:"display_name"`
-	Description string   `json:"description"`
-	Prompt      string   `json:"prompt"`
-	Skills      []string `json:"skills"`
+	RoleID      string                  `json:"role_id"`
+	DisplayName string                  `json:"display_name"`
+	Description string                  `json:"description"`
+	Prompt      string                  `json:"prompt"`
+	Skills      []string                `json:"skills"`
+	Policy      *roles.RolePolicyConfig `json:"policy,omitempty"`
+	Budget      *roles.RoleBudgetConfig `json:"budget,omitempty"`
 }
 
 func (roleCreateTool) IsEnabled(execCtx ExecContext) bool { return execCtx.RoleService != nil }
@@ -182,6 +187,8 @@ func (roleCreateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		Description: input.Description,
 		Prompt:      input.Prompt,
 		SkillNames:  input.Skills,
+		Policy:      input.Policy,
+		Budget:      input.Budget,
 	})
 	if err != nil {
 		return ToolExecutionResult{}, err
@@ -267,6 +274,8 @@ func (roleUpdateTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, e
 		Description: input.Description,
 		Prompt:      input.Prompt,
 		SkillNames:  input.Skills,
+		Policy:      input.Policy,
+		Budget:      input.Budget,
 	})
 	if err != nil {
 		return ToolExecutionResult{}, err
@@ -291,6 +300,12 @@ func mergeRoleUpdateWithCurrent(input RoleUpsertInput, current roles.Spec) RoleU
 	}
 	if input.Skills == nil {
 		input.Skills = append([]string(nil), current.SkillNames...)
+	}
+	if input.Policy == nil {
+		input.Policy = current.Policy
+	}
+	if input.Budget == nil {
+		input.Budget = current.Budget
 	}
 	return input
 }
@@ -361,6 +376,8 @@ func roleUpsertInputSchema() map[string]any {
 			"description": "Optional installed skill names for this role.",
 			"items":       map[string]any{"type": "string"},
 		},
+		"policy": rolePolicySchema(),
+		"budget": roleBudgetSchema(),
 	}, "role_id", "prompt")
 }
 
@@ -375,6 +392,41 @@ func roleOutputProperties() map[string]any {
 			"items": map[string]any{"type": "string"},
 		},
 		"version": map[string]any{"type": "integer"},
+		"policy":  rolePolicySchema(),
+		"budget":  roleBudgetSchema(),
+	}
+}
+
+func rolePolicySchema() map[string]any {
+	return objectSchema(map[string]any{
+		"model":                map[string]any{"type": "string"},
+		"permission_profile":   map[string]any{"type": "string"},
+		"denied_tools":         stringArraySchema(),
+		"memory_read_scope":    map[string]any{"type": "string"},
+		"memory_write_scope":   map[string]any{"type": "string"},
+		"default_visibility":   map[string]any{"type": "string"},
+		"can_delegate":         map[string]any{"type": "boolean"},
+		"output_schema":        map[string]any{"type": "string"},
+		"report_audience":      stringArraySchema(),
+		"automation_ownership": stringArraySchema(),
+	})
+}
+
+func roleBudgetSchema() map[string]any {
+	return objectSchema(map[string]any{
+		"max_runtime":        map[string]any{"type": "string"},
+		"max_tool_calls":     map[string]any{"type": "integer"},
+		"max_context_tokens": map[string]any{"type": "integer"},
+		"max_cost":           map[string]any{"type": "number"},
+		"max_turns_per_hour": map[string]any{"type": "integer"},
+		"max_concurrent":     map[string]any{"type": "integer"},
+	})
+}
+
+func stringArraySchema() map[string]any {
+	return map[string]any{
+		"type":  "array",
+		"items": map[string]any{"type": "string"},
 	}
 }
 
@@ -419,12 +471,22 @@ func decodeRoleUpsertCall(call Call) (DecodedCall, error) {
 	if err != nil {
 		return DecodedCall{}, err
 	}
+	policy, err := decodeRolePolicyField(call.Input["policy"])
+	if err != nil {
+		return DecodedCall{}, err
+	}
+	budget, err := decodeRoleBudgetField(call.Input["budget"])
+	if err != nil {
+		return DecodedCall{}, err
+	}
 	input := RoleUpsertInput{
 		RoleID:      strings.TrimSpace(call.StringInput("role_id")),
 		DisplayName: strings.TrimSpace(call.StringInput("display_name")),
 		Description: strings.TrimSpace(call.StringInput("description")),
 		Prompt:      strings.TrimSpace(call.StringInput("prompt")),
 		Skills:      skills,
+		Policy:      policy,
+		Budget:      budget,
 	}
 	if input.RoleID == "" {
 		return DecodedCall{}, fmt.Errorf("role_id is required")
@@ -441,10 +503,55 @@ func decodeRoleUpsertCall(call Call) (DecodedCall, error) {
 				"description":  input.Description,
 				"prompt":       input.Prompt,
 				"skills":       append([]string(nil), input.Skills...),
+				"policy":       input.Policy,
+				"budget":       input.Budget,
 			},
 		},
 		Input: input,
 	}, nil
+}
+
+func decodeRolePolicyField(raw any) (*roles.RolePolicyConfig, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	if typed, ok := raw.(*roles.RolePolicyConfig); ok {
+		return typed, nil
+	}
+	var out roles.RolePolicyConfig
+	if err := decodeRoleStructField(raw, "policy", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func decodeRoleBudgetField(raw any) (*roles.RoleBudgetConfig, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	if typed, ok := raw.(*roles.RoleBudgetConfig); ok {
+		return typed, nil
+	}
+	var out roles.RoleBudgetConfig
+	if err := decodeRoleStructField(raw, "budget", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func decodeRoleStructField(raw any, field string, dst any) error {
+	rawMap, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s must be an object", field)
+	}
+	data, err := json.Marshal(rawMap)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, dst); err != nil {
+		return fmt.Errorf("%s is invalid: %w", field, err)
+	}
+	return nil
 }
 
 func decodeStringArrayField(raw any, field string) ([]string, error) {
@@ -477,6 +584,8 @@ func roleOutputFromSpec(spec roles.Spec) RoleOutput {
 		Prompt:      spec.Prompt,
 		Skills:      append([]string(nil), spec.SkillNames...),
 		Version:     spec.Version,
+		Policy:      spec.Policy,
+		Budget:      spec.Budget,
 	}
 }
 

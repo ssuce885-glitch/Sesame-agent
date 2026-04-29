@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type {
   HistoryEntry,
@@ -7,6 +8,23 @@ import type {
   RuntimeWorktree,
   WorkspaceReportDeliveryItem,
 } from "../api/types";
+import {
+  GitBranch,
+  Layers,
+  Cpu,
+  FileText,
+  Wrench,
+  AlertTriangle,
+  Check,
+  X,
+  Circle,
+  Play,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Mail,
+  Database,
+} from "../components/Icon";
 
 export interface DetailItem {
   label: string;
@@ -26,66 +44,113 @@ export interface SelectionDetailCardData {
   items: DetailItem[];
 }
 
-export function SummaryCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+/* ─── SummaryCard (KPI style) ──────────────────────────────────── */
+
+export function SummaryCard({
+  label,
+  value,
+  detail,
+  accent = "accent",
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  accent?: "accent" | "success" | "warning" | "error";
+}) {
+  const accentMap = {
+    accent: "var(--color-accent)",
+    success: "var(--color-success)",
+    warning: "var(--color-warning)",
+    error: "var(--color-error)",
+  };
+  const color = accentMap[accent];
   return (
     <div
-      className="rounded-xl px-5 py-4"
+      className="rounded-lg px-4 py-3 relative overflow-hidden"
       style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border)" }}
     >
-      <div className="text-xs font-medium uppercase tracking-wide" style={{ color: "var(--color-text-muted)" }}>
+      <div
+        className="absolute bottom-0 left-0 right-0 h-0.5"
+        style={{ backgroundColor: color }}
+      />
+      <div className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-tertiary)" }}>
         {label}
       </div>
-      <div className="mt-3 text-4xl font-semibold" style={{ color: "var(--color-text)" }}>
+      <div className="mt-1 text-2xl font-bold tabular-nums" style={{ color: "var(--color-text)" }}>
         {value}
       </div>
-      <div className="mt-2 text-sm" style={{ color: "var(--color-text-muted)" }}>
+      <div className="mt-1 text-xs" style={{ color: "var(--color-text-secondary)" }}>
         {detail}
       </div>
     </div>
   );
 }
 
+/* ─── Panel (collapsible widget) ───────────────────────────────── */
+
 export function Panel({
   title,
   subtitle,
   emptyText,
+  collapsible = false,
   children,
 }: {
   title: string;
   subtitle: string;
   emptyText: string;
+  collapsible?: boolean;
   children: ReactNode;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
   const items = Array.isArray(children) ? children.filter(Boolean) : children ? [children] : [];
 
   return (
     <section
-      className="rounded-2xl p-5"
+      className="rounded-lg overflow-hidden"
       style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border)" }}
     >
-      <div className="mb-4" style={{ borderBottom: "1px solid var(--color-border)", paddingBottom: 12 }}>
-        <h2 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--color-text)" }}>
-          {title}
-        </h2>
-        <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-          {subtitle}
-        </p>
-      </div>
-      <div className="flex flex-col gap-3">
-        {items.length > 0 ? (
-          items
-        ) : (
-          <div
-            className="rounded-xl border border-dashed px-4 py-5 text-sm"
-            style={{ color: "var(--color-text-muted)", borderColor: "var(--color-border)" }}
+      <div
+        className="flex items-center justify-between px-4 py-2.5"
+        style={{ borderBottom: items.length > 0 && !collapsed ? "1px solid var(--color-border)" : "none" }}
+      >
+        <div>
+          <h2 className="text-xs font-semibold uppercase tracking-wider m-0" style={{ color: "var(--color-text)" }}>
+            {title}
+          </h2>
+          <p className="text-[11px] m-0 mt-0.5" style={{ color: "var(--color-text-tertiary)" }}>
+            {subtitle}
+          </p>
+        </div>
+        {collapsible && (
+          <button
+            type="button"
+            onClick={() => setCollapsed((v) => !v)}
+            className="flex items-center justify-center w-6 h-6 rounded"
+            style={{ backgroundColor: "transparent", border: "none", color: "var(--color-text-tertiary)", cursor: "pointer" }}
           >
-            {emptyText}
-          </div>
+            {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+          </button>
         )}
       </div>
+      {!collapsed && (
+        <div className="px-2 py-2">
+          {items.length > 0 ? (
+            <div className="flex flex-col gap-1">{items}</div>
+          ) : (
+            <div
+              className="rounded border border-dashed px-4 py-4 text-xs text-center"
+              style={{ color: "var(--color-text-tertiary)", borderColor: "var(--color-border)" }}
+            >
+              {emptyText}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }
+
+/* ─── Row components (list-item style) ─────────────────────────── */
 
 export function ContextHeadRow({
   entry,
@@ -97,230 +162,172 @@ export function ContextHeadRow({
   onSelect: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className="rounded-xl px-4 py-3"
-      style={rowBaseStyle(selected)}
-      onMouseEnter={(e) => rowHoverIn(e, selected)}
-      onMouseLeave={(e) => rowHoverOut(e, selected)}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
-            {entry.title || entry.id}
-          </div>
-          {entry.preview && (
-            <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
-              {entry.preview}
-            </div>
-          )}
+    <button type="button" onClick={onSelect} className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-md"
+      style={rowBaseStyle(selected)} onMouseEnter={(e) => rowHoverIn(e, selected)} onMouseLeave={(e) => rowHoverOut(e, selected)}>
+      <GitBranch size={14} color={entry.is_current ? "var(--color-accent)" : "var(--color-text-tertiary)"} />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate" style={{ color: "var(--color-text)" }}>
+          {entry.title || entry.id}
         </div>
-        <StatusBadge tone={entry.is_current ? "accent" : "neutral"}>
-          {entry.is_current ? "Current" : entry.source_kind || "history"}
-        </StatusBadge>
+        {entry.preview && (
+          <div className="text-xs truncate mt-0.5" style={{ color: "var(--color-text-tertiary)" }}>
+            {entry.preview}
+          </div>
+        )}
       </div>
-      <div className="mt-3 text-xs" style={{ color: "var(--color-text-muted)" }}>
-        Updated {formatTimestamp(entry.updated_at)}
-      </div>
+      <StatusBadge tone={entry.is_current ? "accent" : "neutral"}>
+        {entry.is_current ? "Current" : entry.source_kind || "history"}
+      </StatusBadge>
+      <span className="text-[11px] shrink-0" style={{ color: "var(--color-text-tertiary)" }}>
+        {formatTimestamp(entry.updated_at)}
+      </span>
     </button>
   );
 }
 
 export function TaskRow({ task, selected, onSelect }: { task: RuntimeTask; selected: boolean; onSelect: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className="rounded-xl px-4 py-3"
-      style={rowBaseStyle(selected)}
-      onMouseEnter={(e) => rowHoverIn(e, selected)}
-      onMouseLeave={(e) => rowHoverOut(e, selected)}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
-            {task.title || task.id}
-          </div>
-          {task.description && (
-            <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
-              {task.description}
-            </div>
-          )}
+    <button type="button" onClick={onSelect} className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-md"
+      style={rowBaseStyle(selected)} onMouseEnter={(e) => rowHoverIn(e, selected)} onMouseLeave={(e) => rowHoverOut(e, selected)}>
+      <Cpu size={14} color="var(--color-text-tertiary)" />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate" style={{ color: "var(--color-text)" }}>
+          {task.title || task.id}
         </div>
+        {task.description && (
+          <div className="text-xs truncate mt-0.5" style={{ color: "var(--color-text-tertiary)" }}>
+            {task.description}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+          {task.owner || "runtime"}
+        </span>
         <StatusBadge tone={toneFromState(task.state)}>{task.state}</StatusBadge>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-        <span>Owner: {task.owner || "runtime"}</span>
-        <span>Kind: {task.kind || "task"}</span>
-        <span>Updated {formatTimestamp(task.updated_at)}</span>
+        <span className="text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+          {formatTimestamp(task.updated_at)}
+        </span>
       </div>
     </button>
   );
 }
 
-export function ToolRunRow({
-  toolRun,
-  selected,
-  onSelect,
-}: {
-  toolRun: RuntimeToolRun;
-  selected: boolean;
-  onSelect: () => void;
-}) {
+export function ToolRunRow({ toolRun, selected, onSelect }: { toolRun: RuntimeToolRun; selected: boolean; onSelect: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className="rounded-xl px-4 py-3"
-      style={rowBaseStyle(selected)}
-      onMouseEnter={(e) => rowHoverIn(e, selected)}
-      onMouseLeave={(e) => rowHoverOut(e, selected)}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
-            {toolRun.tool_name}
-          </div>
-          {toolRun.input_json && (
-            <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
-              {toolRun.input_json}
-            </div>
-          )}
+    <button type="button" onClick={onSelect} className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-md"
+      style={rowBaseStyle(selected)} onMouseEnter={(e) => rowHoverIn(e, selected)} onMouseLeave={(e) => rowHoverOut(e, selected)}>
+      <Wrench size={14} color="var(--color-text-tertiary)" />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate" style={{ color: "var(--color-text)" }}>
+          {toolRun.tool_name}
         </div>
+        {toolRun.input_json && (
+          <div className="text-xs truncate mt-0.5 font-mono" style={{ color: "var(--color-text-tertiary)" }}>
+            {toolRun.input_json.length > 80 ? toolRun.input_json.slice(0, 80) + "…" : toolRun.input_json}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+          {toolRun.task_id || "—"}
+        </span>
         <StatusBadge tone={toneFromState(toolRun.state)}>{toolRun.state}</StatusBadge>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-        <span>Task: {toolRun.task_id || "none"}</span>
-        <span>Call: {toolRun.tool_call_id || "n/a"}</span>
-        <span>Updated {formatTimestamp(toolRun.updated_at || toolRun.created_at)}</span>
+        <span className="text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+          {formatTimestamp(toolRun.updated_at || toolRun.created_at)}
+        </span>
       </div>
     </button>
   );
 }
 
-export function WorktreeRow({
-  worktree,
-  selected,
-  onSelect,
-}: {
-  worktree: RuntimeWorktree;
-  selected: boolean;
-  onSelect: () => void;
-}) {
+export function WorktreeRow({ worktree, selected, onSelect }: { worktree: RuntimeWorktree; selected: boolean; onSelect: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className="rounded-xl px-4 py-3"
-      style={rowBaseStyle(selected)}
-      onMouseEnter={(e) => rowHoverIn(e, selected)}
-      onMouseLeave={(e) => rowHoverOut(e, selected)}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
-            {worktree.worktree_branch || worktree.id}
-          </div>
-          <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
-            {worktree.worktree_path}
-          </div>
+    <button type="button" onClick={onSelect} className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-md"
+      style={rowBaseStyle(selected)} onMouseEnter={(e) => rowHoverIn(e, selected)} onMouseLeave={(e) => rowHoverOut(e, selected)}>
+      <Layers size={14} color="var(--color-text-tertiary)" />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate" style={{ color: "var(--color-text)" }}>
+          {worktree.worktree_branch || worktree.id}
         </div>
+        <div className="text-xs truncate mt-0.5 font-mono" style={{ color: "var(--color-text-tertiary)" }}>
+          {worktree.worktree_path}
+        </div>
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+          {worktree.task_id || "—"}
+        </span>
         <StatusBadge tone={toneFromState(worktree.state)}>{worktree.state}</StatusBadge>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-        <span>Task: {worktree.task_id || "none"}</span>
-        <span>Updated {formatTimestamp(worktree.updated_at || worktree.created_at)}</span>
-      </div>
-    </button>
-  );
-}
-
-export function ReportRow({
-  item,
-  selected,
-  onSelect,
-}: {
-  item: WorkspaceReportDeliveryItem;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className="rounded-xl px-4 py-3"
-      style={rowBaseStyle(selected)}
-      onMouseEnter={(e) => rowHoverIn(e, selected)}
-      onMouseLeave={(e) => rowHoverOut(e, selected)}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
-            {item.envelope.title || item.source_id}
-          </div>
-          {item.envelope.summary && (
-            <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
-              {item.envelope.summary}
-            </div>
-          )}
-        </div>
-        <StatusBadge tone={toneFromSeverity(item.envelope.severity)}>{item.delivery_state || "queued"}</StatusBadge>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-        <span>Source: {item.source_role_id || item.source_kind}</span>
-        <span>Severity: {item.envelope.severity || "info"}</span>
-        <span>Updated {formatTimestamp(item.updated_at || item.created_at)}</span>
+        <span className="text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+          {formatTimestamp(worktree.updated_at || worktree.created_at)}
+        </span>
       </div>
     </button>
   );
 }
 
-export function DiagnosticRow({
-  diagnostic,
-  selected,
-  onSelect,
-}: {
-  diagnostic: RuntimeDiagnostic;
-  selected: boolean;
-  onSelect: () => void;
-}) {
+export function ReportRow({ item, selected, onSelect }: { item: WorkspaceReportDeliveryItem; selected: boolean; onSelect: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className="rounded-xl px-4 py-3"
-      style={rowBaseStyle(selected)}
-      onMouseEnter={(e) => rowHoverIn(e, selected)}
-      onMouseLeave={(e) => rowHoverOut(e, selected)}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
-            {diagnostic.summary || diagnostic.event_type || diagnostic.id}
-          </div>
-          {diagnostic.reason && (
-            <div className="mt-1 text-sm leading-5" style={{ color: "var(--color-text-muted)" }}>
-              {diagnostic.reason}
-            </div>
-          )}
+    <button type="button" onClick={onSelect} className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-md"
+      style={rowBaseStyle(selected)} onMouseEnter={(e) => rowHoverIn(e, selected)} onMouseLeave={(e) => rowHoverOut(e, selected)}>
+      <Mail size={14} color="var(--color-text-tertiary)" />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate" style={{ color: "var(--color-text)" }}>
+          {item.envelope.title || item.source_id}
         </div>
-        <StatusBadge tone={toneFromDiagnosticEvent(diagnostic.event_type)}>{diagnostic.event_type}</StatusBadge>
+        {item.envelope.summary && (
+          <div className="text-xs truncate mt-0.5" style={{ color: "var(--color-text-tertiary)" }}>
+            {item.envelope.summary}
+          </div>
+        )}
       </div>
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-        <span>Session: {diagnostic.session_id}</span>
-        <span>Turn: {diagnostic.turn_id}</span>
-        <span>Created {formatTimestamp(diagnostic.created_at)}</span>
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+          {item.source_role_id || item.source_kind}
+        </span>
+        <StatusBadge tone={toneFromSeverity(item.envelope.severity)}>
+          {item.delivery_state || "queued"}
+        </StatusBadge>
+        <span className="text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+          {formatTimestamp(item.updated_at || item.created_at)}
+        </span>
       </div>
     </button>
   );
 }
+
+export function DiagnosticRow({ diagnostic, selected, onSelect }: { diagnostic: RuntimeDiagnostic; selected: boolean; onSelect: () => void }) {
+  return (
+    <button type="button" onClick={onSelect} className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-md"
+      style={rowBaseStyle(selected)} onMouseEnter={(e) => rowHoverIn(e, selected)} onMouseLeave={(e) => rowHoverOut(e, selected)}>
+      <AlertTriangle size={14} color={diagnostic.severity === "error" || diagnostic.severity === "critical" ? "var(--color-error)" : "var(--color-warning)"} />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate" style={{ color: "var(--color-text)" }}>
+          {diagnostic.summary || diagnostic.event_type || diagnostic.id}
+        </div>
+        {diagnostic.reason && (
+          <div className="text-xs truncate mt-0.5" style={{ color: "var(--color-text-tertiary)" }}>
+            {diagnostic.reason}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+          {diagnostic.category || diagnostic.event_type}
+        </span>
+        <StatusBadge tone={toneFromSeverity(diagnostic.severity)}>
+          {diagnostic.severity || "info"}
+        </StatusBadge>
+        <span className="text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+          {formatTimestamp(diagnostic.created_at)}
+        </span>
+      </div>
+    </button>
+  );
+}
+
+/* ─── SelectionDetailCard ──────────────────────────────────────── */
 
 export function SelectionDetailCard({
   detail,
@@ -330,55 +337,53 @@ export function SelectionDetailCard({
   actions: SelectionDetailCardAction[];
 }) {
   return (
-    <div
-      className="rounded-xl px-4 py-4"
-      style={{ backgroundColor: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
-            {detail.title}
-          </div>
-          {detail.summary && (
-            <div className="mt-1 text-sm leading-6" style={{ color: "var(--color-text-muted)" }}>
-              {detail.summary}
+    <div className="rounded-lg overflow-hidden" style={{ backgroundColor: "var(--color-bg-elevated)", border: "1px solid var(--color-border)" }}>
+      <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--color-border)" }}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold truncate" style={{ color: "var(--color-text)" }}>
+              {detail.title}
             </div>
-          )}
+            {detail.summary && (
+              <div className="text-xs mt-0.5 leading-relaxed" style={{ color: "var(--color-text-secondary)" }}>
+                {detail.summary}
+              </div>
+            )}
+          </div>
+          <StatusBadge tone="accent">{detail.kindLabel}</StatusBadge>
         </div>
-        <StatusBadge tone="accent">{detail.kindLabel}</StatusBadge>
       </div>
-      {actions.length > 0 ? (
-        <div className="mt-4 flex flex-wrap gap-2">
+
+      {actions.length > 0 && (
+        <div className="px-4 py-2 flex flex-wrap gap-2" style={{ borderBottom: "1px solid var(--color-border)" }}>
           {actions.map((action) => (
             <button
               key={action.label}
               type="button"
               onClick={() => void action.onClick()}
               disabled={action.disabled}
-              className="rounded-full px-3 py-1.5 text-xs font-medium"
+              className="rounded px-2.5 py-1 text-xs font-medium"
               style={{
                 backgroundColor: "var(--color-surface)",
                 border: "1px solid var(--color-border)",
                 color: "var(--color-text)",
-                opacity: action.disabled ? 0.6 : 1,
+                opacity: action.disabled ? 0.5 : 1,
+                cursor: action.disabled ? "not-allowed" : "pointer",
               }}
             >
               {action.label}
             </button>
           ))}
         </div>
-      ) : null}
-      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+      )}
+
+      <div className="p-4 grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2">
         {detail.items.map((item) => (
-          <div
-            key={`${detail.kindLabel}:${item.label}`}
-            className="rounded-lg px-3 py-3"
-            style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border)" }}
-          >
-            <div className="text-[11px] uppercase tracking-wide" style={{ color: "var(--color-text-muted)" }}>
+          <div key={`${detail.kindLabel}:${item.label}`}>
+            <div className="text-[10px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: "var(--color-text-tertiary)" }}>
               {item.label}
             </div>
-            <div className="mt-1 text-sm break-words" style={{ color: "var(--color-text)" }}>
+            <div className="text-xs break-words font-mono leading-relaxed" style={{ color: "var(--color-text-secondary)" }}>
               {item.value}
             </div>
           </div>
@@ -388,6 +393,8 @@ export function SelectionDetailCard({
   );
 }
 
+/* ─── StatusBadge ──────────────────────────────────────────────── */
+
 function StatusBadge({
   children,
   tone,
@@ -396,77 +403,53 @@ function StatusBadge({
   tone: "accent" | "success" | "warning" | "danger" | "neutral";
 }) {
   const palette = {
-    accent: { background: "rgba(62, 130, 247, 0.14)", color: "var(--color-accent)" },
-    success: { background: "rgba(55, 170, 102, 0.14)", color: "#2f8f57" },
-    warning: { background: "rgba(214, 138, 36, 0.16)", color: "#b36b00" },
-    danger: { background: "rgba(210, 73, 73, 0.14)", color: "#b64040" },
-    neutral: { background: "rgba(120, 132, 152, 0.16)", color: "var(--color-text-muted)" },
+    accent: { bg: "rgba(59,130,246,0.12)", color: "#60a5fa" },
+    success: { bg: "rgba(34,197,94,0.12)", color: "#4ade80" },
+    warning: { bg: "rgba(245,158,11,0.12)", color: "#fbbf24" },
+    danger: { bg: "rgba(239,68,68,0.12)", color: "#f87171" },
+    neutral: { bg: "rgba(92,99,112,0.15)", color: "#9aa2b0" },
   } as const;
 
   return (
     <span
-      className="rounded-full px-2.5 py-1 text-xs font-medium capitalize"
-      style={{ backgroundColor: palette[tone].background, color: palette[tone].color }}
+      className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide shrink-0"
+      style={{ backgroundColor: palette[tone].bg, color: palette[tone].color }}
     >
       {children}
     </span>
   );
 }
 
+/* ─── Helpers ──────────────────────────────────────────────────── */
+
 function toneFromState(state: string): "accent" | "success" | "warning" | "danger" | "neutral" {
   switch (state) {
-    case "running":
-      return "accent";
-    case "completed":
-      return "success";
-    case "pending":
-      return "warning";
+    case "running": return "accent";
+    case "completed": return "success";
+    case "pending": return "warning";
     case "failed":
-    case "cancelled":
-      return "danger";
-    default:
-      return "neutral";
+    case "cancelled": return "danger";
+    default: return "neutral";
   }
 }
 
 function toneFromSeverity(severity?: string): "accent" | "success" | "warning" | "danger" | "neutral" {
   switch (severity) {
     case "critical":
-    case "error":
-      return "danger";
-    case "warning":
-      return "warning";
+    case "error": return "danger";
+    case "warning": return "warning";
     case "ok":
-    case "success":
-      return "success";
-    default:
-      return "neutral";
-  }
-}
-
-function toneFromDiagnosticEvent(eventType: string): "accent" | "success" | "warning" | "danger" | "neutral" {
-  switch (eventType) {
-    case "error":
-    case "failure":
-    case "blocked":
-      return "danger";
-    case "warning":
-    case "degraded":
-      return "warning";
-    case "ok":
-    case "recovered":
-      return "success";
-    default:
-      return "neutral";
+    case "success": return "success";
+    default: return "neutral";
   }
 }
 
 function rowBaseStyle(selected: boolean): CSSProperties {
   return {
-    backgroundColor: selected ? "rgba(62, 130, 247, 0.08)" : "var(--color-surface-2)",
-    border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
+    backgroundColor: selected ? "rgba(59,130,246,0.06)" : "transparent",
+    border: `1px solid ${selected ? "rgba(59,130,246,0.2)" : "transparent"}`,
     textAlign: "left",
-    transition: "background-color 0.15s, border-color 0.15s",
+    transition: "background-color 0.1s, border-color 0.1s",
     cursor: "pointer",
   };
 }
@@ -474,13 +457,11 @@ function rowBaseStyle(selected: boolean): CSSProperties {
 function rowHoverIn(e: React.MouseEvent<HTMLButtonElement>, selected: boolean) {
   if (selected) return;
   e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.03)";
-  e.currentTarget.style.borderColor = "var(--color-text-muted)";
 }
 
 function rowHoverOut(e: React.MouseEvent<HTMLButtonElement>, selected: boolean) {
   if (selected) return;
-  e.currentTarget.style.backgroundColor = "var(--color-surface-2)";
-  e.currentTarget.style.borderColor = "var(--color-border)";
+  e.currentTarget.style.backgroundColor = "transparent";
 }
 
 export function sortByUpdatedAtDesc<T extends { updated_at?: string; created_at?: string }>(a: T, b: T) {
@@ -496,20 +477,20 @@ function compareTimestamps(a?: string, b?: string) {
 }
 
 function parseTimestamp(value?: string) {
-  if (!value) {
-    return 0;
-  }
+  if (!value) return 0;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 export function formatTimestamp(value?: string) {
-  if (!value) {
-    return "unknown";
-  }
+  if (!value) return "—";
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString();
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
+

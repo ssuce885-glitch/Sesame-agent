@@ -15,6 +15,10 @@ interface MessageListProps {
   suggestionsDisabled?: boolean;
 }
 
+type BlockItem =
+  | { kind: "single"; msg: ChatMessage }
+  | { kind: "tool_group"; msgs: ChatMessage[] };
+
 export function MessageList({ messages, connection, onSuggestionClick, suggestionsDisabled }: MessageListProps) {
   const { t } = useI18n();
   const suggestions = [
@@ -27,7 +31,6 @@ export function MessageList({ messages, connection, onSuggestionClick, suggestio
   const [autoScroll, setAutoScroll] = useState(true);
   const [newMsg, setNewMsg] = useState(false);
 
-  // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     if (autoScroll) {
       bottomRef.current?.scrollIntoView({ behavior: preferredScrollBehavior() });
@@ -51,9 +54,6 @@ export function MessageList({ messages, connection, onSuggestionClick, suggestio
   }
 
   // Group messages by turn; collect consecutive tool_calls into ToolCallGroup
-  type BlockItem =
-    | { kind: "single"; msg: ChatMessage }
-    | { kind: "tool_group"; msgs: ChatMessage[] };
 
   const turns: { user?: ChatMessage; blocks: BlockItem[] }[] = [];
   for (const msg of messages) {
@@ -63,7 +63,6 @@ export function MessageList({ messages, connection, onSuggestionClick, suggestio
       if (turns.length === 0) {
         turns.push({ blocks: [] });
       }
-
       if (msg.kind === "tool_call") {
         const blocks = turns[turns.length - 1].blocks;
         const last = blocks[blocks.length - 1];
@@ -83,25 +82,25 @@ export function MessageList({ messages, connection, onSuggestionClick, suggestio
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="h-full overflow-y-auto px-3 py-4 md:px-6"
+        className="h-full overflow-y-auto px-4 py-5 md:px-8"
         style={{ backgroundColor: "var(--color-bg)" }}
       >
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full select-none">
-            {/* Decorative ring */}
+            {/* Brand mark */}
             <div
-              className="w-16 h-16 rounded-full mb-6"
-              style={{
-                background: "conic-gradient(from 0deg, var(--color-accent), var(--color-assistant), var(--color-tool), var(--color-accent))",
-                opacity: 0.15,
-                filter: "blur(1px)",
-              }}
-            />
-            <p
-              className="text-base mb-4"
-              style={{ color: "var(--color-text-muted)" }}
+              className="w-12 h-12 rounded-lg flex items-center justify-center mb-5"
+              style={{ backgroundColor: "var(--color-accent-dim)" }}
             >
+              <span className="text-xl font-bold" style={{ color: "var(--color-accent)" }}>
+                S
+              </span>
+            </div>
+            <p className="text-sm mb-1" style={{ color: "var(--color-text)" }}>
               {t("chat.emptyPrompt")}
+            </p>
+            <p className="text-xs mb-5" style={{ color: "var(--color-text-tertiary)" }}>
+              Sesame personal assistant
             </p>
             {onSuggestionClick && (
               <div className="flex flex-wrap gap-2 justify-center">
@@ -111,14 +110,14 @@ export function MessageList({ messages, connection, onSuggestionClick, suggestio
                     type="button"
                     onClick={() => onSuggestionClick(s)}
                     disabled={suggestionsDisabled}
-                    className="rounded-full px-4 py-1.5 text-sm"
+                    className="rounded-full px-3.5 py-1.5 text-xs font-medium"
                     style={{
                       backgroundColor: "var(--color-surface)",
                       border: "1px solid var(--color-border)",
-                      color: "var(--color-text-muted)",
+                      color: "var(--color-text-secondary)",
                       cursor: suggestionsDisabled ? "not-allowed" : "pointer",
                       opacity: suggestionsDisabled ? 0.4 : 1,
-                      transition: "border-color 0.15s, color 0.15s, opacity 0.15s",
+                      transition: "border-color 0.15s, color 0.15s",
                     }}
                     onMouseEnter={(e) => {
                       if (suggestionsDisabled) return;
@@ -128,7 +127,7 @@ export function MessageList({ messages, connection, onSuggestionClick, suggestio
                     onMouseLeave={(e) => {
                       if (suggestionsDisabled) return;
                       e.currentTarget.style.borderColor = "var(--color-border)";
-                      e.currentTarget.style.color = "var(--color-text-muted)";
+                      e.currentTarget.style.color = "var(--color-text-secondary)";
                     }}
                   >
                     {s}
@@ -140,75 +139,57 @@ export function MessageList({ messages, connection, onSuggestionClick, suggestio
         )}
 
         {turns.map((turn, ti) => (
-          <div key={ti} className="mb-6">
+          <div key={ti} className="mb-2">
             {turn.user && (
-              <UserMessage
-                text={turn.user.text ?? ""}
-              />
+              <UserMessage text={turn.user.text ?? ""} />
             )}
-            {turn.blocks.map((block, bi) => {
-              if (block.kind === "tool_group") {
-                return <ToolCallGroup key={`tg-${ti}-${bi}`} messages={block.msgs} />;
-              }
-              const msg = block.msg;
-              switch (msg.kind) {
-                case "assistant_message":
-                  return (
-                    <AssistantMessage
-                      key={msg.id}
-                      text={msg.text ?? ""}
-                      streaming={msg.streaming ?? false}
-                      usage={msg.usage}
-                    />
-                  );
-                case "notice":
-                  return <NoticeBlock key={msg.id} text={msg.text ?? ""} />;
-                case "error":
-                  return <ErrorBlock key={msg.id} text={msg.text ?? ""} />;
-                default:
-                  return null;
-              }
-            })}
+            {renderBlocks(turn.blocks, ti)}
           </div>
         ))}
 
         <div ref={bottomRef} />
       </div>
 
-      {/* New messages indicator */}
+      {/* New messages floating button */}
       {newMsg && !autoScroll && (
         <button
           onClick={scrollToBottom}
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-4 py-2 rounded-full text-sm"
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
           style={{
             backgroundColor: "var(--color-accent)",
             color: "#fff",
             border: "none",
             cursor: "pointer",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+            boxShadow: "0 2px 10px rgba(0,0,0,0.3)",
           }}
         >
-          <ArrowDown size={14} color="#fff" />
+          <ArrowDown size={12} color="#fff" />
           {t("chat.newMessages")}
         </button>
       )}
 
       {/* Connection status */}
       <div
-        className="absolute top-3 right-4 flex items-center gap-1.5 text-xs"
-        style={{ color: "var(--color-text-muted)" }}
+        className="absolute top-3 right-4 flex items-center gap-1.5 text-[11px] font-medium"
+        style={{ color: "var(--color-text-tertiary)" }}
       >
         <span
-          className="inline-block w-2 h-2 rounded-full"
+          className="inline-block w-1.5 h-1.5 rounded-full"
           style={{
             backgroundColor:
               connection === "open"
                 ? "var(--color-success)"
                 : connection === "reconnecting" || connection === "connecting"
-                ? "var(--color-warning)"
-                : connection === "error"
-                ? "var(--color-error)"
-                : "var(--color-border)",
+                  ? "var(--color-warning)"
+                  : connection === "error"
+                    ? "var(--color-error)"
+                    : "var(--color-border-strong)",
+            boxShadow:
+              connection === "open"
+                ? "0 0 6px rgba(34,197,94,0.5)"
+                : connection === "reconnecting"
+                  ? "0 0 6px rgba(245,158,11,0.5)"
+                  : undefined,
           }}
         />
         {connection === "connecting" && t("chat.connecting")}
@@ -219,6 +200,88 @@ export function MessageList({ messages, connection, onSuggestionClick, suggestio
       </div>
     </div>
   );
+}
+
+function renderBlocks(blocks: BlockItem[], turnIdx: number): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let i = 0;
+  while (i < blocks.length) {
+    const block = blocks[i];
+    if (block.kind === "tool_group") {
+      out.push(
+        <ToolCallGroup key={`tg-${turnIdx}-${i}`} messages={block.msgs} />
+      );
+      i++;
+      continue;
+    }
+    const msg = block.msg;
+    if (msg.kind === "notice") {
+      const text = msg.text ?? "";
+      let count = 1;
+      let j = i + 1;
+      while (j < blocks.length) {
+        const next = blocks[j];
+        if (
+          next.kind === "single" &&
+          next.msg.kind === "notice" &&
+          (next.msg.text ?? "") === text
+        ) {
+          count++;
+          j++;
+        } else {
+          break;
+        }
+      }
+      out.push(
+        <NoticeBlock
+          key={`notice-${turnIdx}-${i}`}
+          text={text}
+          count={count > 1 ? count : undefined}
+        />
+      );
+      i = j;
+      continue;
+    }
+    if (msg.kind === "error") {
+      const text = msg.text ?? "";
+      let count = 1;
+      let j = i + 1;
+      while (j < blocks.length) {
+        const next = blocks[j];
+        if (
+          next.kind === "single" &&
+          next.msg.kind === "error" &&
+          (next.msg.text ?? "") === text
+        ) {
+          count++;
+          j++;
+        } else {
+          break;
+        }
+      }
+      out.push(
+        <ErrorBlock
+          key={`error-${turnIdx}-${i}`}
+          text={text}
+          count={count > 1 ? count : undefined}
+        />
+      );
+      i = j;
+      continue;
+    }
+    if (msg.kind === "assistant_message") {
+      out.push(
+        <AssistantMessage
+          key={msg.id}
+          text={msg.text ?? ""}
+          streaming={msg.streaming ?? false}
+          usage={msg.usage}
+        />
+      );
+    }
+    i++;
+  }
+  return out;
 }
 
 function preferredScrollBehavior(): ScrollBehavior {

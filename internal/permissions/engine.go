@@ -13,6 +13,8 @@ const (
 	ProfileReadOnly       = "read_only"
 	ProfileWorkspaceWrite = "workspace_write"
 	ProfileTrustedLocal   = "trusted_local"
+	ProfileSandbox        = "sandbox"
+	ProfileNone           = "none"
 
 	defaultProfile = ProfileTrustedLocal
 )
@@ -85,6 +87,12 @@ var profileSpecs = map[string]profileSpec{
 	},
 	ProfileTrustedLocal: {
 		Wildcard: true,
+	},
+	ProfileSandbox: {
+		Allowed: baseReadOnlyTools(),
+	},
+	ProfileNone: {
+		Allowed: map[string]struct{}{},
 	},
 }
 

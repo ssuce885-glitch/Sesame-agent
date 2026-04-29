@@ -17,11 +17,13 @@ import (
 )
 
 type UpsertInput struct {
-	RoleID      string   `json:"role_id"`
-	DisplayName string   `json:"display_name"`
-	Description string   `json:"description"`
-	Prompt      string   `json:"prompt"`
-	SkillNames  []string `json:"skills"`
+	RoleID      string            `json:"role_id"`
+	DisplayName string            `json:"display_name"`
+	Description string            `json:"description"`
+	Prompt      string            `json:"prompt"`
+	SkillNames  []string          `json:"skills"`
+	Policy      *RolePolicyConfig `json:"policy,omitempty"`
+	Budget      *RoleBudgetConfig `json:"budget,omitempty"`
 }
 
 type AutomationCleanupService interface {
@@ -425,12 +427,19 @@ func copyRoleEntry(src, dst string) error {
 }
 
 func writeRoleFilesToDir(roleDir string, in UpsertInput, version int) error {
-	raw, err := yaml.Marshal(map[string]any{
+	payload := map[string]any{
 		"display_name": strings.TrimSpace(in.DisplayName),
 		"description":  strings.TrimSpace(in.Description),
 		"skills":       dedupeStrings(in.SkillNames),
 		"version":      normalizeRoleVersion(version),
-	})
+	}
+	if in.Policy != nil {
+		payload["policy"] = cloneRolePolicyConfig(in.Policy)
+	}
+	if in.Budget != nil {
+		payload["budget"] = cloneRoleBudgetConfig(in.Budget)
+	}
+	raw, err := yaml.Marshal(payload)
 	if err != nil {
 		return err
 	}
@@ -452,6 +461,8 @@ func writeRoleSnapshotToDir(roleDir string, spec Spec) error {
 		Prompt:      spec.Prompt,
 		SkillNames:  normalizeSkillNames(spec.SkillNames),
 		Version:     normalizeRoleVersion(spec.Version),
+		Policy:      cloneRolePolicyConfig(spec.Policy),
+		Budget:      cloneRoleBudgetConfig(spec.Budget),
 	})
 	if err != nil {
 		return err
@@ -471,6 +482,8 @@ func specFromUpsertInput(in UpsertInput, version int) Spec {
 		Prompt:      strings.TrimSpace(in.Prompt),
 		SkillNames:  normalizeSkillNames(in.SkillNames),
 		Version:     normalizeRoleVersion(version),
+		Policy:      cloneRolePolicyConfig(in.Policy),
+		Budget:      cloneRoleBudgetConfig(in.Budget),
 	}
 }
 

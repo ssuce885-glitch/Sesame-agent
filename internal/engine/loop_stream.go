@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -17,6 +19,7 @@ type loopUsageTotals struct {
 	inputTokens  int
 	outputTokens int
 	cachedTokens int
+	costUSD      float64
 	hasUsage     bool
 }
 
@@ -107,6 +110,11 @@ func executePreparedLoop(ctx context.Context, e *Engine, in Input, emitter loopE
 			return emitter.Fail(ctx, err)
 		}
 		updateLoopUsageTotals(&usageTotals, responseMeta)
+		if state.budget != nil && responseMeta != nil {
+			if err := state.budget.RecordCost(responseMeta.CostUSD); err != nil {
+				return emitter.Fail(ctx, err)
+			}
+		}
 
 		if len(toolCalls) == 0 {
 			if err := completeAssistantOnlyTurn(ctx, e, in, emitter, state, messageEnded, orderedAssistantItems, usageTotals); err != nil {
@@ -159,6 +167,7 @@ func updateLoopUsageTotals(totals *loopUsageTotals, responseMeta *model.Response
 	totals.inputTokens += responseMeta.InputTokens
 	totals.outputTokens += responseMeta.OutputTokens
 	totals.cachedTokens += responseMeta.CachedTokens
+	totals.costUSD += responseMeta.CostUSD
 	totals.hasUsage = true
 }
 
@@ -198,6 +207,7 @@ func completeAssistantOnlyTurn(
 		usageTotals.inputTokens,
 		usageTotals.outputTokens,
 		usageTotals.cachedTokens,
+		usageTotals.costUSD,
 	)
 	parentReplyCommitted, err := buildParentReplyCommittedPayload(ctx, e.store, in.Session, in.Turn, writeContextHeadID, nextPositionBeforeFlush, orderedAssistantItems, state.reports)
 	if err != nil {
@@ -240,6 +250,9 @@ func executeToolCallBatches(
 	if e.maxToolSteps > 0 && toolSteps+len(toolCalls) > e.maxToolSteps {
 		return toolSteps, false, emitter.Fail(ctx, fmt.Errorf("turn exceeded max tool steps (%d)", e.maxToolSteps))
 	}
+	if err := saveTurnCheckpoint(ctx, e, in, state, types.TurnCheckpointStatePreToolBatch, toolCalls, state.nextPosition, nil, nil, nil); err != nil {
+		return toolSteps, false, emitter.Fail(ctx, err)
+	}
 	plannedBatches := state.toolRuntime.PlanBatches(callInputs, state.toolExecCtx)
 	turnCompletingBatch := firstTurnCompletingBatchIndex(plannedBatches)
 	assistantFlushBatch := len(plannedBatches) - 1
@@ -279,6 +292,12 @@ func executeToolCallBatches(
 				stepLimitExceededAfterBatch = true
 			}
 		}
+		if state.budget != nil {
+			if err := state.budget.RecordToolCall(len(batch.Calls)); err != nil {
+				return toolSteps, false, emitter.Fail(ctx, err)
+			}
+		}
+		checkpointFileModifyingTools(ctx, e, state.sessionID, in.Turn.ID, batchToolCalls)
 
 		for _, call := range batchToolCalls {
 			toolSteps++
@@ -312,6 +331,12 @@ func executeToolCallBatches(
 			return toolSteps, false, err
 		}
 		state.nextPosition = nextPosition
+		completedIDs := checkpointCompletedToolIDs(state.req.ToolResults)
+		assistantItems := checkpointAssistantItems(orderedAssistantItems, assistantCursor)
+		if err := saveTurnCheckpoint(ctx, e, in, state, types.TurnCheckpointStatePostToolBatch, batchToolCalls, nextPosition, completedIDs, state.req.ToolResults, assistantItems); err != nil {
+			return toolSteps, false, emitter.Fail(ctx, err)
+		}
+		state.nextCheckpointSeq++
 		callOffset += len(batch.Calls)
 		if stopAfterBatch {
 			completeTurnAfterTools = true
@@ -359,6 +384,7 @@ func executeToolCallBatches(
 			usageTotals.inputTokens,
 			usageTotals.outputTokens,
 			usageTotals.cachedTokens,
+			usageTotals.costUSD,
 		)
 		committedAssistantItems := orderedAssistantItems
 		if assistantCursor >= 0 && assistantCursor <= len(orderedAssistantItems) {
@@ -545,6 +571,7 @@ func updateLoopSkillsFromToolMetadata(e *Engine, state *preparedLoopState, metad
 	state.toolExecCtx.InjectedEnv = injectedEnv
 	previousDefs := state.visibleDefs
 	state.visibleDefs = state.toolRuntime.VisibleDefinitions(state.toolExecCtx)
+	state.visibleDefs = applyRolePolicyToToolDefinitions(state.toolExecCtx.RoleSpec, state.visibleDefs)
 	clearPreviousResponseWhenVisibleToolsChange(&state.req, previousDefs, state.visibleDefs)
 	state.req.Tools = buildToolSchemas(state.visibleDefs)
 	state.req.Instructions = appendReportPromptSection(instructions.Render(instructions.RenderInput{
@@ -592,6 +619,41 @@ func visibleToolNames(defs []tools.Definition) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func checkpointFileModifyingTools(ctx context.Context, e *Engine, sessionID, turnID string, batchToolCalls []model.ToolCallChunk) {
+	if e == nil || e.fileCheckpoints == nil {
+		return
+	}
+	for _, call := range batchToolCalls {
+		if !isFileModifyingTool(call.Name) {
+			continue
+		}
+		reason := firstToolArgPreview(call.Input, 100)
+		if _, err := e.fileCheckpoints.CheckpointBeforeTool(ctx, sessionID, turnID, call.ID, call.Name, reason); err != nil {
+			slog.Warn("checkpoint failed", "tool", call.Name, "error", err)
+		}
+	}
+}
+
+func isFileModifyingTool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "file_write", "apply_patch", "shell_command", "shell", "file_edit", "file_move", "file_delete", "notebook_edit":
+		return true
+	default:
+		return false
+	}
+}
+
+func firstToolArgPreview(input map[string]any, limit int) string {
+	if len(input) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		raw = []byte(fmt.Sprint(input))
+	}
+	return singleLinePreview(string(raw), limit)
 }
 
 func emitToolInterrupt(

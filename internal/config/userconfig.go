@@ -13,6 +13,7 @@ type UserConfig struct {
 	Provider                       string              `json:"provider"`
 	CompatMode                     string              `json:"compat_mode"`
 	Model                          string              `json:"model"`
+	QAModel                        string              `json:"qa_model,omitempty"`
 	BaseURL                        string              `json:"base_url"`
 	APIKey                         string              `json:"api_key"`
 	DataDir                        string              `json:"data_dir"`
@@ -33,6 +34,7 @@ type UserConfig struct {
 	MicrocompactBytesThreshold     int                 `json:"microcompact_bytes_threshold"`
 	MaxCompactionPasses            int                 `json:"max_compaction_passes"`
 	MaxCompactionBatchItems        int                 `json:"max_compaction_batch_items"`
+	DefaultRoleBudget              RoleBudgetConfig    `json:"default_role_budget,omitempty"`
 	ResetAnthropic                 bool                `json:"-"`
 	ResetOpenAI                    bool                `json:"-"`
 	ResetVision                    bool                `json:"-"`
@@ -228,8 +230,18 @@ func userConfigPatchRoot(patch UserConfig) (map[string]json.RawMessage, error) {
 			return nil, err
 		}
 	}
+	if strings.TrimSpace(patch.QAModel) != "" {
+		if err := putJSONString(out, "qa_model", patch.QAModel); err != nil {
+			return nil, err
+		}
+	}
 	if strings.TrimSpace(patch.PermissionProfile) != "" {
 		if err := putJSONString(out, "permission_profile", patch.PermissionProfile); err != nil {
+			return nil, err
+		}
+	}
+	if !isZeroRoleBudget(patch.DefaultRoleBudget) {
+		if err := putJSONValue(out, "default_role_budget", patch.DefaultRoleBudget); err != nil {
 			return nil, err
 		}
 	}
@@ -437,6 +449,24 @@ func putJSONObject(dst map[string]json.RawMessage, key string, value map[string]
 	}
 	dst[key] = data
 	return nil
+}
+
+func putJSONValue(dst map[string]json.RawMessage, key string, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	dst[key] = data
+	return nil
+}
+
+func isZeroRoleBudget(budget RoleBudgetConfig) bool {
+	return strings.TrimSpace(budget.MaxRuntime) == "" &&
+		budget.MaxToolCalls == 0 &&
+		budget.MaxContextTokens == 0 &&
+		budget.MaxCost == 0 &&
+		budget.MaxTurnsPerHour == 0 &&
+		budget.MaxConcurrent == 0
 }
 
 func mergeRawJSONObjects(existing, patch map[string]json.RawMessage) (map[string]json.RawMessage, error) {

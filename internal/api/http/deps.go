@@ -23,6 +23,11 @@ type Store interface {
 	LatestSessionEventSeq(context.Context, string) (int64, error)
 }
 
+type FileCheckpointService interface {
+	GetDiff(parentID, childID string) (string, error)
+	RollbackTo(context.Context, string) error
+}
+
 type Manager interface {
 	RegisterSession(types.Session)
 	UpdateSession(types.Session) bool

@@ -14,6 +14,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = max(minWidth, msg.Width)
 		m.height = max(minHeight, msg.Height)
+		m.resetGlamourRenderer()
 		m.layout()
 		return m, nil
 

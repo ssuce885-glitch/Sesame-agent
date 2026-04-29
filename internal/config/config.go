@@ -18,12 +18,22 @@ type CLIStartupOverrides struct {
 	WorkspaceRoot  string
 }
 
+type RoleBudgetConfig struct {
+	MaxRuntime       string  `json:"max_runtime,omitempty"`
+	MaxToolCalls     int     `json:"max_tool_calls,omitempty"`
+	MaxContextTokens int     `json:"max_context_tokens,omitempty"`
+	MaxCost          float64 `json:"max_cost,omitempty"`
+	MaxTurnsPerHour  int     `json:"max_turns_per_hour,omitempty"`
+	MaxConcurrent    int     `json:"max_concurrent,omitempty"`
+}
+
 type Config struct {
 	Addr                       string
 	DataDir                    string
 	ModelProvider              string
 	CompatMode                 string
 	Model                      string
+	QAModel                    string
 	AnthropicAPIKey            string
 	AnthropicBaseURL           string
 	OpenAIAPIKey               string
@@ -56,6 +66,7 @@ type Config struct {
 	TaskOutputMaxBytes           int
 	RemoteExecutorShimCommand    string
 	RemoteExecutorTimeoutSeconds int
+	DefaultRoleBudget            RoleBudgetConfig
 	DaemonID                     string
 	Paths                        Paths
 	ConfigFingerprint            string
@@ -177,6 +188,7 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		uc.Model,
 		providerModelFallback(modelProvider, uc),
 	)
+	qaModel := firstNonEmpty(envOrDefault("SESAME_QA_MODEL", ""), uc.QAModel)
 	primaryAnthropicAPIKey := selectedProviderAPIKey(modelProvider == "anthropic", genericAPIKey, envOrDefaultWithFallback("ANTHROPIC_API_KEY", uc.Anthropic.APIKey, ""))
 	primaryAnthropicBaseURL := selectedProviderBaseURL(modelProvider == "anthropic", genericBaseURL, envOrDefaultWithFallback("ANTHROPIC_BASE_URL", uc.Anthropic.BaseURL, ""), "https://api.anthropic.com")
 	primaryOpenAIAPIKey := selectedProviderAPIKey(modelProvider == "openai_compatible", genericAPIKey, envOrDefaultWithFallback("OPENAI_API_KEY", uc.OpenAI.APIKey, ""))
@@ -191,6 +203,7 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		ModelProvider:                modelProvider,
 		CompatMode:                   compatMode,
 		Model:                        model,
+		QAModel:                      qaModel,
 		AnthropicAPIKey:              primaryAnthropicAPIKey,
 		AnthropicBaseURL:             primaryAnthropicBaseURL,
 		OpenAIAPIKey:                 primaryOpenAIAPIKey,
@@ -222,6 +235,7 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		TaskOutputMaxBytes:           intEnvOrDefault("SESAME_TASK_OUTPUT_MAX_BYTES", 1<<20),
 		RemoteExecutorShimCommand:    envOrDefault("SESAME_REMOTE_EXECUTOR_SHIM_COMMAND", ""),
 		RemoteExecutorTimeoutSeconds: intEnvOrDefault("SESAME_REMOTE_EXECUTOR_TIMEOUT_SECONDS", 300),
+		DefaultRoleBudget:            defaultRoleBudgetWithFallback(uc.DefaultRoleBudget),
 		DaemonID:                     envOrDefault("SESAME_DAEMON_ID", ""),
 		Paths:                        paths,
 	}
@@ -231,46 +245,49 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 
 func (c Config) Fingerprint() string {
 	payload := struct {
-		Addr                         string `json:"addr"`
-		DataDir                      string `json:"data_dir"`
-		ModelProvider                string `json:"provider"`
-		CompatMode                   string `json:"compat_mode"`
-		Model                        string `json:"model"`
-		AnthropicAPIKey              string `json:"anthropic_api_key"`
-		AnthropicBaseURL             string `json:"anthropic_base_url"`
-		OpenAIAPIKey                 string `json:"openai_api_key"`
-		OpenAIBaseURL                string `json:"openai_base_url"`
-		VisionProvider               string `json:"vision_provider"`
-		VisionAPIKey                 string `json:"vision_api_key"`
-		VisionBaseURL                string `json:"vision_base_url"`
-		VisionModel                  string `json:"vision_model"`
-		ProviderCacheProfile         string `json:"provider_cache_profile"`
-		LogLevel                     string `json:"log_level"`
-		PermissionProfile            string `json:"permission_profile"`
-		MaxToolSteps                 int    `json:"max_tool_steps"`
-		MaxShellOutputBytes          int    `json:"max_shell_output_bytes"`
-		ShellTimeoutSeconds          int    `json:"shell_timeout_seconds"`
-		MaxFileWriteBytes            int    `json:"max_file_write_bytes"`
-		MaxRecentItems               int    `json:"max_recent_items"`
-		CompactionThreshold          int    `json:"compaction_threshold"`
-		MaxEstimatedTokens           int    `json:"max_estimated_tokens"`
-		ModelContextWindow           int    `json:"model_context_window"`
-		MaxCompactionPasses          int    `json:"max_compaction_passes"`
-		MaxCompactionBatchItems      int    `json:"max_compaction_batch_items"`
-		MaxToolResultStoreBytes      int    `json:"max_tool_result_store_bytes"`
-		SystemPrompt                 string `json:"system_prompt"`
-		SystemPromptFile             string `json:"system_prompt_file"`
-		MaxWorkspacePromptBytes      int    `json:"max_workspace_prompt_bytes"`
-		MaxConcurrentTasks           int    `json:"max_concurrent_tasks"`
-		TaskOutputMaxBytes           int    `json:"task_output_max_bytes"`
-		RemoteExecutorShimCommand    string `json:"remote_executor_shim_command"`
-		RemoteExecutorTimeoutSeconds int    `json:"remote_executor_timeout_seconds"`
+		Addr                         string           `json:"addr"`
+		DataDir                      string           `json:"data_dir"`
+		ModelProvider                string           `json:"provider"`
+		CompatMode                   string           `json:"compat_mode"`
+		Model                        string           `json:"model"`
+		QAModel                      string           `json:"qa_model"`
+		AnthropicAPIKey              string           `json:"anthropic_api_key"`
+		AnthropicBaseURL             string           `json:"anthropic_base_url"`
+		OpenAIAPIKey                 string           `json:"openai_api_key"`
+		OpenAIBaseURL                string           `json:"openai_base_url"`
+		VisionProvider               string           `json:"vision_provider"`
+		VisionAPIKey                 string           `json:"vision_api_key"`
+		VisionBaseURL                string           `json:"vision_base_url"`
+		VisionModel                  string           `json:"vision_model"`
+		ProviderCacheProfile         string           `json:"provider_cache_profile"`
+		LogLevel                     string           `json:"log_level"`
+		PermissionProfile            string           `json:"permission_profile"`
+		MaxToolSteps                 int              `json:"max_tool_steps"`
+		MaxShellOutputBytes          int              `json:"max_shell_output_bytes"`
+		ShellTimeoutSeconds          int              `json:"shell_timeout_seconds"`
+		MaxFileWriteBytes            int              `json:"max_file_write_bytes"`
+		MaxRecentItems               int              `json:"max_recent_items"`
+		CompactionThreshold          int              `json:"compaction_threshold"`
+		MaxEstimatedTokens           int              `json:"max_estimated_tokens"`
+		ModelContextWindow           int              `json:"model_context_window"`
+		MaxCompactionPasses          int              `json:"max_compaction_passes"`
+		MaxCompactionBatchItems      int              `json:"max_compaction_batch_items"`
+		MaxToolResultStoreBytes      int              `json:"max_tool_result_store_bytes"`
+		SystemPrompt                 string           `json:"system_prompt"`
+		SystemPromptFile             string           `json:"system_prompt_file"`
+		MaxWorkspacePromptBytes      int              `json:"max_workspace_prompt_bytes"`
+		MaxConcurrentTasks           int              `json:"max_concurrent_tasks"`
+		TaskOutputMaxBytes           int              `json:"task_output_max_bytes"`
+		RemoteExecutorShimCommand    string           `json:"remote_executor_shim_command"`
+		RemoteExecutorTimeoutSeconds int              `json:"remote_executor_timeout_seconds"`
+		DefaultRoleBudget            RoleBudgetConfig `json:"default_role_budget,omitempty"`
 	}{
 		Addr:                         c.Addr,
 		DataDir:                      c.DataDir,
 		ModelProvider:                c.ModelProvider,
 		CompatMode:                   c.CompatMode,
 		Model:                        c.Model,
+		QAModel:                      c.QAModel,
 		AnthropicAPIKey:              c.AnthropicAPIKey,
 		AnthropicBaseURL:             c.AnthropicBaseURL,
 		OpenAIAPIKey:                 c.OpenAIAPIKey,
@@ -300,6 +317,7 @@ func (c Config) Fingerprint() string {
 		TaskOutputMaxBytes:           c.TaskOutputMaxBytes,
 		RemoteExecutorShimCommand:    c.RemoteExecutorShimCommand,
 		RemoteExecutorTimeoutSeconds: c.RemoteExecutorTimeoutSeconds,
+		DefaultRoleBudget:            c.DefaultRoleBudget,
 	}
 	raw, _ := json.Marshal(payload)
 	sum := sha256.Sum256(raw)
@@ -350,6 +368,36 @@ func intEnvOrDefaultWithFallback(key string, fileFallback int, hardDefault int) 
 		return fileFallback
 	}
 	return hardDefault
+}
+
+func defaultRoleBudgetWithFallback(fileBudget RoleBudgetConfig) RoleBudgetConfig {
+	defaults := RoleBudgetConfig{
+		MaxRuntime:       "30m",
+		MaxToolCalls:     20,
+		MaxContextTokens: 16000,
+		MaxCost:          5.0,
+		MaxTurnsPerHour:  60,
+		MaxConcurrent:    1,
+	}
+	if strings.TrimSpace(fileBudget.MaxRuntime) != "" {
+		defaults.MaxRuntime = strings.TrimSpace(fileBudget.MaxRuntime)
+	}
+	if fileBudget.MaxToolCalls > 0 {
+		defaults.MaxToolCalls = fileBudget.MaxToolCalls
+	}
+	if fileBudget.MaxContextTokens > 0 {
+		defaults.MaxContextTokens = fileBudget.MaxContextTokens
+	}
+	if fileBudget.MaxCost > 0 {
+		defaults.MaxCost = fileBudget.MaxCost
+	}
+	if fileBudget.MaxTurnsPerHour > 0 {
+		defaults.MaxTurnsPerHour = fileBudget.MaxTurnsPerHour
+	}
+	if fileBudget.MaxConcurrent > 0 {
+		defaults.MaxConcurrent = fileBudget.MaxConcurrent
+	}
+	return defaults
 }
 
 func firstNonEmpty(values ...string) string {

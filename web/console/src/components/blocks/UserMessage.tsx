@@ -1,26 +1,27 @@
 export function UserMessage({ text }: { text: string }) {
   return (
-    <div className="mb-4">
-      <div className="flex items-baseline gap-3 mb-1">
+    <div className="flex gap-3 mb-5">
+      <div
+        className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5"
+        style={{ backgroundColor: "var(--color-user-dim)" }}
+      >
         <span
-          className="text-sm font-semibold"
+          className="text-xs font-bold"
           style={{ color: "var(--color-user)" }}
         >
-          you
+          U
         </span>
       </div>
-      <div
-        className="rounded-xl px-4 py-3 text-sm"
-        style={{
-          backgroundColor: "var(--color-surface)",
-          border: "1px solid var(--color-border)",
-          color: "var(--color-text)",
-          borderLeft: "3px solid var(--color-user)",
-          lineHeight: 1.6,
-          whiteSpace: "pre-wrap",
-        }}
-      >
-        {text}
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-semibold mb-1" style={{ color: "var(--color-user)" }}>
+          You
+        </div>
+        <div
+          className="text-sm leading-relaxed whitespace-pre-wrap"
+          style={{ color: "var(--color-text)" }}
+        >
+          {text}
+        </div>
       </div>
     </div>
   );

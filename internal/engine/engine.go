@@ -7,6 +7,7 @@ import (
 	contextstate "go-agent/internal/context"
 	"go-agent/internal/model"
 	"go-agent/internal/permissions"
+	"go-agent/internal/roles"
 	"go-agent/internal/runtimegraph"
 	"go-agent/internal/scheduler"
 	"go-agent/internal/session"
@@ -50,6 +51,11 @@ type ConversationStore interface {
 	InsertProviderCacheEntry(context.Context, types.ProviderCacheEntry) error
 	InsertConversationCompaction(context.Context, types.ConversationCompaction) error
 	InsertConversationCompactionWithContextHead(context.Context, types.ConversationCompaction) error
+	InsertCompactionQA(context.Context, types.CompactionQA) error
+	InsertTurnCheckpoint(context.Context, types.TurnCheckpoint) error
+	GetLatestTurnCheckpoint(context.Context, string) (types.TurnCheckpoint, bool, error)
+	DeleteTurnCheckpoints(context.Context, string) (int64, error)
+	ListInterruptedTurnsWithCheckpoints(context.Context) ([]string, error)
 	InsertConversationArchiveEntry(context.Context, types.ConversationArchiveEntry) error
 	ListConversationArchiveEntries(context.Context, string) ([]types.ConversationArchiveEntry, error)
 	SearchConversationArchiveEntries(context.Context, string, string) ([]types.ConversationArchiveEntry, error)
@@ -63,36 +69,47 @@ type ContextHeadSummaryWorker interface {
 	Wait()
 }
 
+type CompactionQAWorker interface {
+	Enqueue(ctx context.Context, compaction types.ConversationCompaction, sourceItems []model.ConversationItem)
+	Wait()
+}
+
 type Engine struct {
-	model                         model.StreamingClient
-	registry                      *tools.Registry
-	permission                    *permissions.Engine
-	store                         ConversationStore
-	ctxManager                    *contextstate.Manager
-	compactor                     contextstate.Compactor
-	archiver                      *contextstate.ArchiveCompactor
-	runtime                       *contextstate.Runtime
-	meta                          RuntimeMetadata
-	basePrompt                    string
-	globalConfigRoot              string
-	maxWorkspacePromptBytes       int
-	activeSkillTokenBudget        int
-	maxToolSteps                  int
-	maxToolResultStoreBytes       int
-	automationService             tools.AutomationService
-	roleService                   tools.RoleService
-	sessionDelegationService      session.RoleDelegationService
-	taskManager                   *task.Manager
-	runtimeService                *runtimegraph.Service
-	schedulerService              *scheduler.Service
-	contextHeadSummaryAsync       bool
-	contextHeadSummaryWorker      ContextHeadSummaryWorker
-	contextHeadSummaryWG          sync.WaitGroup
-	compactionFailureMu           sync.Mutex
-	consecutiveCompactionFailures int
-	contextHeadSummaryMu          sync.Mutex
-	contextHeadSummaryRunning     map[string]bool
-	contextHeadSummaryPending     map[string]Input
+	model                           model.StreamingClient
+	registry                        *tools.Registry
+	permission                      *permissions.Engine
+	store                           ConversationStore
+	fileCheckpoints                 *FileCheckpointService
+	ctxManager                      *contextstate.Manager
+	compactor                       contextstate.Compactor
+	archiver                        *contextstate.ArchiveCompactor
+	runtime                         *contextstate.Runtime
+	meta                            RuntimeMetadata
+	basePrompt                      string
+	globalConfigRoot                string
+	maxWorkspacePromptBytes         int
+	activeSkillTokenBudget          int
+	maxToolSteps                    int
+	maxToolResultStoreBytes         int
+	defaultRoleBudget               roles.RoleBudgetConfig
+	roleBudgetTrackers              map[string]*RoleBudgetTracker
+	roleBudgetMu                    sync.Mutex
+	automationService               tools.AutomationService
+	roleService                     tools.RoleService
+	sessionDelegationService        session.RoleDelegationService
+	taskManager                     *task.Manager
+	runtimeService                  *runtimegraph.Service
+	schedulerService                *scheduler.Service
+	contextHeadSummaryAsync         bool
+	contextHeadSummaryWorker        ContextHeadSummaryWorker
+	contextHeadSummaryWG            sync.WaitGroup
+	compactionQA                    CompactionQAWorker
+	compactionFailureMu             sync.Mutex
+	consecutiveCompactionFailures   int
+	consecutiveCompactionQAFailures int
+	contextHeadSummaryMu            sync.Mutex
+	contextHeadSummaryRunning       map[string]bool
+	contextHeadSummaryPending       map[string]Input
 }
 
 const defaultActiveSkillTokenBudget = 2048
@@ -195,6 +212,29 @@ func (e *Engine) SetMaxToolResultStoreBytes(n int) {
 	e.maxToolResultStoreBytes = n
 }
 
+func (e *Engine) SetFileCheckpointService(service *FileCheckpointService) {
+	if e == nil {
+		return
+	}
+	e.fileCheckpoints = service
+}
+
+func (e *Engine) SetDefaultRoleBudget(budget roles.RoleBudgetConfig) {
+	if e == nil {
+		return
+	}
+	e.defaultRoleBudget = budget
+}
+
+func (e *Engine) SetRoleBudgetTrackers(trackers map[string]*RoleBudgetTracker) {
+	if e == nil {
+		return
+	}
+	e.roleBudgetMu.Lock()
+	defer e.roleBudgetMu.Unlock()
+	e.roleBudgetTrackers = trackers
+}
+
 func (e *Engine) SetTaskManager(manager *task.Manager) {
 	if e == nil {
 		return
@@ -243,7 +283,7 @@ func (e *Engine) compactionCircuitOpen() bool {
 	}
 	e.compactionFailureMu.Lock()
 	defer e.compactionFailureMu.Unlock()
-	return e.consecutiveCompactionFailures >= 3
+	return e.consecutiveCompactionFailures >= 3 || e.consecutiveCompactionQAFailures >= 3
 }
 
 func (e *Engine) recordSummaryCompactionResult(err error) {
@@ -266,6 +306,22 @@ func (e *Engine) resetCompactionCircuit() {
 	e.compactionFailureMu.Lock()
 	defer e.compactionFailureMu.Unlock()
 	e.consecutiveCompactionFailures = 0
+	e.consecutiveCompactionQAFailures = 0
+}
+
+func (e *Engine) recordCompactionQAResult(status types.CompactionQAStatus) {
+	if e == nil {
+		return
+	}
+	e.compactionFailureMu.Lock()
+	defer e.compactionFailureMu.Unlock()
+	if status == types.CompactionQAStatusFailed {
+		e.consecutiveCompactionQAFailures++
+		return
+	}
+	if status == types.CompactionQAStatusPassed {
+		e.consecutiveCompactionQAFailures = 0
+	}
 }
 
 func (e *Engine) SetContextHeadSummaryAsync(enabled bool) {
@@ -291,12 +347,27 @@ func (e *Engine) SetContextHeadSummaryWorker(worker ContextHeadSummaryWorker) {
 	}
 }
 
+func (e *Engine) SetCompactionQAWorker(w CompactionQAWorker) {
+	if e == nil {
+		return
+	}
+	e.compactionQA = w
+	if recorder, ok := w.(interface {
+		SetResultRecorder(func(types.CompactionQAStatus))
+	}); ok {
+		recorder.SetResultRecorder(e.recordCompactionQAResult)
+	}
+}
+
 func (e *Engine) waitBackgroundTasks() {
 	if e == nil {
 		return
 	}
 	if e.contextHeadSummaryWorker != nil {
 		e.contextHeadSummaryWorker.Wait()
+	}
+	if e.compactionQA != nil {
+		e.compactionQA.Wait()
 	}
 	e.contextHeadSummaryWG.Wait()
 }

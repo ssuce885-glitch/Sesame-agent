@@ -129,14 +129,14 @@ func (s *Store) ClaimQueuedReportDeliveriesForTurn(ctx context.Context, sessionI
 	return claimed, nil
 }
 
-func (s *Store) RequeueClaimedReportDeliveriesForTurn(ctx context.Context, turnID string) error {
+func (s *Store) RequeueClaimedReportDeliveriesForTurn(ctx context.Context, turnID string) (int64, error) {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
-		return nil
+		return 0, nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() {
 		_ = tx.Rollback()
@@ -145,18 +145,18 @@ func (s *Store) RequeueClaimedReportDeliveriesForTurn(ctx context.Context, turnI
 	rows, err := tx.QueryContext(ctx, `
 		select payload, observed_at, injected_turn_id, injected_at, created_at, updated_at
 		from report_deliveries
-		where injected_turn_id = ?
+		where injected_turn_id = ? and state = ?
 		order by observed_at asc, created_at asc, id asc
-	`, turnID)
+	`, turnID, string(types.ReportDeliveryStateDelivered))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	deliveries, err := scanReportDeliveryRows(rows)
 	if closeErr := rows.Close(); closeErr != nil && err == nil {
 		err = closeErr
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	now := time.Now().UTC()
@@ -166,8 +166,11 @@ func (s *Store) RequeueClaimedReportDeliveriesForTurn(ctx context.Context, turnI
 		deliveries[index].InjectedAt = time.Time{}
 		deliveries[index].UpdatedAt = now
 		if err := upsertReportDeliveryWithExec(ctx, tx, deliveries[index]); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int64(len(deliveries)), nil
 }

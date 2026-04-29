@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go-agent/internal/automation"
 	"go-agent/internal/config"
@@ -110,8 +111,20 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	runner.SetGlobalConfigRoot(cfg.Paths.GlobalRoot)
 	runner.SetArchiver(wiring.archiver)
 	runner.SetContextHeadSummaryAsync(true)
+	qaModel := strings.TrimSpace(cfg.QAModel)
+	if qaModel == "" {
+		qaModel = cfg.Model
+	}
+	runner.SetCompactionQAWorker(engine.NewInProcessCompactionQAWorker(modelClient, store, storeAndBusSink{store: store, bus: bus}, qaModel))
 	runner.SetMaxWorkspacePromptBytes(cfg.MaxWorkspacePromptBytes)
 	runner.SetMaxToolResultStoreBytes(cfg.MaxToolResultStoreBytes)
+	fileCheckpointService := engine.NewFileCheckpointService(store, cfg.Paths.WorkspaceRoot)
+	runner.SetFileCheckpointService(fileCheckpointService)
+	defaultRoleBudget := roleBudgetFromConfig(cfg.DefaultRoleBudget)
+	runner.SetDefaultRoleBudget(defaultRoleBudget)
+	if roleCatalog, err := rolectx.LoadCatalog(cfg.Paths.WorkspaceRoot); err == nil {
+		runner.SetRoleBudgetTrackers(engine.NewRoleBudgetTrackers(roleCatalog, defaultRoleBudget))
+	}
 	runner.SetRuntimeService(runtimeService)
 	runner.SetAutomationService(automationService)
 	roleService := rolectx.NewServiceWithGlobalRoot(cfg.Paths.GlobalRoot)
@@ -181,6 +194,7 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 		Store:             store,
 		Bus:               bus,
 		Engine:            runner,
+		FileCheckpoints:   fileCheckpointService,
 		SessionManager:    sessionManager,
 		TaskManager:       taskManager,
 		RuntimeService:    runtimeService,
@@ -194,4 +208,15 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 
 func toolsRegistry() *tools.Registry {
 	return tools.NewRegistry()
+}
+
+func roleBudgetFromConfig(budget config.RoleBudgetConfig) rolectx.RoleBudgetConfig {
+	return rolectx.RoleBudgetConfig{
+		MaxRuntime:       budget.MaxRuntime,
+		MaxToolCalls:     budget.MaxToolCalls,
+		MaxContextTokens: budget.MaxContextTokens,
+		MaxCost:          budget.MaxCost,
+		MaxTurnsPerHour:  budget.MaxTurnsPerHour,
+		MaxConcurrent:    budget.MaxConcurrent,
+	}
 }

@@ -1,9 +1,7 @@
 import type { MetricsOverview } from "../../api/types";
 
 export function SummaryCards({ metrics }: { metrics?: MetricsOverview }) {
-  const total = metrics
-    ? metrics.input_tokens + metrics.output_tokens
-    : 0;
+  const total = metrics ? metrics.input_tokens + metrics.output_tokens : 0;
 
   const cards = [
     {
@@ -23,37 +21,24 @@ export function SummaryCards({ metrics }: { metrics?: MetricsOverview }) {
     },
     {
       label: "Cache Hit",
-      value: metrics
-        ? `${Math.round(metrics.cache_hit_rate * 100)}%`
-        : "—",
-      color:
-        metrics && metrics.cache_hit_rate > 0.5
-          ? "var(--color-success)"
-          : "var(--color-text-muted)",
+      value: metrics ? `${Math.round(metrics.cache_hit_rate * 100)}%` : "—",
+      color: metrics && metrics.cache_hit_rate > 0.5 ? "var(--color-success)" : "var(--color-text-tertiary)",
     },
   ];
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
       {cards.map((card) => (
         <div
           key={card.label}
-          className="rounded-xl px-5 py-4"
-          style={{
-            backgroundColor: "var(--color-surface)",
-            border: "1px solid var(--color-border)",
-          }}
+          className="rounded-lg px-4 py-3 relative overflow-hidden"
+          style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border)" }}
         >
-          <div
-            className="text-xs font-medium mb-3 uppercase tracking-wide"
-            style={{ color: "var(--color-text-muted)" }}
-          >
+          <div className="absolute bottom-0 left-0 right-0 h-0.5" style={{ backgroundColor: card.color }} />
+          <div className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-tertiary)" }}>
             {card.label}
           </div>
-          <div
-            className="text-2xl font-bold"
-            style={{ color: card.color }}
-          >
+          <div className="mt-1 text-xl font-bold tabular-nums" style={{ color: card.color }}>
             {card.value}
           </div>
         </div>

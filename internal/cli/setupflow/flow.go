@@ -2,9 +2,14 @@ package setupflow
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-isatty"
 
 	"go-agent/internal/config"
 	discordcfg "go-agent/internal/connectors/discord"
@@ -37,6 +42,12 @@ func Run(r io.Reader, w io.Writer, cfg config.Config, action string) error {
 		return err
 	}
 
+	// Delegate to TUI wizard when running in a terminal.
+	if isTerminalReaderWriter(r, w) {
+		return runTUIWizard(cfg, fileCfg, action, missing)
+	}
+
+	// Fall back to plain-text flow for piped/non-terminal input.
 	reader := bufio.NewReader(r)
 	for {
 		nextCfg, err := config.ResolveCLIStartupConfig(config.CLIStartupOverrides{
@@ -127,6 +138,34 @@ func Run(r io.Reader, w io.Writer, cfg config.Config, action string) error {
 		}
 		missing = config.MissingSetupFields(cfg)
 	}
+}
+
+func isTerminalReaderWriter(r io.Reader, w io.Writer) bool {
+	inFile, ok1 := r.(*os.File)
+	outFile, ok2 := w.(*os.File)
+	if !ok1 || !ok2 {
+		return false
+	}
+	return isatty.IsTerminal(inFile.Fd()) && isatty.IsTerminal(outFile.Fd())
+}
+
+func runTUIWizard(cfg config.Config, fileCfg config.UserConfig, action string, missing []string) error {
+	m := newSetupModel(cfg, fileCfg, action, missing)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	finalModel, err := p.Run()
+	if errors.Is(err, tea.ErrProgramKilled) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if final, ok := finalModel.(setupModel); ok && final.showSaved {
+		return nil
+	}
+	if len(missing) > 0 && !modelConfigured(cfg) {
+		return fmt.Errorf("setup cancelled before configuration was saved")
+	}
+	return nil
 }
 
 func chooseHomeSection(reader *bufio.Reader, w io.Writer, cfg config.Config, fileCfg config.UserConfig, missing []string, configPath, action string) (homeChoice, error) {

@@ -30,7 +30,7 @@ type reportTurnEnqueuer interface {
 type turnResultStore interface {
 	eventSinkStore
 	GetTurn(context.Context, string) (types.Turn, bool, error)
-	RequeueClaimedReportDeliveriesForTurn(context.Context, string) error
+	RequeueClaimedReportDeliveriesForTurn(context.Context, string) (int64, error)
 	ListSessionEvents(context.Context, string, int64) ([]types.Event, error)
 	InsertConversationItemWithContextHead(context.Context, string, string, string, int, model.ConversationItem) error
 	GetConversationItemIDByContextHeadAndPosition(context.Context, string, string, int) (int64, bool, error)
@@ -68,8 +68,8 @@ func (s turnResultFallbackSink) HandleTurnResult(ctx context.Context, sess types
 		payload := any(types.TurnFailedPayload{Message: err.Error()})
 		if errors.Is(err, context.Canceled) {
 			if turn.Kind == types.TurnKindReportBatch {
-				_ = s.store.RequeueClaimedReportDeliveriesForTurn(ctx, turnID)
-				if s.reportEnqueue != nil {
+				requeued, requeueErr := s.store.RequeueClaimedReportDeliveriesForTurn(ctx, turnID)
+				if requeueErr == nil && requeued > 0 && s.reportEnqueue != nil {
 					_ = s.reportEnqueue.EnqueueSyntheticReportTurn(ctx, sess.ID)
 				}
 			}

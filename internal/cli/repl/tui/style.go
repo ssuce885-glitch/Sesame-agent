@@ -191,6 +191,13 @@ var (
 			BorderForeground(lipgloss.Color(colorBorder)).
 			Padding(0, 1)
 
+	// Code blocks inside tool panels
+	StyleToolCode = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorToolTarget)).
+			Background(lipgloss.Color(colorSurface)).
+			Padding(0, 1).
+			Border(lipgloss.HiddenBorder())
+
 	// Surface panel for activity blocks
 	StyleSurfacePanel = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).

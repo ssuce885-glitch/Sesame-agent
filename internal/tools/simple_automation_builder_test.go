@@ -180,7 +180,7 @@ func TestAutomationCreateSimpleRejectsRoleOwnedAutomationFromMainParent(t *testi
 		},
 	}, execCtx)
 	if err == nil {
-		t.Fatal("expected role ownership boundary error")
+		t.Fatal("expected main parent ownership boundary error")
 	}
 	if !strings.Contains(err.Error(), "owning specialist role") {
 		t.Fatalf("error = %v, want owning specialist role guidance", err)

@@ -2,6 +2,7 @@ import { useMetricsOverview, useMetricsTimeseries } from "../api/queries";
 import { SummaryCards } from "../components/usage/SummaryCards";
 import { UsageChart } from "../components/usage/UsageChart";
 import { useI18n } from "../i18n";
+import { BarChart } from "../components/Icon";
 
 interface UsagePageProps {
   sessionId?: string;
@@ -13,56 +14,37 @@ export function UsagePage({ sessionId }: UsagePageProps) {
   const { data: timeseries, isLoading: loadingTimeseries } = useMetricsTimeseries(sessionId);
 
   return (
-    <div className="flex flex-col gap-6 overflow-y-auto p-4 md:p-6" style={{ backgroundColor: "var(--color-bg)" }}>
-      {/* Page title */}
-      <div>
-        <h1
-          className="text-xl font-bold"
-          style={{ color: "var(--color-text)", borderBottom: "2px solid var(--color-accent)", paddingBottom: 8, display: "inline-block" }}
-        >
-          {t("usage.title")}
-        </h1>
-        <p className="text-sm mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-          {sessionId ? t("usage.currentSession") : t("usage.allSessions")} — {t("usage.last30Days")}
-        </p>
+    <div className="flex flex-col gap-4 overflow-y-auto p-4 md:p-5" style={{ backgroundColor: "var(--color-bg)" }}>
+      <div className="flex items-center gap-2">
+        <BarChart size={18} color="var(--color-text-tertiary)" />
+        <div>
+          <h1 className="text-lg font-bold m-0" style={{ color: "var(--color-text)" }}>
+            {t("usage.title")}
+          </h1>
+          <p className="text-xs m-0 mt-0.5" style={{ color: "var(--color-text-tertiary)" }}>
+            {sessionId ? t("usage.currentSession") : t("usage.allSessions")} — {t("usage.last30Days")}
+          </p>
+        </div>
       </div>
 
-      {/* Summary cards */}
       {loadingOverview ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           {[0, 1, 2, 3].map((i) => (
             <div
               key={i}
-              className="rounded-xl px-5 py-4 animate-pulse"
-              style={{
-                backgroundColor: "var(--color-surface)",
-                border: "1px solid var(--color-border)",
-              }}
-            >
-              <div
-                className="h-3 w-20 rounded mb-3"
-                style={{ backgroundColor: "var(--color-border)" }}
-              />
-              <div
-                className="h-8 w-24 rounded"
-                style={{ backgroundColor: "var(--color-border)" }}
-              />
-            </div>
+              className="rounded-lg px-4 py-3 animate-shimmer"
+              style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border)", height: 72 }}
+            />
           ))}
         </div>
       ) : (
         <SummaryCards metrics={overview} />
       )}
 
-      {/* Timeseries chart */}
       {loadingTimeseries ? (
         <div
-          className="rounded-xl px-5 py-4 animate-pulse"
-          style={{
-            backgroundColor: "var(--color-surface)",
-            border: "1px solid var(--color-border)",
-            height: 300,
-          }}
+          className="rounded-lg animate-shimmer"
+          style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border)", height: 300 }}
         />
       ) : (
         <UsageChart data={timeseries} />
