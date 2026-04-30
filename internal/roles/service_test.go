@@ -125,7 +125,6 @@ func TestServiceCreateRoundTripsPolicyAndBudget(t *testing.T) {
 			MaxRuntime:       "5m",
 			MaxToolCalls:     3,
 			MaxContextTokens: 1000,
-			MaxCost:          1.5,
 			MaxTurnsPerHour:  4,
 			MaxConcurrent:    1,
 		},
@@ -136,7 +135,7 @@ func TestServiceCreateRoundTripsPolicyAndBudget(t *testing.T) {
 	if spec.Policy == nil || spec.Policy.Model != "special-model" || spec.Policy.CanDelegate == nil || *spec.Policy.CanDelegate {
 		t.Fatalf("Policy = %#v", spec.Policy)
 	}
-	if spec.Budget == nil || spec.Budget.MaxRuntime != "5m" || spec.Budget.MaxToolCalls != 3 || spec.Budget.MaxCost != 1.5 {
+	if spec.Budget == nil || spec.Budget.MaxRuntime != "5m" || spec.Budget.MaxToolCalls != 3 {
 		t.Fatalf("Budget = %#v", spec.Budget)
 	}
 

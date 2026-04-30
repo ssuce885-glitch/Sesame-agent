@@ -19,12 +19,11 @@ type CLIStartupOverrides struct {
 }
 
 type RoleBudgetConfig struct {
-	MaxRuntime       string  `json:"max_runtime,omitempty"`
-	MaxToolCalls     int     `json:"max_tool_calls,omitempty"`
-	MaxContextTokens int     `json:"max_context_tokens,omitempty"`
-	MaxCost          float64 `json:"max_cost,omitempty"`
-	MaxTurnsPerHour  int     `json:"max_turns_per_hour,omitempty"`
-	MaxConcurrent    int     `json:"max_concurrent,omitempty"`
+	MaxRuntime       string `json:"max_runtime,omitempty"`
+	MaxToolCalls     int    `json:"max_tool_calls,omitempty"`
+	MaxContextTokens int    `json:"max_context_tokens,omitempty"`
+	MaxTurnsPerHour  int    `json:"max_turns_per_hour,omitempty"`
+	MaxConcurrent    int    `json:"max_concurrent,omitempty"`
 }
 
 type Config struct {
@@ -361,9 +360,8 @@ func intEnvOrDefaultWithFallback(key string, fileFallback int, hardDefault int) 
 func defaultRoleBudgetWithFallback(fileBudget RoleBudgetConfig) RoleBudgetConfig {
 	defaults := RoleBudgetConfig{
 		MaxRuntime:       "30m",
-		MaxToolCalls:     20,
-		MaxContextTokens: 16000,
-		MaxCost:          5.0,
+		MaxToolCalls:     100,
+		MaxContextTokens: 128000,
 		MaxTurnsPerHour:  60,
 		MaxConcurrent:    1,
 	}
@@ -375,9 +373,6 @@ func defaultRoleBudgetWithFallback(fileBudget RoleBudgetConfig) RoleBudgetConfig
 	}
 	if fileBudget.MaxContextTokens > 0 {
 		defaults.MaxContextTokens = fileBudget.MaxContextTokens
-	}
-	if fileBudget.MaxCost > 0 {
-		defaults.MaxCost = fileBudget.MaxCost
 	}
 	if fileBudget.MaxTurnsPerHour > 0 {
 		defaults.MaxTurnsPerHour = fileBudget.MaxTurnsPerHour

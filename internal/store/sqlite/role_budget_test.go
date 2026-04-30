@@ -24,7 +24,6 @@ func TestTurnCostRoundTrip(t *testing.T) {
 		OwnerRoleID:  "analyst",
 		InputTokens:  100,
 		OutputTokens: 20,
-		CostUSD:      0.125,
 		CreatedAt:    createdAt,
 	}
 	if err := store.UpsertTurnCost(ctx, cost); err != nil {
@@ -38,7 +37,7 @@ func TestTurnCostRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("GetTurnCost() found no row")
 	}
-	if got.ID != "turn_cost_turn_1" || got.OwnerRoleID != "analyst" || got.InputTokens != 100 || got.OutputTokens != 20 || got.CostUSD != 0.125 || !got.CreatedAt.Equal(createdAt) {
+	if got.ID != "turn_cost_turn_1" || got.OwnerRoleID != "analyst" || got.InputTokens != 100 || got.OutputTokens != 20 || !got.CreatedAt.Equal(createdAt) {
 		t.Fatalf("TurnCost = %#v", got)
 	}
 

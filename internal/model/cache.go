@@ -35,5 +35,4 @@ type ResponseMetadata struct {
 	CachedTokens int
 	InputTokens  int
 	OutputTokens int
-	CostUSD      float64
 }

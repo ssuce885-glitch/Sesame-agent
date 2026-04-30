@@ -425,7 +425,6 @@ func roleBudgetSchema() map[string]any {
 		"max_runtime":        map[string]any{"type": "string"},
 		"max_tool_calls":     map[string]any{"type": "integer"},
 		"max_context_tokens": map[string]any{"type": "integer"},
-		"max_cost":           map[string]any{"type": "number"},
 		"max_turns_per_hour": map[string]any{"type": "integer"},
 		"max_concurrent":     map[string]any{"type": "integer"},
 	})

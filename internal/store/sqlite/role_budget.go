@@ -28,16 +28,15 @@ func upsertTurnCostWithExec(ctx context.Context, execer execContexter, cost type
 	}
 	_, err := execer.ExecContext(ctx, `
 		insert into turn_costs (
-			id, turn_id, session_id, owner_role_id, input_tokens, output_tokens, cost_usd, created_at
+			id, turn_id, session_id, owner_role_id, input_tokens, output_tokens, created_at
 		)
-		values (?, ?, ?, ?, ?, ?, ?, ?)
+		values (?, ?, ?, ?, ?, ?, ?)
 		on conflict(id) do update set
 			turn_id = excluded.turn_id,
 			session_id = excluded.session_id,
 			owner_role_id = excluded.owner_role_id,
 			input_tokens = excluded.input_tokens,
 			output_tokens = excluded.output_tokens,
-			cost_usd = excluded.cost_usd,
 			created_at = excluded.created_at
 	`,
 		cost.ID,
@@ -46,7 +45,6 @@ func upsertTurnCostWithExec(ctx context.Context, execer execContexter, cost type
 		strings.TrimSpace(cost.OwnerRoleID),
 		cost.InputTokens,
 		cost.OutputTokens,
-		cost.CostUSD,
 		cost.CreatedAt.UTC().Format(timeLayout),
 	)
 	return err
@@ -54,7 +52,7 @@ func upsertTurnCostWithExec(ctx context.Context, execer execContexter, cost type
 
 func (s *Store) GetTurnCost(ctx context.Context, turnID string) (types.TurnCost, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
-		select id, turn_id, session_id, owner_role_id, input_tokens, output_tokens, cost_usd, created_at
+		select id, turn_id, session_id, owner_role_id, input_tokens, output_tokens, created_at
 		from turn_costs
 		where turn_id = ?
 		order by created_at desc, id asc
@@ -72,7 +70,7 @@ func (s *Store) GetTurnCost(ctx context.Context, turnID string) (types.TurnCost,
 
 func (s *Store) ListTurnCostsBySession(ctx context.Context, sessionID string) ([]types.TurnCost, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select id, turn_id, session_id, owner_role_id, input_tokens, output_tokens, cost_usd, created_at
+		select id, turn_id, session_id, owner_role_id, input_tokens, output_tokens, created_at
 		from turn_costs
 		where session_id = ?
 		order by created_at desc, id asc
@@ -107,7 +105,6 @@ func scanTurnCost(scanner turnCostScanner) (types.TurnCost, error) {
 		&cost.OwnerRoleID,
 		&cost.InputTokens,
 		&cost.OutputTokens,
-		&cost.CostUSD,
 		&createdAt,
 	); err != nil {
 		return types.TurnCost{}, err

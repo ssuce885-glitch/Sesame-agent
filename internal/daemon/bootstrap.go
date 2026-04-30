@@ -214,7 +214,6 @@ func roleBudgetFromConfig(budget config.RoleBudgetConfig) rolectx.RoleBudgetConf
 		MaxRuntime:       budget.MaxRuntime,
 		MaxToolCalls:     budget.MaxToolCalls,
 		MaxContextTokens: budget.MaxContextTokens,
-		MaxCost:          budget.MaxCost,
 		MaxTurnsPerHour:  budget.MaxTurnsPerHour,
 		MaxConcurrent:    budget.MaxConcurrent,
 	}

@@ -16,12 +16,11 @@ type RolePolicyConfig struct {
 }
 
 type RoleBudgetConfig struct {
-	MaxRuntime       string  `json:"max_runtime,omitempty" yaml:"max_runtime,omitempty"`
-	MaxToolCalls     int     `json:"max_tool_calls,omitempty" yaml:"max_tool_calls,omitempty"`
-	MaxContextTokens int     `json:"max_context_tokens,omitempty" yaml:"max_context_tokens,omitempty"`
-	MaxCost          float64 `json:"max_cost,omitempty" yaml:"max_cost,omitempty"`
-	MaxTurnsPerHour  int     `json:"max_turns_per_hour,omitempty" yaml:"max_turns_per_hour,omitempty"`
-	MaxConcurrent    int     `json:"max_concurrent,omitempty" yaml:"max_concurrent,omitempty"`
+	MaxRuntime       string `json:"max_runtime,omitempty" yaml:"max_runtime,omitempty"`
+	MaxToolCalls     int    `json:"max_tool_calls,omitempty" yaml:"max_tool_calls,omitempty"`
+	MaxContextTokens int    `json:"max_context_tokens,omitempty" yaml:"max_context_tokens,omitempty"`
+	MaxTurnsPerHour  int    `json:"max_turns_per_hour,omitempty" yaml:"max_turns_per_hour,omitempty"`
+	MaxConcurrent    int    `json:"max_concurrent,omitempty" yaml:"max_concurrent,omitempty"`
 }
 
 type TurnCost struct {
@@ -31,6 +30,5 @@ type TurnCost struct {
 	OwnerRoleID  string    `json:"owner_role_id"`
 	InputTokens  int       `json:"input_tokens"`
 	OutputTokens int       `json:"output_tokens"`
-	CostUSD      float64   `json:"cost_usd"`
 	CreatedAt    time.Time `json:"created_at"`
 }

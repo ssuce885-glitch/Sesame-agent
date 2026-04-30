@@ -363,7 +363,6 @@ func isZeroRoleBudget(budget RoleBudgetConfig) bool {
 	return strings.TrimSpace(budget.MaxRuntime) == "" &&
 		budget.MaxToolCalls == 0 &&
 		budget.MaxContextTokens == 0 &&
-		budget.MaxCost == 0 &&
 		budget.MaxTurnsPerHour == 0 &&
 		budget.MaxConcurrent == 0
 }

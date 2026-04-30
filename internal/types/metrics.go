@@ -10,7 +10,6 @@ type TurnUsage struct {
 	InputTokens  int       `json:"input_tokens"`
 	OutputTokens int       `json:"output_tokens"`
 	CachedTokens int       `json:"cached_tokens"`
-	CostUSD      float64   `json:"cost_usd,omitempty"`
 	CacheHitRate float64   `json:"cache_hit_rate"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`

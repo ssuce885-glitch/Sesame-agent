@@ -19,7 +19,6 @@ type loopUsageTotals struct {
 	inputTokens  int
 	outputTokens int
 	cachedTokens int
-	costUSD      float64
 	hasUsage     bool
 }
 
@@ -110,11 +109,6 @@ func executePreparedLoop(ctx context.Context, e *Engine, in Input, emitter loopE
 			return emitter.Fail(ctx, err)
 		}
 		updateLoopUsageTotals(&usageTotals, responseMeta)
-		if state.budget != nil && responseMeta != nil {
-			if err := state.budget.RecordCost(responseMeta.CostUSD); err != nil {
-				return emitter.Fail(ctx, err)
-			}
-		}
 
 		if len(toolCalls) == 0 {
 			if err := completeAssistantOnlyTurn(ctx, e, in, emitter, state, messageEnded, orderedAssistantItems, usageTotals); err != nil {
@@ -167,7 +161,6 @@ func updateLoopUsageTotals(totals *loopUsageTotals, responseMeta *model.Response
 	totals.inputTokens += responseMeta.InputTokens
 	totals.outputTokens += responseMeta.OutputTokens
 	totals.cachedTokens += responseMeta.CachedTokens
-	totals.costUSD += responseMeta.CostUSD
 	totals.hasUsage = true
 }
 
@@ -207,7 +200,6 @@ func completeAssistantOnlyTurn(
 		usageTotals.inputTokens,
 		usageTotals.outputTokens,
 		usageTotals.cachedTokens,
-		usageTotals.costUSD,
 	)
 	parentReplyCommitted, err := buildParentReplyCommittedPayload(ctx, e.store, in.Session, in.Turn, writeContextHeadID, nextPositionBeforeFlush, orderedAssistantItems, state.reports)
 	if err != nil {
@@ -403,7 +395,6 @@ func (e *Engine) finalizeToolTurn(
 		usageTotals.inputTokens,
 		usageTotals.outputTokens,
 		usageTotals.cachedTokens,
-		usageTotals.costUSD,
 	)
 	committedAssistantItems := orderedAssistantItems
 	if assistantCursor >= 0 && assistantCursor <= len(orderedAssistantItems) {

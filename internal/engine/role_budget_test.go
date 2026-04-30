@@ -34,25 +34,37 @@ func TestRoleBudgetTrackerEnforcesToolAndContextLimits(t *testing.T) {
 	}
 }
 
-func TestRoleBudgetTrackerClampsRoleBudgetToDefault(t *testing.T) {
+func TestRoleBudgetTrackerUsesRoleValuesWhenSet(t *testing.T) {
 	budget := effectiveRoleBudget(&roles.RoleBudgetConfig{
 		MaxRuntime:       "1h",
 		MaxToolCalls:     100,
 		MaxContextTokens: 200000,
-		MaxCost:          50,
 		MaxTurnsPerHour:  1000,
 		MaxConcurrent:    10,
 	}, roles.RoleBudgetConfig{
 		MaxRuntime:       "30m",
 		MaxToolCalls:     20,
 		MaxContextTokens: 16000,
-		MaxCost:          5,
 		MaxTurnsPerHour:  60,
 		MaxConcurrent:    1,
 	})
 
-	if budget.MaxRuntime != "30m" || budget.MaxToolCalls != 20 || budget.MaxContextTokens != 16000 || budget.MaxCost != 5 || budget.MaxTurnsPerHour != 60 || budget.MaxConcurrent != 1 {
-		t.Fatalf("budget was not clamped to defaults: %#v", budget)
+	if budget.MaxRuntime != "1h" || budget.MaxToolCalls != 100 || budget.MaxContextTokens != 200000 || budget.MaxTurnsPerHour != 1000 || budget.MaxConcurrent != 10 {
+		t.Fatalf("budget did not use role values: %#v", budget)
+	}
+}
+
+func TestRoleBudgetTrackerFallsBackToDefaultWhenRoleNotSet(t *testing.T) {
+	budget := effectiveRoleBudget(&roles.RoleBudgetConfig{}, roles.RoleBudgetConfig{
+		MaxRuntime:       "30m",
+		MaxToolCalls:     20,
+		MaxContextTokens: 16000,
+		MaxTurnsPerHour:  60,
+		MaxConcurrent:    1,
+	})
+
+	if budget.MaxRuntime != "30m" || budget.MaxToolCalls != 20 || budget.MaxContextTokens != 16000 || budget.MaxTurnsPerHour != 60 || budget.MaxConcurrent != 1 {
+		t.Fatalf("budget did not fall back to defaults: %#v", budget)
 	}
 }
 

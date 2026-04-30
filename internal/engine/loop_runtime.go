@@ -445,12 +445,11 @@ func persistTurnCost(ctx context.Context, store ConversationStore, in Input, usa
 		OwnerRoleID:  rolectx.SpecialistRoleIDFromContext(ctx),
 		InputTokens:  usage.InputTokens,
 		OutputTokens: usage.OutputTokens,
-		CostUSD:      usage.CostUSD,
 		CreatedAt:    usage.CreatedAt,
 	})
 }
 
-func buildTurnUsage(hasUsage bool, turnID, sessionID, provider, modelName string, inputTokens, outputTokens, cachedTokens int, costUSD float64) *types.TurnUsage {
+func buildTurnUsage(hasUsage bool, turnID, sessionID, provider, modelName string, inputTokens, outputTokens, cachedTokens int) *types.TurnUsage {
 	if !hasUsage {
 		return nil
 	}
@@ -467,7 +466,6 @@ func buildTurnUsage(hasUsage bool, turnID, sessionID, provider, modelName string
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
 		CachedTokens: cachedTokens,
-		CostUSD:      costUSD,
 		CacheHitRate: cacheHitRate,
 		CreatedAt:    now,
 		UpdatedAt:    now,

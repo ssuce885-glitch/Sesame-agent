@@ -18,7 +18,6 @@ type RoleBudgetTracker struct {
 	spec           roles.Spec
 	turnsThisHour  []time.Time
 	activeTasks    int
-	totalCost      float64
 	toolCalls      int
 	turnStartedAt  time.Time
 	defaultBudget  roles.RoleBudgetConfig
@@ -95,10 +94,6 @@ func (t *RoleBudgetTracker) CanStartTurn() error {
 			return fmt.Errorf("role %s exceeded max turns per hour (%d)", roleBudgetName(t.spec), budget.MaxTurnsPerHour)
 		}
 	}
-	if budget.MaxCost > 0 && t.totalCost >= budget.MaxCost {
-		return fmt.Errorf("role %s exceeded max cost %.4f", roleBudgetName(t.spec), budget.MaxCost)
-	}
-
 	t.turnsThisHour = append(t.turnsThisHour, now)
 	t.activeTasks++
 	t.toolCalls = 0
@@ -132,21 +127,6 @@ func (t *RoleBudgetTracker) RecordToolCall(count int) error {
 	limit := t.effectiveCache.MaxToolCalls
 	if limit > 0 && t.toolCalls > limit {
 		return fmt.Errorf("role %s exceeded max tool calls (%d)", roleBudgetName(t.spec), limit)
-	}
-	return nil
-}
-
-func (t *RoleBudgetTracker) RecordCost(amount float64) error {
-	if t == nil || amount <= 0 {
-		return nil
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.totalCost += amount
-	limit := t.effectiveCache.MaxCost
-	if limit > 0 && t.totalCost > limit {
-		return fmt.Errorf("role %s exceeded max cost %.4f", roleBudgetName(t.spec), limit)
 	}
 	return nil
 }
@@ -186,7 +166,6 @@ func effectiveRoleBudget(roleBudget *roles.RoleBudgetConfig, defaultBudget roles
 	}
 	effective.MaxToolCalls = clampPositiveInt(roleBudget.MaxToolCalls, defaultBudget.MaxToolCalls)
 	effective.MaxContextTokens = clampPositiveInt(roleBudget.MaxContextTokens, defaultBudget.MaxContextTokens)
-	effective.MaxCost = clampPositiveFloat(roleBudget.MaxCost, defaultBudget.MaxCost)
 	effective.MaxTurnsPerHour = clampPositiveInt(roleBudget.MaxTurnsPerHour, defaultBudget.MaxTurnsPerHour)
 	effective.MaxConcurrent = clampPositiveInt(roleBudget.MaxConcurrent, defaultBudget.MaxConcurrent)
 	return effective
@@ -194,28 +173,14 @@ func effectiveRoleBudget(roleBudget *roles.RoleBudgetConfig, defaultBudget roles
 
 func clampRuntimeBudget(roleValue, defaultValue string) string {
 	roleDuration := parseBudgetDuration(roleValue)
-	defaultDuration := parseBudgetDuration(defaultValue)
-	if roleDuration <= 0 || defaultDuration <= 0 || roleDuration <= defaultDuration {
-		return strings.TrimSpace(roleValue)
+	if roleDuration <= 0 {
+		return strings.TrimSpace(defaultValue)
 	}
-	return strings.TrimSpace(defaultValue)
+	return strings.TrimSpace(roleValue)
 }
 
 func clampPositiveInt(roleValue, defaultValue int) int {
 	if roleValue <= 0 {
-		return defaultValue
-	}
-	if defaultValue > 0 && roleValue > defaultValue {
-		return defaultValue
-	}
-	return roleValue
-}
-
-func clampPositiveFloat(roleValue, defaultValue float64) float64 {
-	if roleValue <= 0 {
-		return defaultValue
-	}
-	if defaultValue > 0 && roleValue > defaultValue {
 		return defaultValue
 	}
 	return roleValue
