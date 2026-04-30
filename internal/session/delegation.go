@@ -101,7 +101,7 @@ func (s *DelegationService) DelegateToRole(ctx context.Context, in DelegateToRol
 	}
 	_, ok := catalog.ByID[targetRole]
 	if !ok {
-		return DelegateToRoleOutput{}, fmt.Errorf("target_role %q is currently unavailable", targetRole)
+		return DelegateToRoleOutput{}, fmt.Errorf("target_role %q is not installed. Use role_list to see available roles. If no roles are installed, create one with role_create first.", targetRole)
 	}
 
 	description := strings.TrimSpace(in.Reason)

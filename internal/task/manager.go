@@ -26,7 +26,6 @@ type workspaceState struct {
 }
 
 type Config struct {
-	MaxConcurrentTasks int
 	TaskOutputMaxBytes int
 	TerminalNotifier   TerminalNotifier
 	WorkspaceStore     WorkspaceStore

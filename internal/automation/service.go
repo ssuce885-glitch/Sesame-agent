@@ -92,10 +92,8 @@ func (s *Service) Apply(ctx context.Context, spec types.AutomationSpec) (types.A
 				return types.AutomationSpec{}, err
 			}
 		case types.AutomationStatePaused:
-			if _, ok, err := s.watcher.Pause(ctx, spec.ID); err != nil {
+			if _, _, err := s.watcher.Pause(ctx, spec.ID); err != nil {
 				return types.AutomationSpec{}, err
-			} else if !ok {
-				// No runtime exists yet; paused automation remains persisted without an active watcher.
 			}
 		}
 	}

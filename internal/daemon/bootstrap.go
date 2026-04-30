@@ -88,9 +88,9 @@ func buildDiscordConnector(cfg config.Config, userCfg config.UserConfig, runtime
 	})
 }
 
-func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, modelClient model.StreamingClient) (*Runtime, error) {
+func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, modelClient model.StreamingClient) *Runtime {
 	bus := stream.NewBus()
-	runtimeService := runtimegraph.NewService(store)
+	runtimeService := runtimegraph.NewService(runtimeGraphStoreAdapter{Store: store})
 	automationService := automation.NewService(store)
 
 	wiring := buildRuntimeWiring(cfg, modelClient)
@@ -134,7 +134,6 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	taskNotifier := buildTaskTerminalNotifier(store, bus, cfg.Paths.WorkspaceRoot)
 	agentExecutor := buildAgentTaskExecutor(runner, store)
 	taskManager := task.NewManager(task.Config{
-		MaxConcurrentTasks: cfg.MaxConcurrentTasks,
 		TaskOutputMaxBytes: cfg.TaskOutputMaxBytes,
 		TerminalNotifier:   taskNotifier,
 		WorkspaceStore:     store,
@@ -149,7 +148,7 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 	})
 	automationService.SetWatcherService(watcherService)
 
-	schedulerService := scheduler.NewService(store, taskManager)
+	schedulerService := scheduler.NewService(schedulerStoreAdapter{Store: store}, taskManager)
 	taskManager.SetRemoteConfig(task.RemoteExecutorConfig{
 		ShimCommand:    cfg.RemoteExecutorShimCommand,
 		TimeoutSeconds: cfg.RemoteExecutorTimeoutSeconds,
@@ -203,7 +202,7 @@ func buildRuntime(_ context.Context, cfg config.Config, store *sqlite.Store, mod
 		SchedulerService:  schedulerService,
 		ReportingService:  reportingService,
 		TaskNotifier:      taskNotifier,
-	}, nil
+	}
 }
 
 func toolsRegistry() *tools.Registry {

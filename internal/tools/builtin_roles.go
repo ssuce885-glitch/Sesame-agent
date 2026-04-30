@@ -54,10 +54,14 @@ type RoleUpsertInput struct {
 	Budget      *roles.RoleBudgetConfig `json:"budget,omitempty"`
 }
 
-func (roleCreateTool) IsEnabled(execCtx ExecContext) bool { return execCtx.RoleService != nil }
-func (roleGetTool) IsEnabled(execCtx ExecContext) bool    { return execCtx.RoleService != nil }
-func (roleListTool) IsEnabled(execCtx ExecContext) bool   { return execCtx.RoleService != nil }
-func (roleUpdateTool) IsEnabled(execCtx ExecContext) bool { return execCtx.RoleService != nil }
+func (roleCreateTool) IsEnabled(execCtx ExecContext) bool {
+	return execCtx.RoleService != nil && execCtx.RoleSpec == nil
+}
+func (roleGetTool) IsEnabled(execCtx ExecContext) bool  { return execCtx.RoleService != nil }
+func (roleListTool) IsEnabled(execCtx ExecContext) bool { return execCtx.RoleService != nil }
+func (roleUpdateTool) IsEnabled(execCtx ExecContext) bool {
+	return execCtx.RoleService != nil && execCtx.RoleSpec == nil
+}
 
 func (roleCreateTool) IsConcurrencySafe() bool { return false }
 func (roleGetTool) IsConcurrencySafe() bool    { return true }
@@ -245,10 +249,14 @@ func (roleListTool) ExecuteDecoded(ctx context.Context, decoded DecodedCall, exe
 	} else {
 		output.Diagnostics = []RoleDiagnosticOutput{}
 	}
+	modelText := fmt.Sprintf("Found %d installed roles in the workspace catalog.", len(output.Roles))
+	if len(output.Roles) == 0 {
+		modelText = "No specialist roles are installed. If the user wants an automation or specialist work, use role_create to create one first."
+	}
 	return ToolExecutionResult{
 		Result: Result{
 			Text:      mustJSON(output),
-			ModelText: fmt.Sprintf("Found %d installed roles in the workspace catalog.", len(output.Roles)),
+			ModelText: modelText,
 		},
 		Data:        output,
 		PreviewText: fmt.Sprintf("Listed %d roles", len(output.Roles)),

@@ -7,8 +7,6 @@ import (
 	"go-agent/internal/types"
 )
 
-const defaultGlobalSystemPromptVersion = "2026-04-27.personal-assistant.v1"
-
 const defaultMaxWorkspacePromptBytes = 32768
 
 const defaultGlobalSystemPrompt = `# Identity
@@ -44,28 +42,30 @@ Do not use task_create to hand work to a specialist role.
 Do not combine task_create and schedule_report for the same delayed objective unless the user explicitly asks for both an immediate run and a scheduled follow-up.
 Do not fetch report contents during scheduling unless the user explicitly asked for an immediate preview as well.
 
-# Automation native flow
-Automations are role-owned watcher chains: detector -> owner role task -> main_agent report.
+# Role management
+Installed specialist roles are file-backed runtime assets under roles/<role_id>/.
+To create a role, call role_create. Do not use file_write, shell_command, or manual directory creation to create or update role assets.
+If the user asks for an automation or specialist work and no roles are installed, say: "No specialist roles are installed. Would you like me to create one?" If they confirm, use role_create.
+If role_create is not in your visible tool list, role management is not configured. Tell the user; do not write role files manually.
+Only delegate to installed valid roles from the current catalog.
+If a role is invalid or incomplete, report that it is unavailable instead of pretending it exists.
+
+# Automation workflow
+Automations are owned by specialist roles. The workflow is:
+1. main_parent checks roles with role_list (or role catalog in context).
+2. If no role exists, ask to create one with role_create.
+3. main_parent delegates to the specialist role with delegate_to_role.
+4. The specialist activates skills, then calls automation_create_simple.
+main_parent must not call automation_create_simple. If the tool is visible and you are main_parent, ignore it — use delegate_to_role instead.
 Optimize for cheap, reliable detectors and native watcher execution.
 Before creating, modifying, pausing, or resuming automations, activate the relevant automation skills first.
 Use skill_use to load automation-standard-behavior before calling automation_control.
-Use skill_use to load automation-standard-behavior and automation-normalizer before calling automation_create_simple.
 For cheap read-only inspection, prefer automation_query before taking control actions.
 Before creating or changing an automation, identify the signal, source, dedupe behavior, and expected trigger frequency.
 For watcher scripts that can emit needs_agent or needs_human, require a stable dedupe_key: the same real-world incident, source item, file version, or scheduled slot must produce the same key across reruns. Do not use random ids, process ids, attempt counters, full timestamps, or current seconds as dedupe keys.
-Prefer the cheapest observable signal first: existing state or API checks, then short native commands, and only then more complex scripts.
-After creating or updating an automation, immediately verify watcher state and recent heartbeats using automation_query before declaring success.
-When asked to validate native automation behavior, validate watcher lifecycle and owner-task handoff behavior directly.
+Prefer the cheapest observable signal first.
+After creating or updating an automation, verify watcher state with automation_query before declaring success.
 Do not use while true loops, nohup/background shell polling, or background script daemons as watcher substitutes.
-
-# Specialist roles
-Installed specialist roles are file-backed runtime assets under roles/<role_id>/.
-A valid installed role requires role.yaml and prompt.md.
-Do not invent role.json, README.md, or ad-hoc permission fields.
-If asked to create or edit a role, follow the runtime role schema exactly.
-For role management, use role_list, role_get, role_create, and role_update instead of writing role files manually.
-Only delegate to installed valid roles from the current catalog.
-If a role is invalid or incomplete, report that it is unavailable instead of pretending it exists.
 
 # Output efficiency
 Keep answers concise, concrete, and focused on what matters for the current task.
@@ -80,10 +80,6 @@ Not using a tool for a workspace question requires justification.`
 type RuntimeInstructions struct {
 	Text    string
 	Notices []string
-}
-
-func buildRuntimeInstructions(session types.Session, basePrompt string, memoryRefs []string) (RuntimeInstructions, error) {
-	return buildRuntimeInstructionsWithMaxBytes(session, basePrompt, memoryRefs, defaultMaxWorkspacePromptBytes)
 }
 
 func buildRuntimeInstructionsWithMaxBytes(session types.Session, basePrompt string, memoryRefs []string, maxBytes int) (RuntimeInstructions, error) {

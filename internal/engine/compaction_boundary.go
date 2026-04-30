@@ -8,10 +8,7 @@ import (
 )
 
 func encodeBoundaryMetadata(metadata types.CompactionBoundaryMetadata) string {
-	raw, err := json.Marshal(metadata)
-	if err != nil {
-		return "{}"
-	}
+	raw, _ := json.Marshal(metadata)
 	return string(raw)
 }
 

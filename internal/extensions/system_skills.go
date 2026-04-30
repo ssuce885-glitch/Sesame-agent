@@ -139,10 +139,10 @@ func embeddedSystemSkillsFingerprint() (string, error) {
 	sort.Strings(entries)
 	hasher := sha256.New()
 	for _, entry := range entries {
-		_, _ = hasher.Write([]byte(entry))
-		_, _ = hasher.Write([]byte("\x00"))
-		_, _ = hasher.Write([]byte(hashes[entry]))
-		_, _ = hasher.Write([]byte("\x00"))
+		hasher.Write([]byte(entry))
+		hasher.Write([]byte("\x00"))
+		hasher.Write([]byte(hashes[entry]))
+		hasher.Write([]byte("\x00"))
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }

@@ -18,18 +18,6 @@ func selectPromptSummaryBundle(contextHeadSummary *model.Summary, boundary *mode
 	}
 }
 
-func flattenSummaryBundle(bundle SummaryBundle) []model.Summary {
-	out := make([]model.Summary, 0, 2+len(bundle.Rolling))
-	if bundle.ContextHeadSummary != nil {
-		out = append(out, *bundle.ContextHeadSummary)
-	}
-	if bundle.Boundary != nil {
-		out = append(out, *bundle.Boundary)
-	}
-	out = append(out, bundle.Rolling...)
-	return out
-}
-
 func normalizeOptionalSummary(summary *model.Summary, tokenBudget int) *model.Summary {
 	if summary == nil {
 		return nil

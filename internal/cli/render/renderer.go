@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -394,12 +393,4 @@ func trimPreview(text string) string {
 		return trimmed
 	}
 	return trimmed[:96] + "..."
-}
-
-func basename(path string) string {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return ""
-	}
-	return filepath.Base(trimmed)
 }

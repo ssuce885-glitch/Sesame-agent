@@ -12,7 +12,9 @@ func TestMainParentPromptRequiresSkillBeforeAutomationControl(t *testing.T) {
 	prompt := DefaultSystemPrompt(types.SessionRoleMainParent)
 	required := []string{
 		"Before creating, modifying, pausing, or resuming automations",
-		"automation_control",
+		"activate the relevant automation skills",
+		"automation-standard-behavior",
+		"automation-normalizer",
 	}
 	for _, text := range required {
 		if !strings.Contains(prompt, text) {

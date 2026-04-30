@@ -2,7 +2,6 @@ package contextstate
 
 import (
 	"encoding/json"
-	"strings"
 
 	"go-agent/internal/model"
 )
@@ -165,53 +164,6 @@ func cloneJSONMap(value map[string]any) map[string]any {
 	for key, elem := range value {
 		out[key] = cloneJSONValue(elem)
 	}
-	return out
-}
-
-func messagesToConversationItems(messages []Message) []model.ConversationItem {
-	if len(messages) == 0 {
-		return nil
-	}
-
-	out := make([]model.ConversationItem, 0, len(messages))
-	for _, message := range messages {
-		switch message.Role {
-		case "user":
-			out = append(out, model.UserMessageItem(message.Content))
-		case "assistant":
-			out = append(out, model.ConversationItem{
-				Kind: model.ConversationItemAssistantText,
-				Text: message.Content,
-			})
-		case "assistant_thinking":
-			out = append(out, model.AssistantThinkingItem(message.Content))
-		case "tool_result":
-			out = append(out, model.ConversationItem{
-				Kind: model.ConversationItemToolResult,
-				Result: &model.ToolResult{
-					Content: message.Content,
-				},
-			})
-		case "tool_call":
-			out = append(out, model.ConversationItem{
-				Kind: model.ConversationItemToolCall,
-				Text: message.Content,
-			})
-		case "summary":
-			out = append(out, model.ConversationItem{
-				Kind: model.ConversationItemSummary,
-				Summary: &model.Summary{
-					RangeLabel: strings.TrimSpace(message.Content),
-				},
-			})
-		default:
-			out = append(out, model.ConversationItem{
-				Kind: model.ConversationItemAssistantText,
-				Text: message.Content,
-			})
-		}
-	}
-
 	return out
 }
 

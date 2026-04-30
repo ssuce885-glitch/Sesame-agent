@@ -62,9 +62,7 @@ func NewService(store Store) *Service {
 func (s *Service) SetColdStore(cs interface {
 	InsertColdIndexEntry(context.Context, types.ColdIndexEntry) error
 }) {
-	if s != nil {
-		s.coldStore = cs
-	}
+	s.coldStore = cs
 }
 
 func (s *Service) SetCleanupStore(cs interface {
@@ -75,33 +73,27 @@ func (s *Service) SetCleanupStore(cs interface {
 	CleanupDeprecatedMemories(context.Context, time.Time) (int64, error)
 	CleanupOldConversationCompactions(context.Context, int) (int64, error)
 }) {
-	if s != nil {
-		s.cleanupStore = cs
-	}
+	s.cleanupStore = cs
 }
 
 func (s *Service) SetWorkspaceRoot(root string) {
-	if s != nil {
-		s.workspaceRoot = strings.TrimSpace(root)
-	}
+	s.workspaceRoot = strings.TrimSpace(root)
 }
 
 func (s *Service) SetClock(now func() time.Time) {
-	if s != nil && now != nil {
+	if now != nil {
 		s.now = now
 	}
 }
 
 func (s *Service) SetPollInterval(interval time.Duration) {
-	if s != nil && interval > 0 {
+	if interval > 0 {
 		s.pollInterval = interval
 	}
 }
 
 func (s *Service) SetReportReadySink(fn func(context.Context, string, string, types.ReportDeliveryItem) error) {
-	if s != nil {
-		s.reportReadySink = fn
-	}
+	s.reportReadySink = fn
 }
 
 func truncateRunes(value string, max int) string {

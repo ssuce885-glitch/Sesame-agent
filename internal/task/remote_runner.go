@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -39,8 +40,9 @@ func (r RemoteRunner) Run(ctx context.Context, task *Task, sink OutputSink) erro
 	cmd.Dir = task.WorkspaceRoot
 
 	output, err := cmd.CombinedOutput()
+	var appendErr error
 	if len(output) > 0 {
-		_ = sink.Append(task.ID, output)
+		appendErr = sink.Append(task.ID, output)
 	}
-	return err
+	return errors.Join(err, appendErr)
 }

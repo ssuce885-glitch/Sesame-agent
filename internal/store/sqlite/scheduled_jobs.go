@@ -84,7 +84,15 @@ func getScheduledJobWithQueryer(ctx context.Context, queryer queryContexter, id 
 }
 
 func (s *Store) ListScheduledJobs(ctx context.Context) ([]types.ScheduledJob, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return listScheduledJobsWithQueryer(ctx, s.db)
+}
+
+func (t runtimeTx) ListScheduledJobs(ctx context.Context) ([]types.ScheduledJob, error) {
+	return listScheduledJobsWithQueryer(ctx, t.tx)
+}
+
+func listScheduledJobsWithQueryer(ctx context.Context, queryer queryContexter) ([]types.ScheduledJob, error) {
+	rows, err := queryer.QueryContext(ctx, `
 		select payload, created_at, updated_at
 		from scheduled_jobs
 		order by updated_at desc, created_at desc, id asc
@@ -97,7 +105,15 @@ func (s *Store) ListScheduledJobs(ctx context.Context) ([]types.ScheduledJob, er
 }
 
 func (s *Store) ListScheduledJobsByWorkspace(ctx context.Context, workspaceRoot string) ([]types.ScheduledJob, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return listScheduledJobsByWorkspaceWithQueryer(ctx, s.db, workspaceRoot)
+}
+
+func (t runtimeTx) ListScheduledJobsByWorkspace(ctx context.Context, workspaceRoot string) ([]types.ScheduledJob, error) {
+	return listScheduledJobsByWorkspaceWithQueryer(ctx, t.tx, workspaceRoot)
+}
+
+func listScheduledJobsByWorkspaceWithQueryer(ctx context.Context, queryer queryContexter, workspaceRoot string) ([]types.ScheduledJob, error) {
+	rows, err := queryer.QueryContext(ctx, `
 		select payload, created_at, updated_at
 		from scheduled_jobs
 		where workspace_root = ?
@@ -111,7 +127,15 @@ func (s *Store) ListScheduledJobsByWorkspace(ctx context.Context, workspaceRoot 
 }
 
 func (s *Store) ListDueScheduledJobs(ctx context.Context, now time.Time) ([]types.ScheduledJob, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return listDueScheduledJobsWithQueryer(ctx, s.db, now)
+}
+
+func (t runtimeTx) ListDueScheduledJobs(ctx context.Context, now time.Time) ([]types.ScheduledJob, error) {
+	return listDueScheduledJobsWithQueryer(ctx, t.tx, now)
+}
+
+func listDueScheduledJobsWithQueryer(ctx context.Context, queryer queryContexter, now time.Time) ([]types.ScheduledJob, error) {
+	rows, err := queryer.QueryContext(ctx, `
 		select payload, created_at, updated_at
 		from scheduled_jobs
 		where enabled = 1 and next_run_at != '' and next_run_at <= ?

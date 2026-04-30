@@ -449,9 +449,7 @@ func (f *sseFrame) addLine(line string) {
 		f.eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 	case strings.HasPrefix(line, "data:"):
 		data := strings.TrimPrefix(line, "data:")
-		if strings.HasPrefix(data, " ") {
-			data = data[1:]
-		}
+		data = strings.TrimPrefix(data, " ")
 		f.dataLines = append(f.dataLines, data)
 	case strings.HasPrefix(line, "id:"):
 		return

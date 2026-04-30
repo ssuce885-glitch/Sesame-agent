@@ -46,13 +46,10 @@ func TestTrustedLocalBypassesDestructiveShellApproval(t *testing.T) {
 		t.Fatalf("Decode returned error: %v", err)
 	}
 
-	interrupt, err := checkToolPermission(context.Background(), tool, "shell_command", decoded, ExecContext{
+	err = checkToolPermission(context.Background(), tool, "shell_command", decoded, ExecContext{
 		PermissionEngine: permissions.NewEngine(permissions.ProfileTrustedLocal),
 	})
 	if err != nil {
 		t.Fatalf("checkToolPermission returned error: %v", err)
-	}
-	if interrupt != nil {
-		t.Fatalf("checkToolPermission returned interrupt: %#v", interrupt.Interrupt)
 	}
 }

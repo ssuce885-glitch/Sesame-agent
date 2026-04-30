@@ -31,11 +31,3 @@ type contextHeadSummaryRefreshReport struct {
 	GlobalEntriesUpserted    int
 	WorkspaceEntriesPruned   int
 }
-
-type injectedMemoryRefKind string
-
-const (
-	injectedMemoryRefWorkspaceOverview injectedMemoryRefKind = "workspace_overview"
-	injectedMemoryRefWorkspaceDetail   injectedMemoryRefKind = "workspace_detail"
-	injectedMemoryRefGlobal            injectedMemoryRefKind = "global"
-)

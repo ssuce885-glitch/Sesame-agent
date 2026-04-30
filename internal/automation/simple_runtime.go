@@ -79,7 +79,19 @@ func (r *SimpleRuntime) HandleMatch(ctx context.Context, spec types.AutomationSp
 		return nil
 	}
 
-	taskPrompt := buildSimpleAutomationPrompt(spec, summary, dedupeKey, facts)
+	taskPrompt, err := buildSimpleAutomationPrompt(spec, summary, dedupeKey, facts)
+	if err != nil {
+		_ = r.store.UpsertSimpleAutomationRun(ctx, types.SimpleAutomationRun{
+			AutomationID: automationID,
+			DedupeKey:    dedupeKey,
+			Owner:        owner,
+			LastStatus:   "failure",
+			LastSummary:  err.Error(),
+			CreatedAt:    now,
+			UpdatedAt:    r.currentTime(),
+		})
+		return err
+	}
 	createdTask, err := r.taskManager.Create(ctx, task.CreateTaskInput{
 		Type:          task.TaskTypeAgent,
 		Command:       taskPrompt,
@@ -179,10 +191,10 @@ func resolveSimpleAutomationTargetRole(owner string) (string, error) {
 	}
 }
 
-func buildSimpleAutomationPrompt(spec types.AutomationSpec, summary, dedupeKey string, facts map[string]any) string {
+func buildSimpleAutomationPrompt(spec types.AutomationSpec, summary, dedupeKey string, facts map[string]any) (string, error) {
 	factsJSON, err := json.Marshal(facts)
 	if err != nil {
-		factsJSON = []byte("{}")
+		return "", fmt.Errorf("marshal automation detector facts: %w", err)
 	}
 
 	return strings.Join([]string{
@@ -201,5 +213,5 @@ func buildSimpleAutomationPrompt(spec types.AutomationSpec, summary, dedupeKey s
 		"detector_summary: " + strings.TrimSpace(summary),
 		"dedupe_key: " + strings.TrimSpace(dedupeKey),
 		"facts_json: " + string(factsJSON),
-	}, "\n")
+	}, "\n"), nil
 }

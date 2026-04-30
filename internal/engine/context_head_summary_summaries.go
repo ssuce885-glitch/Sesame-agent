@@ -22,34 +22,6 @@ func cloneSummaryForContextHeadSummary(summary model.Summary) model.Summary {
 	return cloned
 }
 
-func prependContextHeadSummary(summaries []model.Summary, summary model.Summary) []model.Summary {
-	out := make([]model.Summary, 0, len(summaries)+1)
-	out = append(out, cloneSummaryForContextHeadSummary(summary))
-	for _, existing := range summaries {
-		out = append(out, cloneSummaryForContextHeadSummary(existing))
-	}
-	return out
-}
-
-func dedupeSummaries(summaries []model.Summary) []model.Summary {
-	if len(summaries) <= 1 {
-		return summaries
-	}
-
-	seen := make(map[string]struct{}, len(summaries))
-	out := make([]model.Summary, 0, len(summaries))
-	for _, summary := range summaries {
-		normalized := normalizeSummaryForPrompt(summary)
-		key := encodeContextHeadSummaryPayload(normalized)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, normalized)
-	}
-	return out
-}
-
 func normalizeSummaryForPrompt(summary model.Summary) model.Summary {
 	normalized := cloneSummaryForContextHeadSummary(summary)
 	normalized.RangeLabel = strings.TrimSpace(normalized.RangeLabel)
@@ -104,33 +76,6 @@ func dedupeSummaryStrings(values []string) []string {
 		result = append(result, value.text)
 	}
 	return result
-}
-
-func selectPromptSummaries(summaries []model.Summary, contextHeadSummaryPresent bool) SummaryBundle {
-	summaries = dedupeSummaries(summaries)
-	if len(summaries) == 0 {
-		return SummaryBundle{}
-	}
-
-	var contextHeadSummary *model.Summary
-	start := 0
-	if contextHeadSummaryPresent {
-		if selected := takeSummaryBudget(summaries[:1], contextHeadSummaryTokenBudget, contextHeadSummaryMaxCount); len(selected) > 0 {
-			value := selected[0]
-			contextHeadSummary = &value
-		}
-		start = 1
-	}
-
-	var boundary *model.Summary
-	if start < len(summaries) {
-		value := summaries[start]
-		boundary = &value
-		start++
-	}
-
-	rolling := summaries[start:]
-	return selectPromptSummaryBundle(contextHeadSummary, boundary, rolling)
 }
 
 func takeSummaryBudget(summaries []model.Summary, tokenBudget int, maxCount int) []model.Summary {
@@ -206,23 +151,6 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func removeMatchingSummary(summaries []model.Summary, target model.Summary) []model.Summary {
-	if len(summaries) == 0 {
-		return nil
-	}
-
-	targetKey := encodeContextHeadSummaryPayload(normalizeSummaryForPrompt(target))
-	out := make([]model.Summary, 0, len(summaries))
-	for _, summary := range summaries {
-		summaryKey := encodeContextHeadSummaryPayload(normalizeSummaryForPrompt(summary))
-		if summaryKey == targetKey {
-			continue
-		}
-		out = append(out, summary)
-	}
-	return out
 }
 
 func isZeroSummary(summary model.Summary) bool {

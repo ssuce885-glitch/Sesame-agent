@@ -52,14 +52,6 @@ func ResolveAutomationAssetPath(workspaceRoot, automationID, assetPath string) (
 	return filepath.Join(baseDir, relPath), nil
 }
 
-func ReadAutomationAsset(workspaceRoot, automationID, assetPath string) ([]byte, error) {
-	path, err := ResolveAutomationAssetPath(workspaceRoot, automationID, assetPath)
-	if err != nil {
-		return nil, err
-	}
-	return os.ReadFile(path)
-}
-
 func PersistAutomationAssets(workspaceRoot, automationID string, assets []types.AutomationAsset) error {
 	if len(assets) == 0 {
 		return nil

@@ -1,18 +1,11 @@
 package automation
 
 import (
-	"context"
 	"strings"
 	"time"
 
 	"go-agent/internal/types"
 )
-
-type watcherHoldStore interface {
-	GetAutomationWatcher(context.Context, string) (types.AutomationWatcherRuntime, bool, error)
-	ListAutomationWatcherHolds(context.Context, string) ([]types.AutomationWatcherHold, error)
-	ReplaceAutomationWatcherHolds(context.Context, string, string, []types.AutomationWatcherHold) error
-}
 
 func EffectiveWatcherState(current types.AutomationWatcherState, holds []types.AutomationWatcherHold) types.AutomationWatcherState {
 	if len(holds) > 0 {
@@ -47,58 +40,4 @@ func ReleaseWatcherHold(holds []types.AutomationWatcherHold, kind types.Automati
 		out = append(out, hold)
 	}
 	return out
-}
-
-func SwapWatcherHold(holds []types.AutomationWatcherHold, fromKind types.AutomationWatcherHoldKind, fromOwner string, toKind types.AutomationWatcherHoldKind, toOwner, reason string, now time.Time) []types.AutomationWatcherHold {
-	return AcquireWatcherHold(ReleaseWatcherHold(holds, fromKind, fromOwner), toKind, toOwner, reason, now)
-}
-
-func ReleaseWatcherHoldByOwner(ctx context.Context, store watcherHoldStore, automationID string, kind types.AutomationWatcherHoldKind, ownerID string) error {
-	if store == nil {
-		return nil
-	}
-	runtime, watcherID, holds, err := watcherHoldContext(ctx, store, automationID)
-	if err != nil {
-		return err
-	}
-	if runtime.AutomationID == "" {
-		return nil
-	}
-	updated := ReleaseWatcherHold(holds, kind, ownerID)
-	return store.ReplaceAutomationWatcherHolds(ctx, automationID, watcherID, updated)
-}
-
-func AcquireWatcherHoldByOwner(ctx context.Context, store watcherHoldStore, automationID string, kind types.AutomationWatcherHoldKind, ownerID, reason string, now time.Time) error {
-	if store == nil {
-		return nil
-	}
-	runtime, watcherID, holds, err := watcherHoldContext(ctx, store, automationID)
-	if err != nil {
-		return err
-	}
-	if runtime.AutomationID == "" {
-		return nil
-	}
-	updated := AcquireWatcherHold(holds, kind, ownerID, reason, now)
-	return store.ReplaceAutomationWatcherHolds(ctx, automationID, watcherID, updated)
-}
-
-func watcherHoldContext(ctx context.Context, store watcherHoldStore, automationID string) (types.AutomationWatcherRuntime, string, []types.AutomationWatcherHold, error) {
-	automationID = strings.TrimSpace(automationID)
-	if automationID == "" {
-		return types.AutomationWatcherRuntime{}, "", nil, nil
-	}
-	runtime, ok, err := store.GetAutomationWatcher(ctx, automationID)
-	if err != nil || !ok {
-		return types.AutomationWatcherRuntime{}, "", nil, err
-	}
-	holds, err := store.ListAutomationWatcherHolds(ctx, automationID)
-	if err != nil {
-		return types.AutomationWatcherRuntime{}, "", nil, err
-	}
-	watcherID := strings.TrimSpace(runtime.WatcherID)
-	if watcherID == "" {
-		watcherID = "watcher:" + automationID
-	}
-	return runtime, watcherID, holds, nil
 }

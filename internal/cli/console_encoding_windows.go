@@ -9,20 +9,17 @@ func ensureConsoleUTF8() {
 	setConsoleCP := kernel32.NewProc("SetConsoleCP")
 	setConsoleOutputCP := kernel32.NewProc("SetConsoleOutputCP")
 
-	_ = configureConsoleUTF8(func(codePage uint32, output bool) error {
-		var proc *syscall.LazyProc
+	for _, output := range []bool{false, true} {
+		proc := setConsoleCP
 		if output {
 			proc = setConsoleOutputCP
-		} else {
-			proc = setConsoleCP
 		}
 		if err := proc.Find(); err != nil {
-			return err
+			return
 		}
-		r1, _, err := proc.Call(uintptr(codePage))
+		r1, _, _ := proc.Call(uintptr(65001))
 		if r1 == 0 {
-			return err
+			return
 		}
-		return nil
-	})
+	}
 }

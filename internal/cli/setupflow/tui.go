@@ -262,67 +262,6 @@ func (m setupModel) defaultChoiceIdx() int {
 	return 0
 }
 
-func (s setupScreen) title() string {
-	switch s {
-	case screenHome:
-		return "Sesame Configuration"
-	case screenModelProtocol:
-		return "Model Protocol"
-	case screenModelForm:
-		return "Model Setup"
-	case screenIntegrations:
-		return "Third-Party Integrations"
-	case screenDiscordEnable:
-		return "Discord Integration"
-	case screenDiscordTokenMode:
-		return "Discord Bot Token"
-	case screenDiscordToken:
-		return "Discord Bot Token"
-	case screenDiscordEnvVar:
-		return "Discord Bot Token Env Var"
-	case screenDiscordIntents:
-		return "Gateway Intents"
-	case screenDiscordMessageContent:
-		return "Message Content Intent"
-	case screenDiscordLogIgnored:
-		return "Log Ignored Messages"
-	case screenDiscordGuildID:
-		return "Guild ID"
-	case screenDiscordChannelID:
-		return "Channel ID"
-	case screenDiscordAllowedUsers:
-		return "Allowed User IDs"
-	case screenDiscordAdvanced:
-		return "Advanced Discord Options"
-	case screenDiscordRequireMention:
-		return "Require Mention"
-	case screenDiscordPostAck:
-		return "Post Acknowledgement"
-	case screenDiscordReplyTimeout:
-		return "Reply Wait Timeout"
-	case screenDiscordMaxChars:
-		return "Max Input Chars"
-	case screenDiscordLongReply:
-		return "Long Reply Mode"
-	case screenDiscordAttachments:
-		return "Attachments Mode"
-	case screenVisionEnable:
-		return "Vision Model"
-	case screenVisionProvider:
-		return "Vision Provider"
-	case screenVisionAPIKey:
-		return "Vision API Key"
-	case screenVisionBaseURL:
-		return "Vision Base URL"
-	case screenVisionModel:
-		return "Vision Model"
-	case screenSaveConfirm:
-		return "Save Configuration"
-	default:
-		return "Sesame Configuration"
-	}
-}
-
 func (m setupModel) Init() tea.Cmd {
 	return nil
 }
@@ -1186,28 +1125,6 @@ func boolChoiceIndex(value bool) int {
 		return 0
 	}
 	return 1
-}
-
-func vendorLabels(vendors []vendorOption) []string {
-	labels := make([]string, 0, len(vendors))
-	for _, vendor := range vendors {
-		labels = append(labels, vendor.label)
-	}
-	return labels
-}
-
-func modelAPIKeyLabel(provider string) string {
-	if strings.TrimSpace(provider) == "openai_compatible" {
-		return "OpenAI-compatible API key"
-	}
-	return "Anthropic API key"
-}
-
-func modelBaseURLLabel(provider string) string {
-	if strings.TrimSpace(provider) == "openai_compatible" {
-		return "OpenAI-compatible base URL"
-	}
-	return "Anthropic base URL"
 }
 
 func joinStatuses(statuses []string) string {

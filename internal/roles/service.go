@@ -65,13 +65,6 @@ func IsNotFound(err error) bool {
 
 func IsConflict(err error) bool { return errors.Is(err, ErrConflict) }
 
-func IsInternal(err error) bool {
-	if err == nil {
-		return false
-	}
-	return errors.Is(err, ErrInternal) || (!IsInvalidInput(err) && !IsNotFound(err) && !IsConflict(err))
-}
-
 func (s *Service) List(workspaceRoot string) (Catalog, error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if err := validateWorkspaceRoot(workspaceRoot); err != nil {

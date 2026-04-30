@@ -16,7 +16,7 @@
 
 ---
 
-## Route Tree (41 endpoints)
+## Route Tree (43 endpoints)
 
 ### Status
 ```
@@ -56,6 +56,9 @@ POST /v1/session/history/load                Body: {head_id}
 POST /v1/session/reopen                      Body: none
      → ContextHead (JSON). Creates new context head with source=reopen.
 
+GET  /v1/session/files/content?path=<path>  →  Raw file content
+     Serves a relative or absolute path after resolving it inside the current session workspace.
+
 GET  /v1/session/checkpoints?limit=<int>    → {checkpoints: FileCheckpoint[]}
 
 GET  /v1/session/checkpoints/:id/diff        → {checkpoint, parent?, diff: string}
@@ -85,11 +88,6 @@ GET  /v1/metrics/timeseries   →  {bucket, points: [{bucket_start, input_tokens
 GET  /v1/metrics/turns        →  {items, page, page_size, total_count}
 ```
 `/v1/metrics/turns` enriches each row with a session title derived from the first user message.
-
-### Memory
-```
-GET  /v1/memory/candidates  →  {"items":[]}  (hardcoded stub)
-```
 
 ### Reporting
 ```

@@ -169,7 +169,7 @@ func deprecateLowScoringMemories(store ConversationStore, workspaceRoot string, 
 	if err != nil {
 		return
 	}
-	deprecated := make([]string, 0)
+	var deprecated []string
 	for _, entry := range entries {
 		if memory.EffectiveScore(entry, now) >= memory.DeprecationThreshold {
 			continue

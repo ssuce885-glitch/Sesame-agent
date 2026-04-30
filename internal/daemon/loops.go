@@ -10,12 +10,10 @@ const supervisedLoopErrorBackoff = 25 * time.Millisecond
 
 func runSupervisedLoop(
 	ctx context.Context,
-	name string,
 	every time.Duration,
 	tick func(context.Context) error,
 	onError func(context.Context, error),
 ) {
-	_ = name
 	if tick == nil {
 		return
 	}

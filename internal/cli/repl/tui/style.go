@@ -204,16 +204,3 @@ var (
 				BorderForeground(lipgloss.Color(colorBorder)).
 				Padding(0, 1)
 )
-
-// Helper functions
-func DimText(text string) string {
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color(colorMeta)).
-		Render(text)
-}
-
-func BrightText(text string) string {
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color(colorInputText)).
-		Render(text)
-}

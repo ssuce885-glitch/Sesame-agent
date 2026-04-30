@@ -388,9 +388,7 @@ func splitApplyPatchContent(content string) []string {
 	if normalized == "" {
 		return nil
 	}
-	if strings.HasSuffix(normalized, "\n") {
-		normalized = strings.TrimSuffix(normalized, "\n")
-	}
+	normalized = strings.TrimSuffix(normalized, "\n")
 	if normalized == "" {
 		return nil
 	}

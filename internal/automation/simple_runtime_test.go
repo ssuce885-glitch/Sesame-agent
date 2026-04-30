@@ -11,11 +11,14 @@ import (
 )
 
 func TestBuildSimpleAutomationPromptPinsOwnerTaskMode(t *testing.T) {
-	prompt := buildSimpleAutomationPrompt(types.AutomationSpec{
+	prompt, err := buildSimpleAutomationPrompt(types.AutomationSpec{
 		ID:    "box_txt_cleaner",
 		Title: "Box Cleaner",
 		Goal:  "Clean .txt files from ./box.",
 	}, "found files", "box_txt_cleaner|simple", map[string]any{"count": 2})
+	if err != nil {
+		t.Fatalf("buildSimpleAutomationPrompt() error = %v", err)
+	}
 
 	required := []string{
 		"# Current Mode: Owner Task Mode",
@@ -28,6 +31,17 @@ func TestBuildSimpleAutomationPromptPinsOwnerTaskMode(t *testing.T) {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q:\n%s", text, prompt)
 		}
+	}
+}
+
+func TestBuildSimpleAutomationPromptReturnsFactsMarshalError(t *testing.T) {
+	_, err := buildSimpleAutomationPrompt(types.AutomationSpec{
+		ID:    "box_txt_cleaner",
+		Title: "Box Cleaner",
+		Goal:  "Clean .txt files from ./box.",
+	}, "found files", "box_txt_cleaner|simple", map[string]any{"bad": func() {}})
+	if err == nil {
+		t.Fatal("buildSimpleAutomationPrompt() error = nil, want marshal error")
 	}
 }
 

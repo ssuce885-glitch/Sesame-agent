@@ -16,9 +16,6 @@ type Store struct {
 }
 
 func (s *Store) DB() *sql.DB {
-	if s == nil {
-		return nil
-	}
 	return s.db
 }
 

@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"go-agent/internal/store/sqlite"
 	"go-agent/internal/types"
 )
 
@@ -48,7 +47,14 @@ func (t *TurnContext) RememberFileRead(path string, modifiedAt time.Time) {
 	t.fileReadState[path] = modifiedAt
 }
 
-type RuntimeTx = sqlite.RuntimeTx
+type RuntimeTx interface {
+	InsertRun(context.Context, types.Run) error
+	UpsertRun(context.Context, types.Run) error
+	UpsertPlan(context.Context, types.Plan) error
+	UpsertTaskRecord(context.Context, types.TaskRecord) error
+	UpsertWorktree(context.Context, types.Worktree) error
+	ListActivePlansForSession(context.Context, string) ([]types.Plan, error)
+}
 
 type Store interface {
 	WithTx(context.Context, func(tx RuntimeTx) error) error

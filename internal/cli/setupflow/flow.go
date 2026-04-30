@@ -32,7 +32,7 @@ func Run(r io.Reader, w io.Writer, cfg config.Config, action string) error {
 	}
 	if r == nil {
 		if len(missing) > 0 {
-			return fmt.Errorf("Sesame is not configured. Run 'sesame setup' in an interactive terminal.")
+			return fmt.Errorf("sesame is not configured; run 'sesame setup' in an interactive terminal")
 		}
 		return fmt.Errorf("interactive input required for %s", strings.TrimSpace(action))
 	}

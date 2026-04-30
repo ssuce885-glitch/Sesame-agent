@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -112,7 +113,9 @@ func (m *Manager) finishRun(taskID, workspaceRoot string, runErr error, ctxErr e
 	m.markTerminalLocked(task)
 	snapshot := copyTask(*task)
 	notifier := m.terminalNotifier
-	_ = m.saveTaskLocked(task)
+	if err := m.saveTaskLocked(task); err != nil {
+		slog.Warn("failed to persist task state", "task_id", task.ID, "error", err)
+	}
 	m.mu.Unlock()
 
 	if notifier == nil {
@@ -133,13 +136,12 @@ func (m *Manager) finishRun(taskID, workspaceRoot string, runErr error, ctxErr e
 	}
 	notifiedAt := time.Now().UTC()
 	current.CompletionNotifiedAt = &notifiedAt
-	_ = m.saveTaskLocked(current)
+	if err := m.saveTaskLocked(current); err != nil {
+		slog.Warn("failed to persist task state", "task_id", current.ID, "error", err)
+	}
 }
 
 func (m *Manager) waiterLocked(task *Task) chan struct{} {
-	if task == nil {
-		return nil
-	}
 	if waiter, ok := m.waiters[task.ID]; ok {
 		return waiter
 	}

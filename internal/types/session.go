@@ -72,7 +72,7 @@ type Turn struct {
 
 func NewID(prefix string) string {
 	var buf [8]byte
-	_, _ = rand.Read(buf[:])
+	rand.Read(buf[:])
 
 	return prefix + "_" + hex.EncodeToString(buf[:])
 }

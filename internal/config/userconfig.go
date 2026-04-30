@@ -196,10 +196,7 @@ func MergeAndWriteUserConfig(patch UserConfig) error {
 		}
 	}
 
-	patchRoot, err := userConfigPatchRoot(patch)
-	if err != nil {
-		return err
-	}
+	patchRoot := userConfigPatchRoot(patch)
 	if len(patchRoot) == 0 {
 		return nil
 	}
@@ -217,247 +214,149 @@ func MergeAndWriteUserConfig(patch UserConfig) error {
 	return os.WriteFile(paths.GlobalConfigFile, out, 0o600)
 }
 
-func userConfigPatchRoot(patch UserConfig) (map[string]json.RawMessage, error) {
+func userConfigPatchRoot(patch UserConfig) map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
 
 	if strings.TrimSpace(patch.Provider) != "" {
-		if err := putJSONString(out, "provider", patch.Provider); err != nil {
-			return nil, err
-		}
+		putJSONString(out, "provider", patch.Provider)
 	}
 	if strings.TrimSpace(patch.Model) != "" {
-		if err := putJSONString(out, "model", patch.Model); err != nil {
-			return nil, err
-		}
+		putJSONString(out, "model", patch.Model)
 	}
 	if strings.TrimSpace(patch.QAModel) != "" {
-		if err := putJSONString(out, "qa_model", patch.QAModel); err != nil {
-			return nil, err
-		}
+		putJSONString(out, "qa_model", patch.QAModel)
 	}
 	if strings.TrimSpace(patch.PermissionProfile) != "" {
-		if err := putJSONString(out, "permission_profile", patch.PermissionProfile); err != nil {
-			return nil, err
-		}
+		putJSONString(out, "permission_profile", patch.PermissionProfile)
 	}
 	if !isZeroRoleBudget(patch.DefaultRoleBudget) {
-		if err := putJSONValue(out, "default_role_budget", patch.DefaultRoleBudget); err != nil {
-			return nil, err
-		}
+		putJSONValue(out, "default_role_budget", patch.DefaultRoleBudget)
 	}
 
 	listenPatch := map[string]json.RawMessage{}
 	if strings.TrimSpace(patch.Listen.Addr) != "" {
-		if err := putJSONString(listenPatch, "addr", patch.Listen.Addr); err != nil {
-			return nil, err
-		}
+		putJSONString(listenPatch, "addr", patch.Listen.Addr)
 	}
 	if len(listenPatch) > 0 {
-		if err := putJSONObject(out, "listen", listenPatch); err != nil {
-			return nil, err
-		}
+		putJSONObject(out, "listen", listenPatch)
 	}
 
 	discordPatch := map[string]json.RawMessage{}
 	if patch.SetDiscordEnabled || patch.Discord.Enabled {
-		if err := putJSONBool(discordPatch, "enabled", patch.Discord.Enabled); err != nil {
-			return nil, err
-		}
+		putJSONBool(discordPatch, "enabled", patch.Discord.Enabled)
 	}
 	if patch.ClearDiscordBotToken {
-		if err := putJSONString(discordPatch, "bot_token", ""); err != nil {
-			return nil, err
-		}
+		putJSONString(discordPatch, "bot_token", "")
 	}
 	if strings.TrimSpace(patch.Discord.BotToken) != "" {
-		if err := putJSONString(discordPatch, "bot_token", patch.Discord.BotToken); err != nil {
-			return nil, err
-		}
+		putJSONString(discordPatch, "bot_token", patch.Discord.BotToken)
 	}
 	if patch.ClearDiscordBotTokenEnv {
-		if err := putJSONString(discordPatch, "bot_token_env", ""); err != nil {
-			return nil, err
-		}
+		putJSONString(discordPatch, "bot_token_env", "")
 	}
 	if strings.TrimSpace(patch.Discord.BotTokenEnv) != "" {
-		if err := putJSONString(discordPatch, "bot_token_env", patch.Discord.BotTokenEnv); err != nil {
-			return nil, err
-		}
+		putJSONString(discordPatch, "bot_token_env", patch.Discord.BotTokenEnv)
 	}
 	if len(patch.Discord.GatewayIntents) > 0 {
-		if err := putJSONStringArray(discordPatch, "gateway_intents", patch.Discord.GatewayIntents); err != nil {
-			return nil, err
-		}
+		putJSONStringArray(discordPatch, "gateway_intents", patch.Discord.GatewayIntents)
 	}
 	if patch.SetDiscordMessageContentIntent || patch.Discord.MessageContentIntent {
-		if err := putJSONBool(discordPatch, "message_content_intent", patch.Discord.MessageContentIntent); err != nil {
-			return nil, err
-		}
+		putJSONBool(discordPatch, "message_content_intent", patch.Discord.MessageContentIntent)
 	}
 	if patch.SetDiscordLogIgnoredMessages || patch.Discord.LogIgnoredMessages {
-		if err := putJSONBool(discordPatch, "log_ignored_messages", patch.Discord.LogIgnoredMessages); err != nil {
-			return nil, err
-		}
+		putJSONBool(discordPatch, "log_ignored_messages", patch.Discord.LogIgnoredMessages)
 	}
 	if len(discordPatch) > 0 {
-		if err := putJSONObject(out, "discord", discordPatch); err != nil {
-			return nil, err
-		}
+		putJSONObject(out, "discord", discordPatch)
 	}
 
 	openAIPatch := map[string]json.RawMessage{}
 	if patch.ResetOpenAI {
-		if err := putJSONString(openAIPatch, "api_key", ""); err != nil {
-			return nil, err
-		}
-		if err := putJSONString(openAIPatch, "base_url", ""); err != nil {
-			return nil, err
-		}
-		if err := putJSONString(openAIPatch, "model", ""); err != nil {
-			return nil, err
-		}
+		putJSONString(openAIPatch, "api_key", "")
+		putJSONString(openAIPatch, "base_url", "")
+		putJSONString(openAIPatch, "model", "")
 	}
 	if strings.TrimSpace(patch.OpenAI.APIKey) != "" {
-		if err := putJSONString(openAIPatch, "api_key", patch.OpenAI.APIKey); err != nil {
-			return nil, err
-		}
+		putJSONString(openAIPatch, "api_key", patch.OpenAI.APIKey)
 	}
 	if strings.TrimSpace(patch.OpenAI.BaseURL) != "" {
-		if err := putJSONString(openAIPatch, "base_url", patch.OpenAI.BaseURL); err != nil {
-			return nil, err
-		}
+		putJSONString(openAIPatch, "base_url", patch.OpenAI.BaseURL)
 	}
 	if strings.TrimSpace(patch.OpenAI.Model) != "" {
-		if err := putJSONString(openAIPatch, "model", patch.OpenAI.Model); err != nil {
-			return nil, err
-		}
+		putJSONString(openAIPatch, "model", patch.OpenAI.Model)
 	}
 	if len(openAIPatch) > 0 {
-		if err := putJSONObject(out, "openai", openAIPatch); err != nil {
-			return nil, err
-		}
+		putJSONObject(out, "openai", openAIPatch)
 	}
 
 	anthropicPatch := map[string]json.RawMessage{}
 	if patch.ResetAnthropic {
-		if err := putJSONString(anthropicPatch, "api_key", ""); err != nil {
-			return nil, err
-		}
-		if err := putJSONString(anthropicPatch, "base_url", ""); err != nil {
-			return nil, err
-		}
-		if err := putJSONString(anthropicPatch, "model", ""); err != nil {
-			return nil, err
-		}
+		putJSONString(anthropicPatch, "api_key", "")
+		putJSONString(anthropicPatch, "base_url", "")
+		putJSONString(anthropicPatch, "model", "")
 	}
 	if strings.TrimSpace(patch.Anthropic.APIKey) != "" {
-		if err := putJSONString(anthropicPatch, "api_key", patch.Anthropic.APIKey); err != nil {
-			return nil, err
-		}
+		putJSONString(anthropicPatch, "api_key", patch.Anthropic.APIKey)
 	}
 	if strings.TrimSpace(patch.Anthropic.BaseURL) != "" {
-		if err := putJSONString(anthropicPatch, "base_url", patch.Anthropic.BaseURL); err != nil {
-			return nil, err
-		}
+		putJSONString(anthropicPatch, "base_url", patch.Anthropic.BaseURL)
 	}
 	if strings.TrimSpace(patch.Anthropic.Model) != "" {
-		if err := putJSONString(anthropicPatch, "model", patch.Anthropic.Model); err != nil {
-			return nil, err
-		}
+		putJSONString(anthropicPatch, "model", patch.Anthropic.Model)
 	}
 	if len(anthropicPatch) > 0 {
-		if err := putJSONObject(out, "anthropic", anthropicPatch); err != nil {
-			return nil, err
-		}
+		putJSONObject(out, "anthropic", anthropicPatch)
 	}
 
 	visionPatch := map[string]json.RawMessage{}
 	if patch.ResetVision {
-		if err := putJSONString(visionPatch, "provider", ""); err != nil {
-			return nil, err
-		}
-		if err := putJSONString(visionPatch, "api_key", ""); err != nil {
-			return nil, err
-		}
-		if err := putJSONString(visionPatch, "base_url", ""); err != nil {
-			return nil, err
-		}
-		if err := putJSONString(visionPatch, "model", ""); err != nil {
-			return nil, err
-		}
+		putJSONString(visionPatch, "provider", "")
+		putJSONString(visionPatch, "api_key", "")
+		putJSONString(visionPatch, "base_url", "")
+		putJSONString(visionPatch, "model", "")
 	}
 	if strings.TrimSpace(patch.Vision.Provider) != "" {
-		if err := putJSONString(visionPatch, "provider", patch.Vision.Provider); err != nil {
-			return nil, err
-		}
+		putJSONString(visionPatch, "provider", patch.Vision.Provider)
 	}
 	if strings.TrimSpace(patch.Vision.APIKey) != "" {
-		if err := putJSONString(visionPatch, "api_key", patch.Vision.APIKey); err != nil {
-			return nil, err
-		}
+		putJSONString(visionPatch, "api_key", patch.Vision.APIKey)
 	}
 	if strings.TrimSpace(patch.Vision.BaseURL) != "" {
-		if err := putJSONString(visionPatch, "base_url", patch.Vision.BaseURL); err != nil {
-			return nil, err
-		}
+		putJSONString(visionPatch, "base_url", patch.Vision.BaseURL)
 	}
 	if strings.TrimSpace(patch.Vision.Model) != "" {
-		if err := putJSONString(visionPatch, "model", patch.Vision.Model); err != nil {
-			return nil, err
-		}
+		putJSONString(visionPatch, "model", patch.Vision.Model)
 	}
 	if len(visionPatch) > 0 {
-		if err := putJSONObject(out, "vision", visionPatch); err != nil {
-			return nil, err
-		}
+		putJSONObject(out, "vision", visionPatch)
 	}
 
-	return out, nil
+	return out
 }
 
-func putJSONString(dst map[string]json.RawMessage, key, value string) error {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
+func putJSONString(dst map[string]json.RawMessage, key, value string) {
+	data, _ := json.Marshal(value)
 	dst[key] = data
-	return nil
 }
 
-func putJSONBool(dst map[string]json.RawMessage, key string, value bool) error {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
+func putJSONBool(dst map[string]json.RawMessage, key string, value bool) {
+	data, _ := json.Marshal(value)
 	dst[key] = data
-	return nil
 }
 
-func putJSONStringArray(dst map[string]json.RawMessage, key string, values []string) error {
-	data, err := json.Marshal(values)
-	if err != nil {
-		return err
-	}
+func putJSONStringArray(dst map[string]json.RawMessage, key string, values []string) {
+	data, _ := json.Marshal(values)
 	dst[key] = data
-	return nil
 }
 
-func putJSONObject(dst map[string]json.RawMessage, key string, value map[string]json.RawMessage) error {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
+func putJSONObject(dst map[string]json.RawMessage, key string, value map[string]json.RawMessage) {
+	data, _ := json.Marshal(value)
 	dst[key] = data
-	return nil
 }
 
-func putJSONValue(dst map[string]json.RawMessage, key string, value any) error {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
+func putJSONValue(dst map[string]json.RawMessage, key string, value any) {
+	data, _ := json.Marshal(value)
 	dst[key] = data
-	return nil
 }
 
 func isZeroRoleBudget(budget RoleBudgetConfig) bool {
@@ -599,21 +498,6 @@ func GlobalConfigPath() (string, error) {
 		return "", err
 	}
 	return paths.GlobalConfigFile, nil
-}
-
-func GlobalCLIConfigPath() (string, error) {
-	paths, err := ResolvePaths("", "")
-	if err != nil {
-		return "", err
-	}
-	return paths.GlobalCLIConfigFile, nil
-}
-
-func pathJoin(root string, elems ...string) string {
-	parts := make([]string, 0, len(elems)+1)
-	parts = append(parts, root)
-	parts = append(parts, elems...)
-	return filepath.Join(parts...)
 }
 
 func lookupSkillEntry(entries map[string]UserConfigSkillEntry, name string) (UserConfigSkillEntry, bool) {

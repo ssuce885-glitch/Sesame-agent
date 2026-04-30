@@ -63,7 +63,6 @@ func NewRouter(deps Dependencies) http.Handler {
 	registerRuntimeGraphRoutes(mux, deps)
 	registerWorkspaceReportsRoutes(mux, deps)
 	registerMetricsRoutes(mux, deps)
-	registerMemoryRoutes(mux, deps)
 	registerReportingRoutes(mux, deps)
 	registerCronRoutes(mux, deps)
 	registerAutomationRoutes(mux, deps)

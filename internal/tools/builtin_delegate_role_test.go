@@ -64,6 +64,19 @@ func TestDelegateToRoleAllowsModelConfirmation(t *testing.T) {
 	}
 }
 
+func TestDelegateToRoleHiddenInSpecialistContext(t *testing.T) {
+	tool := delegateToRoleTool{}
+	if tool.IsEnabled(ExecContext{
+		SessionDelegationService: &fakeDelegateService{},
+		TurnContext: &runtimegraph.TurnContext{
+			CurrentSessionID: "session_1",
+		},
+		RoleSpec: &roles.Spec{RoleID: "analyst"},
+	}) {
+		t.Fatal("delegate_to_role should be hidden in specialist role context")
+	}
+}
+
 func TestDelegateToRoleRespectsCanDelegatePolicy(t *testing.T) {
 	canDelegate := false
 	_, err := (delegateToRoleTool{}).ExecuteDecoded(context.Background(), DecodedCall{

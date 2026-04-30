@@ -38,10 +38,6 @@ func New(baseURL string, httpClient *http.Client) *Client {
 	return NewWithContextBindingAndSessionRole(baseURL, httpClient, sessionbinding.DefaultContextBinding, types.SessionRoleMainParent)
 }
 
-func NewWithContextBinding(baseURL string, httpClient *http.Client, binding string) *Client {
-	return NewWithContextBindingAndSessionRole(baseURL, httpClient, binding, types.SessionRoleMainParent)
-}
-
 func NewWithContextBindingAndSessionRole(baseURL string, httpClient *http.Client, binding string, role types.SessionRole) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -279,29 +275,31 @@ func (c *Client) RecordHeartbeat(ctx context.Context, req types.TriggerHeartbeat
 	return out, nil
 }
 
-func (c *Client) StreamEvents(ctx context.Context, afterSeq int64) (<-chan types.Event, error) {
+func (c *Client) StreamEvents(ctx context.Context, afterSeq int64) (<-chan types.Event, <-chan error, error) {
 	params := url.Values{}
 	params.Set("after", strconv.FormatInt(afterSeq, 10))
 	params.Set("binding", sessionbinding.Normalize(c.contextBinding))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/v1/session/events?%s", c.baseURL, params.Encode()), nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	c.applyContextBinding(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf("stream events status: %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("stream events status: %d", resp.StatusCode)
 	}
 
 	out := make(chan types.Event, 16)
+	errs := make(chan error, 1)
 	go func() {
 		defer close(out)
+		defer close(errs)
 		defer resp.Body.Close()
 
 		reader := bufio.NewReader(resp.Body)
@@ -309,6 +307,7 @@ func (c *Client) StreamEvents(ctx context.Context, afterSeq int64) (<-chan types
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil && !errors.Is(err, io.EOF) {
+				errs <- err
 				return
 			}
 			line = strings.TrimRight(line, "\r\n")
@@ -325,11 +324,12 @@ func (c *Client) StreamEvents(ctx context.Context, afterSeq int64) (<-chan types
 				if event, ok := parseEventFrame(frame.String()); ok {
 					out <- event
 				}
+				errs <- nil
 				return
 			}
 		}
 	}()
-	return out, nil
+	return out, errs, nil
 }
 
 func (c *Client) doJSON(ctx context.Context, method string, path string, body any, out any) error {

@@ -391,7 +391,8 @@ func (s *WatcherService) inspectRuntime(spec types.AutomationSpec, runtime types
 			runtime.State = types.AutomationWatcherState(desired)
 			return runtime, desired == string(types.AutomationWatcherStateRunning), nil
 		}
-		return runtime, isContinuousWatcher(spec), nil
+		continuous, err := isContinuousWatcher(spec)
+		return runtime, continuous, err
 	}
 	taskRecord, ok, err := s.taskManager.Get(runtime.TaskID, runtime.WorkspaceRoot)
 	if err != nil {
@@ -403,7 +404,8 @@ func (s *WatcherService) inspectRuntime(spec types.AutomationSpec, runtime types
 			return runtime, desired == string(types.AutomationWatcherStateRunning), nil
 		}
 		runtime.TaskID = ""
-		return runtime, isContinuousWatcher(spec), nil
+		continuous, err := isContinuousWatcher(spec)
+		return runtime, continuous, err
 	}
 	switch taskRecord.Status {
 	case task.TaskStatusRunning:
@@ -417,7 +419,8 @@ func (s *WatcherService) inspectRuntime(spec types.AutomationSpec, runtime types
 			runtime.State = types.AutomationWatcherStatePaused
 			return runtime, false, nil
 		}
-		return runtime, isContinuousWatcher(spec), nil
+		continuous, err := isContinuousWatcher(spec)
+		return runtime, continuous, err
 	case task.TaskStatusFailed:
 		runtime.TaskID = ""
 		runtime.State = types.AutomationWatcherStateFailed
@@ -427,7 +430,8 @@ func (s *WatcherService) inspectRuntime(spec types.AutomationSpec, runtime types
 			runtime.LastError = ""
 			return runtime, false, nil
 		}
-		return runtime, isContinuousWatcher(spec), nil
+		continuous, err := isContinuousWatcher(spec)
+		return runtime, continuous, err
 	case task.TaskStatusCompleted:
 		runtime.TaskID = ""
 		runtime.State = types.AutomationWatcherStateStopped
@@ -435,9 +439,11 @@ func (s *WatcherService) inspectRuntime(spec types.AutomationSpec, runtime types
 			runtime.State = types.AutomationWatcherState(desired)
 			return runtime, false, nil
 		}
-		return runtime, isContinuousWatcher(spec), nil
+		continuous, err := isContinuousWatcher(spec)
+		return runtime, continuous, err
 	default:
-		return runtime, isContinuousWatcher(spec), nil
+		continuous, err := isContinuousWatcher(spec)
+		return runtime, continuous, err
 	}
 }
 
@@ -527,17 +533,16 @@ func validateWatcherSignals(spec types.AutomationSpec) error {
 	}
 }
 
-func isContinuousWatcher(spec types.AutomationSpec) bool {
-	type lifecycle struct {
-		Mode string `json:"mode"`
+func isContinuousWatcher(spec types.AutomationSpec) (bool, error) {
+	cfg, err := decodeWatcherLifecycle(spec.WatcherLifecycle)
+	if err != nil {
+		return false, err
 	}
-	var cfg lifecycle
-	_ = json.Unmarshal(spec.WatcherLifecycle, &cfg)
 	switch strings.ToLower(strings.TrimSpace(cfg.Mode)) {
 	case "", "continuous":
-		return true
+		return true, nil
 	default:
-		return false
+		return false, nil
 	}
 }
 

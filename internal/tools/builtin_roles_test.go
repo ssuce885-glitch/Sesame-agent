@@ -7,6 +7,25 @@ import (
 	"go-agent/internal/roles"
 )
 
+func TestRoleMutationToolsHiddenFromSpecialists(t *testing.T) {
+	execCtx := ExecContext{
+		RoleService: roles.NewService(),
+		RoleSpec:    &roles.Spec{RoleID: "analyst"},
+	}
+	if (roleCreateTool{}).IsEnabled(execCtx) {
+		t.Fatal("role_create should be hidden in specialist role context")
+	}
+	if (roleUpdateTool{}).IsEnabled(execCtx) {
+		t.Fatal("role_update should be hidden in specialist role context")
+	}
+	if !(roleListTool{}).IsEnabled(execCtx) {
+		t.Fatal("role_list should remain visible in specialist role context")
+	}
+	if !(roleGetTool{}).IsEnabled(execCtx) {
+		t.Fatal("role_get should remain visible in specialist role context")
+	}
+}
+
 func TestRoleUpdatePreservesCatalogMetadataWhenOmitted(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	roleService := roles.NewService()

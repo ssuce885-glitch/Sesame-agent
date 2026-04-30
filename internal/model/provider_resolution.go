@@ -36,7 +36,6 @@ type ResolvedProviderConfig struct {
 	APIKey       string
 	BaseURL      string
 	Provider     string
-	CompatMode   string
 	APIFamily    APIFamily
 	Profile      ProviderProfile
 	CacheProfile CapabilityProfile
@@ -51,7 +50,6 @@ func ResolveProviderConfig(cfg config.Config) (ResolvedProviderConfig, error) {
 			APIKey:       cfg.AnthropicAPIKey,
 			BaseURL:      cfg.AnthropicBaseURL,
 			Provider:     cfg.ModelProvider,
-			CompatMode:   cfg.CompatMode,
 			APIFamily:    APIFamilyAnthropicMessages,
 			Profile:      profile,
 			CacheProfile: CapabilityProfile(cfg.ProviderCacheProfile),
@@ -63,7 +61,6 @@ func ResolveProviderConfig(cfg config.Config) (ResolvedProviderConfig, error) {
 			APIKey:       cfg.OpenAIAPIKey,
 			BaseURL:      cfg.OpenAIBaseURL,
 			Provider:     cfg.ModelProvider,
-			CompatMode:   cfg.CompatMode,
 			APIFamily:    APIFamilyOpenAIResponsesCompatible,
 			Profile:      profile,
 			CacheProfile: CapabilityProfile(cfg.ProviderCacheProfile),

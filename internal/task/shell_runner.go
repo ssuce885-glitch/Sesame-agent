@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 
@@ -27,13 +28,19 @@ func (ShellRunner) Run(ctx context.Context, task *Task, sink OutputSink) error {
 	}
 
 	var wg sync.WaitGroup
+	var appendMu sync.Mutex
+	var appendErr error
 	streamPipe := func(reader io.Reader) {
 		defer wg.Done()
 		buf := make([]byte, 4096)
 		for {
 			n, readErr := reader.Read(buf)
 			if n > 0 {
-				_ = sink.Append(task.ID, buf[:n])
+				if err := sink.Append(task.ID, buf[:n]); err != nil {
+					appendMu.Lock()
+					appendErr = errors.Join(appendErr, err)
+					appendMu.Unlock()
+				}
 			}
 			if readErr != nil {
 				return
@@ -46,5 +53,5 @@ func (ShellRunner) Run(ctx context.Context, task *Task, sink OutputSink) error {
 	go streamPipe(stderr)
 	err = cmd.Wait()
 	wg.Wait()
-	return err
+	return errors.Join(err, appendErr)
 }

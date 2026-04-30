@@ -40,23 +40,27 @@ func (a tuiClientAdapter) InterruptTurn(ctx context.Context) error {
 	return a.client.InterruptTurn(ctx)
 }
 
-func (a tuiClientAdapter) StreamEvents(ctx context.Context, afterSeq int64) (<-chan tuiv2.Event, error) {
-	events, err := a.client.StreamEvents(ctx, afterSeq)
+func (a tuiClientAdapter) StreamEvents(ctx context.Context, afterSeq int64) (<-chan tuiv2.Event, <-chan error, error) {
+	events, errs, err := a.client.StreamEvents(ctx, afterSeq)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make(chan tuiv2.Event, 64)
+	outErrs := make(chan error, 1)
 	go func() {
 		defer close(out)
+		defer close(outErrs)
 		for event := range events {
 			select {
 			case <-ctx.Done():
+				outErrs <- ctx.Err()
 				return
 			case out <- adaptTUIEvent(event):
 			}
 		}
+		outErrs <- <-errs
 	}()
-	return out, nil
+	return out, outErrs, nil
 }
 
 func (a tuiClientAdapter) GetTimeline(ctx context.Context) (tuiv2.SessionTimelineResponse, error) {

@@ -28,10 +28,8 @@ func WithContextBinding(ctx context.Context, binding string) context.Context {
 }
 
 func FromContext(ctx context.Context) string {
-	if ctx != nil {
-		if binding, ok := ctx.Value(contextKey{}).(string); ok {
-			return Normalize(binding)
-		}
+	if binding, ok := ctx.Value(contextKey{}).(string); ok {
+		return Normalize(binding)
 	}
 	return DefaultContextBinding
 }

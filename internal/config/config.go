@@ -31,7 +31,6 @@ type Config struct {
 	Addr                       string
 	DataDir                    string
 	ModelProvider              string
-	CompatMode                 string
 	Model                      string
 	QAModel                    string
 	AnthropicAPIKey            string
@@ -62,7 +61,6 @@ type Config struct {
 	SystemPrompt                 string
 	SystemPromptFile             string
 	MaxWorkspacePromptBytes      int
-	MaxConcurrentTasks           int
 	TaskOutputMaxBytes           int
 	RemoteExecutorShimCommand    string
 	RemoteExecutorTimeoutSeconds int
@@ -164,10 +162,6 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 	modelProvider := firstNonEmpty(
 		envOrDefault("SESAME_MODEL_PROVIDER", ""),
 	)
-	compatMode := firstNonEmpty(
-		envOrDefault("SESAME_COMPAT_MODE", ""),
-		uc.CompatMode,
-	)
 	genericBaseURL := firstNonEmpty(
 		envOrDefault("SESAME_BASE_URL", ""),
 		uc.BaseURL,
@@ -176,7 +170,7 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		envOrDefault("SESAME_API_KEY", ""),
 		uc.APIKey,
 	)
-	modelProvider = resolveModelProvider(modelProvider, compatMode, genericBaseURL)
+	modelProvider = resolveModelProvider(modelProvider, genericBaseURL)
 	modelProvider = firstNonEmpty(
 		modelProvider,
 		uc.Provider,
@@ -201,7 +195,6 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		Addr:                         firstNonEmpty(strings.TrimSpace(overrides.Addr), envOrDefaultWithFallback("SESAME_ADDR", uc.Listen.Addr, "127.0.0.1:4317")),
 		DataDir:                      paths.DataDir,
 		ModelProvider:                modelProvider,
-		CompatMode:                   compatMode,
 		Model:                        model,
 		QAModel:                      qaModel,
 		AnthropicAPIKey:              primaryAnthropicAPIKey,
@@ -231,7 +224,6 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 		SystemPrompt:                 envOrDefaultWithFallback("SESAME_SYSTEM_PROMPT", uc.SystemPrompt, ""),
 		SystemPromptFile:             envOrDefaultWithFallback("SESAME_SYSTEM_PROMPT_FILE", uc.SystemPromptFile, ""),
 		MaxWorkspacePromptBytes:      intEnvOrDefault("SESAME_MAX_WORKSPACE_PROMPT_BYTES", 32768),
-		MaxConcurrentTasks:           intEnvOrDefault("SESAME_MAX_CONCURRENT_TASKS", 8),
 		TaskOutputMaxBytes:           intEnvOrDefault("SESAME_TASK_OUTPUT_MAX_BYTES", 1<<20),
 		RemoteExecutorShimCommand:    envOrDefault("SESAME_REMOTE_EXECUTOR_SHIM_COMMAND", ""),
 		RemoteExecutorTimeoutSeconds: intEnvOrDefault("SESAME_REMOTE_EXECUTOR_TIMEOUT_SECONDS", 300),
@@ -248,7 +240,6 @@ func (c Config) Fingerprint() string {
 		Addr                         string           `json:"addr"`
 		DataDir                      string           `json:"data_dir"`
 		ModelProvider                string           `json:"provider"`
-		CompatMode                   string           `json:"compat_mode"`
 		Model                        string           `json:"model"`
 		QAModel                      string           `json:"qa_model"`
 		AnthropicAPIKey              string           `json:"anthropic_api_key"`
@@ -276,7 +267,6 @@ func (c Config) Fingerprint() string {
 		SystemPrompt                 string           `json:"system_prompt"`
 		SystemPromptFile             string           `json:"system_prompt_file"`
 		MaxWorkspacePromptBytes      int              `json:"max_workspace_prompt_bytes"`
-		MaxConcurrentTasks           int              `json:"max_concurrent_tasks"`
 		TaskOutputMaxBytes           int              `json:"task_output_max_bytes"`
 		RemoteExecutorShimCommand    string           `json:"remote_executor_shim_command"`
 		RemoteExecutorTimeoutSeconds int              `json:"remote_executor_timeout_seconds"`
@@ -285,7 +275,6 @@ func (c Config) Fingerprint() string {
 		Addr:                         c.Addr,
 		DataDir:                      c.DataDir,
 		ModelProvider:                c.ModelProvider,
-		CompatMode:                   c.CompatMode,
 		Model:                        c.Model,
 		QAModel:                      c.QAModel,
 		AnthropicAPIKey:              c.AnthropicAPIKey,
@@ -313,7 +302,6 @@ func (c Config) Fingerprint() string {
 		SystemPrompt:                 c.SystemPrompt,
 		SystemPromptFile:             c.SystemPromptFile,
 		MaxWorkspacePromptBytes:      c.MaxWorkspacePromptBytes,
-		MaxConcurrentTasks:           c.MaxConcurrentTasks,
 		TaskOutputMaxBytes:           c.TaskOutputMaxBytes,
 		RemoteExecutorShimCommand:    c.RemoteExecutorShimCommand,
 		RemoteExecutorTimeoutSeconds: c.RemoteExecutorTimeoutSeconds,

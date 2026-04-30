@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"go-agent/internal/store/sqlite"
 	"go-agent/internal/task"
 	"go-agent/internal/types"
 )
@@ -25,6 +24,14 @@ type Store interface {
 	DeleteChildAgentSpec(context.Context, string) (bool, error)
 	GetReportGroup(context.Context, string) (types.ReportGroup, bool, error)
 	UpsertReportGroup(context.Context, types.ReportGroup) error
+}
+
+type RuntimeTx interface {
+	Store
+}
+
+type transactionalStore interface {
+	WithTx(context.Context, func(RuntimeTx) error) error
 }
 
 type CreateJobInput struct {
@@ -98,10 +105,8 @@ func (s *Service) CreateJob(ctx context.Context, in CreateJobInput) (types.Sched
 		return types.ScheduledJob{}, err
 	}
 
-	if txStore, ok := s.store.(interface {
-		WithTx(context.Context, func(sqlite.RuntimeTx) error) error
-	}); ok {
-		if err := txStore.WithTx(ctx, func(tx sqlite.RuntimeTx) error {
+	if txStore, ok := s.store.(transactionalStore); ok {
+		if err := txStore.WithTx(ctx, func(tx RuntimeTx) error {
 			if err := s.validateReportGroupForJob(ctx, tx, job); err != nil {
 				return err
 			}
@@ -175,11 +180,9 @@ func (s *Service) DeleteJob(ctx context.Context, id string) (bool, error) {
 		return false, fmt.Errorf("scheduler service is not configured")
 	}
 
-	if txStore, ok := s.store.(interface {
-		WithTx(context.Context, func(sqlite.RuntimeTx) error) error
-	}); ok {
+	if txStore, ok := s.store.(transactionalStore); ok {
 		deleted := false
-		err := txStore.WithTx(ctx, func(tx sqlite.RuntimeTx) error {
+		err := txStore.WithTx(ctx, func(tx RuntimeTx) error {
 			job, ok, err := tx.GetScheduledJob(ctx, id)
 			if err != nil {
 				return err

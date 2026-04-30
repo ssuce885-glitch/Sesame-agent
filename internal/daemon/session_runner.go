@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"go-agent/internal/engine"
 	rolectx "go-agent/internal/roles"
@@ -24,7 +23,6 @@ type sessionRunnerAdapter struct {
 	store    sessionRunnerStore
 	tasker   *task.Manager
 	notifier *taskTerminalNotifier
-	now      func() time.Time
 }
 
 type sessionRunnerStore interface {
@@ -43,11 +41,6 @@ type combinedEventSink struct {
 	primary   engine.EventSink
 	finalizer engine.TurnFinalizingSink
 	observer  engine.EventSink
-}
-
-type managerTaskObserver struct {
-	manager *task.Manager
-	taskID  string
 }
 
 type multiTaskObserver struct {
@@ -195,31 +188,6 @@ func (s *taskEventSink) FinalText() string {
 	return s.currentText.String()
 }
 
-func (o managerTaskObserver) AppendLog(chunk []byte) error {
-	if o.manager == nil || strings.TrimSpace(o.taskID) == "" {
-		return nil
-	}
-	return o.manager.Append(o.taskID, chunk)
-}
-
-func (o managerTaskObserver) SetFinalText(text string) error {
-	if o.manager == nil || strings.TrimSpace(o.taskID) == "" {
-		return nil
-	}
-	return o.manager.SetFinalText(o.taskID, text)
-}
-
-func (o managerTaskObserver) SetOutcome(outcome types.ChildAgentOutcome, summary string) error {
-	if o.manager == nil || strings.TrimSpace(o.taskID) == "" {
-		return nil
-	}
-	return o.manager.SetOutcome(o.taskID, outcome, summary)
-}
-
-func (managerTaskObserver) SetRunContext(_, _ string) error {
-	return nil
-}
-
 func (o multiTaskObserver) AppendLog(chunk []byte) error {
 	for _, observer := range o.observers {
 		if observer == nil {
@@ -266,11 +234,4 @@ func (o multiTaskObserver) SetRunContext(sessionID, turnID string) error {
 		}
 	}
 	return nil
-}
-
-func (a sessionRunnerAdapter) currentTime() time.Time {
-	if a.now != nil {
-		return a.now().UTC()
-	}
-	return time.Now().UTC()
 }

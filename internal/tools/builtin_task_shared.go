@@ -30,23 +30,14 @@ func timeNowUTC() time.Time {
 }
 
 func currentSessionID(execCtx ExecContext) string {
-	if execCtx.TurnContext == nil {
-		return ""
-	}
 	return strings.TrimSpace(execCtx.TurnContext.CurrentSessionID)
 }
 
 func currentTurnID(execCtx ExecContext) string {
-	if execCtx.TurnContext == nil {
-		return ""
-	}
 	return strings.TrimSpace(execCtx.TurnContext.CurrentTurnID)
 }
 
 func currentRunID(execCtx ExecContext) string {
-	if execCtx.TurnContext == nil {
-		return ""
-	}
 	return strings.TrimSpace(execCtx.TurnContext.CurrentRunID)
 }
 

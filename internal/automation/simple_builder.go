@@ -78,10 +78,7 @@ func CompileSimpleAutomationBuilder(input types.SimpleAutomationBuilderInput, wo
 		SignalKind:      "simple_watcher",
 		Summary:         "simple automation watcher match",
 	}
-	encodedPayload, err := json.Marshal(payload)
-	if err != nil {
-		encodedPayload = []byte(`{"interval_seconds":60,"timeout_seconds":30,"trigger_on":"script_status","signal_kind":"simple_watcher"}`)
-	}
+	encodedPayload, _ := json.Marshal(payload)
 
 	spec := types.AutomationSpec{
 		ID:               input.AutomationID,

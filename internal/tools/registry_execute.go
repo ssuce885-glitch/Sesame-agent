@@ -13,11 +13,6 @@ func (r *Registry) Execute(ctx context.Context, call Call, execCtx ExecContext) 
 	return output.Result, err
 }
 
-func (r *Registry) executeResolved(ctx context.Context, tool Tool, def Definition, resolvedName string, call Call, execCtx ExecContext) (Result, error) {
-	output, err := r.executePreparedRich(ctx, r.prepareResolvedCall(tool, def, resolvedName, call), execCtx)
-	return output.Result, err
-}
-
 func (r *Registry) prepareCall(call Call) PreparedCall {
 	tool, def, resolvedName, ok := r.lookup(call.Name)
 	if !ok {
@@ -63,12 +58,8 @@ func (r *Registry) executePreparedRich(ctx context.Context, prepared PreparedCal
 	if err := checkRoleToolPolicy(prepared.ResolvedName, prepared.Definition, execCtx); err != nil {
 		return ToolExecutionResult{}, err
 	}
-	interrupt, err := checkToolPermission(ctx, prepared.Tool, prepared.ResolvedName, prepared.Decoded, execCtx)
-	if err != nil {
+	if err := checkToolPermission(ctx, prepared.Tool, prepared.ResolvedName, prepared.Decoded, execCtx); err != nil {
 		return ToolExecutionResult{}, err
-	}
-	if interrupt != nil {
-		return *interrupt, nil
 	}
 	return executePreparedTool(ctx, prepared, execCtx)
 }
@@ -131,30 +122,30 @@ func mapToolModelResult(tool Tool, output ToolExecutionResult) ModelToolResult {
 	}
 }
 
-func checkToolPermission(ctx context.Context, tool Tool, resolvedName string, decoded DecodedCall, execCtx ExecContext) (*ToolExecutionResult, error) {
+func checkToolPermission(ctx context.Context, tool Tool, resolvedName string, decoded DecodedCall, execCtx ExecContext) error {
 	if execCtx.PermissionEngine != nil {
 		switch execCtx.PermissionEngine.Decide(resolvedName) {
 		case permissions.DecisionAllow:
 			if execCtx.PermissionEngine.AllowsAll() {
-				return nil, nil
+				return nil
 			}
 		case permissions.DecisionDeny:
-			return nil, permissionDecisionError(resolvedName, permissions.DecisionDeny, "")
+			return permissionDecisionError(resolvedName, permissions.DecisionDeny, "")
 		}
 	}
 	if checker, ok := tool.(permissionAwareTool); ok {
 		decision, reason, err := checker.CheckPermission(ctx, decoded, execCtx)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		switch decision {
 		case permissions.DecisionAllow:
-			return nil, nil
+			return nil
 		case permissions.DecisionDeny:
-			return nil, permissionDecisionError(resolvedName, decision, reason)
+			return permissionDecisionError(resolvedName, decision, reason)
 		}
 	}
-	return nil, nil
+	return nil
 }
 
 func checkRoleToolPolicy(toolName string, def Definition, execCtx ExecContext) error {

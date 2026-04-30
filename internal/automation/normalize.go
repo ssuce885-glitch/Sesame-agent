@@ -189,14 +189,6 @@ func normalizeRawJSON(raw json.RawMessage) json.RawMessage {
 	return json.RawMessage(trimmed)
 }
 
-func isPresentJSON(raw json.RawMessage) bool {
-	raw = normalizeRawJSON(raw)
-	if len(raw) == 0 {
-		return false
-	}
-	return string(raw) != "null"
-}
-
 func normalizeObjectJSON(raw json.RawMessage) json.RawMessage {
 	raw = normalizeRawJSON(raw)
 	if len(raw) == 0 || string(raw) == "null" {

@@ -8,10 +8,7 @@ import (
 )
 
 func encodeContextHeadSummaryPayload(summary model.Summary) string {
-	raw, err := json.Marshal(summary)
-	if err != nil {
-		return ""
-	}
+	raw, _ := json.Marshal(summary)
 	return string(raw)
 }
 

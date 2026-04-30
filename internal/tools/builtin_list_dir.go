@@ -190,7 +190,7 @@ func (listDirTool) ExecuteDecoded(_ context.Context, decoded DecodedCall, execCt
 		end = totalCount
 	}
 
-	selected := entries
+	var selected []ListDirEntry
 	if totalCount > 0 {
 		selected = entries[start:end]
 	} else {

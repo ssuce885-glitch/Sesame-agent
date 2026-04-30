@@ -14,8 +14,8 @@ type automationCreateSimpleTool struct{}
 
 func (automationCreateSimpleTool) IsEnabled(execCtx ExecContext) bool {
 	return execCtx.AutomationService != nil &&
-		!isAutomationOwnerTaskMode(execCtx) &&
-		hasActiveSkills(execCtx, "automation-standard-behavior", "automation-normalizer")
+		execCtx.RoleSpec != nil &&
+		!isAutomationOwnerTaskMode(execCtx)
 }
 
 func (automationCreateSimpleTool) IsConcurrencySafe() bool { return false }
@@ -109,11 +109,11 @@ func (automationCreateSimpleTool) ExecuteDecoded(ctx context.Context, decoded De
 	if err := rejectAutomationDefinitionMutationFromOwnerTask(execCtx); err != nil {
 		return ToolExecutionResult{}, err
 	}
-	if err := requireActiveSkills(execCtx, "automation-standard-behavior", "automation-normalizer"); err != nil {
-		return ToolExecutionResult{}, err
-	}
 	input, _ := decoded.Input.(types.SimpleAutomationBuilderInput)
 	if err := requireOwningRoleAutomationContext(ctx, input.Owner); err != nil {
+		return ToolExecutionResult{}, err
+	}
+	if err := requireActiveSkills(execCtx, "automation-standard-behavior", "automation-normalizer"); err != nil {
 		return ToolExecutionResult{}, err
 	}
 	if err := automation.ValidateRoleBoundSimpleWatchScriptInput(execCtx.WorkspaceRoot, input); err != nil {

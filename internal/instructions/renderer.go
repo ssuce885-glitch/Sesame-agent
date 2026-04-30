@@ -201,16 +201,3 @@ func renderToolCatalogSnapshot(catalog skills.Catalog) []string {
 	}
 	return lines
 }
-
-func toolVisible(visibleTools []string, name string) bool {
-	want := strings.ToLower(strings.TrimSpace(name))
-	if want == "" {
-		return false
-	}
-	for _, toolName := range visibleTools {
-		if strings.ToLower(strings.TrimSpace(toolName)) == want {
-			return true
-		}
-	}
-	return false
-}

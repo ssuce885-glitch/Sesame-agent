@@ -156,10 +156,6 @@ func StopDaemon(pid int) error {
 	return nil
 }
 
-func EnsureSession(baseURL, workspaceRoot string) (string, error) {
-	return EnsureSessionContext(context.Background(), baseURL, workspaceRoot)
-}
-
 func EnsureSessionContext(ctx context.Context, baseURL, workspaceRoot string) (string, error) {
 	var session types.Session
 	err := DoJSON(ctx, http.DefaultClient, baseURL, http.MethodPost, "/v1/session/ensure", types.EnsureSessionRequest{
@@ -172,10 +168,6 @@ func EnsureSessionContext(ctx context.Context, baseURL, workspaceRoot string) (s
 		return "", fmt.Errorf("ensure session returned empty session id")
 	}
 	return session.ID, nil
-}
-
-func SendTurn(baseURL, sessionID, message string) (EvalResponse, error) {
-	return SendTurnContext(context.Background(), baseURL, sessionID, message)
 }
 
 func SendTurnContext(ctx context.Context, baseURL, sessionID, message string) (EvalResponse, error) {
@@ -331,10 +323,6 @@ func WaitForStatus(ctx context.Context, baseURL string, client *http.Client, pro
 	return StatusPayload{}, fmt.Errorf("timed out waiting for /v1/status: %w", lastErr)
 }
 
-func OpenStore(dbPath string) (*sqlite.Store, error) {
-	return sqlite.Open(dbPath)
-}
-
 func WaitForTurnTerminal(ctx context.Context, dbPath, turnID string, timeout time.Duration) (types.TurnState, error) {
 	if timeout <= 0 {
 		timeout = turnTimeout
@@ -412,15 +400,6 @@ func SQLiteIntegrityOK(ctx context.Context, dbPath string) EvalResult {
 	return Result("sqlite integrity", status == "ok", status)
 }
 
-func DaemonLogPath(pid int) string {
-	daemonMu.Lock()
-	defer daemonMu.Unlock()
-	if proc := daemonProcs[pid]; proc != nil {
-		return proc.stderrPath
-	}
-	return ""
-}
-
 func TailFile(path string, limit int64) string {
 	if strings.TrimSpace(path) == "" || limit <= 0 {
 		return ""
@@ -496,9 +475,7 @@ func (f *sseFrame) addLine(line string) {
 		f.eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 	case strings.HasPrefix(line, "data:"):
 		data := strings.TrimPrefix(line, "data:")
-		if strings.HasPrefix(data, " ") {
-			data = data[1:]
-		}
+		data = strings.TrimPrefix(data, " ")
 		f.dataLines = append(f.dataLines, data)
 	case strings.HasPrefix(line, "id:"):
 		return

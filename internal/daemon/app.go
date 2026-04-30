@@ -7,13 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 
 	httpapi "go-agent/internal/api/http"
 	"go-agent/internal/config"
 	"go-agent/internal/model"
-	"go-agent/internal/store/artifacts"
 	"go-agent/internal/store/sqlite"
 )
 
@@ -50,20 +48,12 @@ func Run(ctx context.Context) error {
 	}
 	defer store.Close()
 
-	_, err = artifacts.New(filepath.Join(cfg.DataDir, "artifacts"))
-	if err != nil {
-		return err
-	}
-
 	configureRuntimeGuardrails(cfg)
 	modelClient, err := model.NewFromConfig(cfg)
 	if err != nil {
 		return err
 	}
-	runtime, err := buildRuntime(ctx, cfg, store, modelClient)
-	if err != nil {
-		return err
-	}
+	runtime := buildRuntime(ctx, cfg, store, modelClient)
 	if err := validateRuntime(runtime); err != nil {
 		return err
 	}
@@ -94,14 +84,14 @@ func Run(ctx context.Context) error {
 	}()
 	if runtime.WatcherService != nil {
 		go func() {
-			runSupervisedLoop(ctx, "watcher", runtime.WatcherService.ReconcileInterval(), runtime.WatcherService.Reconcile, func(_ context.Context, err error) {
+			runSupervisedLoop(ctx, runtime.WatcherService.ReconcileInterval(), runtime.WatcherService.Reconcile, func(_ context.Context, err error) {
 				slog.Error("watcher tick failed", "error", err)
 			})
 		}()
 	}
 	if runtime.ReportingService != nil {
 		go func() {
-			runSupervisedLoop(ctx, "reporting", runtime.ReportingService.PollInterval(), runtime.ReportingService.Tick, func(_ context.Context, err error) {
+			runSupervisedLoop(ctx, runtime.ReportingService.PollInterval(), runtime.ReportingService.Tick, func(_ context.Context, err error) {
 				slog.Error("reporting tick failed", "error", err)
 			})
 		}()

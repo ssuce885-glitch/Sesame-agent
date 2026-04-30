@@ -64,7 +64,7 @@ func (s *Streamer) run(ctx context.Context, out chan<- tea.Msg) {
 			return
 		}
 
-		events, err := s.client.StreamEvents(ctx, lastSeq)
+		events, errs, err := s.client.StreamEvents(ctx, lastSeq)
 		if err != nil {
 			if !waitForReconnect(ctx) {
 				return
@@ -74,6 +74,12 @@ func (s *Streamer) run(ctx context.Context, out chan<- tea.Msg) {
 
 		if !s.forwardEvents(ctx, events, out, &lastSeq) {
 			return
+		}
+		if err := <-errs; err != nil {
+			if !waitForReconnect(ctx) {
+				return
+			}
+			continue
 		}
 		if !waitForReconnect(ctx) {
 			return
@@ -198,10 +204,7 @@ func (s *Streamer) buildBufferedDeltaEvent(buffer *bufferedDelta) (Event, bool) 
 	if buffer == nil {
 		return Event{}, false
 	}
-	raw, err := json.Marshal(AssistantDeltaPayload{Text: buffer.text})
-	if err != nil {
-		return Event{}, false
-	}
+	raw, _ := json.Marshal(AssistantDeltaPayload{Text: buffer.text})
 	event := buffer.event
 	event.Payload = raw
 	return event, true

@@ -13,10 +13,6 @@ import (
 	"go-agent/internal/types"
 )
 
-func durableWorkspaceMemoryID(workspaceRoot string) string {
-	return durableWorkspaceOverviewID(workspaceRoot, "")
-}
-
 func durableWorkspaceMemoryPrefix(workspaceRoot string) string {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if workspaceRoot == "" {
@@ -40,11 +36,6 @@ func findMemoryEntry(entries []types.MemoryEntry, scope types.MemoryScope, kind 
 		return entry, true
 	}
 	return types.MemoryEntry{}, false
-}
-
-func buildMemoryRefs(entries []types.MemoryEntry, contextHeadSummaryPresent bool, workspaceRoot string, query string) []string {
-	refs, _ := buildMemoryRefsAndUsage(entries, contextHeadSummaryPresent, workspaceRoot, query)
-	return refs
 }
 
 func buildMemoryRefsAndUsage(entries []types.MemoryEntry, contextHeadSummaryPresent bool, workspaceRoot string, query string) ([]string, []string) {

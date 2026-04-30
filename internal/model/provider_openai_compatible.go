@@ -39,6 +39,113 @@ type openAICompatibleRequestBody struct {
 	Caching            *openAICompatibleCachingBody `json:"caching,omitempty"`
 }
 
+type functionCallTracker struct {
+	calls  map[string]functionCallMeta
+	deltas map[string]string
+	done   map[string]string
+	order  []string
+	events chan<- StreamEvent
+}
+
+type functionCallMeta struct {
+	CallID string
+	Name   string
+}
+
+func newFunctionCallTracker(events chan<- StreamEvent) *functionCallTracker {
+	return &functionCallTracker{
+		calls:  make(map[string]functionCallMeta),
+		deltas: make(map[string]string),
+		done:   make(map[string]string),
+		order:  make([]string, 0, 4),
+		events: events,
+	}
+}
+
+func (t *functionCallTracker) remember(itemID, callID, name string) {
+	if itemID == "" {
+		return
+	}
+	if _, ok := t.calls[itemID]; !ok {
+		t.order = append(t.order, itemID)
+	}
+	meta := t.calls[itemID]
+	if callID != "" {
+		meta.CallID = callID
+	}
+	if name != "" {
+		meta.Name = name
+	}
+	t.calls[itemID] = meta
+}
+
+func (t *functionCallTracker) resolve(itemID, name string) (string, string) {
+	meta := t.calls[itemID]
+	callID := meta.CallID
+	if callID == "" {
+		callID = itemID
+	}
+	if name == "" {
+		name = meta.Name
+	}
+	return callID, name
+}
+
+func (t *functionCallTracker) appendDelta(itemID, delta string) {
+	if itemID == "" || delta == "" {
+		return
+	}
+	t.deltas[itemID] += delta
+}
+
+func (t *functionCallTracker) markDone(itemID, arguments string) {
+	t.done[itemID] = arguments
+}
+
+func (t *functionCallTracker) hasDone(itemID string) bool {
+	_, ok := t.done[itemID]
+	return ok
+}
+
+func (t *functionCallTracker) finalize(ctx context.Context, itemID, name string) error {
+	if strings.TrimSpace(itemID) == "" {
+		return nil
+	}
+	callID, resolvedName := t.resolve(itemID, name)
+	// Prefer the accumulated delta stream as the authoritative source.
+	// The done event's snapshot is only a fallback when no complete delta
+	// stream was available.
+	parsed, err := parseFunctionCallArguments(t.deltas[itemID], t.done[itemID])
+	if err != nil {
+		return err
+	}
+	delete(t.calls, itemID)
+	delete(t.deltas, itemID)
+	delete(t.done, itemID)
+	return sendStreamEvent(ctx, t.events, StreamEvent{
+		Kind: StreamEventToolCallEnd,
+		ToolCall: ToolCallChunk{
+			ID:            callID,
+			Name:          resolvedName,
+			Input:         parsed.Input,
+			InputRaw:      parsed.RawInput,
+			InputRecovery: parsed.Recovery,
+		},
+	})
+}
+
+func (t *functionCallTracker) finalizeOutstanding(ctx context.Context) error {
+	for _, itemID := range t.order {
+		if _, ok := t.calls[itemID]; !ok {
+			continue
+		}
+		if err := t.finalize(ctx, itemID, ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func NewOpenAICompatibleProvider(cfg Config) (*OpenAICompatibleProvider, error) {
 	if cfg.APIKey == "" {
 		return nil, errors.New("openai compatible api key is required")
@@ -90,80 +197,7 @@ func (p *OpenAICompatibleProvider) Stream(ctx context.Context, req Request) (<-c
 }
 
 func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, events chan<- StreamEvent) error {
-	type functionCallMeta struct {
-		CallID string
-		Name   string
-	}
-
-	functionCalls := make(map[string]functionCallMeta)
-	functionCallArgumentDeltas := make(map[string]string)
-	functionCallArgumentDone := make(map[string]string)
-	functionCallOrder := make([]string, 0, 4)
-	rememberFunctionCall := func(itemID, callID, name string) {
-		if itemID == "" {
-			return
-		}
-		if _, ok := functionCalls[itemID]; !ok {
-			functionCallOrder = append(functionCallOrder, itemID)
-		}
-		meta := functionCalls[itemID]
-		if callID != "" {
-			meta.CallID = callID
-		}
-		if name != "" {
-			meta.Name = name
-		}
-		functionCalls[itemID] = meta
-	}
-	resolveFunctionCall := func(itemID, name string) (string, string) {
-		meta := functionCalls[itemID]
-		callID := meta.CallID
-		if callID == "" {
-			callID = itemID
-		}
-		if name == "" {
-			name = meta.Name
-		}
-		return callID, name
-	}
-	finalizeFunctionCall := func(itemID, name string) error {
-		if strings.TrimSpace(itemID) == "" {
-			return nil
-		}
-		callID, resolvedName := resolveFunctionCall(itemID, name)
-		// Prefer the accumulated delta stream as the authoritative source.
-		// The done event's snapshot is only a fallback when no complete delta
-		// stream was available.
-		parsed, err := parseFunctionCallArguments(functionCallArgumentDeltas[itemID], functionCallArgumentDone[itemID])
-		if err != nil {
-			return err
-		}
-		delete(functionCalls, itemID)
-		delete(functionCallArgumentDeltas, itemID)
-		delete(functionCallArgumentDone, itemID)
-		return sendStreamEvent(ctx, events, StreamEvent{
-			Kind: StreamEventToolCallEnd,
-			ToolCall: ToolCallChunk{
-				ID:            callID,
-				Name:          resolvedName,
-				Input:         parsed.Input,
-				InputRaw:      parsed.RawInput,
-				InputRecovery: parsed.Recovery,
-			},
-		})
-	}
-	finalizeOutstandingFunctionCalls := func() error {
-		for _, itemID := range functionCallOrder {
-			if _, ok := functionCalls[itemID]; !ok {
-				continue
-			}
-			if err := finalizeFunctionCall(itemID, ""); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
+	tracker := newFunctionCallTracker(events)
 	body := p.buildRequestBody(req)
 	resp, emitResponseMetadata, err := p.performResponsesRequest(ctx, &body)
 	if err != nil {
@@ -206,7 +240,7 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 				return err
 			}
 			if payload.Item.Type == "function_call" {
-				rememberFunctionCall(payload.Item.ID, payload.Item.CallID, payload.Item.Name)
+				tracker.remember(payload.Item.ID, payload.Item.CallID, payload.Item.Name)
 			}
 		case "response.output_item.done":
 			// No-op for function calls: we finalize from the accumulated
@@ -242,11 +276,9 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			if err := json.Unmarshal([]byte(frame.Data), &payload); err != nil {
 				return err
 			}
-			rememberFunctionCall(payload.ItemID, "", payload.Name)
-			callID, name := resolveFunctionCall(payload.ItemID, payload.Name)
-			if payload.ItemID != "" && payload.Delta != "" {
-				functionCallArgumentDeltas[payload.ItemID] += payload.Delta
-			}
+			tracker.remember(payload.ItemID, "", payload.Name)
+			callID, name := tracker.resolve(payload.ItemID, payload.Name)
+			tracker.appendDelta(payload.ItemID, payload.Delta)
 			if err := sendStreamEvent(ctx, events, StreamEvent{
 				Kind: StreamEventToolCallDelta,
 				ToolCall: ToolCallChunk{
@@ -258,8 +290,8 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 				return err
 			}
 			if payload.ItemID != "" {
-				if _, hasDone := functionCallArgumentDone[payload.ItemID]; hasDone {
-					if err := finalizeFunctionCall(payload.ItemID, payload.Name); err == nil {
+				if tracker.hasDone(payload.ItemID) {
+					if err := tracker.finalize(ctx, payload.ItemID, payload.Name); err == nil {
 						continue
 					}
 				}
@@ -273,10 +305,10 @@ func (p *OpenAICompatibleProvider) stream(ctx context.Context, req Request, even
 			if err := json.Unmarshal([]byte(frame.Data), &payload); err != nil {
 				return err
 			}
-			rememberFunctionCall(payload.ItemID, "", payload.Name)
-			functionCallArgumentDone[payload.ItemID] = payload.Arguments
+			tracker.remember(payload.ItemID, "", payload.Name)
+			tracker.markDone(payload.ItemID, payload.Arguments)
 		case "response.completed":
-			if err := finalizeOutstandingFunctionCalls(); err != nil {
+			if err := tracker.finalizeOutstanding(ctx); err != nil {
 				return err
 			}
 			sawMessageEnd = true

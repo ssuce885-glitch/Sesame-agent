@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"time"
 
 	"go-agent/internal/types"
@@ -235,12 +234,6 @@ func (s *Store) ListConversationCompactionsByStoredContextHead(ctx context.Conte
 	}
 
 	return out, rows.Err()
-}
-
-func parseConversationCompactionPayload[T any](payload string) (T, error) {
-	var out T
-	err := json.Unmarshal([]byte(payload), &out)
-	return out, err
 }
 
 func formatOptionalTime(ts *time.Time) string {

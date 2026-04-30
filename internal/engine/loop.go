@@ -660,10 +660,7 @@ func newBoundaryMetadata(generation int, cutoff int, contextHeadSummaryUpTo int6
 }
 
 func marshalCompactionSummary(summary model.Summary) string {
-	raw, err := json.Marshal(summary)
-	if err != nil {
-		return summary.RangeLabel
-	}
+	raw, _ := json.Marshal(summary)
 	return string(raw)
 }
 

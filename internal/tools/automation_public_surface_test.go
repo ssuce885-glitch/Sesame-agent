@@ -1,9 +1,14 @@
 package tools
 
-import "testing"
+import (
+	"testing"
+
+	"go-agent/internal/roles"
+)
 
 func TestAutomationPublicSurfaceSimpleChainOnly(t *testing.T) {
 	_, execCtx := newSimpleBuilderTestHarness(t)
+	execCtx.RoleSpec = &roles.Spec{RoleID: "doc_cleanup_operator"}
 	enableAutomationCreateSkills(&execCtx)
 	registry := NewRegistry()
 	defs := registry.VisibleDefinitions(execCtx)
@@ -41,40 +46,59 @@ func TestAutomationPublicSurfaceSimpleChainOnly(t *testing.T) {
 	}
 }
 
-func TestAutomationMutationToolsAreHiddenUntilRequiredSkillsAreActive(t *testing.T) {
+func TestAutomationMutationToolVisibilityUsesRoleContextAndSkills(t *testing.T) {
 	_, execCtx := newSimpleBuilderTestHarness(t)
 	registry := NewRegistry()
 
-	withoutSkills := visibleToolNames(registry.VisibleDefinitions(execCtx))
-	if withoutSkills["automation_create_simple"] {
-		t.Fatal("automation_create_simple visible without automation skills")
+	mainParentWithoutSkills := visibleToolNames(registry.VisibleDefinitions(execCtx))
+	if mainParentWithoutSkills["automation_create_simple"] {
+		t.Fatal("automation_create_simple visible outside specialist role context")
 	}
-	if withoutSkills["automation_control"] {
+	if mainParentWithoutSkills["automation_control"] {
 		t.Fatal("automation_control visible without automation-standard-behavior")
 	}
-	if !withoutSkills["automation_query"] {
+	if !mainParentWithoutSkills["automation_query"] {
 		t.Fatal("automation_query should remain visible for read-only inspection")
 	}
-	if !withoutSkills["skill_use"] {
+	if !mainParentWithoutSkills["skill_use"] {
 		t.Fatal("skill_use must remain visible so the model can activate automation skills")
 	}
 
 	execCtx.ActiveSkillNames = []string{"automation-standard-behavior"}
-	withStandardBehavior := visibleToolNames(registry.VisibleDefinitions(execCtx))
-	if !withStandardBehavior["automation_control"] {
+	mainParentWithStandardBehavior := visibleToolNames(registry.VisibleDefinitions(execCtx))
+	if !mainParentWithStandardBehavior["automation_control"] {
 		t.Fatal("automation_control should be visible after automation-standard-behavior is active")
 	}
-	if withStandardBehavior["automation_create_simple"] {
-		t.Fatal("automation_create_simple visible before automation-normalizer is active")
+	if mainParentWithStandardBehavior["automation_create_simple"] {
+		t.Fatal("automation_create_simple visible outside specialist role context with automation skills")
 	}
 
 	enableAutomationCreateSkills(&execCtx)
-	withCreateSkills := visibleToolNames(registry.VisibleDefinitions(execCtx))
-	if !withCreateSkills["automation_control"] {
+	mainParentWithCreateSkills := visibleToolNames(registry.VisibleDefinitions(execCtx))
+	if !mainParentWithCreateSkills["automation_control"] {
 		t.Fatal("automation_control should remain visible with full automation skills")
 	}
-	if !withCreateSkills["automation_create_simple"] {
-		t.Fatal("automation_create_simple should be visible after both automation skills are active")
+	if mainParentWithCreateSkills["automation_create_simple"] {
+		t.Fatal("automation_create_simple visible in main_parent context")
+	}
+
+	execCtx.ActiveSkillNames = nil
+	execCtx.RoleSpec = &roles.Spec{RoleID: "doc_cleanup_operator"}
+	specialistWithoutSkills := visibleToolNames(registry.VisibleDefinitions(execCtx))
+	if !specialistWithoutSkills["automation_create_simple"] {
+		t.Fatal("automation_create_simple should be visible in specialist role context")
+	}
+	if specialistWithoutSkills["automation_control"] {
+		t.Fatal("automation_control visible in specialist role context without automation-standard-behavior")
+	}
+
+	execCtx.ActiveSkillNames = []string{"automation-standard-behavior"}
+	specialistWithStandardBehavior := visibleToolNames(registry.VisibleDefinitions(execCtx))
+	if !specialistWithStandardBehavior["automation_create_simple"] {
+		t.Fatal("automation_create_simple should remain visible in specialist role context")
+	}
+	if !specialistWithStandardBehavior["automation_control"] {
+		t.Fatal("automation_control should be visible in specialist role context after automation-standard-behavior is active")
 	}
 }
 

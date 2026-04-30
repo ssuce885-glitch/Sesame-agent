@@ -23,7 +23,10 @@ type DelegateToRoleOutput struct {
 }
 
 func (delegateToRoleTool) IsEnabled(execCtx ExecContext) bool {
-	return execCtx.SessionDelegationService != nil && execCtx.TurnContext != nil && strings.TrimSpace(currentSessionID(execCtx)) != ""
+	return execCtx.SessionDelegationService != nil &&
+		execCtx.TurnContext != nil &&
+		strings.TrimSpace(currentSessionID(execCtx)) != "" &&
+		execCtx.RoleSpec == nil
 }
 
 func (delegateToRoleTool) Definition() Definition {

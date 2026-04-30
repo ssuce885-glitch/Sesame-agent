@@ -11,8 +11,6 @@ import (
 	"go-agent/internal/cli/render"
 )
 
-const statusBarMessage = "Tab/Shift+Tab views · Enter send · Alt+Enter newline · Esc interrupt · Drag to select/copy · Mouse wheel/PgUp/PgDn/Home/End scroll · Ctrl+C quit"
-
 func (m *Model) refreshCatalog() error {
 	if m.catalogLoader == nil {
 		return nil

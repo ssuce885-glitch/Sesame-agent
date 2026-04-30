@@ -5,35 +5,14 @@ import (
 	"strings"
 )
 
-const (
-	compatModeAnthropic = "anthropic"
-	compatModeOpenAI    = "openai"
-)
-
-func resolveModelProvider(explicitProvider, compatMode, genericBaseURL string) string {
+func resolveModelProvider(explicitProvider, genericBaseURL string) string {
 	if provider := strings.TrimSpace(explicitProvider); provider != "" {
-		return provider
-	}
-	if provider := compatModeToModelProvider(compatMode); provider != "" {
 		return provider
 	}
 	if provider := inferModelProviderFromBaseURL(genericBaseURL); provider != "" {
 		return provider
 	}
 	return ""
-}
-
-func compatModeToModelProvider(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "anthropic", "anthropic_messages", "anthropic-messages":
-		return "anthropic"
-	case "openai", "openai_compatible", "openai-compatible", "openai_responses", "openai_responses_compatible", "openai-responses":
-		return "openai_compatible"
-	case "fake":
-		return "fake"
-	default:
-		return ""
-	}
 }
 
 func inferModelProviderFromBaseURL(raw string) string {

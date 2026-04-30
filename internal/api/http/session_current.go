@@ -22,6 +22,7 @@ func registerCurrentSessionRoutes(mux *http.ServeMux, deps Dependencies) {
 	mux.HandleFunc("/v1/session/history", handleCurrentSession(deps, handleListContextHistory))
 	mux.HandleFunc("/v1/session/history/load", handleCurrentSession(deps, handleLoadContextHistory))
 	mux.HandleFunc("/v1/session/reopen", handleCurrentSession(deps, handleReopenContext))
+	mux.HandleFunc("/v1/session/files/content", handleCurrentSession(deps, handleGetSessionFileContent))
 	mux.HandleFunc("/v1/session/checkpoints", handleCurrentSession(deps, handleListFileCheckpoints))
 	mux.HandleFunc("/v1/session/checkpoints/", handleCurrentSession(deps, handleFileCheckpointAction))
 }

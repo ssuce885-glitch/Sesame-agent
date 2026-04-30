@@ -432,7 +432,7 @@ type turnCostStore interface {
 }
 
 func persistTurnCost(ctx context.Context, store ConversationStore, in Input, usage *types.TurnUsage) error {
-	if store == nil || usage == nil {
+	if usage == nil {
 		return nil
 	}
 	costStore, ok := store.(turnCostStore)
@@ -605,7 +605,7 @@ func buildParentReplyCommittedPayload(
 
 func reportSourceTurnIDs(reports []types.ReportDeliveryItem) []string {
 	seen := map[string]struct{}{}
-	out := make([]string, 0)
+	var out []string
 	for _, report := range reports {
 		turnID := strings.TrimSpace(report.SourceTurnID)
 		if turnID == "" {
@@ -622,7 +622,7 @@ func reportSourceTurnIDs(reports []types.ReportDeliveryItem) []string {
 
 func reportTaskIDs(reports []types.ReportDeliveryItem) []string {
 	seen := map[string]struct{}{}
-	out := make([]string, 0)
+	var out []string
 	for _, report := range reports {
 		taskID := strings.TrimSpace(report.SourceID)
 		if report.SourceKind != types.ReportSourceTaskResult {

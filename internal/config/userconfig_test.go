@@ -8,7 +8,7 @@ import (
 )
 
 func TestUserConfigPatchRootVision(t *testing.T) {
-	root, err := userConfigPatchRoot(UserConfig{
+	root := userConfigPatchRoot(UserConfig{
 		Vision: UserConfigVision{
 			Provider: "openai_compatible",
 			APIKey:   "vision-key",
@@ -16,9 +16,6 @@ func TestUserConfigPatchRootVision(t *testing.T) {
 			Model:    "vision-model",
 		},
 	})
-	if err != nil {
-		t.Fatalf("userConfigPatchRoot returned error: %v", err)
-	}
 
 	var vision map[string]string
 	if err := json.Unmarshal(root["vision"], &vision); err != nil {
@@ -39,10 +36,7 @@ func TestUserConfigPatchRootVision(t *testing.T) {
 }
 
 func TestUserConfigPatchRootResetVision(t *testing.T) {
-	root, err := userConfigPatchRoot(UserConfig{ResetVision: true})
-	if err != nil {
-		t.Fatalf("userConfigPatchRoot returned error: %v", err)
-	}
+	root := userConfigPatchRoot(UserConfig{ResetVision: true})
 
 	var vision map[string]string
 	if err := json.Unmarshal(root["vision"], &vision); err != nil {

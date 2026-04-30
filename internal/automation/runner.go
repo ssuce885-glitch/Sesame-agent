@@ -242,13 +242,17 @@ func (r *WatcherRunner) currentTime() time.Time {
 }
 
 func compileWatcherSignals(spec types.AutomationSpec) ([]compiledWatcherSignal, watcherLifecycleConfig, error) {
-	lifecycle := watcherLifecycleConfig{}
-	_ = json.Unmarshal(spec.WatcherLifecycle, &lifecycle)
+	lifecycle, err := decodeWatcherLifecycle(spec.WatcherLifecycle)
+	if err != nil {
+		return nil, watcherLifecycleConfig{}, err
+	}
 	if strings.EqualFold(strings.TrimSpace(string(spec.Mode)), string(types.AutomationModeSimple)) && strings.TrimSpace(lifecycle.AfterDispatch) == "" {
 		lifecycle.AfterDispatch = "pause"
 	}
 	retrigger := watcherRetriggerPolicy{}
-	_ = json.Unmarshal(spec.RetriggerPolicy, &retrigger)
+	if err := decodeAutomationObjectJSON(spec.RetriggerPolicy, &retrigger, "retrigger_policy"); err != nil {
+		return nil, watcherLifecycleConfig{}, err
+	}
 
 	out := make([]compiledWatcherSignal, 0, len(spec.Signals))
 	for idx, signal := range spec.Signals {
@@ -319,6 +323,21 @@ func compileWatcherSignals(spec types.AutomationSpec) ([]compiledWatcherSignal, 
 		}
 	}
 	return out, lifecycle, nil
+}
+
+func decodeWatcherLifecycle(raw json.RawMessage) (watcherLifecycleConfig, error) {
+	var lifecycle watcherLifecycleConfig
+	if err := decodeAutomationObjectJSON(raw, &lifecycle, "watcher_lifecycle"); err != nil {
+		return watcherLifecycleConfig{}, err
+	}
+	return lifecycle, nil
+}
+
+func decodeAutomationObjectJSON(raw json.RawMessage, v any, field string) error {
+	if err := json.Unmarshal(normalizeObjectJSON(raw), v); err != nil {
+		return fmt.Errorf("decode %s: %w", field, err)
+	}
+	return nil
 }
 
 func evaluateWatcherSignal(signal compiledWatcherSignal, result watcherCommandResult, execErr error) (bool, string, json.RawMessage, error) {

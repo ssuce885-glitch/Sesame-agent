@@ -129,7 +129,7 @@ func collectRuntimeDiagnostics(ctx context.Context, store any, workspaceRoot str
 		return nil, err
 	}
 
-	diagnostics := make([]types.RuntimeDiagnostic, 0)
+	var diagnostics []types.RuntimeDiagnostic
 	for _, sessionRow := range sessions {
 		if strings.TrimSpace(sessionRow.WorkspaceRoot) != workspaceRoot {
 			continue

@@ -66,20 +66,20 @@ func (w *customToolCappedBuffer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	if len(p) > remaining {
-		_, _ = w.buf.Write(p[:remaining])
+		w.buf.Write(p[:remaining])
 		w.truncated = true
 		return len(p), nil
 	}
-	_, _ = w.buf.Write(p)
+	w.buf.Write(p)
 	return len(p), nil
 }
 
 func (w customToolTeeCapture) Write(p []byte) (int, error) {
 	if w.aggregate != nil {
-		_, _ = w.aggregate.Write(p)
+		w.aggregate.Write(p)
 	}
 	if w.stream != nil {
-		_, _ = w.stream.Write(p)
+		w.stream.Write(p)
 	}
 	return len(p), nil
 }

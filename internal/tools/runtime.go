@@ -83,15 +83,6 @@ func (r *Runtime) VisibleDefinitions(execCtx ExecContext) []Definition {
 	return defs
 }
 
-func (r *Runtime) Execute(ctx context.Context, call Call, execCtx ExecContext) (Result, error) {
-	output, err := r.ExecuteRich(ctx, call, execCtx)
-	return output.Result, err
-}
-
-func (r *Runtime) ExecuteRich(ctx context.Context, call Call, execCtx ExecContext) (ToolExecutionResult, error) {
-	return r.executePrepared(ctx, r.prepareCall(call, execCtx), execCtx)
-}
-
 func (r *Runtime) prepareCall(call Call, execCtx ExecContext) PreparedCall {
 	if r == nil || r.registry == nil {
 		return PreparedCall{
@@ -296,28 +287,6 @@ func (r *Runtime) ExecuteBatch(ctx context.Context, batch CallBatch, execCtx Exe
 	return out, nil
 }
 
-func (r *Runtime) ExecuteCalls(ctx context.Context, calls []Call, execCtx ExecContext) ([]CallExecution, error) {
-	if r == nil || r.registry == nil {
-		return nil, errors.New("tool registry is required")
-	}
-
-	results := make([]CallExecution, 0, len(calls))
-	for _, batch := range r.PlanBatches(calls, execCtx) {
-		executed, err := r.ExecuteBatch(ctx, batch, execCtx)
-		if err != nil {
-			return results, err
-		}
-		results = append(results, executed...)
-
-		for _, item := range executed {
-			if item.Err != nil {
-				return results, nil
-			}
-		}
-	}
-	return results, nil
-}
-
 func (r *Runtime) startToolRun(_ context.Context, resolvedName string, call Call, execCtx ExecContext) *types.ToolRun {
 	if r == nil || r.store == nil || execCtx.TurnContext == nil {
 		return nil
@@ -453,14 +422,6 @@ func claimKeys(claims []ResourceClaim) []string {
 		}
 	}
 	return out
-}
-
-func firstMetadataString(metadata map[string]any, key string) string {
-	if len(metadata) == 0 {
-		return ""
-	}
-	value, _ := metadata[key].(string)
-	return strings.TrimSpace(value)
 }
 
 func marshalStructuredPreview(value any, maxBytes int) (any, bool) {

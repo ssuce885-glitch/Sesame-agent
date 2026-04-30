@@ -124,7 +124,7 @@ type RuntimeClient interface {
 	Status(Context) (StatusResponse, error)
 	SubmitTurn(Context, SubmitTurnRequest) (Turn, error)
 	InterruptTurn(Context) error
-	StreamEvents(Context, int64) (<-chan Event, error)
+	StreamEvents(Context, int64) (<-chan Event, <-chan error, error)
 	GetTimeline(Context) (SessionTimelineResponse, error)
 	ListContextHistory(Context) (ListContextHistoryResponse, error)
 	ReopenContext(Context) (ContextHead, error)

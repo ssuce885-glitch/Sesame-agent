@@ -119,20 +119,6 @@ func listReportDeliveriesWithQuery(ctx context.Context, queryer reportDeliveryQu
 	return scanReportDeliveryRows(rows)
 }
 
-func listQueuedReportDeliveriesWithWorkspaceQuery(ctx context.Context, queryer reportDeliveryQueryer, workspaceRoot string) ([]types.ReportDelivery, error) {
-	rows, err := queryer.QueryContext(ctx, `
-		select payload, observed_at, injected_turn_id, injected_at, created_at, updated_at
-		from report_deliveries
-		where workspace_root = ? and channel = ? and state = ?
-		order by observed_at asc, created_at asc, id asc
-	`, strings.TrimSpace(workspaceRoot), string(types.ReportChannelAgent), string(types.ReportDeliveryStateQueued))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanReportDeliveryRows(rows)
-}
-
 func listQueuedReportDeliveriesWithSessionQuery(ctx context.Context, queryer reportDeliveryQueryer, sessionID string) ([]types.ReportDelivery, error) {
 	rows, err := queryer.QueryContext(ctx, `
 		select payload, observed_at, injected_turn_id, injected_at, created_at, updated_at

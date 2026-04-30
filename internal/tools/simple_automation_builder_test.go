@@ -46,9 +46,10 @@ func specialistAutomationContext(roleID string) context.Context {
 
 func TestAutomationCreateSimpleRequiresAutomationSkills(t *testing.T) {
 	_, execCtx := newSimpleBuilderTestHarness(t)
+	execCtx.RoleSpec = &roles.Spec{RoleID: "doc_cleanup_operator"}
 	tool := automationCreateSimpleTool{}
 
-	_, err := tool.Execute(context.Background(), Call{
+	_, err := tool.Execute(specialistAutomationContext("doc_cleanup_operator"), Call{
 		Name: "automation_create_simple",
 		Input: map[string]any{
 			"automation_id":    "simple_requires_skills",

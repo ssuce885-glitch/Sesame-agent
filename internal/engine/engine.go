@@ -115,28 +115,6 @@ type Engine struct {
 const defaultActiveSkillTokenBudget = 2048
 const defaultMaxToolResultStoreBytes = 16384
 
-func New(
-	modelClient model.StreamingClient,
-	registry *tools.Registry,
-	permission *permissions.Engine,
-	store ConversationStore,
-	ctxManager *contextstate.Manager,
-	compactor contextstate.Compactor,
-	maxToolSteps int,
-) *Engine {
-	return NewWithRuntime(
-		modelClient,
-		registry,
-		permission,
-		store,
-		ctxManager,
-		contextstate.NewRuntime(86400, 3),
-		compactor,
-		RuntimeMetadata{},
-		maxToolSteps,
-	)
-}
-
 func NewWithRuntime(
 	modelClient model.StreamingClient,
 	registry *tools.Registry,
@@ -357,17 +335,4 @@ func (e *Engine) SetCompactionQAWorker(w CompactionQAWorker) {
 	}); ok {
 		recorder.SetResultRecorder(e.recordCompactionQAResult)
 	}
-}
-
-func (e *Engine) waitBackgroundTasks() {
-	if e == nil {
-		return
-	}
-	if e.contextHeadSummaryWorker != nil {
-		e.contextHeadSummaryWorker.Wait()
-	}
-	if e.compactionQA != nil {
-		e.compactionQA.Wait()
-	}
-	e.contextHeadSummaryWG.Wait()
 }

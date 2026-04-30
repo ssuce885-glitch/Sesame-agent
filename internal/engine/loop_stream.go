@@ -279,18 +279,11 @@ func executeToolCallBatches(
 		}
 
 		batchToolCalls := toolCalls[callOffset : callOffset+len(batch.Calls)]
-		stepLimitExceededAfterBatch := false
-		if e.maxToolSteps > 0 {
-			remainingSteps := e.maxToolSteps - toolSteps
-			if remainingSteps <= 0 {
-				return toolSteps, false, emitter.Fail(ctx, fmt.Errorf("turn exceeded max tool steps (%d)", e.maxToolSteps))
-			}
-			if remainingSteps < len(batch.Calls) {
-				batch.Calls = batch.Calls[:remainingSteps]
-				batchToolCalls = batchToolCalls[:remainingSteps]
-				batch.Parallel = batch.Parallel && len(batch.Calls) > 1
-				stepLimitExceededAfterBatch = true
-			}
+		var stepLimitExceededAfterBatch bool
+		var err error
+		batchToolCalls, stepLimitExceededAfterBatch, err = enforceToolStepLimit(e.maxToolSteps, toolSteps, &batch, batchToolCalls)
+		if err != nil {
+			return toolSteps, false, emitter.Fail(ctx, err)
 		}
 		if state.budget != nil {
 			if err := state.budget.RecordToolCall(len(batch.Calls)); err != nil {
@@ -367,39 +360,80 @@ func executeToolCallBatches(
 		}
 	}
 	if completeTurnAfterTools && !interrupted {
-		writeContextHeadID := in.Turn.ContextHeadID
-		if e.store != nil {
-			resolvedContextHeadID, err := resolveConversationWriteContextHeadID(ctx, e.store, in.Turn.ContextHeadID)
-			if err != nil {
-				return toolSteps, false, emitter.Fail(ctx, err)
-			}
-			writeContextHeadID = resolvedContextHeadID
-		}
-		usage := buildTurnUsage(
-			usageTotals.hasUsage,
-			in.Turn.ID,
-			state.sessionID,
-			state.usageProvider,
-			state.usageModel,
-			usageTotals.inputTokens,
-			usageTotals.outputTokens,
-			usageTotals.cachedTokens,
-			usageTotals.costUSD,
+		return e.finalizeToolTurn(
+			ctx,
+			in,
+			emitter,
+			state,
+			orderedAssistantItems,
+			assistantCursor,
+			nextPositionBeforeFlush,
+			toolSteps,
+			usageTotals,
 		)
-		committedAssistantItems := orderedAssistantItems
-		if assistantCursor >= 0 && assistantCursor <= len(orderedAssistantItems) {
-			committedAssistantItems = orderedAssistantItems[:assistantCursor]
-		}
-		parentReplyCommitted, err := buildParentReplyCommittedPayload(ctx, e.store, in.Session, in.Turn, writeContextHeadID, nextPositionBeforeFlush, committedAssistantItems, state.reports)
+	}
+	return toolSteps, interrupted, nil
+}
+
+func (e *Engine) finalizeToolTurn(
+	ctx context.Context,
+	in Input,
+	emitter loopEmitter,
+	state *preparedLoopState,
+	orderedAssistantItems []model.ConversationItem,
+	assistantCursor int,
+	nextPositionBeforeFlush int,
+	toolSteps int,
+	usageTotals loopUsageTotals,
+) (int, bool, error) {
+	writeContextHeadID := in.Turn.ContextHeadID
+	if e.store != nil {
+		resolvedContextHeadID, err := resolveConversationWriteContextHeadID(ctx, e.store, in.Turn.ContextHeadID)
 		if err != nil {
 			return toolSteps, false, emitter.Fail(ctx, err)
 		}
-		if err := finalizeTurn(ctx, e, in, usage, parentReplyCommitted); err != nil {
-			return toolSteps, false, err
-		}
-		return toolSteps, true, nil
+		writeContextHeadID = resolvedContextHeadID
 	}
-	return toolSteps, interrupted, nil
+	usage := buildTurnUsage(
+		usageTotals.hasUsage,
+		in.Turn.ID,
+		state.sessionID,
+		state.usageProvider,
+		state.usageModel,
+		usageTotals.inputTokens,
+		usageTotals.outputTokens,
+		usageTotals.cachedTokens,
+		usageTotals.costUSD,
+	)
+	committedAssistantItems := orderedAssistantItems
+	if assistantCursor >= 0 && assistantCursor <= len(orderedAssistantItems) {
+		committedAssistantItems = orderedAssistantItems[:assistantCursor]
+	}
+	parentReplyCommitted, err := buildParentReplyCommittedPayload(ctx, e.store, in.Session, in.Turn, writeContextHeadID, nextPositionBeforeFlush, committedAssistantItems, state.reports)
+	if err != nil {
+		return toolSteps, false, emitter.Fail(ctx, err)
+	}
+	if err := finalizeTurn(ctx, e, in, usage, parentReplyCommitted); err != nil {
+		return toolSteps, false, err
+	}
+	return toolSteps, true, nil
+}
+
+func enforceToolStepLimit(maxToolSteps, toolSteps int, batch *tools.CallBatch, batchToolCalls []model.ToolCallChunk) ([]model.ToolCallChunk, bool, error) {
+	if maxToolSteps <= 0 {
+		return batchToolCalls, false, nil
+	}
+	remainingSteps := maxToolSteps - toolSteps
+	if remainingSteps <= 0 {
+		return nil, false, fmt.Errorf("turn exceeded max tool steps (%d)", maxToolSteps)
+	}
+	if remainingSteps < len(batch.Calls) {
+		batch.Calls = batch.Calls[:remainingSteps]
+		batchToolCalls = batchToolCalls[:remainingSteps]
+		batch.Parallel = batch.Parallel && len(batch.Calls) > 1
+		return batchToolCalls, true, nil
+	}
+	return batchToolCalls, false, nil
 }
 
 func firstTurnCompletingBatchIndex(batches []tools.CallBatch) int {

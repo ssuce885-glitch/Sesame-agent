@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"time"
 
 	"go-agent/internal/types"
 )
@@ -18,6 +19,9 @@ type RuntimeTx interface {
 	UpsertWorktree(context.Context, types.Worktree) error
 	UpsertScheduledJob(context.Context, types.ScheduledJob) error
 	GetScheduledJob(context.Context, string) (types.ScheduledJob, bool, error)
+	ListScheduledJobs(context.Context) ([]types.ScheduledJob, error)
+	ListScheduledJobsByWorkspace(context.Context, string) ([]types.ScheduledJob, error)
+	ListDueScheduledJobs(context.Context, time.Time) ([]types.ScheduledJob, error)
 	DeleteScheduledJob(context.Context, string) (bool, error)
 	UpsertChildAgentSpec(context.Context, types.ChildAgentSpec) error
 	DeleteChildAgentSpec(context.Context, string) (bool, error)

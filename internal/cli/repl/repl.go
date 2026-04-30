@@ -20,7 +20,7 @@ type RuntimeClient interface {
 	Status(context.Context) (client.StatusResponse, error)
 	SubmitTurn(context.Context, types.SubmitTurnRequest) (types.Turn, error)
 	InterruptTurn(context.Context) error
-	StreamEvents(context.Context, int64) (<-chan types.Event, error)
+	StreamEvents(context.Context, int64) (<-chan types.Event, <-chan error, error)
 	GetTimeline(context.Context) (types.SessionTimelineResponse, error)
 	ListContextHistory(context.Context) (types.ListContextHistoryResponse, error)
 	ReopenContext(context.Context) (types.ContextHead, error)
@@ -133,17 +133,24 @@ func (r *REPL) HandleLine(ctx context.Context, line string) (bool, error) {
 	if _, err := r.client.SubmitTurn(ctx, types.SubmitTurnRequest{Message: line}); err != nil {
 		return false, err
 	}
-	events, err := r.client.StreamEvents(ctx, r.lastSeq)
+	events, errs, err := r.client.StreamEvents(ctx, r.lastSeq)
 	if err != nil {
 		return false, err
 	}
+	terminated := false
 	for event := range events {
 		if event.Seq > r.lastSeq {
 			r.lastSeq = event.Seq
 		}
 		r.renderer.RenderEvent(event)
 		if event.Type == types.EventTurnCompleted || event.Type == types.EventTurnFailed || event.Type == types.EventTurnInterrupted {
+			terminated = true
 			break
+		}
+	}
+	if !terminated {
+		if err := <-errs; err != nil {
+			return false, err
 		}
 	}
 	return false, nil

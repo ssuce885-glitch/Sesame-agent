@@ -1,29 +1,7 @@
 package tools
 
-func automationSpecInputSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"properties":           automationSpecProperties(),
-		"additionalProperties": false,
-	}
-}
-
 func automationSpecOutputSchema() map[string]any {
 	return objectSchema(automationSpecProperties(), "id", "title", "workspace_root", "goal", "state")
-}
-
-func automationAssetSchema() map[string]any {
-	return objectSchema(map[string]any{
-		"path": map[string]any{
-			"type": "string",
-		},
-		"content": map[string]any{
-			"type": "string",
-		},
-		"executable": map[string]any{
-			"type": "boolean",
-		},
-	}, "path", "content")
 }
 
 func automationSpecProperties() map[string]any {

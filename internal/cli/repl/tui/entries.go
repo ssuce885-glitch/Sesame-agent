@@ -54,16 +54,6 @@ func (m *Model) appendAssistantEntry(body string, streaming bool) {
 	})
 }
 
-func (m *Model) appendToolEntry(kind EntryKind, title, body, toolCallID, status string) {
-	m.appendEntry(Entry{
-		Kind:       kind,
-		Title:      title,
-		Body:       body,
-		ToolCallID: toolCallID,
-		Status:     status,
-	})
-}
-
 func (m *Model) appendNotice(text string) {
 	text = strings.TrimSpace(text)
 	if text == "" {

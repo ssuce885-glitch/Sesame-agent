@@ -14,10 +14,7 @@ func nativeBuilderValidationError(message string) error {
 }
 
 func marshalBuilderObject(value map[string]any) json.RawMessage {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return json.RawMessage("{}")
-	}
+	data, _ := json.Marshal(value)
 	return json.RawMessage(data)
 }
 

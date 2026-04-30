@@ -120,7 +120,7 @@ func parseDaemonOptions(args []string) (Options, error) {
 
 func parseSkillOptions(args []string) (Options, error) {
 	if len(args) == 0 {
-		return Options{}, fmt.Errorf("usage: sesame skill <list|inspect|install|remove> ...")
+		return Options{}, fmt.Errorf("usage: sesame skill <list|inspect|install|remove>")
 	}
 
 	cmd := &SkillCommand{Action: strings.ToLower(strings.TrimSpace(args[0]))}
@@ -203,7 +203,7 @@ func parseSkillOptions(args []string) (Options, error) {
 
 func parseAutomationOptions(args []string) (Options, error) {
 	if len(args) == 0 {
-		return Options{}, fmt.Errorf("usage: sesame automation <apply|list|get|pause|resume|remove|install|reinstall|watcher> ...")
+		return Options{}, fmt.Errorf("usage: sesame automation <apply|list|get|pause|resume|remove|install|reinstall|watcher>")
 	}
 	if strings.EqualFold(strings.TrimSpace(args[0]), "run") {
 		return Options{}, fmt.Errorf("automation run is removed; emit a synthetic trigger with `sesame trigger emit --automation <id> --source manual_test --signal manual`")
@@ -247,7 +247,7 @@ func parseAutomationOptions(args []string) (Options, error) {
 
 func parseTriggerOptions(args []string) (Options, error) {
 	if len(args) == 0 {
-		return Options{}, fmt.Errorf("usage: sesame trigger <emit|heartbeat|watch> ...")
+		return Options{}, fmt.Errorf("usage: sesame trigger <emit|heartbeat|watch>")
 	}
 
 	cmd := &TriggerCommand{Action: strings.ToLower(strings.TrimSpace(args[0]))}

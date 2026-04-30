@@ -99,22 +99,22 @@ func (s *Service) cleanupOldRows(ctx context.Context, now time.Time) {
 		return
 	}
 
-	affected, err := s.cleanupStore.CleanupDeprecatedMemories(ctx, now.Add(-deprecatedMemoryRetention))
-	logCleanupError("deprecated memories", affected, err)
-	affected, err = s.cleanupStore.CleanupOldReports(ctx, s.workspaceRoot, now.Add(-reportRetention))
-	logCleanupError("old reports", affected, err)
-	affected, err = s.cleanupStore.CleanupOldDigestRecords(ctx, s.workspaceRoot, now.Add(-digestRecordRetention))
-	logCleanupError("old digest records", affected, err)
-	affected, err = s.cleanupStore.CleanupOldReportDeliveries(ctx, s.workspaceRoot, now.Add(-reportDeliveryRetention))
-	logCleanupError("old report deliveries", affected, err)
-	affected, err = s.cleanupStore.CleanupOldChildAgentResults(ctx, now.Add(-childAgentResultRetention))
-	logCleanupError("old child agent results", affected, err)
-	affected, err = s.cleanupStore.CleanupOldConversationCompactions(ctx, conversationCompactionRetentionKeepCount)
-	logCleanupError("old conversation compactions", affected, err)
+	_, err := s.cleanupStore.CleanupDeprecatedMemories(ctx, now.Add(-deprecatedMemoryRetention))
+	logCleanupError("deprecated memories", err)
+	_, err = s.cleanupStore.CleanupOldReports(ctx, s.workspaceRoot, now.Add(-reportRetention))
+	logCleanupError("old reports", err)
+	_, err = s.cleanupStore.CleanupOldDigestRecords(ctx, s.workspaceRoot, now.Add(-digestRecordRetention))
+	logCleanupError("old digest records", err)
+	_, err = s.cleanupStore.CleanupOldReportDeliveries(ctx, s.workspaceRoot, now.Add(-reportDeliveryRetention))
+	logCleanupError("old report deliveries", err)
+	_, err = s.cleanupStore.CleanupOldChildAgentResults(ctx, now.Add(-childAgentResultRetention))
+	logCleanupError("old child agent results", err)
+	_, err = s.cleanupStore.CleanupOldConversationCompactions(ctx, conversationCompactionRetentionKeepCount)
+	logCleanupError("old conversation compactions", err)
 	s.lastCleanupAt = now
 }
 
-func logCleanupError(name string, _ int64, err error) {
+func logCleanupError(name string, err error) {
 	if err != nil {
 		slog.Warn("reporting cleanup failed", "target", name, "error", err)
 	}
