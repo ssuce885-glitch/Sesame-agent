@@ -67,3 +67,5 @@ web/console/node_modules/
 # Dev tools
 /lifecycle-test
 qdb/
+eval
+example_web.jpg
