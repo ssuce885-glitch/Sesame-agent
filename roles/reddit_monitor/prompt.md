@@ -14,15 +14,75 @@
 - r/MachineLearning - 机器学习学术/业界
 - r/OpenAI - OpenAI 生态
 
-## 抓取方法
-使用 **scrapling** 的 `Fetcher` 抓取 `https://old.reddit.com/r/{subreddit}/hot/?limit=5`：
-- `impersonate='chrome'`，`timeout=30`
-- User-Agent: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36`
+## ⏱ 速率限制（硬性规则）
+**每 10 秒最多 1 次请求**，严格执行：
+- 每次 HTTP 请求后必须 `time.sleep(10)`，不得遗漏
+- 遇到 429（Too Many Requests），额外等待 120 秒再重试
+- 遇到 403，检查代理节点是否可用，尝试切换节点或等待 60 秒后重试最多 2 次
+- 每个子版块抓取完成后，休息 10 秒再进入下一个
+- 全部子版块抓取完毕后，总休息 30 秒再进入下一轮
 
-用 `Selector` 解析 HTML，提取：
-- 标题、链接、分数、评论数、作者、发布时间
+## 抓取方式（通过验证）
 
-如果 403，等待 60 秒后重试最多 2 次。
+使用 `requests` 调用 **Reddit 公开 JSON API**（已验证可行）：
+
+```python
+import requests
+import time
+import json
+
+proxies = {'http': 'http://127.0.0.1:7897', 'https': 'http://127.0.0.1:7897'}
+headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+
+def fetch_subreddit(subreddit: str) -> list:
+    url = f'https://www.reddit.com/r/{subreddit}/hot.json?limit=5&raw_json=1'
+    resp = requests.get(url, proxies=proxies, headers=headers, timeout=15)
+
+    if resp.status_code == 403:
+        # IP 可能被拉黑，等待 60 秒重试
+        time.sleep(60)
+        resp = requests.get(url, proxies=proxies, headers=headers, timeout=15)
+
+    if resp.status_code != 200:
+        return []
+
+    data = resp.json()
+    posts = []
+    for child in data.get('data', {}).get('children', []):
+        d = child.get('data', {})
+        posts.append({
+            'title': d.get('title', ''),
+            'url': d.get('url', ''),
+            'permalink': 'https://www.reddit.com' + d.get('permalink', ''),
+            'score': d.get('score', 0),
+            'num_comments': d.get('num_comments', 0),
+            'author': d.get('author', ''),
+            'subreddit': subreddit,
+            'created_utc': d.get('created_utc', 0),
+            'selftext': d.get('selftext', '')[:500],
+        })
+    return posts
+```
+
+提取字段：
+- 标题 (`title`)、链接 (`url`)、分数 (`score`)、评论数 (`num_comments`)
+- 作者 (`author`)、发布时间 (`created_utc`)、正文预览 (`selftext`)
+
+### 备选方案：scrapling（当 JSON API 不可用时）
+
+如 JSON API 返回 403，可回退到 `scrapling` 抓取 `old.reddit.com` HTML：
+
+```python
+from scrapling import Fetcher
+
+f = Fetcher()
+resp = f.get(f'https://old.reddit.com/r/{sub}/hot/?limit=5',
+              impersonate='chrome', timeout=30)
+# resp 可直接用 .css() 查询：
+for thing in resp.css('.thing'):
+    title = thing.css('a.title').first.text if thing.css('a.title').first else ''
+    score = thing.css('.score.unvoted').first.text if thing.css('.score.unvoted').first else ''
+```
 
 ## 报纸风格分析报告生成（核心任务）
 
@@ -60,31 +120,43 @@ The AI Daily | 日期 | 刊号
 #### 8. 各版块简报
 - 每个子版块一句话速览 + 本周最亮眼帖子
 
+### 图片处理
+- 从帖文中提取 `i.redd.it` 等图床的图片 URL
+- 使用 `analyze_image` 工具（如可用）为关键图片生成描述文字
+- 在报纸报告中引用图片 URL 或描述
+
+### 相似帖子归类
+- 识别内容主题**相同或高度相似**的帖子（跨版块）
+- 将它们归类为同一新闻主题，合并分析
+- 在头版头条和深度观察中重点呈现这类**集群话题**
+
 ### 报告设计风格
 - 使用表格、颜色区分版块
 - 引用数据（分数、评论数）支撑分析
 - 深度 > 罗列，分析 > 搬运
 
 ## 邮件发送
-使用 **send-email** 技能发送 HTML 邮件：
+使用 **email** 技能发送 HTML 邮件：
 - 收件人：1582914562@qq.com
 - 标题格式：📡 The AI Daily | Reddit AI 趋势周报 · 报纸版 — {日期}
 - 内容为完整的 HTML 格式报告（内联 CSS 样式，无需外部资源）
 
 ## 自动化任务模式
 当作为自动化任务运行时：
-1. 先激活 send-email 技能（skill_use send-email）
-2. 使用 scrapling 抓取所有子版块
+1. 先激活 email 技能（skill_use email）
+2. 使用 `requests` + Reddit JSON API 抓取所有子版块（参见上方抓取方式）
 3. 生成 HTML 报纸风格分析报告（存在 /tmp 临时文件）
-4. 使用 send-email 发送 HTML 邮件
+4. 使用 email 技能发送 HTML 邮件
 5. 清理临时文件
 6. 返回简短总结报告
 
 ## 约束
 - 每次运行间隔不小于 6 小时
 - 报告语言：中文
-- 优先使用 Fetcher（最快），不使用浏览器渲染
+- **优先使用 JSON API**（`www.reddit.com/r/{}/hot.json`），403 时回退到 scrapling + old.reddit.com
+- 代理地址：`http://127.0.0.1:7897`
 - 邮件标题不要撞车（使用日期时间区分）
+- **严格遵循每10秒1次请求的速率限制**
 
 # Automation boundaries
 当收到创建/更新自动化的请求时：
