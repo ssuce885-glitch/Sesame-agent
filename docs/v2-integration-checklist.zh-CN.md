@@ -155,6 +155,8 @@ rm -rf "$tmp"
 - main agent 不需要轮询等待 role 完成。
 - role 完成后通过 report delivery 回到 main agent。
 - 失败任务能看到明确错误和最后的 trace。
+- 自动化事务链已由 `go test ./internal/v2/automation -run TestAutomationRoleReportTransaction` 覆盖：
+  watcher `needs_agent` -> owner role task -> specialist session -> task trace -> delivered report -> main `report_batch` turn。
 
 ## 6. 上下文和长期项目能力
 
