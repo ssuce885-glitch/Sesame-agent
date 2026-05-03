@@ -1,14 +1,11 @@
 import { MarkdownRenderer } from "../MarkdownRenderer";
-import type { TokenUsage } from "../../api/types";
 
 export function AssistantMessage({
   text,
   streaming,
-  usage,
 }: {
   text: string;
   streaming: boolean;
-  usage?: TokenUsage;
 }) {
   return (
     <div className="flex gap-3 mb-5">
@@ -53,24 +50,6 @@ export function AssistantMessage({
             <span style={{ color: "var(--color-text-tertiary)" }}>(no response)</span>
           )}
         </div>
-
-        {usage && (
-          <div
-            className="flex items-center gap-3 mt-2 text-[11px]"
-            style={{ color: "var(--color-text-tertiary)" }}
-          >
-            <span>In: {usage.input_tokens.toLocaleString()}</span>
-            <span>Out: {usage.output_tokens.toLocaleString()}</span>
-            {usage.cached_tokens > 0 && (
-              <span
-                className="px-1 rounded"
-                style={{ backgroundColor: "var(--color-accent-dim)", color: "var(--color-accent)" }}
-              >
-                Cache: {Math.round(usage.cache_hit_rate * 100)}%
-              </span>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );

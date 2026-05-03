@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import {
   createBrowserRouter,
   RouterProvider,
@@ -8,12 +9,18 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPage } from "./pages/ChatPage";
-import { RuntimePage } from "./pages/RuntimePage";
-import { UsagePage } from "./pages/UsagePage";
 import { RolesPage } from "./pages/RolesPage";
-import { useCurrentSession, useWorkspaceMeta } from "./api/queries";
+import { AutomationsPage } from "./pages/AutomationsPage";
+import { ReportsPage } from "./pages/ReportsPage";
+import { TaskTracePage } from "./pages/TaskTracePage";
+import { TasksPage } from "./pages/TasksPage";
+import { ContextPage } from "./pages/ContextPage";
+import { useSession } from "./api/queries";
 import { useI18n, I18nProvider, type Locale } from "./i18n";
 import { Globe } from "./components/Icon";
+
+const DEFAULT_WORKSPACE_ROOT =
+  (import.meta.env.VITE_WORKSPACE_ROOT as string | undefined) ?? "";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,7 +31,7 @@ const queryClient = new QueryClient({
   },
 });
 
-function RootLayout({ children }: { children: React.ReactNode }) {
+function RootLayout({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <I18nProvider>{children}</I18nProvider>
@@ -35,10 +42,11 @@ function RootLayout({ children }: { children: React.ReactNode }) {
 export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { locale, setLocale, t } = useI18n();
-  const { data: currentSession } = useCurrentSession();
-  const { data: workspace } = useWorkspaceMeta();
+  const { locale, setLocale } = useI18n();
+  const { data: currentSession } = useSession(DEFAULT_WORKSPACE_ROOT);
   const activeSessionId = currentSession?.id ?? null;
+  const workspaceRoot = currentSession?.workspace_root ?? DEFAULT_WORKSPACE_ROOT;
+  const workspaceName = workspaceRoot ? workspaceRoot.split("/").filter(Boolean).pop() : "Sesame";
   const [sidebarConnection, setSidebarConnection] = useState<
     "idle" | "connecting" | "open" | "reconnecting" | "error"
   >("idle");
@@ -64,14 +72,19 @@ export function AppShell() {
 
   const activePath =
     location.pathname === "/" ? "/chat" : location.pathname;
+  const taskTraceId = activePath.startsWith("/tasks/")
+    ? decodeURIComponent(activePath.slice("/tasks/".length))
+    : "";
+  const sidebarActivePath = activePath.startsWith("/tasks/") ? "/tasks" : activePath;
 
   return (
     <div className="flex h-screen" style={{ backgroundColor: "var(--color-bg)" }}>
       <Sidebar
-        workspaceName={workspace?.name}
-        workspaceRoot={workspace?.workspace_root}
+        workspaceName={workspaceName}
+        workspaceRoot={workspaceRoot}
+        sessionId={activeSessionId ?? undefined}
         connection={sidebarConnection}
-        activePath={activePath}
+        activePath={sidebarActivePath}
         onNavigate={(path) => navigate(path)}
       />
 
@@ -89,16 +102,16 @@ export function AppShell() {
               className="text-xs"
               style={{ color: "var(--color-text-tertiary)" }}
             >
-              {workspace?.name || "Sesame"}
+              {workspaceName || "Sesame"}
             </span>
-            {workspace?.workspace_root && (
+            {workspaceRoot && (
               <>
                 <span style={{ color: "var(--color-border-strong)" }}>/</span>
                 <span
                   className="text-xs truncate max-w-[200px]"
                   style={{ color: "var(--color-text-tertiary)" }}
                 >
-                  {workspace.workspace_root.split("/").pop()}
+                  {workspaceRoot}
                 </span>
               </>
             )}
@@ -117,13 +130,20 @@ export function AppShell() {
               onConnectionChange={handleConnectionChange}
             />
           )}
-          {activePath === "/runtime" && (
-            <RuntimePage sessionId={activeSessionId ?? ""} />
+          {activePath === "/roles" && <RolesPage workspaceRoot={workspaceRoot || null} />}
+          {activePath === "/automations" && (
+            <AutomationsPage workspaceRoot={workspaceRoot || null} />
           )}
-          {activePath === "/usage" && (
-            <UsagePage sessionId={activeSessionId ?? undefined} />
+          {activePath === "/reports" && (
+            <ReportsPage workspaceRoot={workspaceRoot || null} />
           )}
-          {activePath === "/roles" && <RolesPage />}
+          {activePath === "/tasks" && (
+            <TasksPage workspaceRoot={workspaceRoot || null} />
+          )}
+          {activePath === "/context" && (
+            <ContextPage workspaceRoot={workspaceRoot || null} sessionId={activeSessionId} />
+          )}
+          {taskTraceId && <TaskTracePage taskId={taskTraceId} />}
         </main>
       </div>
     </div>
@@ -168,9 +188,12 @@ const router = createBrowserRouter([
     element: <AppShell />,
     children: [
       { path: "chat", element: null },
-      { path: "runtime", element: null },
-      { path: "usage", element: null },
       { path: "roles", element: null },
+      { path: "automations", element: null },
+      { path: "reports", element: null },
+      { path: "tasks", element: null },
+      { path: "context", element: null },
+      { path: "tasks/:taskId", element: null },
     ],
   },
 ]);

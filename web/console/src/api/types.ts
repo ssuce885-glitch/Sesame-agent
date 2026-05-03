@@ -1,396 +1,261 @@
-// ─── Current session ──────────────────────────────────────────────────────────
-
-export interface CreateSessionResponse {
+// Session
+export interface SessionInfo {
   id: string;
   workspace_root: string;
+  state: string;
+  active_turn_id?: string;
+  created_at: string;
+  updated_at: string;
+  queue?: QueuePayload;
 }
 
-// ─── Timeline ─────────────────────────────────────────────────────────────────
+export interface QueuePayload {
+  active_turn_id?: string;
+  active_turn_kind?: string;
+  queue_depth: number;
+  queued_user_turns: number;
+  queued_report_batches: number;
+}
 
+// Timeline
 export interface TimelineBlock {
-  id: string;
-  turn_id?: string;
-  run_id?: string;
-  kind:
-    | "user_message"
-    | "reasoning"
-    | "assistant_message"
-    | "notice"
-    | "error"
-    | "plan_block"
-    | "task_block"
-    | "tool_call"
-    | "tool_run_block"
-    | "worktree_block";
-  status?: string;
-  title?: string;
+  kind: string;
   text?: string;
-  tool_call_id?: string;
-  tool_run_id?: string;
+  title?: string;
+  status?: string;
+  content?: TimelineContent[];
+}
+
+export interface TimelineContent {
+  type: string;
+  text?: string;
   tool_name?: string;
-  task_id?: string;
-  plan_id?: string;
-  worktree_id?: string;
-  reason?: string;
-  path?: string;
   args_preview?: string;
   result_preview?: string;
-  content?: ContentBlock[];
-  usage?: TokenUsage;
+  tool_call_id?: string;
+  status?: string;
 }
 
 export interface TimelineResponse {
   blocks: TimelineBlock[];
   latest_seq: number;
   queued_report_count: number;
-  queue: QueueSummary;
+  queue: QueuePayload;
 }
 
-export interface QueueSummary {
-  active_turn_id?: string;
-  active_turn_kind?: string;
-  queue_depth: number;
-  queued_user_turns: number;
-  queued_report_batches: number;
-  queued_reports: number;
+// SSE Events
+export interface SSEEvent {
+  id: string;
+  seq: number;
+  type: string;
+  payload: Record<string, unknown>;
 }
 
-// ─── Content Blocks ────────────────────────────────────────────────────────────
-
-export interface TextContentBlock {
-  type: "text";
-  text: string;
+// Turn
+export interface Turn {
+  id: string;
+  session_id: string;
+  kind: string;
+  state: string;
+  user_message: string;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface ToolCallContentBlock {
-  type: "tool_call";
-  tool_call_id: string;
-  tool_name: string;
-  args_preview?: string;
-  result_preview?: string;
-  status?: string;
+// Task
+export interface Task {
+  id: string;
+  workspace_root: string;
+  session_id: string;
+  role_id?: string;
+  turn_id?: string;
+  parent_session_id?: string;
+  parent_turn_id?: string;
+  report_session_id?: string;
+  kind: string;
+  state: string;
+  prompt: string;
+  output_path?: string;
+  final_text?: string;
+  outcome?: string;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface ImageContentBlock {
-  type: "image";
-  path?: string;
-  url?: string;
-  mime_type?: string;
-  width?: number;
-  height?: number;
-  size_bytes?: number;
+export interface TaskListFilters {
+  state?: string;
+  role_id?: string;
+  session_id?: string;
+  limit?: number;
 }
 
-export type ContentBlock = TextContentBlock | ToolCallContentBlock | ImageContentBlock;
+export interface TaskTraceLink {
+  session_id?: string;
+  turn_id?: string;
+}
 
-// ─── SSE Events ────────────────────────────────────────────────────────────────
+export interface TaskTraceRole extends TaskTraceLink {
+  id?: string;
+}
 
-export interface ServerEvent<T = unknown> {
+export interface TaskTraceState {
+  task: string;
+  turn?: string;
+  session?: string;
+  queue?: QueuePayload;
+}
+
+export interface TaskTraceMessage {
+  id?: number;
+  session_id: string;
+  turn_id?: string;
+  role: string;
+  content: string;
+  tool_call_id?: string;
+  position: number;
+  created_at: string;
+}
+
+export interface TaskTraceEvent {
   id: string;
   seq: number;
   session_id: string;
   turn_id?: string;
   type: string;
   time: string;
-  payload: T;
+  payload: string;
 }
 
-export interface ToolEventPayload {
-  tool_call_id: string;
-  tool_name: string;
-  arguments?: string;
-  arguments_raw?: string;
-  arguments_recovery?: string;
-  result_preview?: string;
-  is_error?: boolean;
+export interface TaskTrace {
+  task: Task;
+  parent: TaskTraceLink;
+  role: TaskTraceRole;
+  state: TaskTraceState;
+  messages: TaskTraceMessage[];
+  events: TaskTraceEvent[];
+  reports: Report[];
+  log_preview?: string;
+  log_path?: string;
+  log_bytes?: number;
+  log_truncated?: boolean;
 }
 
-export interface DeltaPayload {
-  text: string;
-}
-
-export interface FailurePayload {
-  message: string;
-}
-
-export interface ContextHeadSummaryPayload {
-  source_turn_id?: string;
-  workspace_root?: string;
-  async?: boolean;
-  updated?: boolean;
-  workspace_entries_upserted?: number;
-  global_entries_upserted?: number;
-  workspace_entries_pruned?: number;
-  message?: string;
-}
-
-export interface NoticePayload {
-  text: string;
-}
-
-// ─── Metrics ──────────────────────────────────────────────────────────────────
-
-export interface MetricsOverview {
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
-  cache_hit_rate: number;
-}
-
-export interface TimeseriesPoint {
-  bucket_start: string;
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
-}
-
-export interface MetricsTimeseries {
-  bucket: string;
-  points: TimeseriesPoint[];
-}
-
-export interface MetricsTurnRow {
-  session_id: string;
-  session_title?: string;
-  turn_id: string;
-  provider: string;
-  model: string;
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
-  cache_hit_rate: number;
-  created_at: string;
-}
-
-export interface MetricsTurnsResponse {
-  items: MetricsTurnRow[];
-  page: number;
-  page_size: number;
-  total_count: number;
-}
-
-// ─── Runtime ──────────────────────────────────────────────────────────────────
-
-export interface HistoryEntry {
+// Role
+export interface RoleSpec {
   id: string;
-  title?: string;
-  preview?: string;
-  source_kind?: string;
-  is_current: boolean;
-  created_at: string;
-  updated_at: string;
+  name: string;
+  description: string;
+  system_prompt: string;
+  permission_profile?: string;
+  model?: string;
+  max_tool_calls?: number;
+  max_runtime?: number;
+  max_context_tokens?: number;
+  skill_names?: string[];
+  denied_tools?: string[];
+  allowed_tools?: string[];
+  denied_paths?: string[];
+  allowed_paths?: string[];
+  can_delegate: boolean;
+  automation_ownership?: string[];
+  version?: number;
 }
 
-export interface ContextHead {
+export interface RoleInput {
   id: string;
-  session_id: string;
-  parent_head_id?: string;
-  source_kind: string;
-  title?: string;
-  preview?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ContextHistoryResponse {
-  entries: HistoryEntry[];
-  current_head_id?: string;
-}
-
-export interface RuntimeTask {
-  id: string;
-  run_id: string;
-  plan_id?: string;
-  parent_task_id?: string;
-  state: string;
-  title?: string;
+  name: string;
   description?: string;
-  owner?: string;
-  kind?: string;
-  execution_task_id?: string;
-  worktree_id?: string;
+  system_prompt: string;
+  permission_profile?: string;
+  model?: string;
+  max_tool_calls?: number;
+  max_runtime?: number;
+  max_context_tokens?: number;
+  skill_names?: string[];
+  denied_tools?: string[];
+  allowed_tools?: string[];
+  denied_paths?: string[];
+  allowed_paths?: string[];
+  can_delegate?: boolean;
+  automation_ownership?: string[];
+}
+
+// Automation
+export interface Automation {
+  id: string;
+  workspace_root: string;
+  title: string;
+  goal: string;
+  state: string;
+  owner: string;
+  watcher_path: string;
+  watcher_cron: string;
   created_at: string;
   updated_at: string;
 }
 
-export interface RuntimeDiagnostic {
-  id: string;
-  session_id: string;
-  turn_id: string;
-  event_type: string;
-  category?: string;
-  severity?: string;
-  reason?: string;
-  summary?: string;
-  repair_hint?: string;
-  asset_kind?: string;
-  asset_id?: string;
+export interface AutomationRun {
+  automation_id: string;
+  dedupe_key: string;
+  task_id: string;
+  status: string;
+  summary: string;
   created_at: string;
 }
 
-export interface RuntimeToolRun {
+// Report
+export interface Report {
   id: string;
-  run_id: string;
-  task_id?: string;
-  state: string;
-  tool_name: string;
-  tool_call_id?: string;
-  input_json?: string;
-  output_json?: string;
-  error?: string;
-  lock_wait_ms?: number;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export interface RuntimeWorktree {
-  id: string;
-  run_id: string;
-  task_id?: string;
-  state: string;
-  worktree_path: string;
-  worktree_branch?: string;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export interface RuntimeGraph {
-  runs: Array<{ id: string; session_id: string; turn_id?: string; state: string }>;
-  plans: Array<{ id: string; run_id: string; state: string; title?: string }>;
-  tasks: RuntimeTask[];
-  tool_runs: RuntimeToolRun[];
-  worktrees: RuntimeWorktree[];
-  diagnostics?: RuntimeDiagnostic[];
-}
-
-export interface WorkspaceRuntimeGraphResponse {
-  workspace_root: string;
-  graph: RuntimeGraph;
-}
-
-export interface ReportEnvelope {
-  source?: string;
-  status?: string;
-  severity?: string;
-  title?: string;
-  summary?: string;
-}
-
-export interface WorkspaceReportDeliveryItem {
-  id: string;
-  report_id?: string;
-  delivery_id?: string;
-  workspace_root: string;
   session_id: string;
-  source_session_id?: string;
-  source_role_id?: string;
   source_kind: string;
   source_id: string;
-  channel?: string;
-  delivery_state?: string;
-  envelope: ReportEnvelope;
-  observed_at?: string;
-  injected_turn_id?: string;
-  injected_at?: string;
-  created_at?: string;
-  updated_at?: string;
+  title: string;
+  summary: string;
+  severity: string;
+  status: string;
+  delivered: boolean;
+  created_at: string;
 }
 
-export interface WorkspaceReportsResponse {
-  workspace_root: string;
-  items: WorkspaceReportDeliveryItem[];
+export interface ReportsResponse {
+  items: Report[];
   queued_count: number;
 }
 
-// ─── File Checkpoints ─────────────────────────────────────────────────────────
-
-export interface FileCheckpoint {
-  id: string;
-  session_id: string;
-  turn_id: string;
-  tool_call_id: string;
-  tool_name: string;
-  reason: string;
-  git_commit_hash: string;
-  files_changed: string[];
-  diff_summary: string;
-  parent_checkpoint_id: string;
-  created_at: string;
-}
-
-export interface FileCheckpointListResponse {
-  checkpoints: FileCheckpoint[];
-}
-
-export interface FileCheckpointDiffResponse {
-  checkpoint: FileCheckpoint;
-  parent?: FileCheckpoint;
-  diff: string;
-}
-
-export interface FileCheckpointRollbackResponse {
-  status: string;
-  checkpoint?: FileCheckpoint;
-}
-
-// ─── Roles ────────────────────────────────────────────────────────────────────
-
-export interface RoleSpec {
-  role_id: string;
-  display_name: string;
-  description: string;
-  prompt: string;
-  skills: string[];
-  policy: Record<string, unknown>;
-  budget?: Record<string, unknown>;
-  version: number;
-}
-
-export interface RoleSummary {
-  role_id: string;
-  display_name: string;
-  description: string;
-  skills: string[];
-  policy: Record<string, unknown>;
-  budget?: Record<string, unknown>;
-  version: number;
-}
-
-export interface RoleDiagnostic {
-  role_id: string;
-  path: string;
-  error: string;
-}
-
-export interface RoleListResponse {
-  roles: RoleSummary[];
-  diagnostics: RoleDiagnostic[];
-}
-
-export interface RoleVersionListResponse {
-  versions: RoleSpec[];
-}
-
-// ─── Token Usage ───────────────────────────────────────────────────────────────
-
-export interface TokenUsage {
-  provider?: string;
-  model?: string;
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
-  cache_hit_rate: number;
-}
-
-// ─── Workspace ─────────────────────────────────────────────────────────────────
-
-export interface Workspace {
-  id?: string;
-  name?: string;
-  session_id?: string;
+// Project State
+export interface ProjectState {
   workspace_root: string;
-  provider?: string;
-  model?: string;
-  permission_profile?: string;
-  provider_cache_profile?: string;
+  summary: string;
+  source_session_id?: string;
+  source_turn_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Memory
+export interface Memory {
+  id: string;
+  workspace_root: string;
+  kind: string;
+  content: string;
+  source?: string;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// Status
+export interface StatusResponse {
+  status: string;
+  addr: string;
+  model: string;
+  permission_profile: string;
+  default_session_id: string;
+  queue?: QueuePayload;
+}
+
+// Setting
+export interface SettingResponse {
+  key: string;
+  value: string;
 }

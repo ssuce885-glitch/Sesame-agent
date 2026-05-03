@@ -1,15 +1,15 @@
-import { useCallback, useReducer, useEffect } from "react";
+import { useCallback, useReducer, useEffect, useState } from "react";
 import { Composer } from "../components/Composer";
 import { MessageList } from "../components/MessageList";
-import { useTimeline, useSubmitMessage } from "../api/queries";
+import { useTimeline, useSubmitTurn } from "../api/queries";
 import {
   useSessionEvents,
   reduceChat,
   initialState,
   timelineToMessages,
   type ChatState,
-  type ChatAction,
 } from "../api/events";
+import type { SSEEvent } from "../api/types";
 
 interface ChatPageProps {
   sessionId: string;
@@ -18,10 +18,15 @@ interface ChatPageProps {
 
 export function ChatPage({ sessionId, onConnectionChange }: ChatPageProps) {
   const [state, dispatch] = useReducer(reduceChat, initialState);
-  const { data: timeline, isLoading } = useTimeline(sessionId);
-  const submitMessage = useSubmitMessage(sessionId);
+  const { data: timeline } = useTimeline(sessionId || null);
+  const [timelineReady, setTimelineReady] = useState(false);
+  const submitTurn = useSubmitTurn(sessionId);
 
   // Initialize from timeline on session load
+  useEffect(() => {
+    setTimelineReady(false);
+  }, [sessionId]);
+
   useEffect(() => {
     if (timeline?.blocks) {
       dispatch({
@@ -29,11 +34,12 @@ export function ChatPage({ sessionId, onConnectionChange }: ChatPageProps) {
         messages: timelineToMessages(timeline.blocks),
         latestSeq: timeline.latest_seq,
       });
+      setTimelineReady(true);
     }
   }, [timeline]);
 
   // SSE events
-  const handleEvent = useCallback((event: import("../api/types").ServerEvent) => {
+  const handleEvent = useCallback((event: SSEEvent) => {
     dispatch({ type: "event", event });
   }, []);
 
@@ -45,30 +51,25 @@ export function ChatPage({ sessionId, onConnectionChange }: ChatPageProps) {
     [onConnectionChange],
   );
 
-  const { reconnect } = useSessionEvents(
+  useSessionEvents(
     sessionId,
     state.latestSeq,
     handleEvent,
     handleConnectionChange,
+    timelineReady,
   );
 
   async function handleSend(message: string) {
-    if (submitMessage.isPending) return;
+    if (submitTurn.isPending || !sessionId) return;
     // Optimistically mark user message
     dispatch({
-      type: "event",
-      event: {
-        id: `opt_${Date.now()}`,
-        seq: state.latestSeq + 1,
-        session_id: sessionId,
-        turn_id: undefined,
-        type: "user_message",
-        time: new Date().toISOString(),
-        payload: { text: message },
-      },
-    } as ChatAction);
+      type: "appendUserMessage",
+      id: `opt_${Date.now()}`,
+      seq: state.latestSeq + 1,
+      text: message,
+    });
     try {
-      await submitMessage.mutateAsync(message);
+      await submitTurn.mutateAsync(message);
     } catch (err) {
       console.error("Failed to send message:", err);
       throw err;
@@ -77,8 +78,8 @@ export function ChatPage({ sessionId, onConnectionChange }: ChatPageProps) {
 
   return (
     <div className="flex flex-col h-full">
-      <MessageList messages={state.messages} connection={state.connection} onSuggestionClick={handleSend} suggestionsDisabled={submitMessage.isPending} />
-      <Composer onSend={handleSend} disabled={submitMessage.isPending} />
+      <MessageList messages={state.messages} connection={state.connection} onSuggestionClick={handleSend} suggestionsDisabled={submitTurn.isPending || !sessionId} />
+      <Composer onSend={handleSend} disabled={submitTurn.isPending || !sessionId} />
     </div>
   );
 }

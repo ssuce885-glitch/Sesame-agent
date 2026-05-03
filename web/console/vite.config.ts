@@ -7,6 +7,11 @@ export default defineConfig({
   server: {
     port: 4173,
     proxy: {
+      "/v2": {
+        target: process.env.VITE_SESAME_ORIGIN ?? "http://127.0.0.1:8421",
+        changeOrigin: true,
+        selfHandleResponse: false,
+      },
       "/v1": {
         target: process.env.VITE_SESAME_ORIGIN ?? "http://127.0.0.1:4317",
         changeOrigin: true,

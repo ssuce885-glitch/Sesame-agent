@@ -1,42 +1,49 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ensureCurrentSession,
-  getTimeline,
-  getContextHistory,
-  getWorkspace,
-  getWorkspaceReports,
-  getWorkspaceRuntimeGraph,
-  getFileCheckpointDiff,
-  loadContextHistory,
-  listFileCheckpoints,
-  reopenContext,
-  rollbackFileCheckpoint,
-  submitMessage,
-  getMetricsOverview,
-  getMetricsTimeseries,
-  getRole,
-  listRoleVersions,
-  listRoles,
+  cancelTask,
+  createAutomation,
+  createMemory,
   createRole,
+  createTask,
+  deleteMemory,
+  ensureSession,
+  getProjectState,
+  getReports,
+  getRole,
+  getSession,
+  getSetting,
+  getStatus,
+  getTask,
+  getTaskTrace,
+  getTimeline,
+  interruptTurn,
+  listAutomations,
+  listAutomationRuns,
+  listTasks,
+  listRoles,
+  pauseAutomation,
+  resumeAutomation,
+  searchMemory,
+  setSetting,
+  submitTurn,
+  updateProjectState,
   updateRole,
-  deleteRole,
-  generateClientTurnId,
 } from "./client";
+import type { Automation, Memory, ProjectState, RoleInput, RoleSpec, Task, TaskListFilters } from "./types";
 
-// ─── Current workspace/session queries ─────────────────────────────────────────
-
-export function useWorkspaceMeta() {
+export function useSession(workspaceRoot: string) {
   return useQuery({
-    queryKey: ["workspace"],
-    queryFn: getWorkspace,
-    staleTime: 30_000,
+    queryKey: ["session", workspaceRoot],
+    queryFn: () => ensureSession(workspaceRoot),
+    staleTime: 10_000,
   });
 }
 
-export function useCurrentSession() {
+export function useSessionInfo(sessionId: string | null) {
   return useQuery({
-    queryKey: ["session", "current"],
-    queryFn: ensureCurrentSession,
+    queryKey: ["session-info", sessionId],
+    queryFn: () => getSession(sessionId!),
+    enabled: !!sessionId,
     staleTime: 10_000,
   });
 }
@@ -50,102 +57,6 @@ export function useTimeline(sessionId: string | null) {
   });
 }
 
-export function useContextHistory(sessionId: string | null) {
-  return useQuery({
-    queryKey: ["history", sessionId],
-    queryFn: () => getContextHistory(sessionId!),
-    enabled: !!sessionId,
-    staleTime: 10_000,
-  });
-}
-
-export function useWorkspaceRuntimeGraph() {
-  return useQuery({
-    queryKey: ["runtime-graph"],
-    queryFn: getWorkspaceRuntimeGraph,
-    staleTime: 10_000,
-  });
-}
-
-export function useWorkspaceReports() {
-  return useQuery({
-    queryKey: ["workspace-reports"],
-    queryFn: getWorkspaceReports,
-    staleTime: 10_000,
-  });
-}
-
-export function useFileCheckpoints(sessionId: string | null) {
-  return useQuery({
-    queryKey: ["file-checkpoints", sessionId],
-    queryFn: () => listFileCheckpoints(sessionId!),
-    enabled: !!sessionId,
-    staleTime: 10_000,
-  });
-}
-
-export function useFileCheckpointDiff(sessionId: string | null, checkpointId: string | null) {
-  return useQuery({
-    queryKey: ["file-checkpoints", sessionId, checkpointId, "diff"],
-    queryFn: () => getFileCheckpointDiff(sessionId!, checkpointId!),
-    enabled: !!sessionId && !!checkpointId,
-    staleTime: 30_000,
-  });
-}
-
-export function useReopenContext(sessionId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => reopenContext(sessionId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["history", sessionId] });
-      qc.invalidateQueries({ queryKey: ["timeline", sessionId] });
-    },
-  });
-}
-
-export function useLoadContextHistory(sessionId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (headId: string) => loadContextHistory(sessionId, headId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["history", sessionId] });
-      qc.invalidateQueries({ queryKey: ["timeline", sessionId] });
-    },
-  });
-}
-
-export function useRollbackFileCheckpoint(sessionId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (checkpointId: string) => rollbackFileCheckpoint(sessionId, checkpointId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["file-checkpoints", sessionId] });
-      qc.invalidateQueries({ queryKey: ["timeline", sessionId] });
-    },
-  });
-}
-
-// ─── Metrics queries ────────────────────────────────────────────────────────────
-
-export function useMetricsOverview(sessionId?: string) {
-  return useQuery({
-    queryKey: ["metrics", "overview", sessionId],
-    queryFn: () => getMetricsOverview(sessionId),
-    staleTime: 30_000,
-  });
-}
-
-export function useMetricsTimeseries(sessionId?: string) {
-  return useQuery({
-    queryKey: ["metrics", "timeseries", sessionId],
-    queryFn: () => getMetricsTimeseries(sessionId),
-    staleTime: 30_000,
-  });
-}
-
-// ─── Role queries ───────────────────────────────────────────────────────────────
-
 export function useRoles() {
   return useQuery({
     queryKey: ["roles"],
@@ -154,65 +65,242 @@ export function useRoles() {
   });
 }
 
-export function useRole(roleID: string | null) {
+export function useRole(roleId: string | null) {
   return useQuery({
-    queryKey: ["roles", roleID],
-    queryFn: () => getRole(roleID!),
-    enabled: !!roleID,
+    queryKey: ["roles", roleId],
+    queryFn: () => getRole(roleId!),
+    enabled: !!roleId,
     staleTime: 10_000,
-  });
-}
-
-export function useRoleVersions(roleID: string | null) {
-  return useQuery({
-    queryKey: ["roles", roleID, "versions"],
-    queryFn: () => listRoleVersions(roleID!),
-    enabled: !!roleID,
-    staleTime: 10_000,
-  });
-}
-
-// ─── Mutations ─────────────────────────────────────────────────────────────────
-
-export function useSubmitMessage(sessionId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (message: string) =>
-      submitMessage(sessionId, message, generateClientTurnId()),
-    onSuccess: () => {
-      // Invalidate timeline so it refetches latest messages
-      qc.invalidateQueries({ queryKey: ["timeline", sessionId] });
-    },
   });
 }
 
 export function useCreateRole() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: createRole,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["roles"] }),
+    mutationFn: (role: RoleInput) => createRole(role),
+    onSuccess: (role) => {
+      qc.setQueryData<RoleSpec[]>(["roles"], (current = []) => {
+        const existing = current.filter((item) => item.id !== role.id);
+        return [...existing, role].sort((a, b) => a.id.localeCompare(b.id));
+      });
+      qc.invalidateQueries({ queryKey: ["roles"] });
+      qc.setQueryData(["roles", role.id], role);
+    },
   });
 }
 
 export function useUpdateRole() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ roleID, role }: { roleID: string; role: import("./types").RoleSpec }) =>
-      updateRole(roleID, role),
-    onSuccess: (_data, vars) => {
+    mutationFn: ({ roleId, role }: { roleId: string; role: RoleInput }) => updateRole(roleId, role),
+    onSuccess: (role) => {
+      qc.setQueryData<RoleSpec[]>(["roles"], (current = []) => current.map((item) => (item.id === role.id ? role : item)));
       qc.invalidateQueries({ queryKey: ["roles"] });
-      qc.invalidateQueries({ queryKey: ["roles", vars.roleID, "versions"] });
+      qc.setQueryData(["roles", role.id], role);
     },
   });
 }
 
-export function useDeleteRole() {
+export function useReports(workspaceRoot: string | null) {
+  return useQuery({
+    queryKey: ["reports", workspaceRoot],
+    queryFn: () => getReports(workspaceRoot!),
+    enabled: !!workspaceRoot,
+    staleTime: 10_000,
+  });
+}
+
+export function useAutomations(workspaceRoot: string | null) {
+  return useQuery({
+    queryKey: ["automations", workspaceRoot],
+    queryFn: () => listAutomations(workspaceRoot!),
+    enabled: !!workspaceRoot,
+    staleTime: 10_000,
+  });
+}
+
+export function useAutomationRuns(automationId: string | null) {
+  return useQuery({
+    queryKey: ["automation-runs", automationId],
+    queryFn: () => listAutomationRuns(automationId!, 20),
+    enabled: !!automationId,
+    staleTime: 5_000,
+  });
+}
+
+export function useProjectState(workspaceRoot: string | null) {
+  return useQuery({
+    queryKey: ["project-state", workspaceRoot],
+    queryFn: () => getProjectState(workspaceRoot!),
+    enabled: !!workspaceRoot,
+    staleTime: 10_000,
+  });
+}
+
+export function useMemories(workspaceRoot: string | null, query: string) {
+  return useQuery({
+    queryKey: ["memories", workspaceRoot, query],
+    queryFn: () => searchMemory(query, workspaceRoot!, 80),
+    enabled: !!workspaceRoot,
+    staleTime: 5_000,
+  });
+}
+
+export function useCreateMemory(workspaceRoot: string | null, query = "") {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (roleID: string) => deleteRole(roleID),
-    onSuccess: (_data, roleID) => {
-      qc.invalidateQueries({ queryKey: ["roles"] });
-      qc.removeQueries({ queryKey: ["roles", roleID, "versions"] });
+    mutationFn: (memory: Partial<Memory>) => createMemory(memory),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["memories", workspaceRoot] });
+      qc.invalidateQueries({ queryKey: ["memories", workspaceRoot, query] });
     },
+  });
+}
+
+export function useDeleteMemory(workspaceRoot: string | null, query = "") {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteMemory(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["memories", workspaceRoot] });
+      qc.invalidateQueries({ queryKey: ["memories", workspaceRoot, query] });
+    },
+  });
+}
+
+export function useSetting(key: string) {
+  return useQuery({
+    queryKey: ["settings", key],
+    queryFn: () => getSetting(key),
+    staleTime: 10_000,
+  });
+}
+
+export function useSetSetting(key: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (value: string) => setSetting(key, value),
+    onSuccess: (setting) => {
+      qc.setQueryData(["settings", key], setting);
+      qc.invalidateQueries({ queryKey: ["settings", key] });
+    },
+  });
+}
+
+export function useStatus() {
+  return useQuery({
+    queryKey: ["status"],
+    queryFn: getStatus,
+    staleTime: 10_000,
+  });
+}
+
+export function useTask(taskId: string | null) {
+  return useQuery({
+    queryKey: ["tasks", taskId],
+    queryFn: () => getTask(taskId!),
+    enabled: !!taskId,
+    staleTime: 10_000,
+  });
+}
+
+export function useTasks(workspaceRoot: string | null, filters: TaskListFilters = {}) {
+  const state = filters.state ?? "";
+  const roleID = filters.role_id ?? "";
+  const sessionID = filters.session_id ?? "";
+  const limit = filters.limit ?? 0;
+  return useQuery({
+    queryKey: ["tasks", "list", workspaceRoot, state, roleID, sessionID, limit],
+    queryFn: () => listTasks(workspaceRoot!, filters),
+    enabled: !!workspaceRoot,
+    refetchInterval: state === "pending,running" || state === "running" || state === "" ? 3000 : false,
+  });
+}
+
+export function useTaskTrace(taskId: string | null) {
+  return useQuery({
+    queryKey: ["tasks", taskId, "trace"],
+    queryFn: () => getTaskTrace(taskId!),
+    enabled: !!taskId,
+    refetchInterval: (query) => {
+      const state = query.state.data?.task.state;
+      return state === "pending" || state === "running" ? 2000 : false;
+    },
+  });
+}
+
+export function useSubmitTurn(sessionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (message: string) => submitTurn(sessionId, message),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["session-info", sessionId] });
+    },
+  });
+}
+
+export function useInterruptTurn() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (turnId: string) => interruptTurn(turnId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["session"] });
+      qc.invalidateQueries({ queryKey: ["session-info"] });
+    },
+  });
+}
+
+export function useCreateTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (task: Partial<Task>) => createTask(task),
+    onSuccess: (task) => {
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["session-info", task.session_id] });
+      qc.invalidateQueries({ queryKey: ["timeline", task.session_id] });
+    },
+  });
+}
+
+export function useCancelTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (taskId: string) => cancelTask(taskId),
+    onSuccess: (task) => {
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["tasks", task.id] });
+    },
+  });
+}
+
+export function useCreateAutomation(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<Automation>) => createAutomation(data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["automations", workspaceRoot] }),
+  });
+}
+
+export function usePauseAutomation(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => pauseAutomation(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["automations", workspaceRoot] }),
+  });
+}
+
+export function useResumeAutomation(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => resumeAutomation(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["automations", workspaceRoot] }),
+  });
+}
+
+export function useUpdateProjectState(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (state: Partial<ProjectState>) => updateProjectState(state),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project-state", workspaceRoot] }),
   });
 }

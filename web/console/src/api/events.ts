@@ -1,14 +1,6 @@
-import { useEffect, useRef, useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef } from "react";
 import { openEventStream } from "./client";
-import type {
-  ServerEvent,
-  ToolEventPayload,
-  DeltaPayload,
-  FailurePayload,
-  NoticePayload,
-  ContextHeadSummaryPayload,
-} from "./types";
+import type { SSEEvent, TimelineBlock, TimelineContent } from "./types";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -30,37 +22,24 @@ export interface ChatMessage {
   argsPreview?: string;
   resultPreview?: string;
   isError?: boolean;
-  reason?: string;
-  usage?: {
-    input_tokens: number;
-    output_tokens: number;
-    cached_tokens: number;
-    cache_hit_rate: number;
-  };
-}
-
-export interface ContextHeadSummaryStatus {
-  phase: "idle" | "running" | "updated" | "failed";
-  text: string;
 }
 
 export interface ChatState {
   messages: ChatMessage[];
   latestSeq: number;
   connection: "idle" | "connecting" | "open" | "reconnecting" | "error";
-  contextHeadSummary: ContextHeadSummaryStatus;
 }
 
 export type ChatAction =
   | { type: "init"; messages: ChatMessage[]; latestSeq: number }
   | { type: "connection"; value: ChatState["connection"] }
-  | { type: "event"; event: ServerEvent };
+  | { type: "event"; event: SSEEvent }
+  | { type: "appendUserMessage"; id: string; seq: number; text: string };
 
 export const initialState: ChatState = {
   messages: [],
   latestSeq: 0,
   connection: "idle",
-  contextHeadSummary: { phase: "idle", text: "" },
 };
 
 // ─── Reducer ──────────────────────────────────────────────────────────────────
@@ -68,9 +47,6 @@ export const initialState: ChatState = {
 export function reduceChat(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case "init": {
-      // Merge: use timeline as the base, but preserve any SSE messages
-      // that arrived after the timeline's latestSeq (they aren't in the
-      // timeline snapshot yet, so dropping them would lose live data).
       const tlLatestSeq = action.latestSeq;
       const liveAfterInit = state.messages.filter((m) =>
         shouldKeepLiveMessage(m, action.messages, tlLatestSeq),
@@ -84,6 +60,20 @@ export function reduceChat(state: ChatState, action: ChatAction): ChatState {
       return { ...state, connection: action.value };
     case "event":
       return applyEvent(state, action.event);
+    case "appendUserMessage":
+      return {
+        ...state,
+        latestSeq: Math.max(state.latestSeq, action.seq),
+        messages: [
+          ...state.messages,
+          {
+            id: action.id,
+            seq: action.seq,
+            kind: "user_message",
+            text: action.text,
+          },
+        ],
+      };
     default:
       return state;
   }
@@ -120,57 +110,101 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
   return -1;
 }
 
+function eventTurnId(event: SSEEvent): string | undefined {
+  const value = event.payload.turn_id;
+  return typeof value === "string" ? value : undefined;
+}
+
 function turnMatches(msg: ChatMessage, turnId: string | undefined): boolean {
   return !turnId || !msg.turnId || msg.turnId === turnId;
 }
 
-function applyEvent(state: ChatState, event: ServerEvent): ChatState {
-  const nextSeq = Math.max(state.latestSeq, event.seq);
-
-  switch (event.type) {
-    case "user_message": {
-      const text =
-        typeof (event.payload as { text?: unknown })?.text === "string"
-          ? (event.payload as { text: string }).text
-          : "";
-      const msgs = [...state.messages];
-      msgs.push({
-        id: event.id,
-        seq: event.seq,
-        turnId: event.turn_id,
-        kind: "user_message",
-        text,
-      });
-      return { ...state, messages: msgs, latestSeq: nextSeq };
+function payloadString(
+  payload: Record<string, unknown>,
+  ...keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === "string") {
+      return value;
     }
+  }
+  return undefined;
+}
 
+function payloadPreview(
+  payload: Record<string, unknown>,
+  ...keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === "string") {
+      return value;
+    }
+    if (value != null) {
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    }
+  }
+  return undefined;
+}
+
+function eventType(type: string): string {
+  switch (type) {
+    case "turn_started":
+      return "turn.started";
+    case "turn_completed":
+      return "assistant.completed";
+    case "turn_failed":
+      return "turn.failed";
+    case "turn_interrupted":
+      return "turn.interrupted";
+    case "assistant_delta":
+      return "assistant.delta";
+    case "tool_call":
+      return "tool.started";
+    case "tool_result":
+      return "tool.completed";
+    default:
+      return type;
+  }
+}
+
+function applyEvent(state: ChatState, event: SSEEvent): ChatState {
+  const nextSeq = Math.max(state.latestSeq, event.seq);
+  const turnId = eventTurnId(event);
+
+  switch (eventType(event.type)) {
     case "turn.started":
       return { ...state, latestSeq: nextSeq };
 
     case "assistant.delta": {
-      const payload = event.payload as DeltaPayload;
+      const text = payloadString(event.payload, "text") ?? "";
       const msgs = [...state.messages];
       const idx = findLastIndex(
         msgs,
         (msg) =>
           msg.kind === "assistant_message" &&
           msg.streaming === true &&
-          turnMatches(msg, event.turn_id),
+          turnMatches(msg, turnId),
       );
       if (idx < 0) {
         msgs.push({
-          id: `a_${event.seq}_${event.turn_id ?? crypto.randomUUID()}`,
+          id: `a_${event.seq}_${turnId ?? crypto.randomUUID()}`,
           seq: event.seq,
-          turnId: event.turn_id,
+          turnId,
           kind: "assistant_message",
-          text: payload.text,
+          text,
           streaming: true,
         });
       } else {
         msgs[idx] = {
           ...msgs[idx],
           seq: event.seq,
-          text: (msgs[idx].text ?? "") + payload.text,
+          text: (msgs[idx].text ?? "") + text,
           streaming: true,
         };
       }
@@ -181,7 +215,7 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       const msgs = [...state.messages];
       const idx = findLastIndex(
         msgs,
-        (msg) => msg.kind === "assistant_message" && turnMatches(msg, event.turn_id),
+        (msg) => msg.kind === "assistant_message" && turnMatches(msg, turnId),
       );
       if (idx >= 0) {
         msgs[idx] = { ...msgs[idx], seq: event.seq, streaming: false };
@@ -190,19 +224,21 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
     }
 
     case "tool.started": {
-      const p = event.payload as ToolEventPayload;
+      const toolCallId = payloadString(event.payload, "tool_call_id", "id");
+      const toolName = payloadString(event.payload, "tool_name", "name") ?? "tool";
+      const argsPreview = payloadPreview(event.payload, "arguments", "args_preview", "args");
       const msgs = [...state.messages];
-      const idx = p.tool_call_id
-        ? msgs.findIndex((m) => m.kind === "tool_call" && m.toolCallId === p.tool_call_id)
+      const idx = toolCallId
+        ? msgs.findIndex((m) => m.kind === "tool_call" && m.toolCallId === toolCallId)
         : -1;
       const nextToolCall: ChatMessage = {
-        id: p.tool_call_id ? `tc_${p.tool_call_id}` : `tc_${event.seq}`,
+        id: toolCallId ? `tc_${toolCallId}` : `tc_${event.seq}`,
         seq: event.seq,
-        turnId: event.turn_id,
+        turnId,
         kind: "tool_call",
-        toolCallId: p.tool_call_id,
-        toolName: p.tool_name,
-        argsPreview: p.arguments,
+        toolCallId,
+        toolName,
+        argsPreview,
         status: "running",
       };
       if (idx >= 0) {
@@ -214,45 +250,48 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
     }
 
     case "tool.completed": {
-      const p = event.payload as ToolEventPayload;
+      const toolCallId = payloadString(event.payload, "tool_call_id", "id");
+      const isError = event.payload.is_error === true;
       const msgs = [...state.messages];
-      const idx = msgs.findIndex(
-        (m) => m.kind === "tool_call" && m.toolCallId === p.tool_call_id,
-      );
+      const idx = toolCallId
+        ? msgs.findIndex((m) => m.kind === "tool_call" && m.toolCallId === toolCallId)
+        : -1;
       if (idx >= 0) {
         msgs[idx] = {
           ...msgs[idx],
           seq: event.seq,
-          status: p.is_error ? "failed" : "completed",
-          resultPreview: p.result_preview,
-          isError: p.is_error,
+          status: isError ? "failed" : "completed",
+          resultPreview: payloadPreview(event.payload, "result_preview", "output"),
+          isError,
         };
       }
       return { ...state, messages: msgs, latestSeq: nextSeq };
     }
 
-    case "system.notice": {
-      const p = event.payload as NoticePayload;
+    case "system.notice":
+    case "task_result_ready": {
+      const text =
+        payloadString(event.payload, "text", "message", "title") ??
+        (eventType(event.type) === "task_result_ready" ? "Task result ready." : "");
       const msgs = [...state.messages];
       msgs.push({
         id: `notice_${event.seq}`,
         seq: event.seq,
-        turnId: event.turn_id,
+        turnId,
         kind: "notice",
-        text: p.text,
+        text,
       });
       return { ...state, messages: msgs, latestSeq: nextSeq };
     }
 
     case "turn.failed": {
-      const p = event.payload as FailurePayload;
       const msgs = [...state.messages];
       msgs.push({
         id: `error_${event.seq}`,
         seq: event.seq,
-        turnId: event.turn_id,
+        turnId,
         kind: "error",
-        text: p.message,
+        text: payloadString(event.payload, "message", "error") ?? "Turn failed.",
       });
       return { ...state, messages: msgs, latestSeq: nextSeq };
     }
@@ -262,56 +301,9 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
       msgs.push({
         id: `notice_${event.seq}`,
         seq: event.seq,
-        turnId: event.turn_id,
+        turnId,
         kind: "notice",
         text: "Turn interrupted. Waiting for further input.",
-      });
-      return { ...state, messages: msgs, latestSeq: nextSeq };
-    }
-
-    case "context_head_summary.started":
-      return {
-        ...state,
-        latestSeq: nextSeq,
-        contextHeadSummary: { phase: "running", text: "Summarizing context head..." },
-      };
-
-    case "context_head_summary.completed": {
-      const p = event.payload as ContextHeadSummaryPayload;
-      const parts: string[] = [];
-      if (p.workspace_entries_upserted) parts.push(`+${p.workspace_entries_upserted} workspace`);
-      if (p.global_entries_upserted) parts.push(`+${p.global_entries_upserted} global`);
-      if (p.workspace_entries_pruned) parts.push(`-${p.workspace_entries_pruned} pruned`);
-      return {
-        ...state,
-        latestSeq: nextSeq,
-        contextHeadSummary: {
-          phase: "updated",
-          text: parts.length > 0 ? `Context summary updated: ${parts.join(" / ")}` : "Context summary updated",
-        },
-      };
-    }
-
-    case "context_head_summary.failed": {
-      const p = event.payload as ContextHeadSummaryPayload;
-      return {
-        ...state,
-        latestSeq: nextSeq,
-        contextHeadSummary: {
-          phase: "failed",
-          text: p.message ?? "Context summary refresh failed",
-        },
-      };
-    }
-
-    case "context.compacted": {
-      const msgs = [...state.messages];
-      msgs.push({
-        id: `notice_${event.seq}`,
-        seq: event.seq,
-        turnId: event.turn_id,
-        kind: "notice",
-        text: "Context was compacted by the system.",
       });
       return { ...state, messages: msgs, latestSeq: nextSeq };
     }
@@ -323,37 +315,93 @@ function applyEvent(state: ChatState, event: ServerEvent): ChatState {
 
 // ─── Timeline → ChatMessage conversion ─────────────────────────────────────────
 
-export function timelineToMessages(
-  blocks: import("./types").TimelineBlock[],
-): ChatMessage[] {
-  return blocks.map((b) => {
-    if (b.kind === "tool_call") {
-      return {
-        id: `tl_${b.tool_call_id ?? b.id}`,
-        turnId: b.turn_id,
-        kind: "tool_call",
-        toolCallId: b.tool_call_id,
-        toolName: b.tool_name,
-        argsPreview: b.args_preview,
-        resultPreview: b.result_preview,
-        status: b.status,
-        isError: b.status === "failed",
-      };
-    }
-    const text = firstTimelineText(b);
-    return {
-      id: `tl_${b.id}`,
-      turnId: b.turn_id,
-      kind: b.kind as ChatMessage["kind"],
-      text,
-      status: b.status,
-      streaming: b.status === "streaming",
-      usage: b.usage,
-    };
-  });
+export function timelineToMessages(blocks: TimelineBlock[]): ChatMessage[] {
+  return blocks.flatMap((block, index) => timelineBlockToMessages(block, index));
 }
 
-function firstTimelineText(block: import("./types").TimelineBlock): string | undefined {
+function timelineBlockToMessages(block: TimelineBlock, index: number): ChatMessage[] {
+  if (isToolKind(block.kind)) {
+    return [toolMessageFromBlock(block, index)];
+  }
+
+  const messages: ChatMessage[] = [];
+  const text = firstTimelineText(block);
+  if (text) {
+    messages.push({
+      id: `tl_${index}_${block.kind}`,
+      kind: chatKindFromTimelineKind(block.kind),
+      text,
+      status: block.status,
+      streaming: block.status === "streaming",
+    });
+  }
+
+  for (const part of block.content ?? []) {
+    if (isToolContent(part)) {
+      messages.push(toolMessageFromContent(part, index));
+    }
+  }
+
+  if (messages.length === 0 && block.title) {
+    messages.push({
+      id: `tl_${index}_${block.kind}`,
+      kind: chatKindFromTimelineKind(block.kind),
+      text: block.title,
+      status: block.status,
+    });
+  }
+  return messages;
+}
+
+function chatKindFromTimelineKind(kind: string): ChatMessage["kind"] {
+  if (kind === "user_message" || kind === "user") {
+    return "user_message";
+  }
+  if (kind === "assistant_message" || kind === "assistant") {
+    return "assistant_message";
+  }
+  if (kind === "error") {
+    return "error";
+  }
+  return "notice";
+}
+
+function isToolKind(kind: string): boolean {
+  return kind === "tool_call" || kind === "tool";
+}
+
+function isToolContent(part: TimelineContent): boolean {
+  return part.type === "tool_call" || part.type === "tool";
+}
+
+function toolMessageFromBlock(block: TimelineBlock, index: number): ChatMessage {
+  const tool = (block.content ?? []).find(isToolContent);
+  return {
+    id: `tl_tool_${tool?.tool_call_id ?? index}`,
+    kind: "tool_call",
+    toolCallId: tool?.tool_call_id,
+    toolName: tool?.tool_name ?? block.title ?? "tool",
+    argsPreview: tool?.args_preview,
+    resultPreview: tool?.result_preview ?? block.text,
+    status: tool?.status ?? block.status,
+    isError: (tool?.status ?? block.status) === "failed",
+  };
+}
+
+function toolMessageFromContent(part: TimelineContent, index: number): ChatMessage {
+  return {
+    id: `tl_tool_${part.tool_call_id ?? index}`,
+    kind: "tool_call",
+    toolCallId: part.tool_call_id,
+    toolName: part.tool_name ?? "tool",
+    argsPreview: part.args_preview,
+    resultPreview: part.result_preview,
+    status: part.status,
+    isError: part.status === "failed",
+  };
+}
+
+function firstTimelineText(block: TimelineBlock): string | undefined {
   if (typeof block.text === "string" && block.text !== "") {
     return block.text;
   }
@@ -362,10 +410,7 @@ function firstTimelineText(block: import("./types").TimelineBlock): string | und
   }
 
   const text = block.content
-    .filter(
-      (part): part is Extract<import("./types").ContentBlock, { type: "text" }> =>
-        part.type === "text" && typeof part.text === "string" && part.text !== "",
-    )
+    .filter((part) => part.type === "text" && typeof part.text === "string" && part.text !== "")
     .map((part) => part.text)
     .join("");
 
@@ -377,94 +422,65 @@ function firstTimelineText(block: import("./types").TimelineBlock): string | und
 export function useSessionEvents(
   sessionId: string | null,
   afterSeq: number,
-  onEvent: (event: ServerEvent) => void,
+  onEvent: (event: SSEEvent) => void,
   onConnectionChange: (status: ChatState["connection"]) => void,
+  enabled = true,
 ) {
-  const esRef = useRef<EventSource | null>(null);
+  const streamRef = useRef<{ close: () => void } | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const afterSeqRef = useRef(afterSeq);
   const onEventRef = useRef(onEvent);
   const onConnectionChangeRef = useRef(onConnectionChange);
+  const enabledRef = useRef(enabled);
 
   const connect = useCallback(() => {
-    if (!sessionId) return;
+    if (!sessionId || !enabledRef.current) return;
     if (reconnectTimerRef.current != null) {
       window.clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
-    esRef.current?.close();
+    streamRef.current?.close();
     onConnectionChangeRef.current("connecting");
-    const es = openEventStream(sessionId, afterSeqRef.current);
-    esRef.current = es;
-
-    es.addEventListener("open", () => onConnectionChangeRef.current("open"));
-    es.addEventListener("error", () => {
-      onConnectionChangeRef.current("reconnecting");
-      es.close();
-      if (esRef.current === es) {
-        esRef.current = null;
-      }
-      reconnectTimerRef.current = window.setTimeout(() => {
-        reconnectTimerRef.current = null;
-        connect();
-      }, 1000);
-    });
-
-    const dispatchEvent = (e: MessageEvent) => {
-      if (!e.data) return;
-      try {
-        onEventRef.current(JSON.parse(e.data));
-      } catch {
-        // ignore parse errors
-      }
-    };
-
-    es.addEventListener("message", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-
-    // Named SSE events
-    es.addEventListener("turn.started", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("assistant.delta", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("assistant.completed", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("tool.started", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("tool.completed", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("system.notice", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("turn.failed", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("turn.interrupted", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("context_head_summary.started", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("context_head_summary.completed", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("context_head_summary.failed", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
-    es.addEventListener("context.compacted", (e: MessageEvent) => {
-      dispatchEvent(e);
-    });
+    const stream = openEventStream(
+      sessionId,
+      afterSeqRef.current,
+      (event) => {
+        afterSeqRef.current = Math.max(afterSeqRef.current, event.seq);
+        onEventRef.current(event);
+      },
+      () => onConnectionChangeRef.current("open"),
+      () => {
+        onConnectionChangeRef.current("error");
+        stream.close();
+        if (streamRef.current === stream) {
+          streamRef.current = null;
+        }
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectTimerRef.current = null;
+          onConnectionChangeRef.current("reconnecting");
+          connect();
+        }, 1000);
+      },
+    );
+    streamRef.current = stream;
   }, [sessionId]);
 
   useEffect(() => {
     afterSeqRef.current = afterSeq;
   }, [afterSeq]);
+
+  useEffect(() => {
+    enabledRef.current = enabled;
+    if (!enabled) {
+      if (reconnectTimerRef.current != null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      streamRef.current?.close();
+      streamRef.current = null;
+      onConnectionChangeRef.current("idle");
+    }
+  }, [enabled]);
 
   useEffect(() => {
     onEventRef.current = onEvent;
@@ -475,19 +491,21 @@ export function useSessionEvents(
   }, [onConnectionChange]);
 
   useEffect(() => {
-    connect();
+    if (enabled) {
+      connect();
+    }
     return () => {
       if (reconnectTimerRef.current != null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
-      esRef.current?.close();
-      esRef.current = null;
+      streamRef.current?.close();
+      streamRef.current = null;
     };
-  }, [connect]);
+  }, [connect, enabled]);
 
   return {
     reconnect: connect,
-    disconnect: () => esRef.current?.close(),
+    disconnect: () => streamRef.current?.close(),
   };
 }

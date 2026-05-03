@@ -3,7 +3,6 @@ import type { ChatMessage } from "../api/events";
 import { UserMessage } from "./blocks/UserMessage";
 import { AssistantMessage } from "./blocks/AssistantMessage";
 import { ToolCallGroup } from "./blocks/ToolCallGroup";
-import { NoticeBlock } from "./blocks/NoticeBlock";
 import { ErrorBlock } from "./blocks/ErrorBlock";
 import { ArrowDown } from "./Icon";
 import { useI18n } from "../i18n";
@@ -233,7 +232,7 @@ function renderBlocks(blocks: BlockItem[], turnIdx: number): React.ReactNode[] {
         }
       }
       out.push(
-        <NoticeBlock
+        <NoticeMessage
           key={`notice-${turnIdx}-${i}`}
           text={text}
           count={count > 1 ? count : undefined}
@@ -275,13 +274,28 @@ function renderBlocks(blocks: BlockItem[], turnIdx: number): React.ReactNode[] {
           key={msg.id}
           text={msg.text ?? ""}
           streaming={msg.streaming ?? false}
-          usage={msg.usage}
         />
       );
     }
     i++;
   }
   return out;
+}
+
+function NoticeMessage({ text, count }: { text: string; count?: number }) {
+  return (
+    <div
+      className="mb-3 rounded-md px-3 py-2 text-xs"
+      style={{
+        backgroundColor: "var(--color-surface)",
+        border: "1px solid var(--color-border)",
+        color: "var(--color-text-tertiary)",
+      }}
+    >
+      {text}
+      {count && count > 1 ? <span className="ml-2 opacity-70">x{count}</span> : null}
+    </div>
+  );
 }
 
 function preferredScrollBehavior(): ScrollBehavior {

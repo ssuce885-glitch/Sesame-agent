@@ -1,20 +1,20 @@
 import { useState } from "react";
 import { useI18n } from "../i18n";
-import { useCurrentSession } from "../api/queries";
 import {
   MessageSquare,
-  Activity,
-  BarChart,
+  Play,
+  FileText,
   Users,
+  Activity,
+  Database,
   ChevronRight,
-  ChevronDown,
   Globe,
-  Clock,
 } from "./Icon";
 
 interface SidebarProps {
   workspaceName?: string;
   workspaceRoot?: string;
+  sessionId?: string;
   connection?: "idle" | "connecting" | "open" | "reconnecting" | "error";
   activePath: string;
   onNavigate: (path: string) => void;
@@ -23,12 +23,12 @@ interface SidebarProps {
 export function Sidebar({
   workspaceName,
   workspaceRoot,
+  sessionId,
   connection,
   activePath,
   onNavigate,
 }: SidebarProps) {
   const { t } = useI18n();
-  const { data: currentSession } = useCurrentSession();
   const [expanded, setExpanded] = useState(false);
 
   const connColor =
@@ -53,9 +53,11 @@ export function Sidebar({
 
   const navItems = [
     { path: "/chat", label: t("nav.chat"), icon: MessageSquare },
-    { path: "/runtime", label: t("nav.runtime"), icon: Activity },
-    { path: "/usage", label: t("nav.usage"), icon: BarChart },
     { path: "/roles", label: t("nav.roles"), icon: Users },
+    { path: "/tasks", label: t("nav.tasks"), icon: Activity },
+    { path: "/context", label: t("nav.context"), icon: Database },
+    { path: "/automations", label: t("nav.automations"), icon: Play },
+    { path: "/reports", label: t("nav.reports"), icon: FileText },
   ];
 
   return (
@@ -184,7 +186,7 @@ export function Sidebar({
         </div>
 
         {/* Session status */}
-        {currentSession && (
+        {sessionId && (
           <div
             className="flex items-center gap-2 rounded-md px-2"
             style={{ height: 32 }}
@@ -201,7 +203,7 @@ export function Sidebar({
                 className="text-xs truncate"
                 style={{ color: "var(--color-text-secondary)" }}
               >
-                {currentSession.id.slice(0, 8)}… · {connLabel}
+                {sessionId.slice(0, 8)}... · {connLabel}
               </span>
             )}
           </div>

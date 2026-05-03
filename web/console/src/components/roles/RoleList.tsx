@@ -1,13 +1,13 @@
-import type { RoleSummary } from "../../api/types";
+import type { RoleSpec } from "../../api/types";
 import { useI18n } from "../../i18n";
-import { Users, Plus } from "../Icon";
+import { Plus, Users } from "../Icon";
 
 interface RoleListProps {
-  roles: RoleSummary[];
+  roles: RoleSpec[];
   selectedRoleID: string | null;
   isLoading: boolean;
   onSelectRole: (roleID: string) => void;
-  onNewRole: () => void;
+  onCreateRole: () => void;
 }
 
 export function RoleList({
@@ -15,7 +15,7 @@ export function RoleList({
   selectedRoleID,
   isLoading,
   onSelectRole,
-  onNewRole,
+  onCreateRole,
 }: RoleListProps) {
   const { t } = useI18n();
 
@@ -39,17 +39,18 @@ export function RoleList({
         </div>
         <button
           type="button"
-          onClick={onNewRole}
-          className="flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded"
+          aria-label={t("roles.create")}
+          title={t("roles.create")}
+          onClick={onCreateRole}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md"
           style={{
-            backgroundColor: "var(--color-accent)",
-            color: "#fff",
-            border: "none",
+            border: "1px solid var(--color-border)",
+            backgroundColor: "var(--color-surface)",
+            color: "var(--color-text-secondary)",
             cursor: "pointer",
           }}
         >
-          <Plus size={12} />
-          {t("roles.newRole")}
+          <Plus size={14} color="currentColor" />
         </button>
       </div>
 
@@ -67,13 +68,13 @@ export function RoleList({
         )}
 
         {roles.map((role) => {
-          const selected = role.role_id === selectedRoleID;
+          const selected = role.id === selectedRoleID;
           return (
             <button
-              key={role.role_id}
+              key={role.id}
               type="button"
-              aria-label={role.role_id}
-              onClick={() => onSelectRole(role.role_id)}
+              aria-label={role.id}
+              onClick={() => onSelectRole(role.id)}
               className="w-full text-left px-3 py-2.5 rounded-none flex items-start gap-2"
               style={{
                 backgroundColor: selected ? "rgba(59,130,246,0.06)" : "transparent",
@@ -91,33 +92,33 @@ export function RoleList({
             >
               <div className="mt-0.5 w-6 h-6 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: "var(--color-surface)" }}>
                 <span className="text-[10px] font-bold" style={{ color: "var(--color-accent)" }}>
-                  {role.role_id.charAt(0).toUpperCase()}
+                  {role.name.charAt(0).toUpperCase()}
                 </span>
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium truncate" style={{ color: selected ? "var(--color-text)" : "var(--color-text-secondary)" }}>
-                    {role.role_id}
+                    {role.name}
                   </span>
-                  <span className="text-[10px] shrink-0 px-1 rounded" style={{ backgroundColor: "var(--color-surface)", color: "var(--color-text-tertiary)" }}>
-                    v{role.version || 1}
-                  </span>
+                  {role.version && (
+                    <span className="text-[10px] shrink-0 px-1 rounded" style={{ backgroundColor: "var(--color-surface)", color: "var(--color-text-tertiary)" }}>
+                      v{role.version}
+                    </span>
+                  )}
                 </div>
-                {role.display_name && (
-                  <div className="text-xs truncate mt-0.5" style={{ color: "var(--color-text-tertiary)" }}>
-                    {role.display_name}
-                  </div>
-                )}
-                {role.skills.length > 0 && (
+                <div className="text-xs truncate mt-0.5" style={{ color: "var(--color-text-tertiary)" }}>
+                  {role.id}
+                </div>
+                {(role.skill_names?.length ?? 0) > 0 && (
                   <div className="flex flex-wrap gap-1 mt-1.5">
-                    {role.skills.slice(0, 3).map((s) => (
+                    {role.skill_names?.slice(0, 3).map((s) => (
                       <span key={s} className="text-[10px] px-1 rounded" style={{ backgroundColor: "var(--color-surface)", color: "var(--color-text-tertiary)" }}>
                         {s}
                       </span>
                     ))}
-                    {role.skills.length > 3 && (
+                    {(role.skill_names?.length ?? 0) > 3 && (
                       <span className="text-[10px]" style={{ color: "var(--color-text-tertiary)" }}>
-                        +{role.skills.length - 3}
+                        +{(role.skill_names?.length ?? 0) - 3}
                       </span>
                     )}
                   </div>
