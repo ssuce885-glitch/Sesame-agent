@@ -11,7 +11,7 @@
 - `roles/` 已加入 `.gitignore`
 - `skills/` 已加入 `.gitignore`
 - 已从 Git 索引移除当前本地 `reddit_monitor` role 和 workspace skills
-- 本地文件保留，可继续用于当前 workspace 联调
+- 本地文件已移到 `/home/sauce/project/Workspace/sesame-agent-local-workspace/`，可继续用于联调
 
 ## 为什么不上传
 

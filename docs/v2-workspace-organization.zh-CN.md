@@ -161,7 +161,7 @@ migrate web console to v2 api
 结论：
 
 - `roles/` 和顶层 `skills/` 是 workspace 本地业务资产，不属于 GitHub 代码仓库。
-- `reddit_monitor`、email/slack/discord/scrapling 等资产保留在本地 workspace，可继续用于联调。
+- `reddit_monitor`、email/slack/discord/scrapling 等资产已移到 `/home/sauce/project/Workspace/sesame-agent-local-workspace/`，可继续用于联调。
 - 代码仓库只提交 runtime、Web、文档、测试和可复用源码；后续如需分发样例，应放到 `examples/` 或模板安装流程，而不是根目录运行态资产。
 
 ### 6. 文档 / 测试 / 杂项

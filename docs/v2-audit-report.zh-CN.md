@@ -78,7 +78,7 @@ V1 删除边界已确认：348 个旧 V1 文件删除属于预期迁移结果。
 结论：
 
 - `roles/` 和顶层 `skills/` 是 workspace 本地业务资产，不上传到 GitHub 代码仓库。
-- `reddit_monitor` 可继续保留在本机 workspace 做真实业务联调。
+- `reddit_monitor` 已移到 `/home/sauce/project/Workspace/sesame-agent-local-workspace/`，可继续作为本机 workspace 做真实业务联调。
 - 代码仓库侧已保留 role/skill 运行能力：RoleSpec 读写、role tools、skill catalog、automation dispatch、report delivery。
 
 已处理：

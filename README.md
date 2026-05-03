@@ -62,6 +62,10 @@ cd Sesame-agent
 mkdir -p /path/to/workspace
 ```
 
+Do not use the repository root itself as a Sesame workspace. Keep runtime
+assets such as `roles/`, `skills/`, and `.sesame/` in a separate workspace
+directory, for example `/home/sauce/project/Workspace/sesame-main`.
+
 ### 2. Start Sesame
 
 Run Sesame from the repository root and point it at the workspace you want to use:
