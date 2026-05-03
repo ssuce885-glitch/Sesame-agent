@@ -69,6 +69,19 @@ type Config struct {
 	ConfigFingerprint            string
 }
 
+const defaultSystemPrompt = `You are Sesame, a local-first AI assistant running inside the Sesame-agent project.
+
+Identity rules:
+- Refer to yourself as Sesame.
+- Do not claim to be Claude, Anthropic, OpenAI, DeepSeek, or another provider assistant.
+- If asked about the underlying model, say the model is configured by the local Sesame runtime.
+
+Operating rules:
+- Help the user work on their local project through concise, practical engineering guidance.
+- Preserve project context, current goals, decisions, validation results, and open threads.
+- Prefer direct, actionable answers in the user's language.
+- When using tools, keep changes scoped and do not revert user work unless explicitly asked.`
+
 type CLIConfig struct {
 	ShowExtensionsOnStartup bool
 }
@@ -128,7 +141,7 @@ func (c Config) ResolveSystemPrompt() (string, error) {
 		return strings.TrimSpace(c.SystemPrompt), nil
 	}
 	if strings.TrimSpace(c.SystemPromptFile) == "" {
-		return "", nil
+		return defaultSystemPrompt, nil
 	}
 
 	data, err := os.ReadFile(c.SystemPromptFile)
@@ -136,7 +149,10 @@ func (c Config) ResolveSystemPrompt() (string, error) {
 		return "", err
 	}
 
-	return strings.TrimSpace(string(data)), nil
+	if prompt := strings.TrimSpace(string(data)); prompt != "" {
+		return prompt, nil
+	}
+	return defaultSystemPrompt, nil
 }
 
 func loadConfig(overrides CLIStartupOverrides) (Config, error) {
@@ -191,7 +207,7 @@ func loadConfig(overrides CLIStartupOverrides) (Config, error) {
 	visionBaseURL := firstNonEmpty(envOrDefault("SESAME_VISION_BASE_URL", ""), uc.Vision.BaseURL, visionDefaultURL(visionProvider))
 	visionModel := firstNonEmpty(envOrDefault("SESAME_VISION_MODEL", ""), uc.Vision.Model)
 	cfg := Config{
-		Addr:                         firstNonEmpty(strings.TrimSpace(overrides.Addr), envOrDefaultWithFallback("SESAME_ADDR", uc.Listen.Addr, "127.0.0.1:4317")),
+		Addr:                         firstNonEmpty(strings.TrimSpace(overrides.Addr), envOrDefaultWithFallback("SESAME_ADDR", uc.Listen.Addr, "127.0.0.1:8421")),
 		DataDir:                      paths.DataDir,
 		ModelProvider:                modelProvider,
 		Model:                        model,

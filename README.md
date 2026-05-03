@@ -70,32 +70,12 @@ Run Sesame from the repository root and point it at the workspace you want to us
 go run ./cmd/sesame --workspace /path/to/workspace
 ```
 
-If this is your first run, complete setup first:
+The command starts or connects to the V2 daemon and opens the TUI.
+
+To run only the daemon:
 
 ```bash
-go run ./cmd/sesame setup
-```
-
-To reopen provider configuration later:
-
-```bash
-go run ./cmd/sesame configure
-```
-
-`configure` opens a shared configuration home page with two entries:
-- `Model Setup` (required)
-- `Third-Party Integrations` (optional)
-
-Discord setup is under `Third-Party Integrations`. Startup only requires completing `Model Setup`; Discord can be configured later.
-
-Discord `Allowed User IDs` is required when Discord is enabled. Leaving it empty is rejected in the setup flow so a bot cannot accidentally accept messages from everyone or silently reject all users.
-
-When configuration is missing, normal `sesame` startup automatically enters setup.
-
-Or check daemon/runtime status:
-
-```bash
-go run ./cmd/sesame --workspace /path/to/workspace --status
+go run ./cmd/sesame --daemon --workspace /path/to/workspace
 ```
 
 ### 3. Open the console
@@ -103,16 +83,12 @@ go run ./cmd/sesame --workspace /path/to/workspace --status
 When the local daemon is running, open the web console in your browser:
 
 ```text
-http://127.0.0.1:4317/
+http://127.0.0.1:8421/
 ```
 
 ### 4. Start working
 
-Useful chat commands:
-
-- `/history`
-- `/history load <head_id>`
-- `/reopen`
+Use the TUI for chat and the web console for broader runtime inspection: reports, tasks, task trace, roles, automations, project state, and memory.
 
 ## Configuration
 
@@ -181,27 +157,27 @@ This keeps creation, runtime execution, and status/report turns separated so a w
 ## Repository Layout
 
 - `cmd/sesame`
-  CLI entrypoint
-- `internal/cli`
-  TUI, REPL, client calls, and terminal rendering
-- `internal/daemon`
-  Runtime composition, recovery, HTTP server, and orchestration
-- `internal/engine`
-  Turn execution, prompt assembly, tool wiring, and context refresh
-- `internal/session`
-  Session queueing, delegation, and runtime handoff
-- `internal/task`
-  Background task model and execution
-- `internal/tools`
-  Built-in tools, tool runtime, capability gates, and execution control
-- `internal/automation`
-  Watchers, simple owner-task automation, and automation lifecycle
-- `internal/reporting`
-  Report delivery
-- `internal/roles`
-  File-backed role catalog and role service
-- `internal/store/sqlite`
-  Local persistence
+  V2 CLI entrypoint, daemon launcher, and TUI bootstrap
+- `internal/v2/app`
+  Runtime composition, HTTP server, and daemon loops
+- `internal/v2/agent`
+  Turn execution, prompt assembly, tool loop, context budget, and project state refresh
+- `internal/v2/session`
+  Session queueing and turn lifecycle
+- `internal/v2/tasks`
+  Background task model, runners, output sink, and task trace
+- `internal/v2/tools`
+  Built-in tools, role policy gates, and execution boundaries
+- `internal/v2/automation`
+  Watchers, role-owned automation dispatch, and automation lifecycle
+- `internal/v2/reports`
+  Task report creation
+- `internal/v2/roles`
+  File-backed role service and role snapshots
+- `internal/v2/store`
+  Local SQLite persistence
+- `internal/skillcatalog`
+  Shared skill catalog loading and DTOs
 - `web/console`
   React-based console UI
 
