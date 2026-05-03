@@ -5,6 +5,7 @@
 /sesame.exe
 /sesame-agent
 /sesame-agent.exe
+bin/
 
 # Runtime data
 .runtime-data/
@@ -20,7 +21,6 @@ qdb/
 resources/
 rules/
 runs/
-skills/
 .tmp-*/
 tmp/
 *.db
@@ -28,11 +28,6 @@ tmp/
 *.db-wal
 *.log
 coverage.out
-*.test.ts
-*.test.tsx
-*.test.js
-*.test.jsx
-/web/console/src/test/
 
 # Local Sesame state
 .sesame/
@@ -66,6 +61,5 @@ web/console/node_modules/
 
 # Dev tools
 /lifecycle-test
-qdb/
 eval
 example_web.jpg
