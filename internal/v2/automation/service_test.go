@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"go-agent/internal/v2/contracts"
 	"go-agent/internal/v2/roles"
@@ -39,6 +40,7 @@ func TestServiceAutomationLifecycle(t *testing.T) {
 	defer s.Close()
 
 	workspaceRoot := t.TempDir()
+	createAutomationSession(t, s, "main_session", workspaceRoot)
 	watcherPath := filepath.Join(workspaceRoot, "watcher.sh")
 	writeWatcher(t, watcherPath, "docs-stale")
 
@@ -73,6 +75,9 @@ func TestServiceAutomationLifecycle(t *testing.T) {
 	}
 	if tasksAfterFirst[0].SessionID != "" {
 		t.Fatalf("automation task SessionID = %q, want empty", tasksAfterFirst[0].SessionID)
+	}
+	if tasksAfterFirst[0].ReportSessionID != "main_session" || tasksAfterFirst[0].ParentSessionID != "main_session" {
+		t.Fatalf("automation task should report to main session: %+v", tasksAfterFirst[0])
 	}
 	run, err := s.Automations().GetRunByDedupeKey(ctx, automation.ID, "docs-stale")
 	if err != nil {
@@ -130,6 +135,22 @@ func writeWatcher(t *testing.T, path string, dedupeKey string) {
 	t.Helper()
 	body := "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"needs_agent\",\"summary\":\"Docs are stale\",\"dedupe_key\":\"" + dedupeKey + "\",\"signal_kind\":\"docs\"}'\n"
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createAutomationSession(t *testing.T, s contracts.Store, id, workspaceRoot string) {
+	t.Helper()
+	now := time.Now().UTC()
+	if err := s.Sessions().Create(context.Background(), contracts.Session{
+		ID:                id,
+		WorkspaceRoot:     workspaceRoot,
+		SystemPrompt:      "system",
+		PermissionProfile: "default",
+		State:             "idle",
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

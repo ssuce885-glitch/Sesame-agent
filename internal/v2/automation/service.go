@@ -145,15 +145,18 @@ func (s *Service) createOwnerTask(ctx context.Context, a contracts.Automation, r
 	}
 
 	now := time.Now().UTC()
+	reportSessionID := s.defaultReportSessionID(ctx, a.WorkspaceRoot)
 	task := contracts.Task{
-		ID:            types.NewID("task"),
-		WorkspaceRoot: a.WorkspaceRoot,
-		RoleID:        roleID,
-		Kind:          "agent",
-		State:         "pending",
-		Prompt:        automationPrompt(a, result),
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:              types.NewID("task"),
+		WorkspaceRoot:   a.WorkspaceRoot,
+		RoleID:          roleID,
+		ParentSessionID: reportSessionID,
+		ReportSessionID: reportSessionID,
+		Kind:            "agent",
+		State:           "pending",
+		Prompt:          automationPrompt(a, result),
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	if err := s.taskManager.Create(ctx, task); err != nil {
 		return "", err
@@ -162,6 +165,19 @@ func (s *Service) createOwnerTask(ctx context.Context, a contracts.Automation, r
 		return "", err
 	}
 	return task.ID, nil
+}
+
+func (s *Service) defaultReportSessionID(ctx context.Context, workspaceRoot string) string {
+	sessions, err := s.store.Sessions().ListByWorkspace(ctx, workspaceRoot)
+	if err != nil || len(sessions) == 0 {
+		return ""
+	}
+	for _, session := range sessions {
+		if !strings.HasPrefix(session.ID, "specialist-") {
+			return session.ID
+		}
+	}
+	return sessions[0].ID
 }
 
 func (s *Service) recordRun(ctx context.Context, a contracts.Automation, result *WatcherResult, taskID string, runErr error) error {
