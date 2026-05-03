@@ -154,32 +154,15 @@ migrate web console to v2 api
 - `npm run build` 通过，但仍有 Vite 大 chunk 警告。
 - 后续可做 route-level dynamic import 拆包。
 
-### 5. Role / Skills 业务资产
+### 5. Role / Skills 本地资产
 
 审查清单：`docs/v2-roles-skills-manifest.zh-CN.md`
 
-建议作为独立提交处理，提交信息类似：
+结论：
 
-```text
-add workspace roles and skills
-```
-
-包含：
-
-- `roles/reddit_monitor/role.yaml`
-- `roles/reddit_monitor/prompt.md`
-- `roles/reddit_monitor/.role-versions/000006.yaml`
-- `skills/automation-normalizer/SKILL.md`
-- `skills/automation-standard-behavior/SKILL.md`
-- `skills/discord/SKILL.md`
-- `skills/email/SKILL.md`
-- `skills/scrapling/SKILL.md`
-- `skills/slack/SKILL.md`
-
-仍需人工确认：
-
-- `roles/reddit_monitor/prompt.md` 里有收件人邮箱和本地代理地址，是否应该进入仓库需要确认。
-- Reddit Monitor 还需要真实自动化联调。
+- `roles/` 和顶层 `skills/` 是 workspace 本地业务资产，不属于 GitHub 代码仓库。
+- `reddit_monitor`、email/slack/discord/scrapling 等资产保留在本地 workspace，可继续用于联调。
+- 代码仓库只提交 runtime、Web、文档、测试和可复用源码；后续如需分发样例，应放到 `examples/` 或模板安装流程，而不是根目录运行态资产。
 
 ### 6. 文档 / 测试 / 杂项
 
@@ -228,12 +211,10 @@ git diff --check
 2. 再提交 V2 后端 runtime。
 3. 再提交 CLI/config/system prompt。
 4. 再提交 Web Console V2。
-5. 再提交 roles/skills 业务资产。
-6. 最后提交 docs/tests/gitignore 清理。
+5. 最后提交 docs/tests/gitignore 清理。
 
 ## 不建议现在做的事
 
 - 不要用 `git reset --hard` 或 `git checkout -- .`。
 - 不要把 V1 删除和 V2 新增揉成一个不可审查提交。
-- 不要在未确认前移除 `reddit_monitor` 的邮箱/代理配置；应先决定是保留样例、改成环境变量，还是移到 workspace setting。
-- 不要把 `web/console/dist` 或本地 `.sesame` 运行态加入仓库。
+- 不要把 `roles/`、顶层 `skills/`、`web/console/dist` 或本地 `.sesame` 运行态加入仓库。

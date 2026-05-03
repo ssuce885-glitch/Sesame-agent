@@ -1,90 +1,54 @@
-# V2 Roles / Skills Manifest
+# V2 Roles / Skills 本地资产边界
 
 更新时间：2026-05-03
 
 ## 结论
 
-Workspace role 和 skills 已形成独立业务资产边界，可作为单独提交审查。
+`roles/` 和顶层 `skills/` 是 workspace 本地业务资产，不属于 GitHub 代码仓库内容。
 
-验证结果：
+当前仓库策略：
 
-```bash
-go test ./internal/skillcatalog ./internal/v2/roles ./internal/v2/tools
-```
+- `roles/` 已加入 `.gitignore`
+- `skills/` 已加入 `.gitignore`
+- 已从 Git 索引移除当前本地 `reddit_monitor` role 和 workspace skills
+- 本地文件保留，可继续用于当前 workspace 联调
 
-通过。
+## 为什么不上传
 
-## 建议提交
+- role 包含真实业务目标、通知策略、收件人、代理等 workspace 配置。
+- skill 可能包含本地通知、抓取、第三方服务使用方式。
+- 这些内容更接近用户数据和部署配置，不是 Sesame runtime 源码。
 
-提交信息：
+## 代码仓库应包含
 
-```text
-add workspace roles and skills
-```
+- V2 runtime 后端
+- CLI/TUI 入口
+- Web Console
+- role/skill 的加载、创建、编辑、执行能力
+- automation、task、report、context、memory 等通用运行时
+- 文档和测试
 
-建议包含：
+## 代码仓库不应包含
 
-- `roles/reddit_monitor/role.yaml`
-- `roles/reddit_monitor/prompt.md`
-- `roles/reddit_monitor/.role-versions/000006.yaml`
-- `skills/automation-normalizer/SKILL.md`
-- `skills/automation-standard-behavior/SKILL.md`
-- `skills/discord/SKILL.md`
-- `skills/email/SKILL.md`
-- `skills/scrapling/SKILL.md`
-- `skills/slack/SKILL.md`
+- `roles/<role_id>/...`
+- 顶层 `skills/<skill_name>/...`
+- `.sesame/`
+- 数据库、日志、构建产物、测试 workspace
 
-不要混入：
+## 后续分发方式
 
-- V1 删除
-- V2 runtime backend
-- CLI/config/system prompt
-- Web Console 迁移
+如果未来要提供示例或模板，建议新建独立边界：
 
-## 当前 Role
+- `examples/roles/...`
+- `examples/skills/...`
+- `sesame init role <template>`
+- `sesame skill install <template>`
 
-### `reddit_monitor`
+示例内容必须使用占位符，不写入真实邮箱、代理、API key、token 或内部地址。
 
-文件：
+## 本地联调项
 
-- `roles/reddit_monitor/role.yaml`
-- `roles/reddit_monitor/prompt.md`
-- `roles/reddit_monitor/.role-versions/000006.yaml`
-
-当前配置：
-
-- skills: `scrapling`, `email`, `automation-standard-behavior`, `automation-normalizer`
-- permission profile: `workspace`
-- can delegate: `false`
-- automation ownership: `reddit_monitor`
-- max tool calls: `80`
-- max context tokens: `80000`
-
-## 当前 Skills
-
-- `automation-normalizer`
-- `automation-standard-behavior`
-- `discord`
-- `email`
-- `scrapling`
-- `slack`
-
-## 已知人工确认项
-
-`roles/reddit_monitor/prompt.md` 当前包含：
-
-- 收件人邮箱：`1582914562@qq.com`
-- 本地代理地址：`http://127.0.0.1:7897`
-
-这些配置是否进入仓库需要人工确认。可选处理方向：
-
-1. 保留为当前 workspace 的真实业务配置。
-2. 改成环境变量或 workspace setting。
-3. 改成占位符，并在 README/role 文档里说明如何配置。
-
-## 联调项
-
-仍需真实联调：
+`reddit_monitor` 仍可作为本机 workspace 业务资产继续联调：
 
 - Reddit JSON API 抓取
 - `scrapling` fallback

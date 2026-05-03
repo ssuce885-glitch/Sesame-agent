@@ -7,7 +7,7 @@
 - 先阅读 `docs/v2-workspace-organization.zh-CN.md`，确认本轮改动属于哪个提交边界。
 - 确认 V1 删除是预期结果，不在 V2 收口过程中恢复旧实现。
 - 确认 `internal/v2/`、Web 新页面、配置加载新文件都纳入版本控制。
-- 确认角色引用的 `skills/<name>/SKILL.md` 已纳入版本控制，fresh clone 不依赖本机私有技能目录。
+- 确认 `roles/` 和顶层 `skills/` 没有进入代码仓库；它们是 workspace 本地业务资产，应通过本地配置、模板或安装流程准备。
 - 确认临时产物没有进入仓库：数据库、日志、构建产物、测试 workspace。
 - 执行质量检查：
 
