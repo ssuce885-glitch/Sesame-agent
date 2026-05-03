@@ -32,7 +32,7 @@ internal/v2/client         TUI HTTP client
 internal/v2/contracts      behavior-free V2 DTOs and service interfaces
 internal/v2/memory         workspace memory service
 internal/v2/observability  in-process metrics collector
-internal/v2/reports        task report creation
+internal/v2/reports        task report creation and queued report_batch delivery
 internal/v2/roles          role filesystem service and role snapshots
 internal/v2/schema         SQLite schema migrations
 internal/v2/session        session queue manager and stable session IDs
@@ -76,14 +76,13 @@ add v2 runtime backend
 - specialist task runner
 - shell/file/task output bounds
 - task trace
-- reports
+- reports and queued report_batch delivery
 - memory/project state APIs
 - automation watcher dispatch
 - TUI timeline/reports
 
 ## 当前已知后续项
 
-- Reports 的 `delivered/queued` 语义仍需继续收紧。
 - `internal/v2/app` handler tests 可继续扩展到更多路由。
 - Automation 的真实业务联调仍需跑 `reddit_monitor` 场景。
 - Web build 的大 chunk 警告属于前端提交边界，不归本组处理。

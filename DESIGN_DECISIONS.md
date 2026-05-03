@@ -143,10 +143,10 @@ watcher.go: Tick()
   ↓ 检测 needs_agent 信号，构造 TriggerEvent
 SimpleRuntime.HandleMatch()
   ↓ dedup → 构建 Owner Task prompt → Create TaskTypeAgent
-agentTaskExecutor.RunTask()
-  ↓ EnsureSpecialistSession → engine.RunTurn
-reporting service
-  ↓ 收集 ChildAgentResult → 投递到 main_parent ReportBatch
+tasks.AgentRunner
+  ↓ EnsureSpecialistSession → session.Manager.SubmitTurn
+reports.Service
+  ↓ 收集 task result → 投递到 main_parent report_batch turn
 main_parent
   ↓ 处理报告，向用户汇报
 ```
@@ -157,12 +157,14 @@ main_parent
 
 ### 决策
 
-`reporting/service_runtime.go` 的 Tick 每 N 秒扫描未投递的报告。投递时使用 5 分钟冷却窗口：同一 session 的多次 rapid completion 被合并为一个 `TurnKindReportBatch`。
+V2 的 `internal/v2/reports.Service` 在 task 完成时创建 durable report，并在目标 session 空闲时提交一个 `report_batch` turn 给 main agent。若目标 session 正在执行用户 turn 或已有排队 turn，report 保持 `delivered=false`，daemon 的短周期 flush 会在 session 空闲后重新投递。
 
 ### 原因
 
-1. **防止 flood**：两个 watcher 同时触发、两个 Owner Task 几乎同时完成，如果各自独立投递报告，main_parent 会在几秒内收到两条独立的 report turn。合并成 batch 后，main_parent 一次性看到所有报告，给出更连贯的响应
-2. **去重**：`dedupe_key` 确保同一事件不会重复创建 Owner Task。`ClaimSimpleAutomationRun` 使用原子 upsert 实现分布式锁
+1. **不打断用户 turn**：main session 忙碌时只写 durable report，不插队运行 report turn。
+2. **不丢结果**：session 未注册或正在忙碌时，report 保持未送达，后续 flush 会继续尝试。
+3. **合并报告**：一次 flush 会把同一 session 的所有未送达 reports 合并成一个 `report_batch` turn。
+4. **去重**：`dedupe_key` 确保同一事件不会重复创建 Owner Task。`ClaimSimpleAutomationRun` 使用原子 upsert 实现分布式锁。
 
 ---
 

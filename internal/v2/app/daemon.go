@@ -86,7 +86,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		RoleService: roleService,
 	}
 	registry.Register(contracts.NamespaceRoles, tools.NewDelegateToRoleTool(delegateDeps))
-	reportService := reports.NewService(s)
+	reportService := reports.NewService(s, sessionMgr)
 	taskManager.SetReporter(reportService)
 	memoryService := memory.NewService(s)
 	automationService := automation.NewService(s, taskManager, roleService)
@@ -123,6 +123,18 @@ func Run(ctx context.Context, cfg config.Config) error {
 			case <-ticker.C:
 				_ = automationService.Reconcile(ctx)
 				_, _ = memoryService.Cleanup(ctx, cfg.Paths.WorkspaceRoot, 1000, 500)
+			}
+		}
+	}()
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = reportService.FlushWorkspace(ctx, cfg.Paths.WorkspaceRoot)
 			}
 		}
 	}()
