@@ -23,6 +23,7 @@ func TestAutomationRepositoryCRUD(t *testing.T) {
 		Goal:          "Keep docs fresh",
 		State:         "active",
 		Owner:         "role:doc_writer",
+		WorkflowID:    "workflow-docs",
 		WatcherPath:   "roles/doc_writer/automations/watch.sh",
 		WatcherCron:   "@every 1h",
 		CreatedAt:     now,
@@ -36,11 +37,12 @@ func TestAutomationRepositoryCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.ID != automation.ID || got.Owner != automation.Owner {
+	if got.ID != automation.ID || got.Owner != automation.Owner || got.WorkflowID != automation.WorkflowID {
 		t.Fatalf("unexpected automation: %+v", got)
 	}
 
 	got.State = "paused"
+	got.WorkflowID = "workflow-docs-updated"
 	got.UpdatedAt = now.Add(time.Minute)
 	if err := s.Automations().Update(ctx, got); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -49,7 +51,7 @@ func TestAutomationRepositoryCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get updated: %v", err)
 	}
-	if got.State != "paused" {
+	if got.State != "paused" || got.WorkflowID != "workflow-docs-updated" {
 		t.Fatalf("expected paused, got %+v", got)
 	}
 
@@ -70,12 +72,13 @@ func TestAutomationRepositoryCRUD(t *testing.T) {
 	}
 
 	run := contracts.AutomationRun{
-		AutomationID: automation.ID,
-		DedupeKey:    "docs-stale",
-		TaskID:       "task-1",
-		Status:       "needs_agent",
-		Summary:      "Docs are stale.",
-		CreatedAt:    now,
+		AutomationID:  automation.ID,
+		DedupeKey:     "docs-stale",
+		TaskID:        "task-1",
+		WorkflowRunID: "wfrun-1",
+		Status:        "needs_agent",
+		Summary:       "Docs are stale.",
+		CreatedAt:     now,
 	}
 	if err := s.Automations().CreateRun(ctx, run); err != nil {
 		t.Fatalf("CreateRun: %v", err)
@@ -84,7 +87,7 @@ func TestAutomationRepositoryCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRunByDedupeKey: %v", err)
 	}
-	if gotRun.TaskID != run.TaskID || gotRun.Status != run.Status {
+	if gotRun.TaskID != run.TaskID || gotRun.WorkflowRunID != run.WorkflowRunID || gotRun.Status != run.Status {
 		t.Fatalf("unexpected run: %+v", gotRun)
 	}
 	runs, err := s.Automations().ListRunsByAutomation(ctx, automation.ID, 10)

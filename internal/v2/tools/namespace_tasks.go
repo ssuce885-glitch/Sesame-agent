@@ -21,6 +21,7 @@ func (t *taskTraceTool) Definition() contracts.ToolDefinition {
 		Name:        "task_trace",
 		Namespace:   contracts.NamespaceTasks,
 		Description: "Inspect a task, including running specialist role events, persisted messages, reports, and task log preview.",
+		Risk:        "low",
 		Parameters: objectSchema(map[string]any{
 			"task_id":       map[string]any{"type": "string", "description": "Task ID to inspect"},
 			"message_limit": map[string]any{"type": "integer", "description": "Maximum recent messages to include", "default": 40},

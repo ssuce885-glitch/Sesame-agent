@@ -144,6 +144,69 @@ func TestAutomationControlRequiresRoleOwnership(t *testing.T) {
 	}
 }
 
+func TestAutomationQueryIncludesWorkflowFields(t *testing.T) {
+	s, err := store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	now := time.Now().UTC()
+	automation := contracts.Automation{
+		ID:            "automation_docs",
+		WorkspaceRoot: "/workspace",
+		Title:         "Watch docs",
+		Goal:          "Start the docs workflow",
+		State:         "active",
+		Owner:         "role:reviewer",
+		WorkflowID:    "workflow_docs",
+		WatcherPath:   "roles/reviewer/automations/watch.sh",
+		WatcherCron:   "@every 5m",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.Automations().Create(context.Background(), automation); err != nil {
+		t.Fatalf("Create automation: %v", err)
+	}
+	if err := s.Automations().CreateRun(context.Background(), contracts.AutomationRun{
+		AutomationID:  automation.ID,
+		DedupeKey:     "docs-stale",
+		WorkflowRunID: "wfrun_docs_1",
+		Status:        "workflow:queued",
+		Summary:       "Docs changed.",
+		CreatedAt:     now,
+	}); err != nil {
+		t.Fatalf("Create automation run: %v", err)
+	}
+
+	result, err := NewAutomationQueryTool().Execute(context.Background(), contracts.ToolCall{Name: "automation_query"}, contracts.ExecContext{
+		WorkspaceRoot: "/workspace",
+		Store:         s,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %+v", result)
+	}
+	data, ok := result.Data.(automationQueryResult)
+	if !ok {
+		t.Fatalf("result.Data type = %T, want automationQueryResult", result.Data)
+	}
+	if len(data.Automations) != 1 {
+		t.Fatalf("automations len = %d, want 1", len(data.Automations))
+	}
+	if data.Automations[0].WorkflowID != "workflow_docs" {
+		t.Fatalf("workflow_id = %q, want workflow_docs", data.Automations[0].WorkflowID)
+	}
+	if len(data.Automations[0].RecentRuns) != 1 {
+		t.Fatalf("recent runs = %+v, want 1", data.Automations[0].RecentRuns)
+	}
+	if data.Automations[0].RecentRuns[0].WorkflowRunID != "wfrun_docs_1" {
+		t.Fatalf("workflow_run_id = %q, want wfrun_docs_1", data.Automations[0].RecentRuns[0].WorkflowRunID)
+	}
+}
+
 type fakeAutomationRuntime struct {
 	created []contracts.Automation
 	paused  []string

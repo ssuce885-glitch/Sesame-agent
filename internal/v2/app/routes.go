@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,11 +16,13 @@ import (
 
 	"go-agent/internal/config"
 	"go-agent/internal/v2/automation"
+	"go-agent/internal/v2/contextsvc"
 	"go-agent/internal/v2/contracts"
 	"go-agent/internal/v2/memory"
 	"go-agent/internal/v2/observability"
 	"go-agent/internal/v2/roles"
 	"go-agent/internal/v2/tasks"
+	"go-agent/internal/v2/workflows"
 )
 
 type routes struct {
@@ -28,15 +31,21 @@ type routes struct {
 	sessionMgr        contracts.SessionManager
 	taskManager       *tasks.Manager
 	memoryService     *memory.Service
+	contextService    *contextsvc.Service
 	metrics           *observability.Collector
 	roleService       *roles.Service
 	automationService *automation.Service
+	workflowService   workflowTriggerService
 	projectStateAuto  projectStateAutoSetter
 	defaultSessionID  string
 }
 
 type projectStateAutoSetter interface {
 	SetProjectStateAutoUpdate(bool)
+}
+
+type workflowTriggerService interface {
+	Trigger(ctx context.Context, workflow contracts.Workflow, input workflows.TriggerInput) (contracts.WorkflowRun, error)
 }
 
 func (r *routes) handler() http.Handler {
@@ -55,6 +64,24 @@ func (r *routes) handler() http.Handler {
 	mux.HandleFunc("POST /v2/memory", r.handleCreateMemory)
 	mux.HandleFunc("GET /v2/memory", r.handleSearchMemory)
 	mux.HandleFunc("DELETE /v2/memory/{id}", r.handleDeleteMemory)
+	mux.HandleFunc("GET /v2/context/preview", r.handleContextPreview)
+	mux.HandleFunc("GET /v2/context/blocks", r.handleListContextBlocks)
+	mux.HandleFunc("POST /v2/context/blocks", r.handleCreateContextBlock)
+	mux.HandleFunc("PUT /v2/context/blocks/{id}", r.handleUpdateContextBlock)
+	mux.HandleFunc("DELETE /v2/context/blocks/{id}", r.handleDeleteContextBlock)
+	mux.HandleFunc("GET /v2/workflows", r.handleListWorkflows)
+	mux.HandleFunc("POST /v2/workflows", r.handleCreateWorkflow)
+	mux.HandleFunc("GET /v2/workflows/{id}", r.handleGetWorkflow)
+	mux.HandleFunc("PUT /v2/workflows/{id}", r.handleUpdateWorkflow)
+	mux.HandleFunc("POST /v2/workflows/{id}/trigger", r.handleTriggerWorkflow)
+	mux.HandleFunc("GET /v2/workflow_runs", r.handleListWorkflowRuns)
+	mux.HandleFunc("POST /v2/workflow_runs", r.handleCreateWorkflowRun)
+	mux.HandleFunc("GET /v2/workflow_runs/{id}", r.handleGetWorkflowRun)
+	mux.HandleFunc("PUT /v2/workflow_runs/{id}", r.handleUpdateWorkflowRun)
+	mux.HandleFunc("GET /v2/approvals", r.handleListApprovals)
+	mux.HandleFunc("POST /v2/approvals", r.handleCreateApproval)
+	mux.HandleFunc("GET /v2/approvals/{id}", r.handleGetApproval)
+	mux.HandleFunc("PUT /v2/approvals/{id}", r.handleUpdateApproval)
 	mux.HandleFunc("GET /v2/project_state", r.handleGetProjectState)
 	mux.HandleFunc("PUT /v2/project_state", r.handlePutProjectState)
 	mux.HandleFunc("GET /v2/settings/{key}", r.handleGetSetting)
@@ -517,6 +544,97 @@ func (r *routes) handleDeleteMemory(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+func (r *routes) handleContextPreview(w http.ResponseWriter, req *http.Request) {
+	sessionID := firstNonEmpty(req.URL.Query().Get("session_id"), r.defaultSessionID)
+	if strings.TrimSpace(sessionID) == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("session_id is required"))
+		return
+	}
+	systemPrompt := ""
+	if resolved, err := r.cfg.ResolveSystemPrompt(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	} else if strings.TrimSpace(resolved) != "" {
+		systemPrompt = resolved
+	}
+	preview, err := r.contextSvc().Preview(req.Context(), contextsvc.PreviewInput{
+		SessionID:        sessionID,
+		DefaultSessionID: r.defaultSessionID,
+		SystemPrompt:     systemPrompt,
+	})
+	if err != nil {
+		writeContextServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
+}
+
+func (r *routes) handleListContextBlocks(w http.ResponseWriter, req *http.Request) {
+	workspaceRoot := firstNonEmpty(req.URL.Query().Get("workspace_root"), r.cfg.Paths.WorkspaceRoot)
+	if strings.TrimSpace(workspaceRoot) == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("workspace_root is required"))
+		return
+	}
+	limit := parsePositiveInt(req.URL.Query().Get("limit"))
+	blocks, err := r.contextSvc().ListBlocks(req.Context(), workspaceRoot, contracts.ContextBlockListOptions{
+		Owner:      req.URL.Query().Get("owner"),
+		Visibility: req.URL.Query().Get("visibility"),
+		Type:       req.URL.Query().Get("type"),
+		Limit:      limit,
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, blocks)
+}
+
+func (r *routes) handleCreateContextBlock(w http.ResponseWriter, req *http.Request) {
+	var input contextsvc.BlockInput
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+	got, err := r.contextSvc().CreateBlock(req.Context(), r.cfg.Paths.WorkspaceRoot, input, newID)
+	if err != nil {
+		writeContextServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, got)
+}
+
+func (r *routes) handleUpdateContextBlock(w http.ResponseWriter, req *http.Request) {
+	id := strings.TrimSpace(req.PathValue("id"))
+	if id == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("context block id is required"))
+		return
+	}
+	var input contextsvc.BlockInput
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+	got, err := r.contextSvc().UpdateBlock(req.Context(), id, input)
+	if err != nil {
+		writeContextServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, got)
+}
+
+func (r *routes) handleDeleteContextBlock(w http.ResponseWriter, req *http.Request) {
+	id := strings.TrimSpace(req.PathValue("id"))
+	if id == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("context block id is required"))
+		return
+	}
+	if err := r.contextSvc().DeleteBlock(req.Context(), id); err != nil {
+		writeContextServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
 func (r *routes) handleGetProjectState(w http.ResponseWriter, req *http.Request) {
 	workspaceRoot := firstNonEmpty(req.URL.Query().Get("workspace_root"), r.cfg.Paths.WorkspaceRoot)
 	state, ok, err := r.store.ProjectStates().Get(req.Context(), workspaceRoot)
@@ -529,6 +647,600 @@ func (r *routes) handleGetProjectState(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, state)
+}
+
+func (r *routes) contextSvc() *contextsvc.Service {
+	if r.contextService != nil {
+		return r.contextService
+	}
+	return contextsvc.New(r.store, r.memoryService)
+}
+
+type workflowInput struct {
+	ID             *string `json:"id,omitempty"`
+	WorkspaceRoot  *string `json:"workspace_root,omitempty"`
+	Name           *string `json:"name,omitempty"`
+	Trigger        *string `json:"trigger,omitempty"`
+	OwnerRole      *string `json:"owner_role,omitempty"`
+	InputSchema    *string `json:"input_schema,omitempty"`
+	Steps          *string `json:"steps,omitempty"`
+	RequiredTools  *string `json:"required_tools,omitempty"`
+	ApprovalPolicy *string `json:"approval_policy,omitempty"`
+	ReportPolicy   *string `json:"report_policy,omitempty"`
+	FailurePolicy  *string `json:"failure_policy,omitempty"`
+	ResumePolicy   *string `json:"resume_policy,omitempty"`
+}
+
+type workflowRunInput struct {
+	ID            *string `json:"id,omitempty"`
+	WorkflowID    *string `json:"workflow_id,omitempty"`
+	WorkspaceRoot *string `json:"workspace_root,omitempty"`
+	State         *string `json:"state,omitempty"`
+	TriggerRef    *string `json:"trigger_ref,omitempty"`
+	TaskIDs       *string `json:"task_ids,omitempty"`
+	ReportIDs     *string `json:"report_ids,omitempty"`
+	ApprovalIDs   *string `json:"approval_ids,omitempty"`
+	Trace         *string `json:"trace,omitempty"`
+}
+
+type workflowTriggerInput struct {
+	TriggerRef *string `json:"trigger_ref,omitempty"`
+}
+
+type approvalInput struct {
+	ID              *string `json:"id,omitempty"`
+	WorkflowRunID   *string `json:"workflow_run_id,omitempty"`
+	WorkspaceRoot   *string `json:"workspace_root,omitempty"`
+	RequestedAction *string `json:"requested_action,omitempty"`
+	RiskLevel       *string `json:"risk_level,omitempty"`
+	Summary         *string `json:"summary,omitempty"`
+	ProposedPayload *string `json:"proposed_payload,omitempty"`
+	State           *string `json:"state,omitempty"`
+	DecidedBy       *string `json:"decided_by,omitempty"`
+	DecidedAt       *string `json:"decided_at,omitempty"`
+}
+
+func (r *routes) workflowWorkspaceRoot(req *http.Request) (string, error) {
+	configured := strings.TrimSpace(r.cfg.Paths.WorkspaceRoot)
+	requested := strings.TrimSpace(req.URL.Query().Get("workspace_root"))
+	if configured == "" {
+		if requested == "" {
+			return "", fmt.Errorf("workspace_root is required")
+		}
+		return requested, nil
+	}
+	if requested != "" && requested != configured {
+		return "", fmt.Errorf("workspace_root must match daemon workspace")
+	}
+	return configured, nil
+}
+
+func (r *routes) requireWorkflowWorkspace(w http.ResponseWriter, workspaceRoot, kind, id string) bool {
+	configured := strings.TrimSpace(r.cfg.Paths.WorkspaceRoot)
+	if configured == "" || strings.TrimSpace(workspaceRoot) == configured {
+		return true
+	}
+	writeJSONError(w, http.StatusNotFound, fmt.Errorf("%s %q not found", kind, id))
+	return false
+}
+
+func (r *routes) requireWorkflowEntityWorkspace(req *http.Request, w http.ResponseWriter, workspaceRoot, kind, id string) bool {
+	configured := strings.TrimSpace(r.cfg.Paths.WorkspaceRoot)
+	if configured != "" {
+		return r.requireWorkflowWorkspace(w, workspaceRoot, kind, id)
+	}
+	requested := strings.TrimSpace(req.URL.Query().Get("workspace_root"))
+	if requested == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("workspace_root is required"))
+		return false
+	}
+	if requested != strings.TrimSpace(workspaceRoot) {
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("%s %q not found", kind, id))
+		return false
+	}
+	return true
+}
+
+func (r *routes) handleCreateWorkflow(w http.ResponseWriter, req *http.Request) {
+	var input workflowInput
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+	workspaceRoot := strings.TrimSpace(r.cfg.Paths.WorkspaceRoot)
+	if workspaceRoot == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("workspace_root is required"))
+		return
+	}
+	now := time.Now().UTC()
+	id := newID("workflow")
+	workflow := contracts.Workflow{
+		ID:            id,
+		WorkspaceRoot: workspaceRoot,
+		Trigger:       "manual",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	workflow = applyWorkflowInput(workflow, input)
+	workflow.ID = id
+	workflow.WorkspaceRoot = workspaceRoot
+	workflow.CreatedAt = now
+	workflow.UpdatedAt = now
+	if strings.TrimSpace(workflow.Name) == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("name is required"))
+		return
+	}
+	if strings.TrimSpace(workflow.Trigger) == "" {
+		workflow.Trigger = "manual"
+	}
+	if err := r.store.Workflows().Create(req.Context(), workflow); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	got, err := r.store.Workflows().Get(req.Context(), workflow.ID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, got)
+}
+
+func (r *routes) handleListWorkflows(w http.ResponseWriter, req *http.Request) {
+	workspaceRoot, err := r.workflowWorkspaceRoot(req)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	workflows, err := r.store.Workflows().ListByWorkspace(req.Context(), workspaceRoot)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if workflows == nil {
+		workflows = []contracts.Workflow{}
+	}
+	writeJSON(w, http.StatusOK, workflows)
+}
+
+func (r *routes) handleGetWorkflow(w http.ResponseWriter, req *http.Request) {
+	id := strings.TrimSpace(req.PathValue("id"))
+	if id == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("workflow id is required"))
+		return
+	}
+	workflow, err := r.store.Workflows().Get(req.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("workflow %q not found", id))
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !r.requireWorkflowEntityWorkspace(req, w, workflow.WorkspaceRoot, "workflow", id) {
+		return
+	}
+	writeJSON(w, http.StatusOK, workflow)
+}
+
+func (r *routes) handleUpdateWorkflow(w http.ResponseWriter, req *http.Request) {
+	id := strings.TrimSpace(req.PathValue("id"))
+	if id == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("workflow id is required"))
+		return
+	}
+	existing, err := r.store.Workflows().Get(req.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("workflow %q not found", id))
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !r.requireWorkflowEntityWorkspace(req, w, existing.WorkspaceRoot, "workflow", id) {
+		return
+	}
+	var input workflowInput
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+	workflow := applyWorkflowInput(existing, input)
+	workflow.ID = existing.ID
+	workflow.WorkspaceRoot = existing.WorkspaceRoot
+	workflow.CreatedAt = existing.CreatedAt
+	workflow.UpdatedAt = time.Now().UTC()
+	if strings.TrimSpace(workflow.Name) == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("name is required"))
+		return
+	}
+	if strings.TrimSpace(workflow.Trigger) == "" {
+		workflow.Trigger = "manual"
+	}
+	if err := r.store.Workflows().Update(req.Context(), workflow); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	got, err := r.store.Workflows().Get(req.Context(), id)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, got)
+}
+
+func (r *routes) handleCreateWorkflowRun(w http.ResponseWriter, req *http.Request) {
+	var input workflowRunInput
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+	workflowID := stringPtrValue(input.WorkflowID)
+	if strings.TrimSpace(workflowID) == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("workflow_id is required"))
+		return
+	}
+	workflow, err := r.store.Workflows().Get(req.Context(), workflowID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("workflow %q not found", workflowID))
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !r.requireWorkflowEntityWorkspace(req, w, workflow.WorkspaceRoot, "workflow", workflowID) {
+		return
+	}
+	now := time.Now().UTC()
+	id := newID("wfrun")
+	run := contracts.WorkflowRun{
+		ID:            id,
+		WorkflowID:    workflow.ID,
+		WorkspaceRoot: workflow.WorkspaceRoot,
+		State:         "queued",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	run = applyWorkflowRunInput(run, input)
+	state, err := workflowRunStateFromInput(input.State, "queued")
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	run.ID = id
+	run.WorkflowID = workflow.ID
+	run.WorkspaceRoot = workflow.WorkspaceRoot
+	run.State = state
+	run.CreatedAt = now
+	run.UpdatedAt = now
+	if err := r.store.Workflows().CreateRun(req.Context(), run); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	got, err := r.store.Workflows().GetRun(req.Context(), run.ID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, got)
+}
+
+func (r *routes) handleTriggerWorkflow(w http.ResponseWriter, req *http.Request) {
+	id := strings.TrimSpace(req.PathValue("id"))
+	if id == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("workflow id is required"))
+		return
+	}
+	workflow, err := r.store.Workflows().Get(req.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("workflow %q not found", id))
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !r.requireWorkflowEntityWorkspace(req, w, workflow.WorkspaceRoot, "workflow", id) {
+		return
+	}
+	if r.workflowService == nil {
+		writeJSONError(w, http.StatusInternalServerError, workflows.ErrUnavailable)
+		return
+	}
+
+	var input workflowTriggerInput
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+
+	run, err := r.workflowService.Trigger(context.WithoutCancel(req.Context()), workflow, workflows.TriggerInput{
+		TriggerRef: stringPtrValue(input.TriggerRef),
+	})
+	switch {
+	case errors.Is(err, workflows.ErrInvalidWorkflow):
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	case errors.Is(err, workflows.ErrUnavailable):
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	case err != nil:
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, workflowTriggerStatusCode(run.State), run)
+}
+
+func (r *routes) handleListWorkflowRuns(w http.ResponseWriter, req *http.Request) {
+	workspaceRoot, err := r.workflowWorkspaceRoot(req)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	runs, err := r.store.Workflows().ListRunsByWorkspace(req.Context(), workspaceRoot, contracts.WorkflowRunListOptions{
+		WorkflowID: req.URL.Query().Get("workflow_id"),
+		State:      req.URL.Query().Get("state"),
+		Limit:      parsePositiveInt(req.URL.Query().Get("limit")),
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if runs == nil {
+		runs = []contracts.WorkflowRun{}
+	}
+	writeJSON(w, http.StatusOK, runs)
+}
+
+func (r *routes) handleGetWorkflowRun(w http.ResponseWriter, req *http.Request) {
+	id := strings.TrimSpace(req.PathValue("id"))
+	if id == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("workflow run id is required"))
+		return
+	}
+	run, err := r.store.Workflows().GetRun(req.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("workflow run %q not found", id))
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !r.requireWorkflowEntityWorkspace(req, w, run.WorkspaceRoot, "workflow run", id) {
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
+}
+
+func (r *routes) handleUpdateWorkflowRun(w http.ResponseWriter, req *http.Request) {
+	id := strings.TrimSpace(req.PathValue("id"))
+	if id == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("workflow run id is required"))
+		return
+	}
+	existing, err := r.store.Workflows().GetRun(req.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("workflow run %q not found", id))
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !r.requireWorkflowEntityWorkspace(req, w, existing.WorkspaceRoot, "workflow run", id) {
+		return
+	}
+	var input workflowRunInput
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+	run := applyWorkflowRunInput(existing, input)
+	run.ID = existing.ID
+	run.WorkflowID = existing.WorkflowID
+	run.WorkspaceRoot = existing.WorkspaceRoot
+	run.CreatedAt = existing.CreatedAt
+	run.UpdatedAt = time.Now().UTC()
+	if input.State != nil {
+		state, err := workflowRunStateFromInput(input.State, existing.State)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err)
+			return
+		}
+		run.State = state
+	}
+	if err := r.store.Workflows().UpdateRun(req.Context(), run); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	got, err := r.store.Workflows().GetRun(req.Context(), id)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, got)
+}
+
+func (r *routes) handleListApprovals(w http.ResponseWriter, req *http.Request) {
+	workspaceRoot, err := r.workflowWorkspaceRoot(req)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	stateFilter := strings.TrimSpace(req.URL.Query().Get("state"))
+	if stateFilter != "" {
+		if stateFilter, err = approvalStateFromInput(&stateFilter, ""); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	approvals, err := r.store.Workflows().ListApprovalsByWorkspace(req.Context(), workspaceRoot, contracts.ApprovalListOptions{
+		WorkflowRunID: req.URL.Query().Get("workflow_run_id"),
+		State:         stateFilter,
+		Limit:         parsePositiveInt(req.URL.Query().Get("limit")),
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if approvals == nil {
+		approvals = []contracts.Approval{}
+	}
+	writeJSON(w, http.StatusOK, approvals)
+}
+
+func (r *routes) handleCreateApproval(w http.ResponseWriter, req *http.Request) {
+	var input approvalInput
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+	workflowRunID := stringPtrValue(input.WorkflowRunID)
+	if workflowRunID == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("workflow_run_id is required"))
+		return
+	}
+	run, err := r.store.Workflows().GetRun(req.Context(), workflowRunID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("workflow run %q not found", workflowRunID))
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !r.requireWorkflowEntityWorkspace(req, w, run.WorkspaceRoot, "workflow run", workflowRunID) {
+		return
+	}
+
+	now := time.Now().UTC()
+	id := newID("approval")
+	state, err := approvalStateFromInput(input.State, "pending")
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	if state != "pending" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("approval state must be pending on create"))
+		return
+	}
+	approval := contracts.Approval{
+		ID:            id,
+		WorkflowRunID: run.ID,
+		WorkspaceRoot: run.WorkspaceRoot,
+		State:         state,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	approval = applyApprovalInput(approval, input)
+	approval.ID = id
+	approval.WorkflowRunID = run.ID
+	approval.WorkspaceRoot = run.WorkspaceRoot
+	approval.State = state
+	approval.DecidedBy = ""
+	approval.DecidedAt = time.Time{}
+	approval.CreatedAt = now
+	approval.UpdatedAt = now
+	if strings.TrimSpace(approval.RequestedAction) == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("requested_action is required"))
+		return
+	}
+	if input.DecidedAt != nil && strings.TrimSpace(*input.DecidedAt) != "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("pending approvals cannot include decided_at"))
+		return
+	}
+	if err := r.store.Workflows().CreateApproval(req.Context(), approval); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	got, err := r.store.Workflows().GetApproval(req.Context(), approval.ID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, got)
+}
+
+func (r *routes) handleGetApproval(w http.ResponseWriter, req *http.Request) {
+	id := strings.TrimSpace(req.PathValue("id"))
+	if id == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("approval id is required"))
+		return
+	}
+	approval, err := r.store.Workflows().GetApproval(req.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("approval %q not found", id))
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !r.requireWorkflowEntityWorkspace(req, w, approval.WorkspaceRoot, "approval", id) {
+		return
+	}
+	writeJSON(w, http.StatusOK, approval)
+}
+
+func (r *routes) handleUpdateApproval(w http.ResponseWriter, req *http.Request) {
+	id := strings.TrimSpace(req.PathValue("id"))
+	if id == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("approval id is required"))
+		return
+	}
+	existing, err := r.store.Workflows().GetApproval(req.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("approval %q not found", id))
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !r.requireWorkflowEntityWorkspace(req, w, existing.WorkspaceRoot, "approval", id) {
+		return
+	}
+	var input approvalInput
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+	if approvalStateIsTerminal(existing.State) {
+		mutated, err := approvalTerminalMutationRequested(existing, input)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err)
+			return
+		}
+		if mutated {
+			writeJSONError(w, http.StatusBadRequest, fmt.Errorf("approval %q is already %s and cannot be modified", id, existing.State))
+			return
+		}
+		writeJSON(w, http.StatusOK, existing)
+		return
+	}
+
+	approval, err := updatedApprovalFromInput(existing, input, time.Now().UTC())
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(approval.RequestedAction) == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("requested_action is required"))
+		return
+	}
+	if err := r.store.Workflows().UpdateApproval(req.Context(), approval); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	got, err := r.store.Workflows().GetApproval(req.Context(), id)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, got)
 }
 
 func (r *routes) handlePutProjectState(w http.ResponseWriter, req *http.Request) {
@@ -1100,6 +1812,17 @@ func writeJSONError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
+func writeContextServiceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, contextsvc.ErrNotFound), errors.Is(err, sql.ErrNoRows):
+		writeJSONError(w, http.StatusNotFound, err)
+	case errors.Is(err, contextsvc.ErrInvalidInput):
+		writeJSONError(w, http.StatusBadRequest, err)
+	default:
+		writeJSONError(w, http.StatusInternalServerError, err)
+	}
+}
+
 func writeRoleServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, roles.ErrInvalidRole):
@@ -1111,6 +1834,272 @@ func writeRoleServiceError(w http.ResponseWriter, err error) {
 	default:
 		writeJSONError(w, http.StatusInternalServerError, err)
 	}
+}
+
+func applyWorkflowInput(workflow contracts.Workflow, input workflowInput) contracts.Workflow {
+	if input.ID != nil {
+		workflow.ID = strings.TrimSpace(*input.ID)
+	}
+	if input.WorkspaceRoot != nil {
+		workflow.WorkspaceRoot = strings.TrimSpace(*input.WorkspaceRoot)
+	}
+	if input.Name != nil {
+		workflow.Name = strings.TrimSpace(*input.Name)
+	}
+	if input.Trigger != nil {
+		workflow.Trigger = strings.TrimSpace(*input.Trigger)
+	}
+	if input.OwnerRole != nil {
+		workflow.OwnerRole = strings.TrimSpace(*input.OwnerRole)
+	}
+	if input.InputSchema != nil {
+		workflow.InputSchema = strings.TrimSpace(*input.InputSchema)
+	}
+	if input.Steps != nil {
+		workflow.Steps = strings.TrimSpace(*input.Steps)
+	}
+	if input.RequiredTools != nil {
+		workflow.RequiredTools = strings.TrimSpace(*input.RequiredTools)
+	}
+	if input.ApprovalPolicy != nil {
+		workflow.ApprovalPolicy = strings.TrimSpace(*input.ApprovalPolicy)
+	}
+	if input.ReportPolicy != nil {
+		workflow.ReportPolicy = strings.TrimSpace(*input.ReportPolicy)
+	}
+	if input.FailurePolicy != nil {
+		workflow.FailurePolicy = strings.TrimSpace(*input.FailurePolicy)
+	}
+	if input.ResumePolicy != nil {
+		workflow.ResumePolicy = strings.TrimSpace(*input.ResumePolicy)
+	}
+	return workflow
+}
+
+func applyWorkflowRunInput(run contracts.WorkflowRun, input workflowRunInput) contracts.WorkflowRun {
+	if input.ID != nil {
+		run.ID = strings.TrimSpace(*input.ID)
+	}
+	if input.WorkflowID != nil {
+		run.WorkflowID = strings.TrimSpace(*input.WorkflowID)
+	}
+	if input.WorkspaceRoot != nil {
+		run.WorkspaceRoot = strings.TrimSpace(*input.WorkspaceRoot)
+	}
+	if input.State != nil {
+		run.State = strings.TrimSpace(*input.State)
+	}
+	if input.TriggerRef != nil {
+		run.TriggerRef = strings.TrimSpace(*input.TriggerRef)
+	}
+	if input.TaskIDs != nil {
+		run.TaskIDs = strings.TrimSpace(*input.TaskIDs)
+	}
+	if input.ReportIDs != nil {
+		run.ReportIDs = strings.TrimSpace(*input.ReportIDs)
+	}
+	if input.ApprovalIDs != nil {
+		run.ApprovalIDs = strings.TrimSpace(*input.ApprovalIDs)
+	}
+	if input.Trace != nil {
+		run.Trace = strings.TrimSpace(*input.Trace)
+	}
+	return run
+}
+
+func applyApprovalInput(approval contracts.Approval, input approvalInput) contracts.Approval {
+	if input.ID != nil {
+		approval.ID = strings.TrimSpace(*input.ID)
+	}
+	if input.WorkflowRunID != nil {
+		approval.WorkflowRunID = strings.TrimSpace(*input.WorkflowRunID)
+	}
+	if input.WorkspaceRoot != nil {
+		approval.WorkspaceRoot = strings.TrimSpace(*input.WorkspaceRoot)
+	}
+	if input.RequestedAction != nil {
+		approval.RequestedAction = strings.TrimSpace(*input.RequestedAction)
+	}
+	if input.RiskLevel != nil {
+		approval.RiskLevel = strings.TrimSpace(*input.RiskLevel)
+	}
+	if input.Summary != nil {
+		approval.Summary = strings.TrimSpace(*input.Summary)
+	}
+	if input.ProposedPayload != nil {
+		approval.ProposedPayload = strings.TrimSpace(*input.ProposedPayload)
+	}
+	if input.State != nil {
+		approval.State = strings.TrimSpace(*input.State)
+	}
+	if input.DecidedBy != nil {
+		approval.DecidedBy = strings.TrimSpace(*input.DecidedBy)
+	}
+	return approval
+}
+
+func updatedApprovalFromInput(existing contracts.Approval, input approvalInput, now time.Time) (contracts.Approval, error) {
+	approval := applyApprovalInput(existing, input)
+	approval.ID = existing.ID
+	approval.WorkflowRunID = existing.WorkflowRunID
+	approval.WorkspaceRoot = existing.WorkspaceRoot
+	approval.CreatedAt = existing.CreatedAt
+	approval.UpdatedAt = now
+
+	state, err := approvalStateFromInput(input.State, existing.State)
+	if err != nil {
+		return contracts.Approval{}, err
+	}
+	if existing.State != "pending" {
+		return contracts.Approval{}, fmt.Errorf("approval %q cannot transition from %s", existing.ID, existing.State)
+	}
+	switch state {
+	case "pending":
+		if input.DecidedAt != nil && strings.TrimSpace(*input.DecidedAt) != "" {
+			return contracts.Approval{}, fmt.Errorf("pending approvals cannot include decided_at")
+		}
+		approval.State = "pending"
+		approval.DecidedBy = ""
+		approval.DecidedAt = time.Time{}
+	case "approved", "rejected", "expired":
+		approval.State = state
+		approval.DecidedBy = strings.TrimSpace(approval.DecidedBy)
+		if approval.DecidedBy == "" {
+			return contracts.Approval{}, fmt.Errorf("decided_by is required for terminal approvals")
+		}
+		decidedAt, err := approvalTimeFromInput(input.DecidedAt, existing.DecidedAt)
+		if err != nil {
+			return contracts.Approval{}, err
+		}
+		if decidedAt.IsZero() {
+			decidedAt = now
+		}
+		approval.DecidedAt = decidedAt
+	default:
+		return contracts.Approval{}, fmt.Errorf("approval %q cannot transition from %s to %s", existing.ID, existing.State, state)
+	}
+	return approval, nil
+}
+
+func approvalTerminalMutationRequested(existing contracts.Approval, input approvalInput) (bool, error) {
+	if input.State != nil {
+		state, err := approvalStateFromInput(input.State, existing.State)
+		if err != nil {
+			return false, err
+		}
+		if state != existing.State {
+			return true, nil
+		}
+	}
+	if input.RequestedAction != nil && strings.TrimSpace(*input.RequestedAction) != existing.RequestedAction {
+		return true, nil
+	}
+	if input.RiskLevel != nil && strings.TrimSpace(*input.RiskLevel) != existing.RiskLevel {
+		return true, nil
+	}
+	if input.Summary != nil && strings.TrimSpace(*input.Summary) != existing.Summary {
+		return true, nil
+	}
+	if input.ProposedPayload != nil && strings.TrimSpace(*input.ProposedPayload) != existing.ProposedPayload {
+		return true, nil
+	}
+	if input.DecidedBy != nil && strings.TrimSpace(*input.DecidedBy) != existing.DecidedBy {
+		return true, nil
+	}
+	if input.DecidedAt != nil {
+		decidedAt, err := approvalTimeFromInput(input.DecidedAt, existing.DecidedAt)
+		if err != nil {
+			return false, err
+		}
+		if !approvalTimesEqual(decidedAt, existing.DecidedAt) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func approvalStateIsTerminal(state string) bool {
+	switch strings.TrimSpace(state) {
+	case "approved", "rejected", "expired":
+		return true
+	default:
+		return false
+	}
+}
+
+func approvalTimesEqual(left, right time.Time) bool {
+	if left.IsZero() || right.IsZero() {
+		return left.IsZero() && right.IsZero()
+	}
+	return left.Equal(right)
+}
+
+func workflowRunStateFromInput(value *string, fallback string) (string, error) {
+	if value == nil {
+		return fallback, nil
+	}
+	state := strings.TrimSpace(*value)
+	if state == "" {
+		return "", fmt.Errorf("state is required")
+	}
+	switch state {
+	case "queued", "running", "waiting_approval", "completed", "failed", "interrupted":
+		return state, nil
+	default:
+		return "", fmt.Errorf("unsupported workflow run state %q", state)
+	}
+}
+
+func approvalStateFromInput(value *string, fallback string) (string, error) {
+	if value == nil {
+		return fallback, nil
+	}
+	state := strings.TrimSpace(*value)
+	if state == "" {
+		return "", fmt.Errorf("state is required")
+	}
+	switch state {
+	case "pending", "approved", "rejected", "expired":
+		return state, nil
+	default:
+		return "", fmt.Errorf("unsupported approval state %q", state)
+	}
+}
+
+func approvalTimeFromInput(value *string, fallback time.Time) (time.Time, error) {
+	if value == nil {
+		return fallback, nil
+	}
+	raw := strings.TrimSpace(*value)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("decided_at must be RFC3339 timestamp")
+}
+
+func workflowTriggerStatusCode(state string) int {
+	switch strings.TrimSpace(state) {
+	case "completed":
+		return http.StatusCreated
+	case "failed", "interrupted":
+		return http.StatusOK
+	case "queued", "running", "waiting_approval":
+		return http.StatusAccepted
+	default:
+		return http.StatusAccepted
+	}
+}
+
+func stringPtrValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func normalizeKind(kind string) string {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
+  useContextPreview,
   useCreateMemory,
   useDeleteMemory,
   useMemories,
@@ -9,7 +10,7 @@ import {
   useSetting,
   useUpdateProjectState,
 } from "../api/queries";
-import type { Memory } from "../api/types";
+import type { ContextPreview, ContextPreviewBlock, Memory } from "../api/types";
 import { RefreshCw, Save, X } from "../components/Icon";
 import { useI18n } from "../i18n";
 
@@ -27,6 +28,7 @@ export function ContextPage({ workspaceRoot, sessionId }: ContextPageProps) {
   const updateProjectState = useUpdateProjectState(workspaceRoot);
   const autoSetting = useSetting("project_state_auto");
   const setAutoSetting = useSetSetting("project_state_auto");
+  const contextPreview = useContextPreview(sessionId);
   const [summary, setSummary] = useState("");
 
   useEffect(() => {
@@ -49,6 +51,14 @@ export function ContextPage({ workspaceRoot, sessionId }: ContextPageProps) {
           <StateBox tone="neutral" text={t("context.noWorkspace")} />
         ) : (
           <>
+            <ContextPreviewPanel
+              preview={contextPreview.data}
+              isLoading={contextPreview.isLoading}
+              isError={contextPreview.isError}
+              sessionId={sessionId}
+              onRefresh={() => void contextPreview.refetch()}
+            />
+
             <section className="rounded-md p-4" style={{ backgroundColor: "var(--color-bg-elevated)", border: "1px solid var(--color-border)" }}>
               <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
@@ -112,6 +122,158 @@ export function ContextPage({ workspaceRoot, sessionId }: ContextPageProps) {
         )}
       </div>
     </section>
+  );
+}
+
+function ContextPreviewPanel({
+  preview,
+  isLoading,
+  isError,
+  sessionId,
+  onRefresh,
+}: {
+  preview?: ContextPreview;
+  isLoading: boolean;
+  isError: boolean;
+  sessionId: string | null;
+  onRefresh: () => void;
+}) {
+  const { t } = useI18n();
+  const included = preview?.blocks.filter((block) => block.status === "included").length ?? 0;
+  const available = preview?.blocks.filter((block) => block.status === "available").length ?? 0;
+  const visibleBlocks = preview?.blocks.slice(0, 12) ?? [];
+
+  return (
+    <section className="rounded-md p-4" style={{ backgroundColor: "var(--color-bg-elevated)", border: "1px solid var(--color-border)" }}>
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h2 className="m-0 text-sm font-semibold" style={{ color: "var(--color-text)" }}>
+            {t("context.inspector")}
+          </h2>
+          <p className="m-0 mt-1 text-xs" style={{ color: "var(--color-text-tertiary)" }}>
+            {preview?.generated_at ? t("context.generated", { time: formatDate(preview.generated_at) }) : t("context.inspectorSubtitle")}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={!sessionId || isLoading}
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium"
+          style={{
+            border: "1px solid var(--color-border)",
+            backgroundColor: "var(--color-surface)",
+            color: "var(--color-text)",
+            cursor: !sessionId || isLoading ? "not-allowed" : "pointer",
+            opacity: !sessionId || isLoading ? 0.65 : 1,
+          }}
+        >
+          <RefreshCw size={14} />
+          {t("context.refresh")}
+        </button>
+      </div>
+
+      {!sessionId ? (
+        <StateBox tone="neutral" text={t("context.noSession")} />
+      ) : isLoading ? (
+        <LoadingRows />
+      ) : isError ? (
+        <StateBox tone="error" text={t("context.previewLoadFailed")} />
+      ) : preview ? (
+        <div className="grid gap-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Metric label={t("context.promptTokens")} value={String(preview.approx_tokens)} />
+            <Metric label={t("context.includedBlocks")} value={String(included)} />
+            <Metric label={t("context.availableBlocks")} value={String(available)} />
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
+            <div className="min-w-0">
+              <h3 className="m-0 mb-2 text-xs font-semibold uppercase" style={{ color: "var(--color-text-tertiary)" }}>
+                {t("context.promptPreview")}
+              </h3>
+              {preview.prompt.length ? (
+                <div className="flex max-h-[360px] flex-col gap-2 overflow-y-auto pr-1">
+                  {preview.prompt.map((item, index) => (
+                    <article key={`${item.source_ref}-${index}`} className="rounded-md p-3" style={{ backgroundColor: "var(--color-bg)", border: "1px solid var(--color-border)" }}>
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <Badge value={item.role} tone="neutral" />
+                        <span className="break-all text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+                          {item.source_ref}
+                        </span>
+                        <span className="text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+                          {t("context.tokens", { count: item.approx_tokens })}
+                        </span>
+                      </div>
+                      <p className="m-0 whitespace-pre-wrap text-xs leading-5" style={{ color: "var(--color-text-secondary)" }}>
+                        {item.content_preview}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <StateBox tone="neutral" text={t("context.noPromptPreview")} />
+              )}
+            </div>
+
+            <div className="min-w-0">
+              <h3 className="m-0 mb-2 text-xs font-semibold uppercase" style={{ color: "var(--color-text-tertiary)" }}>
+                {t("context.contextBlocks")}
+              </h3>
+              {visibleBlocks.length ? (
+                <div className="flex max-h-[360px] flex-col gap-2 overflow-y-auto pr-1">
+                  {visibleBlocks.map((block) => (
+                    <ContextBlockRow key={`${block.id}-${block.source_ref}`} block={block} />
+                  ))}
+                </div>
+              ) : (
+                <StateBox tone="neutral" text={t("context.noContextBlocks")} />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md px-3 py-2" style={{ backgroundColor: "var(--color-bg)", border: "1px solid var(--color-border)" }}>
+      <div className="text-[11px] font-semibold uppercase" style={{ color: "var(--color-text-tertiary)" }}>
+        {label}
+      </div>
+      <div className="mt-1 text-lg font-semibold" style={{ color: "var(--color-text)" }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ContextBlockRow({ block }: { block: ContextPreviewBlock }) {
+  const tone = block.status === "included" ? "success" : block.status === "available" ? "warning" : "neutral";
+  return (
+    <article className="rounded-md p-3" style={{ backgroundColor: "var(--color-bg)", border: "1px solid var(--color-border)" }}>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <Badge value={block.status} tone={tone} />
+        <Badge value={block.type} tone="neutral" />
+        <span className="break-all text-[11px]" style={{ color: "var(--color-text-tertiary)" }}>
+          {block.source_ref}
+        </span>
+      </div>
+      <p className="m-0 text-sm font-medium" style={{ color: "var(--color-text)" }}>
+        {block.title || block.id}
+      </p>
+      {block.summary ? (
+        <p className="m-0 mt-1 whitespace-pre-wrap text-xs leading-5" style={{ color: "var(--color-text-secondary)" }}>
+          {block.summary}
+        </p>
+      ) : null}
+      {block.reason ? (
+        <p className="m-0 mt-2 text-[11px] leading-4" style={{ color: "var(--color-text-tertiary)" }}>
+          {block.reason}
+        </p>
+      ) : null}
+    </article>
   );
 }
 

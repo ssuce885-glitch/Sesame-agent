@@ -77,16 +77,17 @@ type ReportsResponse struct {
 }
 
 type AutomationResponse struct {
-	ID            string
-	WorkspaceRoot string
-	Title         string
-	Goal          string
-	State         string
-	Owner         string
-	WatcherPath   string
-	WatcherCron   string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID            string    `json:"id"`
+	WorkspaceRoot string    `json:"workspace_root"`
+	Title         string    `json:"title"`
+	Goal          string    `json:"goal"`
+	State         string    `json:"state"`
+	Owner         string    `json:"owner"`
+	WorkflowID    string    `json:"workflow_id,omitempty"`
+	WatcherPath   string    `json:"watcher_path"`
+	WatcherCron   string    `json:"watcher_cron"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type ProjectStateResponse struct {

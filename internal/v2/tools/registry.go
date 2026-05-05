@@ -8,9 +8,9 @@ import (
 )
 
 type Registry struct {
-	mu    sync.RWMutex
-	tools map[string]contracts.Tool
-	byNS  map[contracts.ToolNamespace][]string
+	mu           sync.RWMutex
+	tools        map[string]contracts.Tool
+	registeredNS map[string]contracts.ToolNamespace
 }
 
 type enabledTool interface {
@@ -19,8 +19,8 @@ type enabledTool interface {
 
 func NewRegistry() *Registry {
 	return &Registry{
-		tools: make(map[string]contracts.Tool),
-		byNS:  make(map[contracts.ToolNamespace][]string),
+		tools:        make(map[string]contracts.Tool),
+		registeredNS: make(map[string]contracts.ToolNamespace),
 	}
 }
 
@@ -34,18 +34,12 @@ func (r *Registry) Register(ns contracts.ToolNamespace, tool contracts.Tool) {
 	if def.Name == "" {
 		return
 	}
-	if def.Namespace == "" {
-		def.Namespace = ns
-	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.tools[def.Name]; !exists {
-		r.byNS[ns] = append(r.byNS[ns], def.Name)
-		sort.Strings(r.byNS[ns])
-	}
 	r.tools[def.Name] = tool
+	r.registeredNS[def.Name] = ns
 }
 
 func (r *Registry) Lookup(name string) (contracts.Tool, bool) {
@@ -60,6 +54,19 @@ func (r *Registry) VisibleTools(execCtx contracts.ExecContext) []contracts.ToolD
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	return r.toolDefinitionsLocked(func(tool contracts.Tool) bool {
+		return EvaluateToolAccess(tool, execCtx).Allowed
+	})
+}
+
+func (r *Registry) AllToolDefinitions() []contracts.ToolDefinition {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.toolDefinitionsLocked(nil)
+}
+
+func (r *Registry) toolDefinitionsLocked(include func(contracts.Tool) bool) []contracts.ToolDefinition {
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
 		names = append(names, name)
@@ -69,35 +76,14 @@ func (r *Registry) VisibleTools(execCtx contracts.ExecContext) []contracts.ToolD
 	defs := make([]contracts.ToolDefinition, 0, len(names))
 	for _, name := range names {
 		tool := r.tools[name]
-		if gated, ok := tool.(enabledTool); ok && !gated.IsEnabled(execCtx) {
+		if include != nil && !include(tool) {
 			continue
 		}
-		if isDeniedToolForRole(execCtx.RoleSpec, name) {
-			continue
+		def := tool.Definition()
+		if def.Namespace == "" {
+			def.Namespace = r.registeredNS[name]
 		}
-		defs = append(defs, tool.Definition())
+		defs = append(defs, def)
 	}
 	return defs
-}
-
-func isDeniedToolForRole(spec *contracts.RoleSpec, toolName string) bool {
-	if spec == nil {
-		return false
-	}
-	if len(spec.AllowedTools) > 0 && !stringSliceContains(spec.AllowedTools, toolName) {
-		return true
-	}
-	if stringSliceContains(spec.DeniedTools, toolName) {
-		return true
-	}
-	return false
-}
-
-func stringSliceContains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }

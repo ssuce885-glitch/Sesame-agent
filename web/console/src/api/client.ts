@@ -1,6 +1,9 @@
 import type {
   Automation,
   AutomationRun,
+  ContextBlock,
+  ContextBlockFilters,
+  ContextPreview,
   Memory,
   ProjectState,
   RoleInput,
@@ -15,6 +18,10 @@ import type {
   TaskTrace,
   TimelineResponse,
   Turn,
+  Workflow,
+  WorkflowRun,
+  WorkflowRunFilters,
+  WorkflowTriggerInput,
 } from "./types";
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
@@ -60,6 +67,47 @@ export async function getSession(sessionId: string): Promise<SessionInfo> {
 // Timeline
 export async function getTimeline(sessionId: string): Promise<TimelineResponse> {
   return apiFetch<TimelineResponse>(`/v2/sessions/${encodeURIComponent(sessionId)}/timeline`);
+}
+
+// Context
+export async function getContextPreview(sessionId: string): Promise<ContextPreview> {
+  const params = new URLSearchParams({ session_id: sessionId });
+  return apiFetch<ContextPreview>(`/v2/context/preview?${params.toString()}`);
+}
+
+export async function listContextBlocks(workspaceRoot: string, filters: ContextBlockFilters = {}): Promise<ContextBlock[]> {
+  const params = new URLSearchParams({ workspace_root: workspaceRoot });
+  if (filters.owner) {
+    params.set("owner", filters.owner);
+  }
+  if (filters.visibility) {
+    params.set("visibility", filters.visibility);
+  }
+  if (filters.type) {
+    params.set("type", filters.type);
+  }
+  if (filters.limit && filters.limit > 0) {
+    params.set("limit", String(filters.limit));
+  }
+  return apiFetch<ContextBlock[]>(`/v2/context/blocks?${params.toString()}`);
+}
+
+export async function createContextBlock(block: Partial<ContextBlock>): Promise<ContextBlock> {
+  return apiFetch<ContextBlock>("/v2/context/blocks", {
+    method: "POST",
+    body: JSON.stringify(block),
+  });
+}
+
+export async function updateContextBlock(id: string, block: Partial<ContextBlock>): Promise<ContextBlock> {
+  return apiFetch<ContextBlock>(`/v2/context/blocks/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(block),
+  });
+}
+
+export async function deleteContextBlock(id: string): Promise<void> {
+  await apiFetch<void>(`/v2/context/blocks/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 // Turns
@@ -325,6 +373,69 @@ export async function pauseAutomation(id: string): Promise<Automation> {
 export async function resumeAutomation(id: string): Promise<Automation> {
   return apiFetch<Automation>(`/v2/automations/${encodeURIComponent(id)}/resume`, {
     method: "POST",
+  });
+}
+
+// Workflows
+export async function listWorkflows(workspaceRoot: string): Promise<Workflow[]> {
+  const params = new URLSearchParams({ workspace_root: workspaceRoot });
+  return apiFetch<Workflow[]>(`/v2/workflows?${params.toString()}`);
+}
+
+export async function getWorkflow(id: string): Promise<Workflow> {
+  return apiFetch<Workflow>(`/v2/workflows/${encodeURIComponent(id)}`);
+}
+
+export async function createWorkflow(workflow: Partial<Workflow>): Promise<Workflow> {
+  return apiFetch<Workflow>("/v2/workflows", {
+    method: "POST",
+    body: JSON.stringify(workflow),
+  });
+}
+
+export async function updateWorkflow(id: string, workflow: Partial<Workflow>): Promise<Workflow> {
+  return apiFetch<Workflow>(`/v2/workflows/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(workflow),
+  });
+}
+
+export async function triggerWorkflow(workflowId: string, input: WorkflowTriggerInput = {}): Promise<WorkflowRun> {
+  return apiFetch<WorkflowRun>(`/v2/workflows/${encodeURIComponent(workflowId)}/trigger`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listWorkflowRuns(workspaceRoot: string, filters: WorkflowRunFilters = {}): Promise<WorkflowRun[]> {
+  const params = new URLSearchParams({ workspace_root: workspaceRoot });
+  if (filters.workflow_id) {
+    params.set("workflow_id", filters.workflow_id);
+  }
+  if (filters.state) {
+    params.set("state", filters.state);
+  }
+  if (filters.limit && filters.limit > 0) {
+    params.set("limit", String(filters.limit));
+  }
+  return apiFetch<WorkflowRun[]>(`/v2/workflow_runs?${params.toString()}`);
+}
+
+export async function getWorkflowRun(id: string): Promise<WorkflowRun> {
+  return apiFetch<WorkflowRun>(`/v2/workflow_runs/${encodeURIComponent(id)}`);
+}
+
+export async function createWorkflowRun(run: Partial<WorkflowRun>): Promise<WorkflowRun> {
+  return apiFetch<WorkflowRun>("/v2/workflow_runs", {
+    method: "POST",
+    body: JSON.stringify(run),
+  });
+}
+
+export async function updateWorkflowRun(id: string, run: Partial<WorkflowRun>): Promise<WorkflowRun> {
+  return apiFetch<WorkflowRun>(`/v2/workflow_runs/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(run),
   });
 }
 

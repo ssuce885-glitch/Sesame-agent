@@ -1,0 +1,20 @@
+{
+  "name": "Research Intake",
+  "trigger": "manual",
+  "owner_role": "researcher",
+  "report_policy": "deliver_task_reports",
+  "steps": [
+    {
+      "type": "role_task",
+      "role_id": "researcher",
+      "title": "Scope request",
+      "prompt": "Review the incoming research request or source bundle. Summarize the main question, assumptions, constraints, and missing inputs before deeper work starts."
+    },
+    {
+      "type": "role_task",
+      "role_id": "researcher",
+      "title": "Prepare intake handoff",
+      "prompt": "Draft a reusable intake note with the question, key signals, open questions, and suggested follow-up work so the result can be copied into a report, memory note, or project state update."
+    }
+  ]
+}

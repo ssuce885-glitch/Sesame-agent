@@ -14,8 +14,8 @@ data/
 data-local/
 attachments/
 automations/
-roles/
-skills/
+/roles/
+/skills/
 mailbox/
 /memory/
 notices/

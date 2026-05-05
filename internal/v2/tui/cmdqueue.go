@@ -317,7 +317,7 @@ func preview(text string, maxLen int) string {
 func formatSkillList(catalog skillcatalog.Catalog) []string {
 	lines := make([]string, 0, len(catalog.Skills))
 	for _, skill := range catalog.Skills {
-		line := skill.Name + " [" + skill.Scope + "]"
+		line := skill.DisplayName() + " [" + skill.Scope + "]"
 		if desc := trim(skill.Description); desc != "" {
 			line += " - " + desc
 		}
@@ -349,6 +349,9 @@ func formatAutomationList(items []AutomationResponse) []string {
 		}
 		if owner := trim(item.Owner); owner != "" {
 			meta = append(meta, owner)
+		}
+		if workflowID := trim(item.WorkflowID); workflowID != "" {
+			meta = append(meta, "workflow:"+workflowID)
 		}
 		if cron := trim(item.WatcherCron); cron != "" {
 			meta = append(meta, cron)

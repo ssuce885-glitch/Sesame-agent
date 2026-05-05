@@ -28,6 +28,10 @@ func (t *memoryWriteTool) Definition() contracts.ToolDefinition {
 		Name:        "memory_write",
 		Namespace:   contracts.NamespaceMemory,
 		Description: "Store a durable memory note for later recall. Use for facts, decisions, patterns worth remembering.",
+		Capabilities: []string{
+			string(contracts.CapabilityWriteWorkspace),
+		},
+		Risk: "low",
 		Parameters: objectSchema(map[string]any{
 			"kind": map[string]any{
 				"type": "string",
@@ -76,6 +80,7 @@ func (t *recallArchiveTool) Definition() contracts.ToolDefinition {
 		Name:        "recall_archive",
 		Namespace:   contracts.NamespaceMemory,
 		Description: "Recall stored memories by search query.",
+		Risk:        "low",
 		Parameters: objectSchema(map[string]any{
 			"query": map[string]any{"type": "string"},
 			"limit": map[string]any{"type": "number"},
@@ -128,6 +133,7 @@ func (t *loadContextTool) Definition() contracts.ToolDefinition {
 		Name:        "load_context",
 		Namespace:   contracts.NamespaceMemory,
 		Description: "Load full conversation context by memory or archive reference.",
+		Risk:        "low",
 		Parameters: objectSchema(map[string]any{
 			"reference_id": map[string]any{"type": "string"},
 		}, "reference_id"),

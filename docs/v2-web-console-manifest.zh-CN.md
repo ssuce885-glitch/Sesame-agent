@@ -1,6 +1,6 @@
 # V2 Web Console Manifest
 
-更新时间：2026-05-03
+更新时间：2026-05-04
 
 ## 结论
 
@@ -61,6 +61,7 @@ migrate web console to v2 api
 - Roles
 - Automations
 - Context / Project State / Memory
+- Workflows / Manual Trigger / Run Audit
 
 ## 已删除旧页面/组件
 
@@ -83,6 +84,9 @@ migrate web console to v2 api
 - Task list and trace
 - Reports list
 - Automation create/list/run history
+- Workflow list/create/edit/manual trigger/run audit
+- Context Inspector prompt/context-block preview
+- ContextBlock API types and query/mutation hooks
 - Project state and memory management
 
 ## 后续项

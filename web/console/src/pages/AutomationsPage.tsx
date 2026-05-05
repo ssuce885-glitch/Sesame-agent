@@ -263,8 +263,9 @@ function AutomationRow({
           <p className="m-0 mt-1 truncate text-xs" style={{ color: "var(--color-text-tertiary)" }}>
             {automation.goal}
           </p>
-          <div className="mt-3 grid gap-2 text-xs md:grid-cols-3" style={{ color: "var(--color-text-secondary)" }}>
+          <div className="mt-3 grid gap-2 text-xs md:grid-cols-4" style={{ color: "var(--color-text-secondary)" }}>
             <Field label="Owner" value={automation.owner} />
+            <Field label="Workflow" value={automation.workflow_id ?? ""} />
             <Field label="Path" value={automation.watcher_path} />
             <Field label="Cron" value={automation.watcher_cron} />
           </div>
@@ -314,7 +315,18 @@ function AutomationRuns({ automationID }: { automationID: string }) {
       ) : runs.data?.length ? (
         <div className="flex flex-col gap-2">
           {runs.data.map((run) => (
-            <RunRow key={`${run.automation_id}-${run.dedupe_key}`} run={run} onOpenTask={() => navigate(`/tasks/${encodeURIComponent(run.task_id)}`)} />
+            <RunRow
+              key={`${run.automation_id}-${run.dedupe_key}`}
+              run={run}
+              onOpenTask={() => navigate(`/tasks/${encodeURIComponent(run.task_id)}`)}
+              onOpenWorkflow={() =>
+                navigate(
+                  run.workflow_run_id
+                    ? `/workflows?run_id=${encodeURIComponent(run.workflow_run_id)}`
+                    : "/workflows",
+                )
+              }
+            />
           ))}
         </div>
       ) : (
@@ -324,9 +336,15 @@ function AutomationRuns({ automationID }: { automationID: string }) {
   );
 }
 
-function RunRow({ run, onOpenTask }: { run: AutomationRun; onOpenTask: () => void }) {
+function RunRow({ run, onOpenTask, onOpenWorkflow }: { run: AutomationRun; onOpenTask: () => void; onOpenWorkflow: () => void }) {
+  const linkButtonStyle = {
+    border: "1px solid var(--color-border)",
+    backgroundColor: "var(--color-surface)",
+    color: "var(--color-accent)",
+    cursor: "pointer",
+  } as const;
   return (
-    <div className="grid gap-3 rounded-md p-3 md:grid-cols-[1fr_130px_120px]" style={{ backgroundColor: "var(--color-bg-elevated)", border: "1px solid var(--color-border)" }}>
+    <div className="grid gap-3 rounded-md p-3 md:grid-cols-[1fr_130px_180px]" style={{ backgroundColor: "var(--color-bg-elevated)", border: "1px solid var(--color-border)" }}>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge value={run.status || "unknown"} />
@@ -341,19 +359,29 @@ function RunRow({ run, onOpenTask }: { run: AutomationRun; onOpenTask: () => voi
       <div className="text-xs" style={{ color: "var(--color-text-secondary)" }}>
         {formatDate(run.created_at)}
       </div>
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-2">
+        {run.workflow_run_id ? (
+          <button
+            type="button"
+            onClick={onOpenWorkflow}
+            className="rounded-md px-2.5 py-1.5 text-xs font-medium"
+            style={linkButtonStyle}
+          >
+            {run.workflow_run_id}
+          </button>
+        ) : null}
         {run.task_id ? (
           <button
             type="button"
             onClick={onOpenTask}
             className="rounded-md px-2.5 py-1.5 text-xs font-medium"
-            style={{ border: "1px solid var(--color-border)", backgroundColor: "var(--color-surface)", color: "var(--color-accent)", cursor: "pointer" }}
+            style={linkButtonStyle}
           >
             {run.task_id}
           </button>
-        ) : (
+        ) : !run.workflow_run_id ? (
           <span className="text-xs" style={{ color: "var(--color-text-tertiary)" }}>-</span>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -433,13 +461,16 @@ function LoadingRows() {
 }
 
 function statusTone(value: string): "neutral" | "success" | "warning" | "error" {
+  if (value.startsWith("workflow:")) {
+    return statusTone(value.slice("workflow:".length));
+  }
   if (value === "active" || value === "success" || value === "completed") {
     return "success";
   }
-  if (value === "needs_agent" || value === "running") {
+  if (value === "needs_agent" || value === "queued" || value === "running" || value === "waiting_approval") {
     return "warning";
   }
-  if (value === "error" || value === "failed" || value === "failure" || value === "blocked") {
+  if (value === "error" || value === "failed" || value === "failure" || value === "blocked" || value === "interrupted") {
     return "error";
   }
   return "neutral";

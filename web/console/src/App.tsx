@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
   createBrowserRouter,
@@ -8,16 +8,34 @@ import {
 } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Sidebar } from "./components/Sidebar";
-import { ChatPage } from "./pages/ChatPage";
-import { RolesPage } from "./pages/RolesPage";
-import { AutomationsPage } from "./pages/AutomationsPage";
-import { ReportsPage } from "./pages/ReportsPage";
-import { TaskTracePage } from "./pages/TaskTracePage";
-import { TasksPage } from "./pages/TasksPage";
-import { ContextPage } from "./pages/ContextPage";
 import { useSession } from "./api/queries";
 import { useI18n, I18nProvider, type Locale } from "./i18n";
 import { Globe } from "./components/Icon";
+
+const ChatPage = lazy(() =>
+  import("./pages/ChatPage").then((module) => ({ default: module.ChatPage })),
+);
+const RolesPage = lazy(() =>
+  import("./pages/RolesPage").then((module) => ({ default: module.RolesPage })),
+);
+const AutomationsPage = lazy(() =>
+  import("./pages/AutomationsPage").then((module) => ({ default: module.AutomationsPage })),
+);
+const WorkflowsPage = lazy(() =>
+  import("./pages/WorkflowsPage").then((module) => ({ default: module.WorkflowsPage })),
+);
+const ReportsPage = lazy(() =>
+  import("./pages/ReportsPage").then((module) => ({ default: module.ReportsPage })),
+);
+const TaskTracePage = lazy(() =>
+  import("./pages/TaskTracePage").then((module) => ({ default: module.TaskTracePage })),
+);
+const TasksPage = lazy(() =>
+  import("./pages/TasksPage").then((module) => ({ default: module.TasksPage })),
+);
+const ContextPage = lazy(() =>
+  import("./pages/ContextPage").then((module) => ({ default: module.ContextPage })),
+);
 
 const DEFAULT_WORKSPACE_ROOT =
   (import.meta.env.VITE_WORKSPACE_ROOT as string | undefined) ?? "";
@@ -69,6 +87,15 @@ export function AppShell() {
       setSidebarConnection("idle");
     }
   }, [location.pathname]);
+
+  useEffect(() => {
+    const reloadOnPreloadError = (event: Event) => {
+      event.preventDefault();
+      window.location.reload();
+    };
+    window.addEventListener("vite:preloadError", reloadOnPreloadError);
+    return () => window.removeEventListener("vite:preloadError", reloadOnPreloadError);
+  }, []);
 
   const activePath =
     location.pathname === "/" ? "/chat" : location.pathname;
@@ -124,30 +151,91 @@ export function AppShell() {
 
         {/* Page content */}
         <main className="flex-1 overflow-hidden">
-          {activePath === "/chat" && (
-            <ChatPage
-              sessionId={activeSessionId ?? ""}
-              onConnectionChange={handleConnectionChange}
-            />
-          )}
-          {activePath === "/roles" && <RolesPage workspaceRoot={workspaceRoot || null} />}
-          {activePath === "/automations" && (
-            <AutomationsPage workspaceRoot={workspaceRoot || null} />
-          )}
-          {activePath === "/reports" && (
-            <ReportsPage workspaceRoot={workspaceRoot || null} />
-          )}
-          {activePath === "/tasks" && (
-            <TasksPage workspaceRoot={workspaceRoot || null} />
-          )}
-          {activePath === "/context" && (
-            <ContextPage workspaceRoot={workspaceRoot || null} sessionId={activeSessionId} />
-          )}
-          {taskTraceId && <TaskTracePage taskId={taskTraceId} />}
+          <PageErrorBoundary resetKey={activePath}>
+            <Suspense fallback={<PageFallback />}>
+              {activePath === "/chat" && (
+                <ChatPage
+                  sessionId={activeSessionId ?? ""}
+                  onConnectionChange={handleConnectionChange}
+                />
+              )}
+              {activePath === "/roles" && <RolesPage workspaceRoot={workspaceRoot || null} />}
+              {activePath === "/automations" && (
+                <AutomationsPage workspaceRoot={workspaceRoot || null} />
+              )}
+              {activePath === "/workflows" && (
+                <WorkflowsPage workspaceRoot={workspaceRoot || null} />
+              )}
+              {activePath === "/reports" && (
+                <ReportsPage workspaceRoot={workspaceRoot || null} />
+              )}
+              {activePath === "/tasks" && (
+                <TasksPage workspaceRoot={workspaceRoot || null} />
+              )}
+              {activePath === "/context" && (
+                <ContextPage workspaceRoot={workspaceRoot || null} sessionId={activeSessionId} />
+              )}
+              {taskTraceId && <TaskTracePage taskId={taskTraceId} />}
+            </Suspense>
+          </PageErrorBoundary>
         </main>
       </div>
     </div>
   );
+}
+
+function PageFallback() {
+  return (
+    <div
+      className="h-full flex items-center justify-center text-sm"
+      style={{ backgroundColor: "var(--color-bg)", color: "var(--color-text-tertiary)" }}
+    >
+      Loading...
+    </div>
+  );
+}
+
+class PageErrorBoundary extends Component<
+  { children: ReactNode; resetKey: string },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidUpdate(prevProps: { resetKey: string }) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div
+          className="h-full flex flex-col items-center justify-center gap-3 text-sm"
+          style={{ backgroundColor: "var(--color-bg)", color: "var(--color-text-secondary)" }}
+        >
+          <span>Page failed to load.</span>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="rounded px-3 py-1.5 text-sm font-medium"
+            style={{
+              backgroundColor: "var(--color-accent)",
+              color: "white",
+              cursor: "pointer",
+            }}
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function LanguageSwitcher({
@@ -190,6 +278,7 @@ const router = createBrowserRouter([
       { path: "chat", element: null },
       { path: "roles", element: null },
       { path: "automations", element: null },
+      { path: "workflows", element: null },
       { path: "reports", element: null },
       { path: "tasks", element: null },
       { path: "context", element: null },

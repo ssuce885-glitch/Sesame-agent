@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go-agent/internal/v2/contracts"
 )
 
 func TestServiceListAndGet(t *testing.T) {
@@ -24,6 +26,13 @@ denied_paths:
   - "*.go"
 allowed_paths:
   - "docs/*"
+tool_policy:
+  shell: false
+  file_write:
+    allowed_paths:
+      - "docs/reference/*"
+    denied_paths:
+      - "docs/reference/private/*"
 budget:
   max_tool_calls: 12
   max_runtime: 90
@@ -62,6 +71,12 @@ policy:
 	}
 	if len(specs[0].AllowedPaths) != 1 || specs[0].AllowedPaths[0] != "docs/*" {
 		t.Fatalf("unexpected allowed paths: %+v", specs[0].AllowedPaths)
+	}
+	if allowed := specs[0].ToolPolicy["shell"].Allowed; allowed == nil || *allowed {
+		t.Fatalf("expected shell tool policy deny, got %+v", specs[0].ToolPolicy["shell"])
+	}
+	if got := specs[0].ToolPolicy["file_write"].AllowedPaths; len(got) != 1 || got[0] != "docs/reference/*" {
+		t.Fatalf("unexpected file_write tool policy: %+v", specs[0].ToolPolicy["file_write"])
 	}
 
 	spec, ok, err := service.Get("doc_writer")
@@ -133,8 +148,16 @@ func TestServiceCreateAndUpdateRole(t *testing.T) {
 		SkillNames:        []string{"react", "react"},
 		AllowedTools:      []string{"file_read"},
 		DeniedPaths:       []string{"secrets/*"},
-		CanDelegate:       true,
-		AutomationOwners:  []string{"frontend_reviewer"},
+		ToolPolicy: map[string]contracts.ToolPolicyRule{
+			"shell": {
+				Allowed: boolPtr(false),
+			},
+			"file_write": {
+				AllowedPaths: []string{"docs/reviews/*"},
+			},
+		},
+		CanDelegate:      true,
+		AutomationOwners: []string{"frontend_reviewer"},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -155,6 +178,9 @@ func TestServiceCreateAndUpdateRole(t *testing.T) {
 	}
 	if !strings.Contains(string(roleYAML), "max_context_tokens: 70000") || !strings.Contains(string(roleYAML), "can_delegate: true") {
 		t.Fatalf("role.yaml missing budget/policy:\n%s", roleYAML)
+	}
+	if !strings.Contains(string(roleYAML), "tool_policy:") || !strings.Contains(string(roleYAML), "allowed: false") {
+		t.Fatalf("role.yaml missing tool policy:\n%s", roleYAML)
 	}
 	prompt, err := os.ReadFile(filepath.Join(root, "roles", "frontend_reviewer", "prompt.md"))
 	if err != nil {
@@ -204,4 +230,69 @@ func TestServiceCreateRoleValidation(t *testing.T) {
 	if !errors.Is(err, ErrRoleNotFound) {
 		t.Fatalf("expected role not found, got %v", err)
 	}
+}
+
+func TestServiceRejectsInvalidPathGlobs(t *testing.T) {
+	service := NewService(t.TempDir())
+
+	_, err := service.Create(context.Background(), SaveInput{
+		ID:           "bad_glob",
+		Name:         "Bad Glob",
+		SystemPrompt: "Prompt.",
+		AllowedPaths: []string{"["},
+	})
+	if !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("expected invalid role for bad allowed_paths glob, got %v", err)
+	}
+
+	_, err = service.Create(context.Background(), SaveInput{
+		ID:           "bad_tool_glob",
+		Name:         "Bad Tool Glob",
+		SystemPrompt: "Prompt.",
+		ToolPolicy: map[string]contracts.ToolPolicyRule{
+			"file_write": {
+				DeniedPaths: []string{"["},
+			},
+		},
+	})
+	if !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("expected invalid role for bad tool policy glob, got %v", err)
+	}
+
+	_, err = service.Create(context.Background(), SaveInput{
+		ID:           "recursive_glob",
+		Name:         "Recursive Glob",
+		SystemPrompt: "Prompt.",
+		AllowedPaths: []string{"docs/**"},
+	})
+	if !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("expected invalid role for recursive glob, got %v", err)
+	}
+}
+
+func TestServiceGetRejectsInvalidPathGlobsFromDisk(t *testing.T) {
+	root := t.TempDir()
+	roleDir := filepath.Join(root, "roles", "broken")
+	if err := os.MkdirAll(roleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roleDir, "role.yaml"), []byte(`
+display_name: Broken
+allowed_paths:
+  - "["
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roleDir, "prompt.md"), []byte("Prompt."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := NewService(root).Get("broken")
+	if !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("expected invalid role from disk, got %v", err)
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }

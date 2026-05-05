@@ -15,12 +15,14 @@ import (
 	"go-agent/internal/v2/contracts"
 	"go-agent/internal/v2/roles"
 	"go-agent/internal/v2/tasks"
+	"go-agent/internal/v2/workflows"
 )
 
 type Service struct {
-	store       contracts.Store
-	taskManager *tasks.Manager
-	roleService RoleService
+	store           contracts.Store
+	taskManager     *tasks.Manager
+	roleService     RoleService
+	workflowTrigger WorkflowTrigger
 
 	mu       sync.Mutex
 	lastRuns map[string]time.Time
@@ -31,6 +33,10 @@ type RoleService interface {
 	Get(id string) (roles.RoleSpec, bool, error)
 }
 
+type WorkflowTrigger interface {
+	TriggerAsync(ctx context.Context, workflow contracts.Workflow, input workflows.TriggerInput) (contracts.WorkflowRun, error)
+}
+
 func NewService(s contracts.Store, tm *tasks.Manager, rs RoleService) *Service {
 	return &Service{
 		store:       s,
@@ -38,6 +44,10 @@ func NewService(s contracts.Store, tm *tasks.Manager, rs RoleService) *Service {
 		roleService: rs,
 		lastRuns:    make(map[string]time.Time),
 	}
+}
+
+func (s *Service) SetWorkflowTrigger(trigger WorkflowTrigger) {
+	s.workflowTrigger = trigger
 }
 
 // Reconcile runs watcher scripts for all active automations.
@@ -113,7 +123,7 @@ func (s *Service) reconcileOne(ctx context.Context, a contracts.Automation) erro
 	s.markRun(a.ID)
 	result, err := runWatcher(a.WatcherPath, a.WorkspaceRoot)
 	if err != nil {
-		return s.recordRun(ctx, a, &WatcherResult{Status: "error", Summary: err.Error()}, "", err)
+		return s.recordRun(ctx, a, &WatcherResult{Status: "error", Summary: err.Error()}, automationRunOutcome{}, err)
 	}
 	dedupeKey := watcherRunKey(result)
 	if result.Status == "needs_agent" {
@@ -122,13 +132,24 @@ func (s *Service) reconcileOne(ctx context.Context, a contracts.Automation) erro
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
+		if strings.TrimSpace(a.WorkflowID) != "" {
+			workflowRun, err := s.triggerWorkflow(ctx, a, dedupeKey)
+			if err != nil {
+				return s.recordRun(ctx, a, result, automationRunOutcome{}, err)
+			}
+			return s.recordRun(ctx, a, result, automationRunOutcome{
+				WorkflowRunID: workflowRun.ID,
+				Status:        workflowAutomationRunStatus(workflowRun.State),
+				Summary:       workflowAutomationRunSummary(result, workflowRun),
+			}, nil)
+		}
 		taskID, err := s.createOwnerTask(ctx, a, result)
 		if err != nil {
-			return s.recordRun(ctx, a, result, "", err)
+			return s.recordRun(ctx, a, result, automationRunOutcome{}, err)
 		}
-		return s.recordRun(ctx, a, result, taskID, nil)
+		return s.recordRun(ctx, a, result, automationRunOutcome{TaskID: taskID}, nil)
 	}
-	return s.recordRun(ctx, a, result, "", nil)
+	return s.recordRun(ctx, a, result, automationRunOutcome{}, nil)
 }
 
 func (s *Service) createOwnerTask(ctx context.Context, a contracts.Automation, result *WatcherResult) (string, error) {
@@ -180,30 +201,60 @@ func (s *Service) defaultReportSessionID(ctx context.Context, workspaceRoot stri
 	return sessions[0].ID
 }
 
-func (s *Service) recordRun(ctx context.Context, a contracts.Automation, result *WatcherResult, taskID string, runErr error) error {
+type automationRunOutcome struct {
+	TaskID        string
+	WorkflowRunID string
+	Status        string
+	Summary       string
+}
+
+func (s *Service) triggerWorkflow(ctx context.Context, a contracts.Automation, dedupeKey string) (contracts.WorkflowRun, error) {
+	if s.workflowTrigger == nil {
+		return contracts.WorkflowRun{}, fmt.Errorf("workflow trigger service unavailable for automation %q", a.ID)
+	}
+	workflow, err := s.store.Workflows().Get(ctx, strings.TrimSpace(a.WorkflowID))
+	if err != nil {
+		return contracts.WorkflowRun{}, err
+	}
+	if strings.TrimSpace(workflow.WorkspaceRoot) != strings.TrimSpace(a.WorkspaceRoot) {
+		return contracts.WorkflowRun{}, fmt.Errorf("automation %q workflow %q workspace mismatch: %q != %q", a.ID, workflow.ID, workflow.WorkspaceRoot, a.WorkspaceRoot)
+	}
+	return s.workflowTrigger.TriggerAsync(ctx, workflow, workflows.TriggerInput{
+		TriggerRef: fmt.Sprintf("automation:%s:%s", a.ID, dedupeKey),
+	})
+}
+
+func (s *Service) recordRun(ctx context.Context, a contracts.Automation, result *WatcherResult, outcome automationRunOutcome, runErr error) error {
 	dedupeKey := watcherRunKey(result)
 	if runErr != nil || (result != nil && result.Status != "needs_agent") {
 		dedupeKey = fmt.Sprintf("%s-%d", dedupeKey, time.Now().UTC().UnixNano())
 	}
-	status := ""
-	summary := ""
-	if result != nil {
+	status := outcome.Status
+	if status == "" && result != nil {
 		status = result.Status
-		summary = result.Summary
 	}
 	if runErr != nil {
 		status = "error"
 	}
-	if runErr != nil && summary == "" {
-		summary = runErr.Error()
+	summary := outcome.Summary
+	if summary == "" && result != nil {
+		summary = result.Summary
+	}
+	if runErr != nil {
+		if strings.TrimSpace(summary) != "" {
+			summary = runErr.Error() + "; watcher summary: " + strings.TrimSpace(summary)
+		} else {
+			summary = runErr.Error()
+		}
 	}
 	run := contracts.AutomationRun{
-		AutomationID: a.ID,
-		DedupeKey:    dedupeKey,
-		TaskID:       taskID,
-		Status:       status,
-		Summary:      summary,
-		CreatedAt:    time.Now().UTC(),
+		AutomationID:  a.ID,
+		DedupeKey:     dedupeKey,
+		TaskID:        outcome.TaskID,
+		WorkflowRunID: outcome.WorkflowRunID,
+		Status:        status,
+		Summary:       summary,
+		CreatedAt:     time.Now().UTC(),
 	}
 	err := s.store.Automations().CreateRun(ctx, run)
 	if runErr != nil {
@@ -290,4 +341,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func workflowAutomationRunStatus(state string) string {
+	return "workflow:" + firstNonEmpty(state, "unknown")
+}
+
+func workflowAutomationRunSummary(result *WatcherResult, run contracts.WorkflowRun) string {
+	if result != nil && strings.TrimSpace(result.Summary) != "" {
+		return strings.TrimSpace(result.Summary)
+	}
+	return fmt.Sprintf("workflow run %s entered %s", strings.TrimSpace(run.ID), firstNonEmpty(run.State, "unknown"))
 }

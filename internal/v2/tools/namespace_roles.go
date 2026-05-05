@@ -91,6 +91,7 @@ func (t *roleListTool) Definition() contracts.ToolDefinition {
 		Name:        "role_list",
 		Namespace:   contracts.NamespaceRoles,
 		Description: "List available specialist roles in this workspace.",
+		Risk:        "low",
 		Parameters:  objectSchema(map[string]any{}),
 	}
 }
@@ -126,7 +127,11 @@ func (t *roleCreateTool) Definition() contracts.ToolDefinition {
 		Name:        "role_create",
 		Namespace:   contracts.NamespaceRoles,
 		Description: "Create a new specialist role in roles/<id>/role.yaml and prompt.md.",
-		Parameters:  roleSaveSchema("id", "name", "system_prompt"),
+		Capabilities: []string{
+			string(contracts.CapabilityMutateRuntime),
+		},
+		Risk:       "high",
+		Parameters: roleSaveSchema("id", "name", "system_prompt"),
 	}
 }
 
@@ -135,7 +140,10 @@ func (t *roleCreateTool) Execute(ctx context.Context, call contracts.ToolCall, e
 	if t.service == nil {
 		return contracts.ToolResult{Output: "role service is required", IsError: true}, nil
 	}
-	input := roleSaveInputFromArgs(call.Args)
+	input, err := roleSaveInputFromArgs(call.Args)
+	if err != nil {
+		return contracts.ToolResult{Output: err.Error(), IsError: true, Risk: t.Definition().Risk}, nil
+	}
 	spec, err := t.service.Create(ctx, input)
 	if err != nil {
 		return contracts.ToolResult{Output: err.Error(), IsError: true}, nil
@@ -152,7 +160,11 @@ func (t *roleUpdateTool) Definition() contracts.ToolDefinition {
 		Name:        "role_update",
 		Namespace:   contracts.NamespaceRoles,
 		Description: "Update an existing specialist role. Omitted fields keep their current values.",
-		Parameters:  roleSaveSchema("id"),
+		Capabilities: []string{
+			string(contracts.CapabilityMutateRuntime),
+		},
+		Risk:       "high",
+		Parameters: roleSaveSchema("id"),
 	}
 }
 
@@ -187,10 +199,13 @@ func (t *roleUpdateTool) Execute(ctx context.Context, call contracts.ToolCall, e
 		AllowedTools:      current.AllowedTools,
 		DeniedPaths:       current.DeniedPaths,
 		AllowedPaths:      current.AllowedPaths,
+		ToolPolicy:        contracts.CloneToolPolicyMap(current.ToolPolicy),
 		CanDelegate:       current.CanDelegate,
 		AutomationOwners:  current.AutomationOwners,
 	}
-	mergeRoleSaveInput(&input, call.Args)
+	if err := mergeRoleSaveInput(&input, call.Args); err != nil {
+		return contracts.ToolResult{Output: err.Error(), IsError: true, Risk: t.Definition().Risk}, nil
+	}
 	spec, err := t.service.Update(ctx, id, input)
 	if err != nil {
 		return contracts.ToolResult{Output: err.Error(), IsError: true}, nil
@@ -207,6 +222,10 @@ func (t *roleInstallTool) Definition() contracts.ToolDefinition {
 		Name:        "role_install",
 		Namespace:   contracts.NamespaceRoles,
 		Description: "Install a role directory into this workspace from a local source path.",
+		Capabilities: []string{
+			string(contracts.CapabilityMutateRuntime),
+		},
+		Risk: "high",
 		Parameters: objectSchema(map[string]any{
 			"source_path": map[string]any{"type": "string", "description": "Local role directory path to install"},
 		}, "source_path"),
@@ -247,6 +266,10 @@ func (t *delegateToRoleTool) Definition() contracts.ToolDefinition {
 		Name:        "delegate_to_role",
 		Namespace:   contracts.NamespaceRoles,
 		Description: "Delegate a task to a specialist role.",
+		Capabilities: []string{
+			string(contracts.CapabilityMutateRuntime),
+		},
+		Risk: "high",
 		Parameters: objectSchema(map[string]any{
 			"role": map[string]any{"type": "string", "description": "Specialist role ID to delegate to"},
 			"task": map[string]any{"type": "string", "description": "Task prompt for the specialist role"},
@@ -399,6 +422,11 @@ func roleSaveSchema(required ...string) map[string]any {
 		"denied_tools":  arrayOfStringsSchema("Denied tool names"),
 		"allowed_paths": arrayOfStringsSchema("Allowed workspace path globs"),
 		"denied_paths":  arrayOfStringsSchema("Denied workspace path globs"),
+		"tool_policy": map[string]any{
+			"type":                 "object",
+			"description":          "Optional per-tool policy overrides keyed by tool name. Values may be booleans or policy objects.",
+			"additionalProperties": true,
+		},
 	}, required...)
 }
 
@@ -410,7 +438,11 @@ func arrayOfStringsSchema(description string) map[string]any {
 	}
 }
 
-func roleSaveInputFromArgs(args map[string]any) roles.SaveInput {
+func roleSaveInputFromArgs(args map[string]any) (roles.SaveInput, error) {
+	toolPolicy, err := firstArgToolPolicy(args, "tool_policy")
+	if err != nil {
+		return roles.SaveInput{}, err
+	}
 	return roles.SaveInput{
 		ID:                firstArgString(args, "id", "role", "role_id"),
 		Name:              firstArgString(args, "name", "display_name"),
@@ -426,12 +458,13 @@ func roleSaveInputFromArgs(args map[string]any) roles.SaveInput {
 		AllowedTools:      firstArgStringList(args, "allowed_tools"),
 		DeniedPaths:       firstArgStringList(args, "denied_paths"),
 		AllowedPaths:      firstArgStringList(args, "allowed_paths"),
+		ToolPolicy:        toolPolicy,
 		CanDelegate:       firstArgBool(args, "can_delegate"),
 		AutomationOwners:  firstArgStringList(args, "automation_ownership", "automation_owners"),
-	}
+	}, nil
 }
 
-func mergeRoleSaveInput(input *roles.SaveInput, args map[string]any) {
+func mergeRoleSaveInput(input *roles.SaveInput, args map[string]any) error {
 	if value, ok := optionalArgString(args, "name", "display_name"); ok {
 		input.Name = value
 	}
@@ -477,6 +510,12 @@ func mergeRoleSaveInput(input *roles.SaveInput, args map[string]any) {
 	if value, ok := optionalArgStringList(args, "allowed_paths"); ok {
 		input.AllowedPaths = value
 	}
+	if value, ok, err := optionalArgToolPolicy(args, "tool_policy"); err != nil {
+		return err
+	} else if ok {
+		input.ToolPolicy = value
+	}
+	return nil
 }
 
 func firstArgString(args map[string]any, keys ...string) string {
@@ -555,6 +594,11 @@ func firstArgStringList(args map[string]any, keys ...string) []string {
 	return value
 }
 
+func firstArgToolPolicy(args map[string]any, keys ...string) (map[string]contracts.ToolPolicyRule, error) {
+	value, _, err := optionalArgToolPolicy(args, keys...)
+	return value, err
+}
+
 func optionalArgStringList(args map[string]any, keys ...string) ([]string, bool) {
 	for _, key := range keys {
 		raw, ok := args[key]
@@ -589,4 +633,26 @@ func optionalArgStringList(args map[string]any, keys ...string) ([]string, bool)
 		}
 	}
 	return nil, false
+}
+
+func optionalArgToolPolicy(args map[string]any, keys ...string) (map[string]contracts.ToolPolicyRule, bool, error) {
+	for _, key := range keys {
+		raw, ok := args[key]
+		if !ok {
+			continue
+		}
+		if raw == nil {
+			return nil, true, nil
+		}
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			return nil, true, fmt.Errorf("tool_policy must be a JSON object keyed by tool name: %w", err)
+		}
+		var policy map[string]contracts.ToolPolicyRule
+		if err := json.Unmarshal(encoded, &policy); err != nil {
+			return nil, true, fmt.Errorf("tool_policy must be a JSON object keyed by tool name: %w", err)
+		}
+		return policy, true, nil
+	}
+	return nil, false, nil
 }

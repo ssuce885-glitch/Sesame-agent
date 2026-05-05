@@ -27,6 +27,10 @@ vi.mock("./pages/AutomationsPage", () => ({
   AutomationsPage: () => <div>Automations page</div>,
 }));
 
+vi.mock("./pages/WorkflowsPage", () => ({
+  WorkflowsPage: () => <div>Workflows page</div>,
+}));
+
 vi.mock("./pages/ReportsPage", () => ({
   ReportsPage: () => <div>Reports page</div>,
 }));
@@ -57,12 +61,14 @@ describe("AppShell", () => {
       </I18nProvider>,
     );
 
+    expect(await screen.findByText("Chat page")).toBeInTheDocument();
+
     fireEvent.click(screen.getByTitle("Expand"));
-    expect(screen.getByText(/Connected/)).toBeInTheDocument();
+    expect(await screen.findByText(/Connected/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Automations" }));
 
     expect(await screen.findByText("Automations page")).toBeInTheDocument();
-    expect(screen.getByText(/Idle/)).toBeInTheDocument();
+    expect(await screen.findByText(/Idle/)).toBeInTheDocument();
   });
 });

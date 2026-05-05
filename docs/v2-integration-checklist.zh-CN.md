@@ -157,6 +157,11 @@ rm -rf "$tmp"
 - 失败任务能看到明确错误和最后的 trace。
 - 自动化事务链已由 `go test ./internal/v2/automation -run TestAutomationRoleReportTransaction` 覆盖：
   watcher `needs_agent` -> owner role task -> specialist session -> task trace -> delivered report -> main `report_batch` turn。
+- automation / workflow 联调还需确认：
+  - `POST /v2/automations` 与 `GET /v2/automations` 会返回 `workflow_id`。
+  - `Automation.workflow_id` 为空时仍走 direct owner task。
+  - `Automation.workflow_id` 非空且 watcher 返回 `needs_agent` 时，会触发同 workspace workflow，并把 `workflow_run_id` 写入 automation run。
+  - workflow 不存在、workspace 不匹配或 workflow trigger service 缺失时，automation run 会记录 `error` 审计项。
 
 ## 6. 上下文和长期项目能力
 
@@ -166,15 +171,55 @@ rm -rf "$tmp"
 - 接近阈值时触发自动 compact。
 - 大 tool result 触发 microcompact，但数据库原文不被改写。
 - Project State 按阈值更新，不每轮调用模型。
+- `GET /v2/context/preview?session_id=<id>` 能返回 prompt preview、已注入 context blocks、可用 memory/report blocks。
+- `GET/POST/PUT/DELETE /v2/context/blocks` 能创建和维护 workspace-scoped context index，不改写原始 messages/reports/memories/project_state。
 - compact 后继续多轮对话不丢目标、决策、打开事项。
 
 通过条件：
 
 - timeline 能看到压缩事件。
+- Web Context 页面能看到 Context Inspector，且 Project State 显示为 included，Memory/Report 显示为 available 或后续策略选中状态。
 - compact summary 会进入后续 model context。
 - snapshot/raw segment 可追溯。
 
 ## 7. SQLite 和并发稳定性
+
+## 7. Workflow 审计模型
+
+验证项：
+
+- `POST /v2/workflows` 能创建 workflow 定义，服务端生成 `id` 并绑定当前 workspace。
+- `GET /v2/workflows?workspace_root=<path>` 能列出当前 workspace 的 workflow。
+- `PUT /v2/workflows/{id}` 能更新定义，但不会改写 `id`、`workspace_root`、`created_at`。
+- `POST /v2/workflows/{id}/trigger` 能创建并执行 workflow run；只接受当前 daemon workspace 下、`trigger` 为空或 `manual` 的 workflow。
+- `POST /v2/workflow_runs` 必须引用已存在 workflow，并继承该 workflow 的 workspace。
+- `GET /v2/workflow_runs?workspace_root=<path>&workflow_id=<id>&state=<state>` 能按 workflow 和状态过滤 run 审计记录。
+- `PUT /v2/workflow_runs/{id}` 能更新状态、task/report/approval/trace 字段，但不会换绑 workflow 或 workspace。
+- `POST /v2/approvals` 必须引用已存在 workflow run，并继承该 run 的 workspace。
+- `GET /v2/approvals?workspace_root=<path>&workflow_run_id=<id>&state=<state>&limit=<n>` 能按 run 和状态过滤审批记录。
+- `GET /v2/approvals/{id}` 和 `PUT /v2/approvals/{id}` 必须遵守当前 daemon workspace boundary。
+- automation watcher 命中 `needs_agent` 且绑定了 `workflow_id` 时，workflow run 的 `trigger_ref` 形如 `automation:<automation_id>:<dedupe_key>`，并能回溯到对应 automation run。
+
+通过条件：
+
+- `trigger` MVP 串行执行 `role_task` step，并直接复用现有 `tasks.Manager`、specialist session、report delivery。
+- `steps` 同时兼容 JSON 数组和 `{ "steps": [...] }` 对象包装；step 允许 `kind/type == role_task` 和 `approval`。
+- run 状态至少覆盖 `queued -> running -> waiting_approval -> completed/failed/interrupted`，且 `trace`、`task_ids`、`report_ids`、`approval_ids` 会回写到 `WorkflowRun`。
+- executor 遇到 `approval` step 时会创建 `pending` Approval，写入 `approval_requested` trace，把 run 停在 `waiting_approval`，本轮不继续执行后续 step。
+- automation run 在 workflow 路径下会写入 `workflow_run_id`，`status` 记录为 `workflow:<state>`；旧的 direct task 路径继续使用 `task_id`。
+- 客户端传入的 `id` 和跨 workspace 字段不会覆盖服务端边界。
+- 后续执行器接入时可以从 run 记录追溯 trigger、task、report、approval 和 trace。
+- `examples/workflows/` 已提供首批官方模板和 `README.zh-CN.md`，可直接复用到 Web Console / API 录入，但不会自动加载到 runtime。
+
+Web Console 验收项：
+
+- Sidebar 出现 `Workflows` 导航，能进入独立 workflow 工作台页面。
+- 页面左侧能列出当前 workspace 的 workflow，至少显示名称、最近状态、trigger、owner role、更新时间和 steps 摘要。
+- 页面右侧能创建或编辑 workflow，保存前至少要求 `name` 和 `steps` 非空；`steps` 支持用 owner role + prompt 生成 `role_task` JSON 模板。
+- 选中 workflow 后能查看最近 20 次运行记录，且 `completed` / `failed` / `interrupted` 都能看到 `state`、`task_ids`、`report_ids`，以及 `trace` 的结构化事件视图（`event/state/kind/task_id/approval_id/message/time`）。
+- manual workflow 可通过 Web Console 触发 `POST /v2/workflows/{id}/trigger`，默认 `trigger_ref=manual:web`，触发后运行记录能刷新并显示。
+
+## 8. SQLite 和并发稳定性
 
 验证项：
 
@@ -182,13 +227,14 @@ rm -rf "$tmp"
 - role task 和 main agent 同时写事件/消息不会互相阻塞过久。
 - daemon 重启后不会留下永久 running task。
 - cancel queued/running task 都能收敛到终态。
+- 若任务涉及 shell 子进程，Unix 环境下应验证进程组被一起终止；非 Unix 当前只要求主进程 best-effort 取消，不假设同等强度的子进程清理。
 
 通过条件：
 
 - 压测或重复手工操作中没有 SQLITE_BUSY 泄漏到用户界面。
 - 所有 running 状态都能恢复、取消或完成。
 
-## 8. 发布前判定
+## 9. 发布前判定
 
 V2 可以进入稳定迭代的最低条件：
 

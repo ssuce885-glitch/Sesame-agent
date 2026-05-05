@@ -91,3 +91,52 @@ type ProjectStateRepository interface {
 	Upsert(ctx context.Context, state ProjectState) error
 	Delete(ctx context.Context, workspaceRoot string) error
 }
+
+// ContextBlockListOptions controls context block listing.
+type ContextBlockListOptions struct {
+	Owner      string
+	Visibility string
+	Type       string
+	Limit      int
+}
+
+// ContextBlockRepository stores context index entries.
+type ContextBlockRepository interface {
+	Create(ctx context.Context, block ContextBlock) error
+	Get(ctx context.Context, id string) (ContextBlock, error)
+	Update(ctx context.Context, block ContextBlock) error
+	Delete(ctx context.Context, id string) error
+	ListByWorkspace(ctx context.Context, workspaceRoot string, opts ContextBlockListOptions) ([]ContextBlock, error)
+}
+
+// WorkflowRunListOptions controls workflow run listing.
+type WorkflowRunListOptions struct {
+	WorkflowID string
+	State      string
+	Limit      int
+}
+
+// ApprovalListOptions controls approval listing.
+type ApprovalListOptions struct {
+	WorkflowRunID string
+	State         string
+	Limit         int
+}
+
+// WorkflowRepository stores workflow templates and auditable runs.
+type WorkflowRepository interface {
+	Create(ctx context.Context, workflow Workflow) error
+	Get(ctx context.Context, id string) (Workflow, error)
+	Update(ctx context.Context, workflow Workflow) error
+	ListByWorkspace(ctx context.Context, workspaceRoot string) ([]Workflow, error)
+	CreateRun(ctx context.Context, run WorkflowRun) error
+	GetRun(ctx context.Context, id string) (WorkflowRun, error)
+	GetRunByDedupeRef(ctx context.Context, workflowID, dedupeRef string) (WorkflowRun, error)
+	GetOrCreateRunByDedupeRef(ctx context.Context, run WorkflowRun) (WorkflowRun, bool, error)
+	UpdateRun(ctx context.Context, run WorkflowRun) error
+	ListRunsByWorkspace(ctx context.Context, workspaceRoot string, opts WorkflowRunListOptions) ([]WorkflowRun, error)
+	CreateApproval(ctx context.Context, approval Approval) error
+	GetApproval(ctx context.Context, id string) (Approval, error)
+	UpdateApproval(ctx context.Context, approval Approval) error
+	ListApprovalsByWorkspace(ctx context.Context, workspaceRoot string, opts ApprovalListOptions) ([]Approval, error)
+}

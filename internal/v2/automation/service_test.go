@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"go-agent/internal/v2/roles"
 	"go-agent/internal/v2/store"
 	"go-agent/internal/v2/tasks"
+	"go-agent/internal/v2/workflows"
 )
 
 type fakeRoleService struct {
@@ -116,6 +118,368 @@ func TestServiceAutomationLifecycle(t *testing.T) {
 	}
 }
 
+func TestServiceAutomationTriggersWorkflowRunAsync(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	createAutomationSession(t, s, "main-session", workspaceRoot)
+	watcherPath := filepath.Join(workspaceRoot, "watcher.sh")
+	writeWatcher(t, watcherPath, "docs-stale")
+	createWorkflowRecord(t, s, contracts.Workflow{
+		ID:            "workflow-docs",
+		WorkspaceRoot: workspaceRoot,
+		Name:          "Docs workflow",
+		Trigger:       "manual",
+		Steps:         `{"steps":[{"type":"role_task","role":"doc_writer","prompt":"Review docs."}]}`,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	})
+
+	waitStarted := make(chan string, 2)
+	waitRelease := make(chan struct{})
+	manager := &workflowTaskManagerStub{
+		store: s,
+		waitFn: func(ctx context.Context, task contracts.Task) (contracts.Task, error) {
+			waitStarted <- task.ID
+			<-waitRelease
+			task.State = "completed"
+			task.Outcome = "success"
+			task.FinalText = "Workflow finished."
+			task.UpdatedAt = time.Now().UTC()
+			if err := s.Reports().Create(context.WithoutCancel(ctx), contracts.Report{
+				ID:         "report-workflow-docs",
+				SessionID:  task.ReportSessionID,
+				SourceKind: "task_result",
+				SourceID:   task.ID,
+				Status:     task.State,
+				Severity:   "info",
+				Title:      "Task result: agent",
+				Summary:    task.FinalText,
+				CreatedAt:  time.Now().UTC(),
+			}); err != nil {
+				return contracts.Task{}, err
+			}
+			return task, nil
+		},
+	}
+	workflowService := workflows.NewService(s, manager, "main-session")
+	service := NewService(s, nil, nil)
+	service.SetWorkflowTrigger(workflowService)
+	automation := contracts.Automation{
+		ID:            "automation-1",
+		WorkspaceRoot: workspaceRoot,
+		Title:         "Watch docs",
+		Goal:          "Kick off the docs workflow",
+		Owner:         "role:doc_writer",
+		WorkflowID:    "workflow-docs",
+		WatcherPath:   watcherPath,
+		State:         "active",
+	}
+	if err := service.Create(ctx, automation); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	reconcileDone := make(chan error, 1)
+	go func() {
+		reconcileDone <- service.Reconcile(ctx)
+	}()
+	select {
+	case err := <-reconcileDone:
+		if err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reconcile blocked on workflow completion")
+	}
+
+	var workflowTaskID string
+	select {
+	case workflowTaskID = <-waitStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("workflow wait was not started")
+	}
+
+	tasksAfter, err := s.Tasks().ListByWorkspace(ctx, workspaceRoot)
+	if err != nil {
+		t.Fatalf("ListByWorkspace tasks: %v", err)
+	}
+	if len(tasksAfter) != 1 {
+		t.Fatalf("workflow-backed automation should create exactly one workflow task, got %+v", tasksAfter)
+	}
+	if tasksAfter[0].ID != workflowTaskID || tasksAfter[0].Prompt != "Review docs." {
+		t.Fatalf("unexpected workflow task: %+v", tasksAfter[0])
+	}
+
+	run, err := s.Automations().GetRunByDedupeKey(ctx, automation.ID, "docs-stale")
+	if err != nil {
+		t.Fatalf("GetRunByDedupeKey: %v", err)
+	}
+	if run.TaskID != "" || run.WorkflowRunID == "" || run.Status != "workflow:queued" {
+		t.Fatalf("unexpected run: %+v", run)
+	}
+	workflowRun, err := s.Workflows().GetRun(ctx, run.WorkflowRunID)
+	if err != nil {
+		t.Fatalf("GetRun workflow: %v", err)
+	}
+	if workflowRun.TriggerRef != "automation:automation-1:docs-stale" || workflowRun.State != "running" {
+		t.Fatalf("unexpected workflow run: %+v", workflowRun)
+	}
+
+	if err := service.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile dedupe: %v", err)
+	}
+	if tasksAfter, err = s.Tasks().ListByWorkspace(ctx, workspaceRoot); err != nil {
+		t.Fatalf("ListByWorkspace tasks after dedupe: %v", err)
+	} else if len(tasksAfter) != 1 {
+		t.Fatalf("workflow trigger should be deduped, got tasks %+v", tasksAfter)
+	}
+	runs, err := s.Automations().ListRunsByAutomation(ctx, automation.ID, 10)
+	if err != nil {
+		t.Fatalf("ListRunsByAutomation: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("dedupe should keep one automation run, got %+v", runs)
+	}
+	workflowRuns, err := s.Workflows().ListRunsByWorkspace(ctx, workspaceRoot, contracts.WorkflowRunListOptions{})
+	if err != nil {
+		t.Fatalf("ListRunsByWorkspace: %v", err)
+	}
+	if len(workflowRuns) != 1 {
+		t.Fatalf("workflow trigger should only start one run, got %+v", workflowRuns)
+	}
+
+	close(waitRelease)
+	workflowRun = waitForWorkflowRunState(t, s, run.WorkflowRunID, "completed")
+	if workflowRun.State != "completed" {
+		t.Fatalf("workflow run state = %q, want completed", workflowRun.State)
+	}
+}
+
+func TestServiceAutomationWorkflowWorkspaceMismatchRecordsError(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	otherWorkspaceRoot := t.TempDir()
+	watcherPath := filepath.Join(workspaceRoot, "watcher.sh")
+	writeWatcher(t, watcherPath, "docs-stale")
+	createWorkflowRecord(t, s, contracts.Workflow{
+		ID:            "workflow-other",
+		WorkspaceRoot: otherWorkspaceRoot,
+		Name:          "Other workflow",
+		Trigger:       "manual",
+		Steps:         `{"steps":[{"type":"role_task","role":"doc_writer","prompt":"Review docs."}]}`,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	})
+
+	stub := &workflowTriggerStub{
+		triggerFn: func(ctx context.Context, workflow contracts.Workflow, input workflows.TriggerInput) (contracts.WorkflowRun, error) {
+			t.Fatalf("workflow trigger should not be called on workspace mismatch")
+			return contracts.WorkflowRun{}, nil
+		},
+	}
+	service := NewService(s, nil, nil)
+	service.SetWorkflowTrigger(stub)
+	automation := contracts.Automation{
+		ID:            "automation-1",
+		WorkspaceRoot: workspaceRoot,
+		Title:         "Watch docs",
+		Goal:          "Kick off the docs workflow",
+		Owner:         "role:doc_writer",
+		WorkflowID:    "workflow-other",
+		WatcherPath:   watcherPath,
+		State:         "active",
+	}
+	if err := service.Create(ctx, automation); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := service.Reconcile(ctx); err == nil {
+		t.Fatalf("Reconcile expected error for workspace mismatch")
+	}
+	if stub.calls != 0 {
+		t.Fatalf("workflow trigger calls = %d, want 0", stub.calls)
+	}
+	runs, err := s.Automations().ListRunsByAutomation(ctx, automation.ID, 10)
+	if err != nil {
+		t.Fatalf("ListRunsByAutomation: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one error run, got %+v", runs)
+	}
+	if runs[0].Status != "error" || !strings.Contains(runs[0].Summary, "workspace mismatch") || !strings.HasPrefix(runs[0].DedupeKey, "docs-stale-") {
+		t.Fatalf("unexpected mismatch run: %+v", runs[0])
+	}
+}
+
+func TestServiceAutomationWorkflowRequiresTriggerService(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	watcherPath := filepath.Join(workspaceRoot, "watcher.sh")
+	writeWatcher(t, watcherPath, "docs-stale")
+	createWorkflowRecord(t, s, contracts.Workflow{
+		ID:            "workflow-docs",
+		WorkspaceRoot: workspaceRoot,
+		Name:          "Docs workflow",
+		Trigger:       "manual",
+		Steps:         `{"steps":[{"type":"role_task","role":"doc_writer","prompt":"Review docs."}]}`,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	})
+
+	service := NewService(s, nil, nil)
+	automation := contracts.Automation{
+		ID:            "automation-1",
+		WorkspaceRoot: workspaceRoot,
+		Title:         "Watch docs",
+		Goal:          "Kick off the docs workflow",
+		Owner:         "role:doc_writer",
+		WorkflowID:    "workflow-docs",
+		WatcherPath:   watcherPath,
+		State:         "active",
+	}
+	if err := service.Create(ctx, automation); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := service.Reconcile(ctx); err == nil {
+		t.Fatalf("Reconcile expected error when workflow trigger service is missing")
+	}
+	runs, err := s.Automations().ListRunsByAutomation(ctx, automation.ID, 10)
+	if err != nil {
+		t.Fatalf("ListRunsByAutomation: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one error run, got %+v", runs)
+	}
+	if runs[0].Status != "error" || !strings.Contains(runs[0].Summary, "workflow trigger service unavailable") {
+		t.Fatalf("unexpected missing-trigger run: %+v", runs[0])
+	}
+}
+
+func TestServiceAutomationReconcileRunRecordFailureDoesNotRetriggerWorkflow(t *testing.T) {
+	ctx := context.Background()
+	baseStore, err := store.OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer baseStore.Close()
+
+	s := newAutomationRunFailureStore(baseStore, 1)
+	workspaceRoot := t.TempDir()
+	createAutomationSession(t, s, "main-session", workspaceRoot)
+	watcherPath := filepath.Join(workspaceRoot, "watcher.sh")
+	writeWatcher(t, watcherPath, "docs-stale")
+	createWorkflowRecord(t, s, contracts.Workflow{
+		ID:            "workflow-docs",
+		WorkspaceRoot: workspaceRoot,
+		Name:          "Docs workflow",
+		Trigger:       "manual",
+		Steps:         `{"steps":[{"type":"role_task","role":"doc_writer","prompt":"Review docs."}]}`,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	})
+
+	waitStarted := make(chan string, 2)
+	waitRelease := make(chan struct{})
+	manager := &workflowTaskManagerStub{
+		store: baseStore,
+		waitFn: func(ctx context.Context, task contracts.Task) (contracts.Task, error) {
+			waitStarted <- task.ID
+			<-waitRelease
+			task.State = "completed"
+			task.Outcome = "success"
+			task.FinalText = "Workflow finished."
+			task.UpdatedAt = time.Now().UTC()
+			return task, nil
+		},
+	}
+	workflowService := workflows.NewService(s, manager, "main-session")
+	service := NewService(s, nil, nil)
+	service.SetWorkflowTrigger(workflowService)
+	automation := contracts.Automation{
+		ID:            "automation-1",
+		WorkspaceRoot: workspaceRoot,
+		Title:         "Watch docs",
+		Goal:          "Kick off the docs workflow",
+		Owner:         "role:doc_writer",
+		WorkflowID:    "workflow-docs",
+		WatcherPath:   watcherPath,
+		State:         "active",
+	}
+	if err := service.Create(ctx, automation); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := service.Reconcile(ctx); err == nil {
+		t.Fatalf("Reconcile expected first run record failure")
+	}
+	var firstTaskID string
+	select {
+	case firstTaskID = <-waitStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("workflow wait was not started")
+	}
+
+	if err := service.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile retry: %v", err)
+	}
+	select {
+	case taskID := <-waitStarted:
+		t.Fatalf("duplicate workflow task started: %s (first %s)", taskID, firstTaskID)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	tasksAfter, err := baseStore.Tasks().ListByWorkspace(ctx, workspaceRoot)
+	if err != nil {
+		t.Fatalf("ListByWorkspace tasks: %v", err)
+	}
+	if len(tasksAfter) != 1 {
+		t.Fatalf("workflow-backed automation should create one task, got %+v", tasksAfter)
+	}
+
+	workflowRuns, err := baseStore.Workflows().ListRunsByWorkspace(ctx, workspaceRoot, contracts.WorkflowRunListOptions{})
+	if err != nil {
+		t.Fatalf("ListRunsByWorkspace: %v", err)
+	}
+	if len(workflowRuns) != 1 {
+		t.Fatalf("workflow trigger should reuse existing run, got %+v", workflowRuns)
+	}
+
+	runs, err := baseStore.Automations().ListRunsByAutomation(ctx, automation.ID, 10)
+	if err != nil {
+		t.Fatalf("ListRunsByAutomation: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one persisted automation run after retry, got %+v", runs)
+	}
+	if runs[0].WorkflowRunID != workflowRuns[0].ID {
+		t.Fatalf("automation run workflow_run_id = %q, want %q", runs[0].WorkflowRunID, workflowRuns[0].ID)
+	}
+
+	close(waitRelease)
+	workflowRun := waitForWorkflowRunState(t, baseStore, workflowRuns[0].ID, "completed")
+	if workflowRun.State != "completed" {
+		t.Fatalf("workflow run state = %q, want completed", workflowRun.State)
+	}
+}
+
 type fakeAgentRunner struct{}
 
 func (fakeAgentRunner) Run(_ context.Context, task contracts.Task, _ tasks.OutputSink) error {
@@ -153,4 +517,118 @@ func createAutomationSession(t *testing.T, s contracts.Store, id, workspaceRoot 
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+type workflowTriggerStub struct {
+	calls     int
+	triggerFn func(ctx context.Context, workflow contracts.Workflow, input workflows.TriggerInput) (contracts.WorkflowRun, error)
+}
+
+func (s *workflowTriggerStub) TriggerAsync(ctx context.Context, workflow contracts.Workflow, input workflows.TriggerInput) (contracts.WorkflowRun, error) {
+	s.calls++
+	if s.triggerFn == nil {
+		return contracts.WorkflowRun{}, nil
+	}
+	return s.triggerFn(ctx, workflow, input)
+}
+
+type workflowTaskManagerStub struct {
+	store  contracts.Store
+	tasks  map[string]contracts.Task
+	waitFn func(ctx context.Context, task contracts.Task) (contracts.Task, error)
+}
+
+func (m *workflowTaskManagerStub) Create(ctx context.Context, task contracts.Task) error {
+	if m.tasks == nil {
+		m.tasks = map[string]contracts.Task{}
+	}
+	m.tasks[task.ID] = task
+	return m.store.Tasks().Create(ctx, task)
+}
+
+func (m *workflowTaskManagerStub) Start(ctx context.Context, taskID string) error {
+	task := m.tasks[taskID]
+	task.State = "running"
+	task.UpdatedAt = time.Now().UTC()
+	m.tasks[taskID] = task
+	return m.store.Tasks().Update(ctx, task)
+}
+
+func (m *workflowTaskManagerStub) Wait(ctx context.Context, taskID string) (contracts.Task, error) {
+	task := m.tasks[taskID]
+	if m.waitFn != nil {
+		completedTask, err := m.waitFn(ctx, task)
+		if err != nil {
+			return contracts.Task{}, err
+		}
+		m.tasks[taskID] = completedTask
+		if err := m.store.Tasks().Update(context.WithoutCancel(ctx), completedTask); err != nil {
+			return contracts.Task{}, err
+		}
+		return completedTask, nil
+	}
+	task.State = "completed"
+	task.UpdatedAt = time.Now().UTC()
+	m.tasks[taskID] = task
+	if err := m.store.Tasks().Update(context.WithoutCancel(ctx), task); err != nil {
+		return contracts.Task{}, err
+	}
+	return task, nil
+}
+
+func waitForWorkflowRunState(t *testing.T, s contracts.Store, runID, wantState string) contracts.WorkflowRun {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		run, err := s.Workflows().GetRun(context.Background(), runID)
+		if err == nil && run.State == wantState {
+			return run
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	run, err := s.Workflows().GetRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("GetRun after wait: %v", err)
+	}
+	t.Fatalf("workflow run state = %q, want %q", run.State, wantState)
+	return contracts.WorkflowRun{}
+}
+
+func createWorkflowRecord(t *testing.T, s contracts.Store, workflow contracts.Workflow) {
+	t.Helper()
+	if err := s.Workflows().Create(context.Background(), workflow); err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+}
+
+type automationRunFailureStore struct {
+	contracts.Store
+	automations contracts.AutomationRepository
+}
+
+func newAutomationRunFailureStore(base contracts.Store, failures int) *automationRunFailureStore {
+	return &automationRunFailureStore{
+		Store: base,
+		automations: &automationRunFailureRepo{
+			AutomationRepository: base.Automations(),
+			remainingFailures:    failures,
+		},
+	}
+}
+
+func (s *automationRunFailureStore) Automations() contracts.AutomationRepository {
+	return s.automations
+}
+
+type automationRunFailureRepo struct {
+	contracts.AutomationRepository
+	remainingFailures int
+}
+
+func (r *automationRunFailureRepo) CreateRun(ctx context.Context, run contracts.AutomationRun) error {
+	if r.remainingFailures > 0 {
+		r.remainingFailures--
+		return fmt.Errorf("forced automation run create failure for %s", run.DedupeKey)
+	}
+	return r.AutomationRepository.CreateRun(ctx, run)
 }

@@ -200,6 +200,9 @@ The project is already usable for local operational workflows, but the architect
 
 ## Roadmap
 
+For the detailed V2 direction, see
+[`docs/v2-roadmap-context-workflow.zh-CN.md`](docs/v2-roadmap-context-workflow.zh-CN.md).
+
 ### Runtime & Architecture
 - Continue simplifying the runtime spine around workspace, task, report, and context-head primitives
 - Improve memory and history compaction for longer-running workspaces

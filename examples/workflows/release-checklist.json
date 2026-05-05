@@ -1,0 +1,26 @@
+{
+  "name": "Release Checklist",
+  "trigger": "manual",
+  "owner_role": "release_manager",
+  "approval_policy": "required_for_production",
+  "report_policy": "deliver_task_reports",
+  "steps": [
+    {
+      "type": "role_task",
+      "role_id": "release_manager",
+      "title": "Verify release checklist",
+      "prompt": "Review the release inputs and confirm build status, test status, migration readiness, rollback plan, communication plan, and any blocking risks. Return a concise go or no-go summary with the highest-risk item first."
+    },
+    {
+      "type": "approval",
+      "action": "approve production release",
+      "risk": "high",
+      "summary": "Approve the production release after the checklist review is complete.",
+      "payload": {
+        "environment": "production",
+        "change_type": "release",
+        "requires": "human_decision"
+      }
+    }
+  ]
+}

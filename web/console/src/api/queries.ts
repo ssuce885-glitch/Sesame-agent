@@ -2,11 +2,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cancelTask,
   createAutomation,
+  createContextBlock,
   createMemory,
   createRole,
   createTask,
+  createWorkflow,
+  createWorkflowRun,
+  deleteContextBlock,
   deleteMemory,
   ensureSession,
+  getContextPreview,
   getProjectState,
   getReports,
   getRole,
@@ -16,20 +21,43 @@ import {
   getTask,
   getTaskTrace,
   getTimeline,
+  getWorkflow,
+  getWorkflowRun,
   interruptTurn,
   listAutomations,
   listAutomationRuns,
+  listContextBlocks,
   listTasks,
   listRoles,
+  listWorkflowRuns,
+  listWorkflows,
   pauseAutomation,
   resumeAutomation,
   searchMemory,
   setSetting,
   submitTurn,
+  triggerWorkflow,
   updateProjectState,
+  updateContextBlock,
   updateRole,
+  updateWorkflow,
+  updateWorkflowRun,
 } from "./client";
-import type { Automation, Memory, ProjectState, RoleInput, RoleSpec, Task, TaskListFilters } from "./types";
+import type {
+  Automation,
+  ContextBlock,
+  ContextBlockFilters,
+  Memory,
+  ProjectState,
+  RoleInput,
+  RoleSpec,
+  Task,
+  TaskListFilters,
+  Workflow,
+  WorkflowRun,
+  WorkflowRunFilters,
+  WorkflowTriggerInput,
+} from "./types";
 
 export function useSession(workspaceRoot: string) {
   return useQuery({
@@ -54,6 +82,61 @@ export function useTimeline(sessionId: string | null) {
     queryFn: () => getTimeline(sessionId!),
     enabled: !!sessionId,
     staleTime: Infinity,
+  });
+}
+
+export function useContextPreview(sessionId: string | null) {
+  return useQuery({
+    queryKey: ["context-preview", sessionId],
+    queryFn: () => getContextPreview(sessionId!),
+    enabled: !!sessionId,
+    staleTime: 5_000,
+  });
+}
+
+export function useContextBlocks(workspaceRoot: string | null, filters: ContextBlockFilters = {}) {
+  const owner = filters.owner ?? "";
+  const visibility = filters.visibility ?? "";
+  const type = filters.type ?? "";
+  const limit = filters.limit ?? 0;
+  return useQuery({
+    queryKey: ["context-blocks", workspaceRoot, owner, visibility, type, limit],
+    queryFn: () => listContextBlocks(workspaceRoot!, filters),
+    enabled: !!workspaceRoot,
+    staleTime: 5_000,
+  });
+}
+
+export function useCreateContextBlock(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (block: Partial<ContextBlock>) => createContextBlock(block),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["context-blocks", workspaceRoot] });
+      qc.invalidateQueries({ queryKey: ["context-preview"] });
+    },
+  });
+}
+
+export function useUpdateContextBlock(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, block }: { id: string; block: Partial<ContextBlock> }) => updateContextBlock(id, block),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["context-blocks", workspaceRoot] });
+      qc.invalidateQueries({ queryKey: ["context-preview"] });
+    },
+  });
+}
+
+export function useDeleteContextBlock(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteContextBlock(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["context-blocks", workspaceRoot] });
+      qc.invalidateQueries({ queryKey: ["context-preview"] });
+    },
   });
 }
 
@@ -124,6 +207,45 @@ export function useAutomationRuns(automationId: string | null) {
     queryKey: ["automation-runs", automationId],
     queryFn: () => listAutomationRuns(automationId!, 20),
     enabled: !!automationId,
+    staleTime: 5_000,
+  });
+}
+
+export function useWorkflows(workspaceRoot: string | null) {
+  return useQuery({
+    queryKey: ["workflows", "list", workspaceRoot],
+    queryFn: () => listWorkflows(workspaceRoot!),
+    enabled: !!workspaceRoot,
+    staleTime: 10_000,
+  });
+}
+
+export function useWorkflow(workflowId: string | null) {
+  return useQuery({
+    queryKey: ["workflows", "detail", workflowId],
+    queryFn: () => getWorkflow(workflowId!),
+    enabled: !!workflowId,
+    staleTime: 10_000,
+  });
+}
+
+export function useWorkflowRuns(workspaceRoot: string | null, filters: WorkflowRunFilters = {}) {
+  const workflowID = filters.workflow_id ?? "";
+  const state = filters.state ?? "";
+  const limit = filters.limit ?? 0;
+  return useQuery({
+    queryKey: ["workflow-runs", "list", workspaceRoot, workflowID, state, limit],
+    queryFn: () => listWorkflowRuns(workspaceRoot!, filters),
+    enabled: !!workspaceRoot,
+    staleTime: 5_000,
+  });
+}
+
+export function useWorkflowRun(runId: string | null) {
+  return useQuery({
+    queryKey: ["workflow-runs", "detail", runId],
+    queryFn: () => getWorkflowRun(runId!),
+    enabled: !!runId,
     staleTime: 5_000,
   });
 }
@@ -294,6 +416,63 @@ export function useResumeAutomation(workspaceRoot: string | null) {
   return useMutation({
     mutationFn: (id: string) => resumeAutomation(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["automations", workspaceRoot] }),
+  });
+}
+
+export function useCreateWorkflow(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (workflow: Partial<Workflow>) => createWorkflow(workflow),
+    onSuccess: (workflow) => {
+      qc.invalidateQueries({ queryKey: ["workflows", "list", workspaceRoot] });
+      qc.setQueryData(["workflows", "detail", workflow.id], workflow);
+    },
+  });
+}
+
+export function useUpdateWorkflow(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, workflow }: { id: string; workflow: Partial<Workflow> }) => updateWorkflow(id, workflow),
+    onSuccess: (workflow) => {
+      qc.invalidateQueries({ queryKey: ["workflows", "list", workspaceRoot] });
+      qc.setQueryData(["workflows", "detail", workflow.id], workflow);
+    },
+  });
+}
+
+export function useCreateWorkflowRun(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (run: Partial<WorkflowRun>) => createWorkflowRun(run),
+    onSuccess: (run) => {
+      qc.invalidateQueries({ queryKey: ["workflow-runs", "list", workspaceRoot] });
+      qc.setQueryData(["workflow-runs", "detail", run.id], run);
+    },
+  });
+}
+
+export function useTriggerWorkflow(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ workflowId, input }: { workflowId: string; input?: WorkflowTriggerInput }) =>
+      triggerWorkflow(workflowId, input ?? {}),
+    onSuccess: (run) => {
+      qc.invalidateQueries({ queryKey: ["workflow-runs", "list", workspaceRoot] });
+      qc.setQueryData(["workflow-runs", "detail", run.id], run);
+      qc.invalidateQueries({ queryKey: ["workflows", "detail", run.workflow_id] });
+    },
+  });
+}
+
+export function useUpdateWorkflowRun(workspaceRoot: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, run }: { id: string; run: Partial<WorkflowRun> }) => updateWorkflowRun(id, run),
+    onSuccess: (run) => {
+      qc.invalidateQueries({ queryKey: ["workflow-runs", "list", workspaceRoot] });
+      qc.setQueryData(["workflow-runs", "detail", run.id], run);
+    },
   });
 }
 

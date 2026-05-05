@@ -1,0 +1,52 @@
+[
+  {
+    "name": "Monitoring Role Report",
+    "file": "monitoring-role-report.json",
+    "trigger": "manual",
+    "owner_role": "monitor_watcher",
+    "risk_level": "medium",
+    "required_tools": ["automation_query", "file_read", "task_trace"],
+    "tags": ["monitoring", "reporting", "watcher"],
+    "description": "Review watcher or automation alerts and produce a concise operator-facing report."
+  },
+  {
+    "name": "Incident Triage",
+    "file": "incident-triage.json",
+    "trigger": "manual",
+    "owner_role": "incident_commander",
+    "risk_level": "high",
+    "required_tools": ["file_read", "grep", "task_trace"],
+    "tags": ["incident", "triage", "operations"],
+    "description": "Classify incoming incident signals and propose the next operator actions."
+  },
+  {
+    "name": "Research Intake",
+    "file": "research-intake.json",
+    "trigger": "manual",
+    "owner_role": "researcher",
+    "risk_level": "low",
+    "required_tools": ["file_read", "grep", "load_context"],
+    "tags": ["research", "intake", "summary"],
+    "description": "Prepare a reusable intake summary before deeper research work starts."
+  },
+  {
+    "name": "Release Checklist",
+    "file": "release-checklist.json",
+    "trigger": "manual",
+    "owner_role": "release_manager",
+    "risk_level": "high",
+    "required_tools": ["file_read", "shell", "task_trace"],
+    "tags": ["release", "approval", "checklist"],
+    "description": "Validate release readiness and stop at an explicit approval gate for production changes."
+  },
+  {
+    "name": "Code Review",
+    "file": "code-review.json",
+    "trigger": "manual",
+    "owner_role": "reviewer",
+    "risk_level": "medium",
+    "required_tools": ["file_read", "grep", "task_trace"],
+    "tags": ["code-review", "quality", "findings"],
+    "description": "Review a change set for correctness, regressions, missing tests, and operational risk."
+  }
+]

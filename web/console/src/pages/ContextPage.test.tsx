@@ -12,6 +12,37 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/queries", () => ({
+  useContextPreview: () => ({
+    data: {
+      session_id: "session_1",
+      workspace_root: "/workspace",
+      generated_at: "2026-05-03T00:00:04Z",
+      approx_tokens: 42,
+      prompt: [
+        {
+          role: "system",
+          source_ref: "system_prompt",
+          content_preview: "You are Sesame.",
+          approx_tokens: 4,
+        },
+      ],
+      blocks: [
+        {
+          id: "project_state",
+          type: "fact",
+          owner: "workspace",
+          visibility: "global",
+          source_ref: "project_state:/workspace",
+          status: "included",
+          title: "Project State",
+          summary: "Current project state",
+        },
+      ],
+    },
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  }),
   useProjectState: () => ({
     data: {
       workspace_root: "/workspace",
@@ -82,6 +113,8 @@ describe("ContextPage", () => {
     fireEvent.click(screen.getByLabelText("Auto-update project state"));
     expect(mocks.setSetting).toHaveBeenCalledWith("false");
 
+    expect(screen.getByText("Context Inspector")).toBeInTheDocument();
+    expect(screen.getByText("You are Sesame.")).toBeInTheDocument();
     expect(screen.getByText("Keep runtime context separate from durable memory.")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "fact" } });

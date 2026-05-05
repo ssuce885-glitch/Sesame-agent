@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"go-agent/internal/v2/contracts"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,43 +29,45 @@ var roleIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 
 // RoleSpec is a parsed role definition from disk.
 type RoleSpec struct {
-	ID                string   `json:"id"`
-	Name              string   `json:"name"`
-	Description       string   `json:"description"`
-	SystemPrompt      string   `json:"system_prompt"`
-	PermissionProfile string   `json:"permission_profile"`
-	Model             string   `json:"model"`
-	MaxToolCalls      int      `json:"max_tool_calls"`
-	MaxRuntime        int      `json:"max_runtime"` // seconds
-	MaxContextTokens  int      `json:"max_context_tokens,omitempty"`
-	SkillNames        []string `json:"skill_names,omitempty"`
-	DeniedTools       []string `json:"denied_tools,omitempty"`
-	AllowedTools      []string `json:"allowed_tools,omitempty"`
-	DeniedPaths       []string `json:"denied_paths,omitempty"`
-	AllowedPaths      []string `json:"allowed_paths,omitempty"`
-	CanDelegate       bool     `json:"can_delegate"`
-	AutomationOwners  []string `json:"automation_ownership,omitempty"`
-	Version           int      `json:"version,omitempty"`
+	ID                string                              `json:"id"`
+	Name              string                              `json:"name"`
+	Description       string                              `json:"description"`
+	SystemPrompt      string                              `json:"system_prompt"`
+	PermissionProfile string                              `json:"permission_profile"`
+	Model             string                              `json:"model"`
+	MaxToolCalls      int                                 `json:"max_tool_calls"`
+	MaxRuntime        int                                 `json:"max_runtime"` // seconds
+	MaxContextTokens  int                                 `json:"max_context_tokens,omitempty"`
+	SkillNames        []string                            `json:"skill_names,omitempty"`
+	DeniedTools       []string                            `json:"denied_tools,omitempty"`
+	AllowedTools      []string                            `json:"allowed_tools,omitempty"`
+	DeniedPaths       []string                            `json:"denied_paths,omitempty"`
+	AllowedPaths      []string                            `json:"allowed_paths,omitempty"`
+	ToolPolicy        map[string]contracts.ToolPolicyRule `json:"tool_policy,omitempty"`
+	CanDelegate       bool                                `json:"can_delegate"`
+	AutomationOwners  []string                            `json:"automation_ownership,omitempty"`
+	Version           int                                 `json:"version,omitempty"`
 }
 
 // SaveInput is the full editable role payload accepted by create/update paths.
 type SaveInput struct {
-	ID                string   `json:"id"`
-	Name              string   `json:"name"`
-	Description       string   `json:"description"`
-	SystemPrompt      string   `json:"system_prompt"`
-	PermissionProfile string   `json:"permission_profile"`
-	Model             string   `json:"model"`
-	MaxToolCalls      int      `json:"max_tool_calls"`
-	MaxRuntime        int      `json:"max_runtime"`
-	MaxContextTokens  int      `json:"max_context_tokens,omitempty"`
-	SkillNames        []string `json:"skill_names,omitempty"`
-	DeniedTools       []string `json:"denied_tools,omitempty"`
-	AllowedTools      []string `json:"allowed_tools,omitempty"`
-	DeniedPaths       []string `json:"denied_paths,omitempty"`
-	AllowedPaths      []string `json:"allowed_paths,omitempty"`
-	CanDelegate       bool     `json:"can_delegate"`
-	AutomationOwners  []string `json:"automation_ownership,omitempty"`
+	ID                string                              `json:"id"`
+	Name              string                              `json:"name"`
+	Description       string                              `json:"description"`
+	SystemPrompt      string                              `json:"system_prompt"`
+	PermissionProfile string                              `json:"permission_profile"`
+	Model             string                              `json:"model"`
+	MaxToolCalls      int                                 `json:"max_tool_calls"`
+	MaxRuntime        int                                 `json:"max_runtime"`
+	MaxContextTokens  int                                 `json:"max_context_tokens,omitempty"`
+	SkillNames        []string                            `json:"skill_names,omitempty"`
+	DeniedTools       []string                            `json:"denied_tools,omitempty"`
+	AllowedTools      []string                            `json:"allowed_tools,omitempty"`
+	DeniedPaths       []string                            `json:"denied_paths,omitempty"`
+	AllowedPaths      []string                            `json:"allowed_paths,omitempty"`
+	ToolPolicy        map[string]contracts.ToolPolicyRule `json:"tool_policy,omitempty"`
+	CanDelegate       bool                                `json:"can_delegate"`
+	AutomationOwners  []string                            `json:"automation_ownership,omitempty"`
 }
 
 // Service reads role specs from the filesystem.
@@ -227,10 +232,11 @@ func (s *Service) readRole(id string) (RoleSpec, error) {
 		AllowedTools:      cleanStringList(meta.AllowedTools),
 		DeniedPaths:       cleanStringList(meta.DeniedPaths),
 		AllowedPaths:      cleanStringList(meta.AllowedPaths),
+		ToolPolicy:        normalizeToolPolicyMap(meta.ToolPolicy),
 		CanDelegate:       meta.Policy.CanDelegate,
 		AutomationOwners:  cleanStringList(meta.Policy.AutomationOwners),
 		Version:           meta.Version,
-	}, nil
+	}, validateLoadedRole(id, meta, rawPrompt)
 }
 
 func (s *Service) writeRole(ctx context.Context, input SaveInput, version int) error {
@@ -264,6 +270,7 @@ func (s *Service) writeRole(ctx context.Context, input SaveInput, version int) e
 		AllowedTools: input.AllowedTools,
 		DeniedPaths:  input.DeniedPaths,
 		AllowedPaths: input.AllowedPaths,
+		ToolPolicy:   contracts.CloneToolPolicyMap(input.ToolPolicy),
 	}
 	metaRaw, err := yaml.Marshal(meta)
 	if err != nil {
@@ -299,6 +306,7 @@ func (s *Service) writeSnapshot(input SaveInput, meta roleYAML, version int) err
 		AllowedTools: meta.AllowedTools,
 		DeniedPaths:  meta.DeniedPaths,
 		AllowedPaths: meta.AllowedPaths,
+		ToolPolicy:   meta.ToolPolicy,
 	}
 	raw, err := yaml.Marshal(snapshot)
 	if err != nil {
@@ -312,21 +320,22 @@ func (s *Service) writeSnapshot(input SaveInput, meta roleYAML, version int) err
 }
 
 type roleYAML struct {
-	RoleID            string         `yaml:"role_id,omitempty"`
-	Name              string         `yaml:"name,omitempty"`
-	DisplayName       string         `yaml:"display_name,omitempty"`
-	Description       string         `yaml:"description,omitempty"`
-	Version           int            `yaml:"version,omitempty"`
-	Model             string         `yaml:"model,omitempty"`
-	PermissionProfile string         `yaml:"permission_profile,omitempty"`
-	Policy            rolePolicyYAML `yaml:"policy,omitempty"`
-	Budget            roleBudgetYAML `yaml:"budget,omitempty"`
-	SkillNames        []string       `yaml:"skill_names,omitempty"`
-	Skills            []string       `yaml:"skills,omitempty"`
-	DeniedTools       []string       `yaml:"denied_tools,omitempty"`
-	AllowedTools      []string       `yaml:"allowed_tools,omitempty"`
-	DeniedPaths       []string       `yaml:"denied_paths,omitempty"`
-	AllowedPaths      []string       `yaml:"allowed_paths,omitempty"`
+	RoleID            string                              `yaml:"role_id,omitempty"`
+	Name              string                              `yaml:"name,omitempty"`
+	DisplayName       string                              `yaml:"display_name,omitempty"`
+	Description       string                              `yaml:"description,omitempty"`
+	Version           int                                 `yaml:"version,omitempty"`
+	Model             string                              `yaml:"model,omitempty"`
+	PermissionProfile string                              `yaml:"permission_profile,omitempty"`
+	Policy            rolePolicyYAML                      `yaml:"policy,omitempty"`
+	Budget            roleBudgetYAML                      `yaml:"budget,omitempty"`
+	SkillNames        []string                            `yaml:"skill_names,omitempty"`
+	Skills            []string                            `yaml:"skills,omitempty"`
+	DeniedTools       []string                            `yaml:"denied_tools,omitempty"`
+	AllowedTools      []string                            `yaml:"allowed_tools,omitempty"`
+	DeniedPaths       []string                            `yaml:"denied_paths,omitempty"`
+	AllowedPaths      []string                            `yaml:"allowed_paths,omitempty"`
+	ToolPolicy        map[string]contracts.ToolPolicyRule `yaml:"tool_policy,omitempty"`
 }
 
 type rolePolicyYAML struct {
@@ -343,18 +352,19 @@ type roleBudgetYAML struct {
 }
 
 type roleSnapshotYAML struct {
-	RoleID       string         `yaml:"role_id"`
-	DisplayName  string         `yaml:"display_name"`
-	Description  string         `yaml:"description,omitempty"`
-	Prompt       string         `yaml:"prompt"`
-	Skills       []string       `yaml:"skills,omitempty"`
-	Version      int            `yaml:"version"`
-	Policy       rolePolicyYAML `yaml:"policy,omitempty"`
-	Budget       roleBudgetYAML `yaml:"budget,omitempty"`
-	DeniedTools  []string       `yaml:"denied_tools,omitempty"`
-	AllowedTools []string       `yaml:"allowed_tools,omitempty"`
-	DeniedPaths  []string       `yaml:"denied_paths,omitempty"`
-	AllowedPaths []string       `yaml:"allowed_paths,omitempty"`
+	RoleID       string                              `yaml:"role_id"`
+	DisplayName  string                              `yaml:"display_name"`
+	Description  string                              `yaml:"description,omitempty"`
+	Prompt       string                              `yaml:"prompt"`
+	Skills       []string                            `yaml:"skills,omitempty"`
+	Version      int                                 `yaml:"version"`
+	Policy       rolePolicyYAML                      `yaml:"policy,omitempty"`
+	Budget       roleBudgetYAML                      `yaml:"budget,omitempty"`
+	DeniedTools  []string                            `yaml:"denied_tools,omitempty"`
+	AllowedTools []string                            `yaml:"allowed_tools,omitempty"`
+	DeniedPaths  []string                            `yaml:"denied_paths,omitempty"`
+	AllowedPaths []string                            `yaml:"allowed_paths,omitempty"`
+	ToolPolicy   map[string]contracts.ToolPolicyRule `yaml:"tool_policy,omitempty"`
 }
 
 type durationSeconds struct {
@@ -417,6 +427,7 @@ func normalizeInput(input SaveInput) SaveInput {
 	input.AllowedTools = cleanStringList(input.AllowedTools)
 	input.DeniedPaths = cleanStringList(input.DeniedPaths)
 	input.AllowedPaths = cleanStringList(input.AllowedPaths)
+	input.ToolPolicy = normalizeToolPolicyMap(input.ToolPolicy)
 	return input
 }
 
@@ -446,7 +457,104 @@ func validateInput(input SaveInput) error {
 			}
 		}
 	}
+	if err := validateGlobList("denied_paths", input.DeniedPaths); err != nil {
+		return err
+	}
+	if err := validateGlobList("allowed_paths", input.AllowedPaths); err != nil {
+		return err
+	}
+	for toolName, rule := range input.ToolPolicy {
+		if strings.TrimSpace(toolName) == "" {
+			return fmt.Errorf("%w: tool_policy keys must be non-empty", ErrInvalidRole)
+		}
+		if rule.TimeoutSeconds < 0 {
+			return fmt.Errorf("%w: tool_policy.%s.timeout_seconds must be non-negative", ErrInvalidRole, toolName)
+		}
+		if rule.MaxOutputBytes < 0 {
+			return fmt.Errorf("%w: tool_policy.%s.max_output_bytes must be non-negative", ErrInvalidRole, toolName)
+		}
+		for _, list := range [][]string{rule.AllowedCommands, rule.AllowedPaths, rule.DeniedPaths} {
+			for _, value := range list {
+				if strings.ContainsAny(value, "\x00\r\n") {
+					return fmt.Errorf("%w: tool_policy.%s list values must be single-line strings", ErrInvalidRole, toolName)
+				}
+			}
+		}
+		if err := validateGlobList("tool_policy."+toolName+".allowed_paths", rule.AllowedPaths); err != nil {
+			return err
+		}
+		if err := validateGlobList("tool_policy."+toolName+".denied_paths", rule.DeniedPaths); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateLoadedRole(id string, meta roleYAML, rawPrompt []byte) error {
+	return validateInput(SaveInput{
+		ID:                id,
+		Name:              firstNonEmpty(meta.Name, meta.DisplayName, id),
+		Description:       strings.TrimSpace(meta.Description),
+		SystemPrompt:      strings.TrimSpace(string(rawPrompt)),
+		PermissionProfile: firstNonEmpty(meta.PermissionProfile, meta.Policy.PermissionProfile),
+		Model:             firstNonEmpty(meta.Model, meta.Policy.Model),
+		MaxToolCalls:      meta.Budget.MaxToolCalls,
+		MaxRuntime:        meta.Budget.MaxRuntime.Seconds,
+		MaxContextTokens:  meta.Budget.MaxContextTokens,
+		SkillNames:        cleanStringList(append(append([]string(nil), meta.SkillNames...), meta.Skills...)),
+		DeniedTools:       cleanStringList(meta.DeniedTools),
+		AllowedTools:      cleanStringList(meta.AllowedTools),
+		DeniedPaths:       cleanStringList(meta.DeniedPaths),
+		AllowedPaths:      cleanStringList(meta.AllowedPaths),
+		ToolPolicy:        normalizeToolPolicyMap(meta.ToolPolicy),
+		CanDelegate:       meta.Policy.CanDelegate,
+		AutomationOwners:  cleanStringList(meta.Policy.AutomationOwners),
+	})
+}
+
+func validateGlobList(field string, patterns []string) error {
+	for _, pattern := range patterns {
+		pattern = strings.ReplaceAll(strings.TrimSpace(pattern), "\\", "/")
+		if strings.Contains(pattern, "**") {
+			return fmt.Errorf("%w: %s contains invalid glob pattern %q: recursive \"**\" globs are not supported", ErrInvalidRole, field, pattern)
+		}
+		if _, err := path.Match(pattern, "."); err != nil {
+			return fmt.Errorf("%w: %s contains invalid glob pattern %q: %v", ErrInvalidRole, field, pattern, err)
+		}
+	}
+	return nil
+}
+
+func normalizeToolPolicyMap(input map[string]contracts.ToolPolicyRule) map[string]contracts.ToolPolicyRule {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]contracts.ToolPolicyRule, len(input))
+	for key, rule := range input {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		normalized := contracts.ToolPolicyRule{
+			TimeoutSeconds:  rule.TimeoutSeconds,
+			MaxOutputBytes:  rule.MaxOutputBytes,
+			AllowedCommands: cleanStringList(rule.AllowedCommands),
+			AllowedPaths:    cleanStringList(rule.AllowedPaths),
+			DeniedPaths:     cleanStringList(rule.DeniedPaths),
+		}
+		if rule.Allowed != nil {
+			value := *rule.Allowed
+			normalized.Allowed = &value
+		}
+		if normalized.IsZero() {
+			continue
+		}
+		out[key] = normalized
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func isSafeRoleID(id string) bool {

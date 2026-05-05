@@ -9,6 +9,7 @@ import {
   Database,
   ChevronRight,
   Globe,
+  GitBranch,
 } from "./Icon";
 
 interface SidebarProps {
@@ -57,6 +58,7 @@ export function Sidebar({
     { path: "/tasks", label: t("nav.tasks"), icon: Activity },
     { path: "/context", label: t("nav.context"), icon: Database },
     { path: "/automations", label: t("nav.automations"), icon: Play },
+    { path: "/workflows", label: t("nav.workflows"), icon: GitBranch },
     { path: "/reports", label: t("nav.reports"), icon: FileText },
   ];
 

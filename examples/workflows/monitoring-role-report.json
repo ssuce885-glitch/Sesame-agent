@@ -1,0 +1,14 @@
+{
+  "name": "Monitoring Role Report",
+  "trigger": "manual",
+  "owner_role": "monitor_watcher",
+  "report_policy": "deliver_task_reports",
+  "steps": [
+    {
+      "type": "role_task",
+      "role_id": "monitor_watcher",
+      "title": "Inspect alert and produce report",
+      "prompt": "Review the watcher or automation alert payload, inspect the recent workspace context that is already available, decide whether operator action is needed, and return a concise report with status, evidence, impact, and the next recommended step."
+    }
+  ]
+}

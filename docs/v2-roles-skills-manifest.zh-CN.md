@@ -1,6 +1,6 @@
 # V2 Roles / Skills 本地资产边界
 
-更新时间：2026-05-03
+更新时间：2026-05-05
 
 ## 结论
 
@@ -45,6 +45,63 @@
 - `sesame skill install <template>`
 
 示例内容必须使用占位符，不写入真实邮箱、代理、API key、token 或内部地址。
+
+## 当前模板和 CLI 用法
+
+本仓库现在提供只读分发边界：
+
+- `examples/skills/`：官方 skill 模板目录
+- `examples/workflows/library.json`：workflow 模板分发索引
+
+它们都不会被 runtime 自动加载，只用于复制、安装和录入。
+
+常用命令：
+
+```bash
+sesame skill lint examples/skills/*/SKILL.md
+sesame skill test examples/skills/*/SKILL.md
+sesame skill install automation-normalizer --workspace /path/to/workspace
+sesame skill install /absolute/path/to/local-skill-template --workspace /path/to/workspace
+sesame skill pack automation-normalizer --out /tmp/automation-normalizer.zip
+```
+
+`sesame skill lint <path...> [--workspace <root>]` 支持一次检查一个或多个 skill 文件，当前会检查：
+
+- `id` 或 `name` 非空
+- `description` 非空
+- `requires_tools` 非空且工具名存在于当前内置 runtime tool 集
+- `risk_level` 非空
+- front matter 不包含明显 secret 关键词
+- body 或 `prompt_file` 不为空
+
+`sesame skill test <path...> [--workspace <root>]` 不启动 daemon、不调用模型、不执行外部工具；会先复用 lint，再额外检查 manifest 里的 `examples` / `tests`：
+
+- 路径必须是相对路径并且留在 skill 目录内
+- 不能命中 symlink，也不能穿过 symlink 目录
+- 必须是可读、非空的 regular file
+- 任一 error 返回 1；usage 返回 2
+
+manifest 字段约定：
+
+- 推荐使用 `requires_tools` 记录 skill 依赖的内置工具。
+- `allowed_tools` / `allowed-tools` 只是历史别名，当前 parser 会兼容合并到 `requires_tools`。
+- 这些字段只用于声明和 lint，不会自动解锁 gated tools；实际可见性仍由 role policy、runtime gate 和执行上下文决定。
+
+`sesame skill install` 当前行为：
+
+- 模板名会先从 `examples/skills/<name>` 查找
+- 也支持直接安装本地目录或 markdown 文件
+- 安装目标固定为 `<workspace>/skills/<skill-name>/`
+- 已存在目标不会被覆盖
+
+`sesame skill pack` 当前行为：
+
+- `--out` 必填，且不会覆盖已存在目标
+- source 解析与 `sesame skill install` 共用模板名/路径解析逻辑
+- 打包前必须先通过 lint/test 等价校验，否则不生成 zip
+- zip 根目录固定为 `installSkillName` 规则得到的 skill 名称
+- 目录模板会保留全部普通文件；markdown 单文件模板只打包为 `<skillName>/SKILL.md`
+- source 或目录内任意 symlink entry 都会被拒绝
 
 ## 本地联调项
 

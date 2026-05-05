@@ -16,6 +16,7 @@ import (
 	"go-agent/internal/skillcatalog"
 	"go-agent/internal/v2/agent"
 	"go-agent/internal/v2/automation"
+	"go-agent/internal/v2/contextsvc"
 	"go-agent/internal/v2/contracts"
 	"go-agent/internal/v2/memory"
 	"go-agent/internal/v2/observability"
@@ -25,6 +26,7 @@ import (
 	"go-agent/internal/v2/store"
 	"go-agent/internal/v2/tasks"
 	"go-agent/internal/v2/tools"
+	"go-agent/internal/v2/workflows"
 )
 
 func Run(ctx context.Context, cfg config.Config) error {
@@ -89,6 +91,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	reportService := reports.NewService(s, sessionMgr)
 	taskManager.SetReporter(reportService)
 	memoryService := memory.NewService(s)
+	contextService := contextsvc.New(s, memoryService)
 	automationService := automation.NewService(s, taskManager, roleService)
 	ag.SetAutomationService(automationService)
 	defaultSession, err := ensureSession(ctx, s, cfg.Paths.WorkspaceRoot, systemPrompt, cfg.PermissionProfile)
@@ -99,6 +102,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err := registerExistingSessions(ctx, s, sessionMgr, cfg.Paths.WorkspaceRoot); err != nil {
 		return fmt.Errorf("register sessions: %w", err)
 	}
+	workflowService := workflows.NewService(s, taskManager, defaultSession.ID)
+	workflowService.SetAsyncBaseContext(ctx)
+	automationService.SetWorkflowTrigger(workflowService)
 
 	routes := &routes{
 		cfg:               cfg,
@@ -106,9 +112,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 		sessionMgr:        sessionMgr,
 		taskManager:       taskManager,
 		memoryService:     memoryService,
+		contextService:    contextService,
 		metrics:           metrics,
 		roleService:       roleService,
 		automationService: automationService,
+		workflowService:   workflowService,
 		projectStateAuto:  ag,
 		defaultSessionID:  defaultSession.ID,
 	}
@@ -121,7 +129,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = automationService.Reconcile(ctx)
+				if err := automationService.Reconcile(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "automation reconcile: %v\n", err)
+				}
 				_, _ = memoryService.Cleanup(ctx, cfg.Paths.WorkspaceRoot, 1000, 500)
 			}
 		}

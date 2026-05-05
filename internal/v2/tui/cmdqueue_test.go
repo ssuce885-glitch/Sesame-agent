@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -84,6 +85,46 @@ func TestStartSessionStreamCmdDoesNotCancelBeforeReady(t *testing.T) {
 	}
 	if model.streamCancel != nil {
 		t.Fatal("streamCancel was set before stream ready")
+	}
+}
+
+func TestAutomationResponseJSONTagsDecodeWorkflowID(t *testing.T) {
+	var response AutomationResponse
+	if err := json.Unmarshal([]byte(`{
+		"id":"automation_1",
+		"workspace_root":"/workspace",
+		"title":"Watch docs",
+		"goal":"Keep docs fresh",
+		"state":"active",
+		"owner":"role:reviewer",
+		"workflow_id":"workflow_docs",
+		"watcher_path":"roles/reviewer/automations/watch.sh",
+		"watcher_cron":"@every 5m",
+		"created_at":"2026-05-03T00:00:00Z",
+		"updated_at":"2026-05-03T00:00:01Z"
+	}`), &response); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if response.WorkspaceRoot != "/workspace" || response.WorkflowID != "workflow_docs" || response.WatcherPath == "" {
+		t.Fatalf("unexpected decoded automation response: %+v", response)
+	}
+}
+
+func TestFormatAutomationListIncludesWorkflowID(t *testing.T) {
+	lines := formatAutomationList([]AutomationResponse{{
+		ID:          "automation_1",
+		Title:       "Watch docs",
+		Goal:        "Keep docs fresh",
+		State:       "active",
+		Owner:       "role:reviewer",
+		WorkflowID:  "workflow_docs",
+		WatcherCron: "@every 5m",
+	}})
+	if len(lines) != 1 {
+		t.Fatalf("lines len = %d, want 1", len(lines))
+	}
+	if got := lines[0]; got != "Watch docs [active | role:reviewer | workflow:workflow_docs | @every 5m] - Keep docs fresh" {
+		t.Fatalf("line = %q", got)
 	}
 }
 

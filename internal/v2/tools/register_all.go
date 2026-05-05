@@ -8,6 +8,7 @@ import (
 func RegisterAllTools(r contracts.ToolRegistry, roleService RoleService, catalog skillcatalog.Catalog) {
 	r.Register(contracts.NamespaceShell, NewShellTool())
 	RegisterFilesTools(r)
+	r.Register(contracts.NamespaceWorkspace, NewToolPolicyExplainTool(r))
 	r.Register(contracts.NamespaceMemory, NewMemoryWriteTool())
 	r.Register(contracts.NamespaceMemory, NewRecallArchiveTool())
 	r.Register(contracts.NamespaceMemory, NewLoadContextTool())

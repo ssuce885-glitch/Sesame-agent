@@ -1,0 +1,20 @@
+{
+  "name": "Incident Triage",
+  "trigger": "manual",
+  "owner_role": "incident_commander",
+  "report_policy": "deliver_task_reports",
+  "steps": [
+    {
+      "type": "role_task",
+      "role_id": "incident_commander",
+      "title": "Triage incident signal",
+      "prompt": "Classify the incoming signal by severity, probable scope, immediate containment need, customer impact, and open unknowns. Return a concise triage summary for the operator."
+    },
+    {
+      "type": "role_task",
+      "role_id": "incident_commander",
+      "title": "Recommend next actions",
+      "prompt": "Using the previous triage report in this workflow run, produce the next three actions, suggested owners, rollback or mitigation options, and the most important follow-up question."
+    }
+  ]
+}

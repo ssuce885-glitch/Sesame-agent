@@ -6,10 +6,10 @@ import (
 	"go-agent/internal/v2/contracts"
 )
 
-// buildContext returns messages to send to the model.
+// BuildContext returns messages to send to the model.
 // It includes a system message, prior messages truncated from the oldest side,
 // and the current turn messages.
-func buildContext(systemPrompt string, prior []contracts.Message, turn []contracts.Message, maxTokens int) []contracts.Message {
+func BuildContext(systemPrompt string, prior []contracts.Message, turn []contracts.Message, maxTokens int) []contracts.Message {
 	if maxTokens <= 0 {
 		maxTokens = effectiveContextTokens(maxTokens)
 	}
@@ -41,7 +41,12 @@ func buildContext(systemPrompt string, prior []contracts.Message, turn []contrac
 	return out
 }
 
-func buildInstructions(systemPrompt, projectState string) string {
+func buildContext(systemPrompt string, prior []contracts.Message, turn []contracts.Message, maxTokens int) []contracts.Message {
+	return BuildContext(systemPrompt, prior, turn, maxTokens)
+}
+
+// BuildInstructions combines the base system prompt with workspace project state.
+func BuildInstructions(systemPrompt, projectState string) string {
 	systemPrompt = strings.TrimSpace(systemPrompt)
 	projectState = strings.TrimSpace(projectState)
 	if projectState == "" {
@@ -56,6 +61,10 @@ func buildInstructions(systemPrompt, projectState string) string {
 	b.WriteString(projectState)
 	b.WriteString("\n\nUse Project State as the compact source of truth for long-running workspace goals, decisions, open threads, artifacts, and validation status. Do not treat it as a user request by itself.")
 	return b.String()
+}
+
+func buildInstructions(systemPrompt, projectState string) string {
+	return BuildInstructions(systemPrompt, projectState)
 }
 
 func reverseMessages(messages []contracts.Message) {

@@ -15,9 +15,25 @@ func TestLoadCatalogLoadsSkillDirsAndFrontMatter(t *testing.T) {
 	workspaceDir := filepath.Join(workspaceRoot, "skills", "workspace-skill")
 
 	writeSkill(t, filepath.Join(systemDir, "SKILL.md"), `---
+id: system-skill
 name: system-skill
+version: 1.2.3
 description: System skill.
+scope: system
+requires_tools:
+  - shell
+  - file_read
 allowed-tools: shell, file_read
+risk_level: medium
+approval_required: true
+prompt_file: prompt.md
+examples:
+  - examples/runbook.md
+tests:
+  - tests/dry-run.md
+permissions:
+  network: false
+  delivery: draft_only
 when-to-use:
   - system trigger
 policy:
@@ -29,6 +45,7 @@ agent:
 ---
 System body.
 `)
+	writeSkill(t, filepath.Join(systemDir, "prompt.md"), "Prompt file body.\n")
 	writeSkill(t, filepath.Join(globalDir, "global.md"), `---
 description: Global skill.
 allowed_tools:
@@ -51,8 +68,29 @@ Global body.
 	if system.Scope != "system" || system.Description != "System skill." || system.Body != "System body." {
 		t.Fatalf("unexpected system skill: %+v", system)
 	}
+	if system.ID != "system-skill" || system.Version != "1.2.3" || system.ManifestScope != "system" {
+		t.Fatalf("manifest fields not loaded: %+v", system)
+	}
 	if got, want := system.AllowedTools, []string{"shell", "file_read"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("AllowedTools = %#v, want %#v", got, want)
+	}
+	if got, want := system.RequiresTools, []string{"shell", "file_read"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("RequiresTools = %#v, want %#v", got, want)
+	}
+	if !system.ApprovalRequired || system.RiskLevel != "medium" || system.PromptFile != "prompt.md" {
+		t.Fatalf("risk/approval/prompt not loaded: %+v", system)
+	}
+	if got, want := system.Examples, []string{"examples/runbook.md"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Examples = %#v, want %#v", got, want)
+	}
+	if got, want := system.Tests, []string{"tests/dry-run.md"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Tests = %#v, want %#v", got, want)
+	}
+	if got, ok := system.Permissions["network"].(bool); !ok || got {
+		t.Fatalf("expected boolean permission, got %+v", system.Permissions)
+	}
+	if got, ok := system.Permissions["delivery"].(string); !ok || got != "draft_only" {
+		t.Fatalf("expected string permission, got %+v", system.Permissions)
 	}
 	if !system.Policy.AllowImplicitActivation || system.Agent.Type != "explorer" {
 		t.Fatalf("front matter policy/agent not loaded: %+v", system)

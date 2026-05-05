@@ -43,6 +43,62 @@ export interface TimelineResponse {
   queue: QueuePayload;
 }
 
+// Context Preview
+export interface ContextPromptItem {
+  role: string;
+  source_ref: string;
+  content_preview: string;
+  approx_tokens: number;
+}
+
+export interface ContextPreviewBlock {
+  id: string;
+  type: string;
+  owner: string;
+  visibility: string;
+  source_ref: string;
+  status: "included" | "available" | "excluded" | string;
+  reason?: string;
+  title?: string;
+  summary?: string;
+  importance_score?: number;
+  updated_at?: string;
+}
+
+export interface ContextPreview {
+  session_id: string;
+  workspace_root: string;
+  generated_at: string;
+  approx_tokens: number;
+  prompt: ContextPromptItem[];
+  blocks: ContextPreviewBlock[];
+}
+
+export interface ContextBlock {
+  id: string;
+  workspace_root: string;
+  type: string;
+  owner: string;
+  visibility: string;
+  source_ref: string;
+  title?: string;
+  summary?: string;
+  evidence?: string;
+  confidence: number;
+  importance_score: number;
+  expiry_policy?: string;
+  expires_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContextBlockFilters {
+  owner?: string;
+  visibility?: string;
+  type?: string;
+  limit?: number;
+}
+
 // SSE Events
 export interface SSEEvent {
   id: string;
@@ -188,6 +244,7 @@ export interface Automation {
   goal: string;
   state: string;
   owner: string;
+  workflow_id?: string;
   watcher_path: string;
   watcher_cron: string;
   created_at: string;
@@ -198,9 +255,52 @@ export interface AutomationRun {
   automation_id: string;
   dedupe_key: string;
   task_id: string;
+  workflow_run_id?: string;
   status: string;
   summary: string;
   created_at: string;
+}
+
+// Workflow
+export interface Workflow {
+  id: string;
+  workspace_root: string;
+  name: string;
+  trigger: string;
+  owner_role?: string;
+  input_schema?: string;
+  steps?: string;
+  required_tools?: string;
+  approval_policy?: string;
+  report_policy?: string;
+  failure_policy?: string;
+  resume_policy?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflow_id: string;
+  workspace_root: string;
+  state: string;
+  trigger_ref?: string;
+  task_ids?: string;
+  report_ids?: string;
+  approval_ids?: string;
+  trace?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowTriggerInput {
+  trigger_ref?: string;
+}
+
+export interface WorkflowRunFilters {
+  workflow_id?: string;
+  state?: string;
+  limit?: number;
 }
 
 // Report

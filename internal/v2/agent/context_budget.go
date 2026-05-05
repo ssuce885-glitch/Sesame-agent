@@ -95,6 +95,13 @@ func approximateMessageTokens(messages []contracts.Message) int {
 	return total
 }
 
+// ApproximateMessageTokens exposes the agent's context budgeting heuristic for
+// diagnostics surfaces that need to explain prompt size without reimplementing
+// a second estimator.
+func ApproximateMessageTokens(messages []contracts.Message) int {
+	return approximateMessageTokens(messages)
+}
+
 func approximateContextTokens(systemPrompt string, prior, turn []contracts.Message) int {
 	return approximateTextTokens(systemPrompt) + approximateMessageTokens(prior) + approximateMessageTokens(turn)
 }

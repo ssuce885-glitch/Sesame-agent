@@ -1,0 +1,14 @@
+{
+  "name": "Code Review",
+  "trigger": "manual",
+  "owner_role": "reviewer",
+  "report_policy": "deliver_task_reports",
+  "steps": [
+    {
+      "type": "role_task",
+      "role_id": "reviewer",
+      "title": "Review change set",
+      "prompt": "Review the target diff or current workspace change. Focus on correctness, regressions, missing tests, and operational risk. Return findings first, then concise suggested fixes."
+    }
+  ]
+}

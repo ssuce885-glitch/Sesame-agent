@@ -62,6 +62,8 @@ cd Sesame-agent
 mkdir -p /path/to/workspace
 ```
 
+不要把仓库根目录直接作为 Sesame workspace。`roles/`、`skills/`、`.sesame/` 等运行态资产应放在独立 workspace 目录中，例如 `/home/sauce/project/Workspace/sesame-main`。
+
 ### 2. 启动 Sesame
 
 在仓库根目录执行，并显式指定要使用的 workspace：
@@ -103,7 +105,7 @@ go run ./cmd/sesame --workspace /path/to/workspace --status
 当本地 daemon 运行后，在浏览器中打开：
 
 ```text
-http://127.0.0.1:4317/
+http://127.0.0.1:8421/
 ```
 
 ### 4. 开始使用
@@ -181,27 +183,27 @@ Automation 创建被显式 gating：
 ## 仓库结构
 
 - `cmd/sesame`
-  CLI 入口
-- `internal/cli`
-  TUI、REPL、客户端调用和终端渲染
-- `internal/daemon`
-  runtime 组装、恢复、HTTP 服务和调度
-- `internal/engine`
-  turn 执行、prompt 组装、tool wiring 和上下文刷新
-- `internal/session`
-  session 排队、delegation 和 runtime handoff
-- `internal/task`
-  后台 task 模型和执行
-- `internal/tools`
-  内置工具、工具运行时、能力门禁和执行控制
-- `internal/automation`
-  watcher、simple owner-task automation 和 automation 生命周期
-- `internal/reporting`
-  report 投递
-- `internal/roles`
-  文件化 role catalog 和 role service
-- `internal/store/sqlite`
-  本地持久化
+  V2 CLI 入口、daemon launcher 和 TUI bootstrap
+- `internal/v2/app`
+  runtime 组装、HTTP server 和 daemon loops
+- `internal/v2/agent`
+  turn 执行、prompt 组装、tool loop、context budget 和 Project State refresh
+- `internal/v2/session`
+  session 队列和 turn 生命周期
+- `internal/v2/tasks`
+  后台 task 模型、runners、output sink 和 task trace
+- `internal/v2/tools`
+  内置工具、role policy gates 和执行边界
+- `internal/v2/automation`
+  watcher、role-owned automation dispatch 和 automation lifecycle
+- `internal/v2/reports`
+  task report 创建和 queued report_batch delivery
+- `internal/v2/roles`
+  文件化 role service 和 role snapshots
+- `internal/v2/store`
+  本地 SQLite 持久化
+- `internal/skillcatalog`
+  shared skill catalog loading 和 DTOs
 - `web/console`
   基于 React 的 Console UI
 
@@ -219,6 +221,8 @@ Sesame 正在继续收敛到更明确的 workspace runtime 模型：
 项目已经可以用于本地运维类工作流，但整体架构仍在继续收紧和简化。
 
 ## 路线图
+
+详细 V2 方向见 [`docs/v2-roadmap-context-workflow.zh-CN.md`](docs/v2-roadmap-context-workflow.zh-CN.md)。
 
 ### Runtime 与架构
 - 继续围绕 workspace、task、report 和 context-head 简化 runtime spine

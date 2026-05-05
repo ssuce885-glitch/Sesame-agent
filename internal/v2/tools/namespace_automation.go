@@ -42,6 +42,10 @@ func (t *automationCreateSimpleTool) Definition() contracts.ToolDefinition {
 		Name:        "automation_create_simple",
 		Namespace:   contracts.NamespaceAutomation,
 		Description: "Create a simple watcher-based automation. Requires automation-standard-behavior skill.",
+		Capabilities: []string{
+			string(contracts.CapabilityMutateRuntime),
+		},
+		Risk: "high",
 		Parameters: objectSchema(map[string]any{
 			"title":        map[string]any{"type": "string", "description": "Automation title"},
 			"goal":         map[string]any{"type": "string", "description": "Automation goal"},
@@ -109,6 +113,7 @@ func (t *automationQueryTool) Definition() contracts.ToolDefinition {
 		Name:        "automation_query",
 		Namespace:   contracts.NamespaceAutomation,
 		Description: "Query existing automations and their run history.",
+		Risk:        "low",
 		Parameters: objectSchema(map[string]any{
 			"id": map[string]any{"type": "string", "description": "Optional automation id. When provided, returns one automation detail."},
 		}),
@@ -167,6 +172,10 @@ func (t *automationControlTool) Definition() contracts.ToolDefinition {
 		Name:        "automation_control",
 		Namespace:   contracts.NamespaceAutomation,
 		Description: "Pause or resume an automation.",
+		Capabilities: []string{
+			string(contracts.CapabilityMutateRuntime),
+		},
+		Risk: "high",
 		Parameters: objectSchema(map[string]any{
 			"id":     map[string]any{"type": "string", "description": "Automation id"},
 			"action": map[string]any{"type": "string", "enum": []string{"pause", "resume"}, "description": "Control action"},
@@ -263,6 +272,7 @@ type automationDetail struct {
 	Goal          string                `json:"goal"`
 	State         string                `json:"state"`
 	Owner         string                `json:"owner"`
+	WorkflowID    string                `json:"workflow_id,omitempty"`
 	WatcherPath   string                `json:"watcher_path"`
 	WatcherCron   string                `json:"watcher_cron"`
 	CreatedAt     time.Time             `json:"created_at"`
@@ -278,6 +288,7 @@ func automationDetailFor(ctx context.Context, automation contracts.Automation, r
 		Goal:          automation.Goal,
 		State:         automation.State,
 		Owner:         automation.Owner,
+		WorkflowID:    automation.WorkflowID,
 		WatcherPath:   automation.WatcherPath,
 		WatcherCron:   automation.WatcherCron,
 		CreatedAt:     automation.CreatedAt,
@@ -294,24 +305,26 @@ func automationDetailFor(ctx context.Context, automation contracts.Automation, r
 	detail.RecentRuns = make([]automationRunDetail, 0, len(runs))
 	for _, run := range runs {
 		detail.RecentRuns = append(detail.RecentRuns, automationRunDetail{
-			AutomationID: run.AutomationID,
-			DedupeKey:    run.DedupeKey,
-			TaskID:       run.TaskID,
-			Status:       run.Status,
-			Summary:      run.Summary,
-			CreatedAt:    run.CreatedAt,
+			AutomationID:  run.AutomationID,
+			DedupeKey:     run.DedupeKey,
+			TaskID:        run.TaskID,
+			WorkflowRunID: run.WorkflowRunID,
+			Status:        run.Status,
+			Summary:       run.Summary,
+			CreatedAt:     run.CreatedAt,
 		})
 	}
 	return detail, nil
 }
 
 type automationRunDetail struct {
-	AutomationID string    `json:"automation_id"`
-	DedupeKey    string    `json:"dedupe_key"`
-	TaskID       string    `json:"task_id"`
-	Status       string    `json:"status"`
-	Summary      string    `json:"summary"`
-	CreatedAt    time.Time `json:"created_at"`
+	AutomationID  string    `json:"automation_id"`
+	DedupeKey     string    `json:"dedupe_key"`
+	TaskID        string    `json:"task_id"`
+	WorkflowRunID string    `json:"workflow_run_id,omitempty"`
+	Status        string    `json:"status"`
+	Summary       string    `json:"summary"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 func hasActiveSkill(execCtx contracts.ExecContext, skill string) bool {

@@ -92,6 +92,12 @@ func TestAgentRunnerUsesRoleRuntimeDeadlineWhenCallerHasNone(t *testing.T) {
 			PermissionProfile: "workspace",
 			MaxRuntime:        7,
 			MaxContextTokens:  80000,
+			ToolPolicy: map[string]contracts.ToolPolicyRule{
+				"shell": {
+					Allowed:         boolPtr(false),
+					AllowedCommands: []string{"go test"},
+				},
+			},
 		},
 	})
 	task := contracts.Task{
@@ -122,6 +128,9 @@ func TestAgentRunnerUsesRoleRuntimeDeadlineWhenCallerHasNone(t *testing.T) {
 	}
 	if sessionMgr.roleSpec == nil || sessionMgr.roleSpec.MaxRuntime != 7 || sessionMgr.roleSpec.MaxContextTokens != 80000 {
 		t.Fatalf("role budget was not passed to submitted turn: %+v", sessionMgr.roleSpec)
+	}
+	if allowed := sessionMgr.roleSpec.ToolPolicy["shell"].Allowed; allowed == nil || *allowed {
+		t.Fatalf("tool policy was not passed to submitted turn: %+v", sessionMgr.roleSpec.ToolPolicy)
 	}
 }
 
@@ -182,4 +191,8 @@ func (s *bufferSink) Append(taskID string, data []byte) error {
 
 func (s *bufferSink) String() string {
 	return s.builder.String()
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }

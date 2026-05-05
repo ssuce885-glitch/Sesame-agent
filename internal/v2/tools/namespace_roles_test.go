@@ -23,6 +23,12 @@ func TestRoleCreateAndUpdateTools(t *testing.T) {
 			"name":          "Backend Reviewer",
 			"system_prompt": "Review backend changes.",
 			"skill_names":   []any{"go", "testing"},
+			"tool_policy": map[string]any{
+				"shell": false,
+				"file_write": map[string]any{
+					"allowed_paths": []any{"docs/reviews/*"},
+				},
+			},
 		},
 	}, contracts.ExecContext{WorkspaceRoot: root})
 	if err != nil {
@@ -38,6 +44,9 @@ func TestRoleCreateAndUpdateTools(t *testing.T) {
 	if created.ID != "backend_reviewer" || created.Version != 1 || len(created.SkillNames) != 2 {
 		t.Fatalf("unexpected created role: %+v", created)
 	}
+	if allowed := created.ToolPolicy["shell"].Allowed; allowed == nil || *allowed {
+		t.Fatalf("expected shell tool policy denial, got %+v", created.ToolPolicy)
+	}
 
 	updateResult, err := NewRoleUpdateTool(service).Execute(context.Background(), contracts.ToolCall{
 		Name: "role_update",
@@ -45,6 +54,11 @@ func TestRoleCreateAndUpdateTools(t *testing.T) {
 			"id":             "backend_reviewer",
 			"description":    "Reviews service and storage changes.",
 			"max_tool_calls": float64(12),
+			"tool_policy": map[string]any{
+				"shell": map[string]any{
+					"allowed_commands": []any{"go test"},
+				},
+			},
 		},
 	}, contracts.ExecContext{WorkspaceRoot: root})
 	if err != nil {
@@ -59,6 +73,9 @@ func TestRoleCreateAndUpdateTools(t *testing.T) {
 	}
 	if updated.Description != "Reviews service and storage changes." || updated.SystemPrompt != "Review backend changes." || updated.MaxToolCalls != 12 {
 		t.Fatalf("unexpected updated role: %+v", updated)
+	}
+	if got := updated.ToolPolicy["shell"].AllowedCommands; len(got) != 1 || got[0] != "go test" {
+		t.Fatalf("expected updated tool policy, got %+v", updated.ToolPolicy)
 	}
 }
 

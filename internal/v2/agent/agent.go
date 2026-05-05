@@ -14,6 +14,7 @@ import (
 	"go-agent/internal/model"
 	"go-agent/internal/v2/contracts"
 	"go-agent/internal/v2/observability"
+	v2tools "go-agent/internal/v2/tools"
 )
 
 // Agent implements contracts.Agent. It runs a single LLM turn with bounded
@@ -328,21 +329,18 @@ func (a *Agent) executeToolCalls(ctx context.Context, input contracts.TurnInput,
 	for _, call := range calls {
 		output := ""
 		isError := false
-		if isDeniedTool(baseExecCtx.RoleSpec, call.Name) {
-			roleID := ""
-			if baseExecCtx.RoleSpec != nil {
-				roleID = baseExecCtx.RoleSpec.ID
-			}
-			output = fmt.Sprintf("tool %q is not available to role %s", call.Name, roleID)
+		tool, ok := a.tools.Lookup(call.Name)
+		if !ok {
+			output = fmt.Sprintf("tool %q not found", call.Name)
 			isError = true
 		} else {
-			tool, ok := a.tools.Lookup(call.Name)
-			if !ok {
-				output = fmt.Sprintf("tool %q not found", call.Name)
+			execCtx := baseExecCtx
+			execCtx.ActiveSkills = cloneStrings(activeSkills)
+			decision := v2tools.EvaluateToolAccess(tool, execCtx)
+			if !decision.Allowed {
+				output = decision.Reason
 				isError = true
 			} else {
-				execCtx := baseExecCtx
-				execCtx.ActiveSkills = cloneStrings(activeSkills)
 				result, err := tool.Execute(ctx, call, execCtx)
 				if err != nil {
 					output = err.Error()
@@ -379,28 +377,6 @@ func (a *Agent) executeToolCalls(ctx context.Context, input contracts.TurnInput,
 		}
 	}
 	return messages, activeSkills, nil
-}
-
-func isDeniedTool(spec *contracts.RoleSpec, toolName string) bool {
-	if spec == nil {
-		return false
-	}
-	if len(spec.AllowedTools) > 0 && !stringSliceContains(spec.AllowedTools, toolName) {
-		return true
-	}
-	if stringSliceContains(spec.DeniedTools, toolName) {
-		return true
-	}
-	return false
-}
-
-func stringSliceContains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func (a *Agent) completeTask(ctx context.Context, input contracts.TurnInput, finalAssistantText string) {

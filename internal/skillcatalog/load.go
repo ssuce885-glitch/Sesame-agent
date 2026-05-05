@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -40,10 +41,12 @@ func LoadCatalog(globalRoot, workspaceRoot string) (Catalog, error) {
 	}
 
 	sort.SliceStable(catalog.Skills, func(i, j int) bool {
-		if catalog.Skills[i].Name == catalog.Skills[j].Name {
+		left := catalog.Skills[i].DisplayName()
+		right := catalog.Skills[j].DisplayName()
+		if left == right {
 			return catalog.Skills[i].Scope < catalog.Skills[j].Scope
 		}
-		return catalog.Skills[i].Name < catalog.Skills[j].Name
+		return left < right
 	})
 
 	return catalog, errors.Join(errs...)
@@ -90,7 +93,7 @@ func loadSkillDir(dir, scope string) ([]SkillSpec, error) {
 			errs = append(errs, err)
 			continue
 		}
-		if strings.TrimSpace(spec.Name) != "" {
+		if strings.TrimSpace(spec.DisplayName()) != "" {
 			skills = append(skills, spec)
 		}
 	}
@@ -98,13 +101,30 @@ func loadSkillDir(dir, scope string) ([]SkillSpec, error) {
 }
 
 func loadSkillFile(path, scope string) (SkillSpec, error) {
-	raw, err := os.ReadFile(path)
+	parsed, err := parseSkillFile(path, scope)
 	if err != nil {
 		return SkillSpec{}, err
 	}
+	return parsed.Spec, nil
+}
+
+type parsedSkillFile struct {
+	Path  string
+	Raw   []byte
+	Meta  []byte
+	Body  string
+	Front skillFrontMatter
+	Spec  SkillSpec
+}
+
+func parseSkillFile(path, scope string) (parsedSkillFile, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return parsedSkillFile{}, err
+	}
 	meta, body, err := splitSkillFrontMatter(raw)
 	if err != nil {
-		return SkillSpec{}, fmt.Errorf("parse skill %s: %w", path, err)
+		return parsedSkillFile{}, fmt.Errorf("parse skill %s: %w", path, err)
 	}
 
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
@@ -117,21 +137,41 @@ func loadSkillFile(path, scope string) (SkillSpec, error) {
 		Scope: scope,
 		Body:  strings.TrimSpace(body),
 	}
-	if len(meta) > 0 {
-		var front skillFrontMatter
-		if err := yaml.Unmarshal(meta, &front); err != nil {
-			return SkillSpec{}, fmt.Errorf("parse front matter: %w", err)
-		}
-		if strings.TrimSpace(front.Name) != "" {
-			spec.Name = strings.TrimSpace(front.Name)
-		}
-		spec.Description = strings.TrimSpace(front.Description)
-		spec.Triggers = appendStringLists(front.Triggers, front.WhenToUse, front.WhenToUseHyphen)
-		spec.AllowedTools = appendStringLists(front.AllowedTools, front.AllowedToolsSnake)
-		spec.Policy = front.Policy
-		spec.Agent = front.Agent
+	parsed := parsedSkillFile{
+		Path: path,
+		Raw:  raw,
+		Meta: meta,
+		Body: body,
+		Spec: spec,
 	}
-	return spec, nil
+	if len(meta) > 0 {
+		if err := yaml.Unmarshal(meta, &parsed.Front); err != nil {
+			return parsedSkillFile{}, fmt.Errorf("parse front matter: %w", err)
+		}
+	}
+	if trimmed := strings.TrimSpace(parsed.Front.ID); trimmed != "" {
+		parsed.Spec.ID = trimmed
+	}
+	if trimmed := strings.TrimSpace(parsed.Front.Name); trimmed != "" {
+		parsed.Spec.Name = trimmed
+	} else if trimmed := strings.TrimSpace(parsed.Spec.ID); trimmed != "" {
+		parsed.Spec.Name = trimmed
+	}
+	parsed.Spec.Version = strings.TrimSpace(parsed.Front.Version)
+	parsed.Spec.Description = strings.TrimSpace(parsed.Front.Description)
+	parsed.Spec.ManifestScope = strings.TrimSpace(parsed.Front.Scope)
+	parsed.Spec.Triggers = appendStringLists(parsed.Front.Triggers, parsed.Front.WhenToUse, parsed.Front.WhenToUseHyphen)
+	parsed.Spec.RequiresTools = appendStringLists(parsed.Front.RequiresTools, parsed.Front.AllowedTools, parsed.Front.AllowedToolsSnake)
+	parsed.Spec.AllowedTools = appendStringLists(parsed.Spec.RequiresTools)
+	parsed.Spec.RiskLevel = strings.TrimSpace(parsed.Front.RiskLevel)
+	parsed.Spec.ApprovalRequired = parsed.Front.ApprovalRequired
+	parsed.Spec.PromptFile = strings.TrimSpace(parsed.Front.PromptFile)
+	parsed.Spec.Examples = appendStringLists(parsed.Front.Examples)
+	parsed.Spec.Tests = appendStringLists(parsed.Front.Tests)
+	parsed.Spec.Permissions = normalizeStringBoolMap(parsed.Front.Permissions)
+	parsed.Spec.Policy = parsed.Front.Policy
+	parsed.Spec.Agent = parsed.Front.Agent
+	return parsed, nil
 }
 
 func splitSkillFrontMatter(raw []byte) ([]byte, string, error) {
@@ -178,15 +218,25 @@ func appendStringLists(values ...[]string) []string {
 }
 
 type skillFrontMatter struct {
-	Name              string      `yaml:"name"`
-	Description       string      `yaml:"description"`
-	AllowedTools      stringList  `yaml:"allowed-tools"`
-	AllowedToolsSnake stringList  `yaml:"allowed_tools"`
-	Triggers          stringList  `yaml:"triggers"`
-	WhenToUse         stringList  `yaml:"when_to_use"`
-	WhenToUseHyphen   stringList  `yaml:"when-to-use"`
-	Policy            SkillPolicy `yaml:"policy"`
-	Agent             AgentSpec   `yaml:"agent"`
+	ID                string        `yaml:"id"`
+	Name              string        `yaml:"name"`
+	Version           string        `yaml:"version"`
+	Description       string        `yaml:"description"`
+	Scope             string        `yaml:"scope"`
+	RequiresTools     stringList    `yaml:"requires_tools"`
+	AllowedTools      stringList    `yaml:"allowed-tools"`
+	AllowedToolsSnake stringList    `yaml:"allowed_tools"`
+	RiskLevel         string        `yaml:"risk_level"`
+	ApprovalRequired  bool          `yaml:"approval_required"`
+	PromptFile        string        `yaml:"prompt_file"`
+	Examples          stringList    `yaml:"examples"`
+	Tests             stringList    `yaml:"tests"`
+	Permissions       stringBoolMap `yaml:"permissions"`
+	Triggers          stringList    `yaml:"triggers"`
+	WhenToUse         stringList    `yaml:"when_to_use"`
+	WhenToUseHyphen   stringList    `yaml:"when-to-use"`
+	Policy            SkillPolicy   `yaml:"policy"`
+	Agent             AgentSpec     `yaml:"agent"`
 }
 
 type stringList []string
@@ -218,4 +268,67 @@ func (l *stringList) UnmarshalYAML(node *yaml.Node) error {
 	default:
 		return fmt.Errorf("expected string or list, got yaml kind %d", node.Kind)
 	}
+}
+
+type stringBoolMap map[string]any
+
+func (m *stringBoolMap) UnmarshalYAML(node *yaml.Node) error {
+	if node == nil {
+		*m = nil
+		return nil
+	}
+	if node.Kind == yaml.ScalarNode && strings.TrimSpace(node.Value) == "" {
+		*m = nil
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("expected mapping, got yaml kind %d", node.Kind)
+	}
+
+	out := make(map[string]any, len(node.Content)/2)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := strings.TrimSpace(node.Content[i].Value)
+		if key == "" {
+			continue
+		}
+		valueNode := node.Content[i+1]
+		switch valueNode.Kind {
+		case yaml.ScalarNode:
+			value := strings.TrimSpace(valueNode.Value)
+			if parsed, err := strconv.ParseBool(value); err == nil {
+				out[key] = parsed
+			} else {
+				out[key] = value
+			}
+		default:
+			return fmt.Errorf("expected string or bool for permissions.%s", key)
+		}
+	}
+	*m = out
+	return nil
+}
+
+func normalizeStringBoolMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			out[key] = strings.TrimSpace(typed)
+		case bool:
+			out[key] = typed
+		default:
+			out[key] = typed
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

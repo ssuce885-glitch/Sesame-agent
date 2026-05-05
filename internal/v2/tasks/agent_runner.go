@@ -107,6 +107,7 @@ func (r *AgentRunner) Run(ctx context.Context, task contracts.Task, sink OutputS
 		AllowedTools:      append([]string(nil), roleSpec.AllowedTools...),
 		DeniedPaths:       append([]string(nil), roleSpec.DeniedPaths...),
 		AllowedPaths:      append([]string(nil), roleSpec.AllowedPaths...),
+		ToolPolicy:        contracts.CloneToolPolicyMap(roleSpec.ToolPolicy),
 		CanDelegate:       roleSpec.CanDelegate,
 		AutomationOwners:  append([]string(nil), roleSpec.AutomationOwners...),
 	}

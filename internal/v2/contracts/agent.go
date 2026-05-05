@@ -22,6 +22,8 @@ type Store interface {
 	Memories() MemoryRepository
 	Settings() SettingRepository
 	ProjectStates() ProjectStateRepository
+	ContextBlocks() ContextBlockRepository
+	Workflows() WorkflowRepository
 	WithTx(ctx context.Context, fn func(tx Store) error) error
 }
 

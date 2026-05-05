@@ -5,11 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
 	"time"
+
+	runtimex "go-agent/internal/runtime"
 )
 
 const (
@@ -42,7 +43,7 @@ func runWatcher(scriptPath string, workspaceRoot string) (*WatcherResult, error)
 		name = "python3"
 		args = []string{scriptPath}
 	}
-	cmd := exec.CommandContext(runCtx, name, args...)
+	cmd := runtimex.NewCommandContext(runCtx, name, args...)
 	cmd.Dir = workspaceRoot
 	cmd.Env = append(cmd.Environ(), "WORKSPACE_ROOT="+workspaceRoot)
 	var stdout, stderr limitedBuffer

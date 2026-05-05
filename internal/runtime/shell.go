@@ -127,11 +127,24 @@ func mergeCommandEnv(extraEnv map[string]string) []string {
 	return out
 }
 
+func NewCommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	configureCommandCancellation(cmd)
+	return cmd
+}
+
 func NewShellCommandContext(ctx context.Context, command string) *exec.Cmd {
 	if stdruntime.GOOS == "windows" {
-		return exec.CommandContext(ctx, "cmd", "/c", command)
+		return NewCommandContext(ctx, "cmd", "/c", command)
 	}
-	return exec.CommandContext(ctx, "sh", "-lc", command)
+	return NewCommandContext(ctx, "sh", "-lc", command)
+}
+
+func NewBashCommandContext(ctx context.Context, command string) *exec.Cmd {
+	if stdruntime.GOOS == "windows" {
+		return NewCommandContext(ctx, "cmd", "/c", command)
+	}
+	return NewCommandContext(ctx, "bash", "-lc", command)
 }
 
 func stringsCut(value, sep string) (string, string, bool) {

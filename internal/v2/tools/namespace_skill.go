@@ -32,6 +32,10 @@ func (t *skillUseTool) Definition() contracts.ToolDefinition {
 		Name:        "skill_use",
 		Namespace:   contracts.NamespaceSkill,
 		Description: "Activate a skill to gain domain knowledge and optional tool access.",
+		Capabilities: []string{
+			string(contracts.CapabilityMutateRuntime),
+		},
+		Risk: "low",
 		Parameters: objectSchema(map[string]any{
 			"skill": map[string]any{"type": "string", "description": "Skill name to activate"},
 		}, "skill"),
@@ -49,11 +53,18 @@ func (t *skillUseTool) Execute(ctx context.Context, call contracts.ToolCall, exe
 	}
 
 	names := t.catalog.SkillNames()
-	available := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		available[name] = struct{}{}
+	available := make(map[string]string, len(names)*2)
+	for _, skill := range t.catalog.Skills {
+		canonical := skill.Identifier()
+		if canonical == "" {
+			continue
+		}
+		for _, alias := range skill.Aliases() {
+			available[alias] = canonical
+		}
 	}
-	if _, ok := available[skillName]; !ok {
+	canonical, ok := available[skillName]
+	if !ok {
 		sort.Strings(names)
 		msg := fmt.Sprintf("skill %q not found", skillName)
 		if len(names) > 0 {
@@ -62,7 +73,7 @@ func (t *skillUseTool) Execute(ctx context.Context, call contracts.ToolCall, exe
 		return contracts.ToolResult{Output: msg, IsError: true}, nil
 	}
 
-	result := skillUseResult{ActivatedSkills: []string{skillName}}
+	result := skillUseResult{ActivatedSkills: []string{canonical}}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		return contracts.ToolResult{}, err

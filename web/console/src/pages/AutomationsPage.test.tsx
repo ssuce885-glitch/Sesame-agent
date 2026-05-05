@@ -20,6 +20,7 @@ vi.mock("../api/queries", () => ({
         goal: "Keep docs fresh",
         state: "active",
         owner: "role:reviewer",
+        workflow_id: "workflow_docs",
         watcher_path: "roles/reviewer/automations/watch.sh",
         watcher_cron: "@every 5m",
         created_at: "2026-05-03T00:00:00Z",
@@ -35,8 +36,9 @@ vi.mock("../api/queries", () => ({
       {
         automation_id: "automation_1",
         dedupe_key: "docs-stale",
-        task_id: "task_123",
-        status: "needs_agent",
+        task_id: "",
+        workflow_run_id: "wfrun_docs_1",
+        status: "workflow:running",
         summary: "Docs changed.",
         created_at: "2026-05-03T00:00:02Z",
       },
@@ -94,6 +96,8 @@ describe("AutomationsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /Watch docs/ }));
 
     expect(screen.getByText("Docs changed.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "task_123" })).toBeInTheDocument();
+    expect(screen.getByText("workflow_docs")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "wfrun_docs_1" })).toBeInTheDocument();
+    expect(screen.getByText("workflow:running")).toHaveStyle({ backgroundColor: "var(--color-warning-dim)" });
   });
 });
