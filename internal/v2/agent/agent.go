@@ -86,10 +86,16 @@ func (a *Agent) RunTurn(ctx context.Context, input contracts.TurnInput) error {
 	if roleSpec != nil && strings.TrimSpace(session.SystemPrompt) != "" {
 		systemPrompt = session.SystemPrompt
 	}
+	workspaceInstructions, err := LoadWorkspaceInstructions(session.WorkspaceRoot)
+	if err != nil {
+		return fmt.Errorf("load workspace instructions: %w", err)
+	}
 	if projectState, ok, err := a.store.ProjectStates().Get(ctx, session.WorkspaceRoot); err != nil {
 		return fmt.Errorf("load project state: %w", err)
 	} else if ok {
-		systemPrompt = buildInstructions(systemPrompt, projectState.Summary)
+		systemPrompt = buildInstructionsWithWorkspace(systemPrompt, workspaceInstructions, projectState.Summary)
+	} else if strings.TrimSpace(workspaceInstructions) != "" {
+		systemPrompt = buildInstructionsWithWorkspace(systemPrompt, workspaceInstructions, "")
 	}
 	baseExecCtx := contracts.ExecContext{
 		WorkspaceRoot:   session.WorkspaceRoot,

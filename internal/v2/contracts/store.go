@@ -47,6 +47,7 @@ type TaskRepository interface {
 	Update(ctx context.Context, t Task) error
 	ListByWorkspace(ctx context.Context, workspaceRoot string) ([]Task, error)
 	ListRunnable(ctx context.Context) ([]Task, error)
+	ListRunning(ctx context.Context) ([]Task, error)
 }
 
 // ReportRepository with CRUD operations.
@@ -134,6 +135,7 @@ type WorkflowRepository interface {
 	GetRunByDedupeRef(ctx context.Context, workflowID, dedupeRef string) (WorkflowRun, error)
 	GetOrCreateRunByDedupeRef(ctx context.Context, run WorkflowRun) (WorkflowRun, bool, error)
 	UpdateRun(ctx context.Context, run WorkflowRun) error
+	ListRunning(ctx context.Context) ([]WorkflowRun, error)
 	ListRunsByWorkspace(ctx context.Context, workspaceRoot string, opts WorkflowRunListOptions) ([]WorkflowRun, error)
 	CreateApproval(ctx context.Context, approval Approval) error
 	GetApproval(ctx context.Context, id string) (Approval, error)

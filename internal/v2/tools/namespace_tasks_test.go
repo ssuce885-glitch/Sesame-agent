@@ -106,6 +106,58 @@ func TestTaskTraceToolReturnsRunningRoleSummary(t *testing.T) {
 	}
 }
 
+func TestTaskTraceToolRejectsRoleMismatch(t *testing.T) {
+	s, err := store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	now := time.Now().UTC()
+	workspace := t.TempDir()
+	if err := s.Tasks().Create(context.Background(), contracts.Task{
+		ID:            "task_other_role",
+		WorkspaceRoot: workspace,
+		RoleID:        "other_role",
+		Kind:          "agent",
+		State:         "running",
+		Prompt:        "private work",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewTaskTraceTool().Execute(context.Background(), contracts.ToolCall{
+		Name: "task_trace",
+		Args: map[string]any{"task_id": "task_other_role"},
+	}, contracts.ExecContext{
+		WorkspaceRoot: workspace,
+		Store:         s,
+		RoleSpec:      &contracts.RoleSpec{ID: "reviewer"},
+	})
+	if err != nil {
+		t.Fatalf("task_trace returned error: %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "not found") {
+		t.Fatalf("expected role mismatch to be hidden as not found, got %+v", result)
+	}
+
+	result, err = NewTaskTraceTool().Execute(context.Background(), contracts.ToolCall{
+		Name: "task_trace",
+		Args: map[string]any{"task_id": "task_other_role"},
+	}, contracts.ExecContext{
+		Store:    s,
+		RoleSpec: &contracts.RoleSpec{ID: "other_role"},
+	})
+	if err != nil {
+		t.Fatalf("task_trace without workspace returned error: %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "not found") {
+		t.Fatalf("expected missing workspace to be hidden as not found, got %+v", result)
+	}
+}
+
 type contractsTrace struct {
 	Parent struct {
 		SessionID string `json:"session_id"`

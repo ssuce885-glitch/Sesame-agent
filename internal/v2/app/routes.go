@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"go-agent/internal/config"
-	"go-agent/internal/v2/automation"
+	automationpkg "go-agent/internal/v2/automation"
 	"go-agent/internal/v2/contextsvc"
 	"go-agent/internal/v2/contracts"
 	"go-agent/internal/v2/memory"
@@ -34,7 +34,7 @@ type routes struct {
 	contextService    *contextsvc.Service
 	metrics           *observability.Collector
 	roleService       *roles.Service
-	automationService *automation.Service
+	automationService *automationpkg.Service
 	workflowService   workflowTriggerService
 	projectStateAuto  projectStateAutoSetter
 	defaultSessionID  string
@@ -46,6 +46,7 @@ type projectStateAutoSetter interface {
 
 type workflowTriggerService interface {
 	Trigger(ctx context.Context, workflow contracts.Workflow, input workflows.TriggerInput) (contracts.WorkflowRun, error)
+	Resume(ctx context.Context, runID string) (contracts.WorkflowRun, error)
 }
 
 func (r *routes) handler() http.Handler {
@@ -78,6 +79,7 @@ func (r *routes) handler() http.Handler {
 	mux.HandleFunc("POST /v2/workflow_runs", r.handleCreateWorkflowRun)
 	mux.HandleFunc("GET /v2/workflow_runs/{id}", r.handleGetWorkflowRun)
 	mux.HandleFunc("PUT /v2/workflow_runs/{id}", r.handleUpdateWorkflowRun)
+	mux.HandleFunc("POST /v2/workflow_runs/{id}/resume", r.handleResumeWorkflowRun)
 	mux.HandleFunc("GET /v2/approvals", r.handleListApprovals)
 	mux.HandleFunc("POST /v2/approvals", r.handleCreateApproval)
 	mux.HandleFunc("GET /v2/approvals/{id}", r.handleGetApproval)
@@ -1015,6 +1017,47 @@ func (r *routes) handleGetWorkflowRun(w http.ResponseWriter, req *http.Request) 
 	writeJSON(w, http.StatusOK, run)
 }
 
+func (r *routes) handleResumeWorkflowRun(w http.ResponseWriter, req *http.Request) {
+	id := strings.TrimSpace(req.PathValue("id"))
+	if id == "" {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("workflow run id is required"))
+		return
+	}
+	existing, err := r.store.Workflows().GetRun(req.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("workflow run %q not found", id))
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !r.requireWorkflowEntityWorkspace(req, w, existing.WorkspaceRoot, "workflow run", id) {
+		return
+	}
+	if r.workflowService == nil {
+		writeJSONError(w, http.StatusInternalServerError, workflows.ErrUnavailable)
+		return
+	}
+
+	run, err := r.workflowService.Resume(context.WithoutCancel(req.Context()), id)
+	switch {
+	case errors.Is(err, workflows.ErrInvalidWorkflow):
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	case errors.Is(err, sql.ErrNoRows):
+		writeJSONError(w, http.StatusNotFound, fmt.Errorf("workflow run %q not found", id))
+		return
+	case errors.Is(err, workflows.ErrUnavailable):
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	case err != nil:
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
+}
+
 func (r *routes) handleUpdateWorkflowRun(w http.ResponseWriter, req *http.Request) {
 	id := strings.TrimSpace(req.PathValue("id"))
 	if id == "" {
@@ -1231,7 +1274,12 @@ func (r *routes) handleUpdateApproval(w http.ResponseWriter, req *http.Request) 
 		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("requested_action is required"))
 		return
 	}
-	if err := r.store.Workflows().UpdateApproval(req.Context(), approval); err != nil {
+	if err := r.store.WithTx(req.Context(), func(tx contracts.Store) error {
+		if err := tx.Workflows().UpdateApproval(req.Context(), approval); err != nil {
+			return err
+		}
+		return finalizeWorkflowRunAfterApprovalDecision(req.Context(), tx, approval)
+	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -1420,6 +1468,10 @@ func (r *routes) handleCreateAutomation(w http.ResponseWriter, req *http.Request
 	}
 	automation.UpdatedAt = now
 	if err := r.automationService.Create(req.Context(), automation); err != nil {
+		if automationpkg.IsValidationError(err) {
+			writeJSONError(w, http.StatusBadRequest, err)
+			return
+		}
 		writeJSONError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -1494,6 +1546,10 @@ func (r *routes) handleResumeAutomation(w http.ResponseWriter, req *http.Request
 		return
 	}
 	if err := r.automationService.Resume(req.Context(), id); err != nil {
+		if automationpkg.IsValidationError(err) {
+			writeJSONError(w, http.StatusBadRequest, err)
+			return
+		}
 		writeJSONError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -2032,6 +2088,65 @@ func approvalTimesEqual(left, right time.Time) bool {
 		return left.IsZero() && right.IsZero()
 	}
 	return left.Equal(right)
+}
+
+func finalizeWorkflowRunAfterApprovalDecision(ctx context.Context, store contracts.Store, approval contracts.Approval) error {
+	if store == nil || !approvalStateIsTerminal(approval.State) || strings.TrimSpace(approval.WorkflowRunID) == "" {
+		return nil
+	}
+
+	run, err := store.Workflows().GetRun(ctx, approval.WorkflowRunID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(run.State) != "waiting_approval" {
+		return nil
+	}
+
+	run.Trace = appendWorkflowRunTraceEvent(run.Trace, newWorkflowRunTraceEvent("approval_resolved", map[string]any{
+		"approval_id": approval.ID,
+		"state":       approval.State,
+		"message":     approvalResolutionMessage(approval.State),
+	}))
+	if strings.TrimSpace(approval.State) == "approved" {
+		run.UpdatedAt = time.Now().UTC()
+		return store.Workflows().UpdateRun(ctx, run)
+	}
+
+	run.State = "failed"
+	run.Trace = appendWorkflowRunTraceEvent(run.Trace, newWorkflowRunTraceEvent("run_failed", map[string]any{
+		"approval_id": approval.ID,
+		"state":       run.State,
+		"message":     workflowRunApprovalClosureMessage(approval.State, run.State),
+	}))
+	run.UpdatedAt = time.Now().UTC()
+	return store.Workflows().UpdateRun(ctx, run)
+}
+
+func approvalResolutionMessage(state string) string {
+	switch strings.TrimSpace(state) {
+	case "approved":
+		return "Approval approved."
+	case "rejected":
+		return "Approval rejected."
+	case "expired":
+		return "Approval expired."
+	default:
+		return "Approval resolved."
+	}
+}
+
+func workflowRunApprovalClosureMessage(approvalState, runState string) string {
+	switch strings.TrimSpace(approvalState) {
+	case "approved":
+		return "Approval approved; workflow run closed without automatic post-approval resume."
+	case "rejected":
+		return "Approval rejected; workflow run closed at the approval gate."
+	case "expired":
+		return "Approval expired; workflow run closed at the approval gate."
+	default:
+		return fmt.Sprintf("Approval resolved; workflow run marked %s.", strings.TrimSpace(runState))
+	}
 }
 
 func workflowRunStateFromInput(value *string, fallback string) (string, error) {

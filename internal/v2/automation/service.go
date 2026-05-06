@@ -91,6 +91,10 @@ func (s *Service) Create(ctx context.Context, a contracts.Automation) error {
 	if err := s.validateOwner(a.Owner); err != nil {
 		return err
 	}
+	roleID, _ := ownerRoleID(a.Owner)
+	if _, err := resolveRoleOwnedWatcherPath(a.WatcherPath, a.WorkspaceRoot, roleID, false); err != nil {
+		return err
+	}
 	return s.store.Automations().Create(ctx, a)
 }
 
@@ -114,6 +118,10 @@ func (s *Service) Resume(ctx context.Context, id string) error {
 	if err := s.validateOwner(a.Owner); err != nil {
 		return err
 	}
+	roleID, _ := ownerRoleID(a.Owner)
+	if _, err := resolveRoleOwnedWatcherPath(a.WatcherPath, a.WorkspaceRoot, roleID, true); err != nil {
+		return err
+	}
 	a.State = "active"
 	a.UpdatedAt = time.Now().UTC()
 	return s.store.Automations().Update(ctx, a)
@@ -121,6 +129,13 @@ func (s *Service) Resume(ctx context.Context, id string) error {
 
 func (s *Service) reconcileOne(ctx context.Context, a contracts.Automation) error {
 	s.markRun(a.ID)
+	if err := s.validateOwner(a.Owner); err != nil {
+		return s.recordRun(ctx, a, &WatcherResult{Status: "error", Summary: err.Error()}, automationRunOutcome{}, err)
+	}
+	roleID, _ := ownerRoleID(a.Owner)
+	if _, err := resolveRoleOwnedWatcherPath(a.WatcherPath, a.WorkspaceRoot, roleID, true); err != nil {
+		return s.recordRun(ctx, a, &WatcherResult{Status: "error", Summary: err.Error()}, automationRunOutcome{}, err)
+	}
 	result, err := runWatcher(a.WatcherPath, a.WorkspaceRoot)
 	if err != nil {
 		return s.recordRun(ctx, a, &WatcherResult{Status: "error", Summary: err.Error()}, automationRunOutcome{}, err)
@@ -266,7 +281,7 @@ func (s *Service) recordRun(ctx context.Context, a contracts.Automation, result 
 func (s *Service) validateOwner(owner string) error {
 	roleID, ok := ownerRoleID(owner)
 	if !ok {
-		return nil
+		return newValidationError("automation owner must be a role (role:<id>), got %q", owner)
 	}
 	if s.roleService == nil {
 		return nil

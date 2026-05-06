@@ -107,6 +107,76 @@ func TestRoleInstallTool(t *testing.T) {
 	}
 }
 
+func TestRoleMutationToolsRejectSpecialistRole(t *testing.T) {
+	root := t.TempDir()
+	service := roles.NewService(root)
+	ctx := context.Background()
+	roleSpec := &contracts.RoleSpec{ID: "worker"}
+
+	t.Run("create", func(t *testing.T) {
+		result, err := NewRoleCreateTool(service).Execute(ctx, contracts.ToolCall{
+			Name: "role_create",
+			Args: map[string]any{
+				"id":            "backend_reviewer",
+				"name":          "Backend Reviewer",
+				"system_prompt": "Review backend changes.",
+			},
+		}, contracts.ExecContext{WorkspaceRoot: root, RoleSpec: roleSpec})
+		if err != nil {
+			t.Fatalf("role_create returned error: %v", err)
+		}
+		if !result.IsError || !strings.Contains(result.Output, "main parent") {
+			t.Fatalf("expected main-parent denial, got %+v", result)
+		}
+	})
+
+	if _, err := service.Create(ctx, roles.SaveInput{
+		ID:           "existing_reviewer",
+		Name:         "Existing Reviewer",
+		SystemPrompt: "Review existing code.",
+	}); err != nil {
+		t.Fatalf("seed role: %v", err)
+	}
+	t.Run("update", func(t *testing.T) {
+		result, err := NewRoleUpdateTool(service).Execute(ctx, contracts.ToolCall{
+			Name: "role_update",
+			Args: map[string]any{
+				"id":          "existing_reviewer",
+				"description": "Escalated reviewer.",
+			},
+		}, contracts.ExecContext{WorkspaceRoot: root, RoleSpec: roleSpec})
+		if err != nil {
+			t.Fatalf("role_update returned error: %v", err)
+		}
+		if !result.IsError || !strings.Contains(result.Output, "main parent") {
+			t.Fatalf("expected main-parent denial, got %+v", result)
+		}
+	})
+
+	source := filepath.Join(t.TempDir(), "ops_role")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "role.yaml"), []byte("display_name: Ops Role\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "prompt.md"), []byte("Operate carefully."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("install", func(t *testing.T) {
+		result, err := NewRoleInstallTool(service).Execute(ctx, contracts.ToolCall{
+			Name: "role_install",
+			Args: map[string]any{"source_path": source},
+		}, contracts.ExecContext{WorkspaceRoot: root, RoleSpec: roleSpec})
+		if err != nil {
+			t.Fatalf("role_install returned error: %v", err)
+		}
+		if !result.IsError || !strings.Contains(result.Output, "main parent") {
+			t.Fatalf("expected main-parent denial, got %+v", result)
+		}
+	})
+}
+
 func TestDelegateToRoleToolRejectsRoleWithoutDelegationPolicy(t *testing.T) {
 	result, err := NewDelegateToRoleTool(DelegateToolDeps{}).Execute(context.Background(), contracts.ToolCall{
 		Name: "delegate_to_role",

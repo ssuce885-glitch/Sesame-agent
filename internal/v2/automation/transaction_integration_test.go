@@ -21,6 +21,8 @@ import (
 )
 
 func TestAutomationRoleReportTransaction(t *testing.T) {
+	skipWindowsWatcherExecution(t)
+
 	ctx := context.Background()
 	s, err := store.OpenInMemory()
 	if err != nil {

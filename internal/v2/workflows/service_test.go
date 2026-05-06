@@ -446,6 +446,235 @@ func TestServiceTriggerApprovalStepWaitsForDecision(t *testing.T) {
 	}
 }
 
+func TestServiceResumeApprovedApprovalContinuesAfterGate(t *testing.T) {
+	ctx := context.Background()
+	store, err := v2store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer store.Close()
+
+	workspaceRoot := t.TempDir()
+	now := time.Now().UTC()
+	if err := store.Sessions().Create(ctx, contracts.Session{
+		ID:            "main-session",
+		WorkspaceRoot: workspaceRoot,
+		State:         "idle",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	workflow := contracts.Workflow{
+		ID:            "workflow-resume-approval",
+		WorkspaceRoot: workspaceRoot,
+		Name:          "Resume approval workflow",
+		Trigger:       "manual",
+		Steps:         `{"steps":[{"type":"role_task","role":"planner","prompt":"Draft the change.","name":"Draft"},{"type":"approval","action":"deploy release","risk":"high","summary":"Deploy to production"},{"type":"role_task","role":"reviewer","prompt":"Continue after approval.","name":"Post approval"}]}`,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := store.Workflows().Create(ctx, workflow); err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+
+	manager := &fakeTaskManager{
+		store: store,
+		waitFn: func(ctx context.Context, task contracts.Task) (contracts.Task, error) {
+			task.State = "completed"
+			task.Outcome = "success"
+			task.FinalText = "Completed " + task.RoleID
+			task.UpdatedAt = time.Now().UTC()
+			reportID := "report-" + task.RoleID
+			if err := store.Reports().Create(ctx, contracts.Report{
+				ID:         reportID,
+				SessionID:  task.ReportSessionID,
+				SourceKind: "task_result",
+				SourceID:   task.ID,
+				Status:     task.State,
+				Severity:   "info",
+				Title:      "Task result: agent",
+				Summary:    task.FinalText,
+				CreatedAt:  time.Now().UTC(),
+			}); err != nil {
+				return contracts.Task{}, err
+			}
+			return task, nil
+		},
+	}
+
+	service := NewService(store, manager, "main-session")
+	run, err := service.Trigger(ctx, workflow, TriggerInput{TriggerRef: "manual:resume-approval"})
+	if err != nil {
+		t.Fatalf("Trigger: %v", err)
+	}
+	if run.State != "waiting_approval" {
+		t.Fatalf("run state = %q, want waiting_approval", run.State)
+	}
+	if len(manager.created) != 1 || manager.created[0].RoleID != "planner" {
+		t.Fatalf("created before approval = %+v", manager.created)
+	}
+	approvalIDs := decodeStringSlice(t, run.ApprovalIDs)
+	if len(approvalIDs) != 1 {
+		t.Fatalf("approval_ids = %v, want one", approvalIDs)
+	}
+	approval, err := store.Workflows().GetApproval(ctx, approvalIDs[0])
+	if err != nil {
+		t.Fatalf("GetApproval: %v", err)
+	}
+	approval.State = "approved"
+	approval.DecidedBy = "operator"
+	approval.DecidedAt = time.Now().UTC()
+	approval.UpdatedAt = approval.DecidedAt
+	if err := store.Workflows().UpdateApproval(ctx, approval); err != nil {
+		t.Fatalf("UpdateApproval: %v", err)
+	}
+
+	resumed, err := service.Resume(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if resumed.State != "completed" {
+		t.Fatalf("resumed state = %q, want completed", resumed.State)
+	}
+	if len(manager.created) != 2 || manager.created[1].RoleID != "reviewer" {
+		t.Fatalf("created after resume = %+v", manager.created)
+	}
+	taskIDs := decodeStringSlice(t, resumed.TaskIDs)
+	if len(taskIDs) != 2 || taskIDs[0] != manager.created[0].ID || taskIDs[1] != manager.created[1].ID {
+		t.Fatalf("task_ids = %v, created = %+v", taskIDs, manager.created)
+	}
+	reportIDs := decodeStringSlice(t, resumed.ReportIDs)
+	if len(reportIDs) != 2 || reportIDs[0] != "report-planner" || reportIDs[1] != "report-reviewer" {
+		t.Fatalf("report_ids = %v", reportIDs)
+	}
+	trace := decodeTrace(t, resumed.Trace)
+	if !hasTraceState(trace, "run_resumed", "running") {
+		t.Fatalf("trace missing run_resumed: %+v", trace)
+	}
+	if !hasTraceState(trace, "run_completed", "completed") {
+		t.Fatalf("trace missing run_completed: %+v", trace)
+	}
+}
+
+func TestServiceResumeRejectsPendingApproval(t *testing.T) {
+	ctx := context.Background()
+	store, err := v2store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer store.Close()
+
+	workspaceRoot := t.TempDir()
+	now := time.Now().UTC()
+	workflow := contracts.Workflow{
+		ID:            "workflow-resume-pending",
+		WorkspaceRoot: workspaceRoot,
+		Name:          "Resume pending workflow",
+		Trigger:       "manual",
+		Steps:         `{"steps":[{"type":"approval","action":"deploy"},{"type":"role_task","role":"reviewer","prompt":"Continue"}]}`,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := store.Workflows().Create(ctx, workflow); err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+	service := NewService(store, &fakeTaskManager{store: store}, "main-session")
+	run, err := service.Trigger(ctx, workflow, TriggerInput{})
+	if err != nil {
+		t.Fatalf("Trigger: %v", err)
+	}
+
+	if _, err := service.Resume(ctx, run.ID); !errors.Is(err, ErrInvalidWorkflow) {
+		t.Fatalf("Resume error = %v, want ErrInvalidWorkflow", err)
+	}
+	got, err := store.Workflows().GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.State != "waiting_approval" {
+		t.Fatalf("run state = %q, want waiting_approval", got.State)
+	}
+}
+
+func TestServiceResumeStopsAtNextApprovalGate(t *testing.T) {
+	ctx := context.Background()
+	store, err := v2store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer store.Close()
+
+	workspaceRoot := t.TempDir()
+	now := time.Now().UTC()
+	if err := store.Sessions().Create(ctx, contracts.Session{
+		ID:            "main-session",
+		WorkspaceRoot: workspaceRoot,
+		State:         "idle",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	workflow := contracts.Workflow{
+		ID:            "workflow-resume-next-approval",
+		WorkspaceRoot: workspaceRoot,
+		Name:          "Resume next approval workflow",
+		Trigger:       "manual",
+		Steps:         `{"steps":[{"type":"approval","action":"first approval"},{"type":"role_task","role":"reviewer","prompt":"Continue"},{"type":"approval","action":"second approval"},{"type":"role_task","role":"publisher","prompt":"Publish"}]}`,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := store.Workflows().Create(ctx, workflow); err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+	manager := &fakeTaskManager{
+		store: store,
+		waitFn: func(ctx context.Context, task contracts.Task) (contracts.Task, error) {
+			task.State = "completed"
+			task.Outcome = "success"
+			task.FinalText = "Completed " + task.RoleID
+			task.UpdatedAt = time.Now().UTC()
+			return task, nil
+		},
+	}
+	service := NewService(store, manager, "main-session")
+	run, err := service.Trigger(ctx, workflow, TriggerInput{})
+	if err != nil {
+		t.Fatalf("Trigger: %v", err)
+	}
+	firstApprovalID := decodeStringSlice(t, run.ApprovalIDs)[0]
+	firstApproval, err := store.Workflows().GetApproval(ctx, firstApprovalID)
+	if err != nil {
+		t.Fatalf("GetApproval: %v", err)
+	}
+	firstApproval.State = "approved"
+	firstApproval.DecidedBy = "operator"
+	firstApproval.DecidedAt = time.Now().UTC()
+	firstApproval.UpdatedAt = firstApproval.DecidedAt
+	if err := store.Workflows().UpdateApproval(ctx, firstApproval); err != nil {
+		t.Fatalf("UpdateApproval: %v", err)
+	}
+
+	resumed, err := service.Resume(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if resumed.State != "waiting_approval" {
+		t.Fatalf("resumed state = %q, want waiting_approval", resumed.State)
+	}
+	if len(manager.created) != 1 || manager.created[0].RoleID != "reviewer" {
+		t.Fatalf("created tasks = %+v, want reviewer only", manager.created)
+	}
+	approvalIDs := decodeStringSlice(t, resumed.ApprovalIDs)
+	if len(approvalIDs) != 2 || approvalIDs[0] != firstApprovalID || approvalIDs[1] == "" {
+		t.Fatalf("approval_ids = %v", approvalIDs)
+	}
+	if hasTraceEvent(decodeTrace(t, resumed.Trace), "run_completed") {
+		t.Fatalf("trace should not complete at second approval gate: %s", resumed.Trace)
+	}
+}
+
 func TestServiceTriggerApprovalStepRollsBackOnRunUpdateFailure(t *testing.T) {
 	ctx := context.Background()
 	baseStore, err := v2store.OpenInMemory()

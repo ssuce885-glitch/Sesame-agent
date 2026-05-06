@@ -60,6 +60,17 @@ FROM v2_tasks WHERE state = 'pending' ORDER BY created_at ASC`)
 	return scanTaskList(rows)
 }
 
+func (r *taskRepo) ListRunning(ctx context.Context) ([]contracts.Task, error) {
+	rows, err := r.execer().Query(`
+SELECT id, workspace_root, session_id, role_id, turn_id, parent_session_id, parent_turn_id, report_session_id, kind, state, prompt, output_path, final_text, outcome, created_at, updated_at
+FROM v2_tasks WHERE state = 'running' ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTaskList(rows)
+}
+
 func scanTask(row interface {
 	Scan(dest ...any) error
 }) (contracts.Task, error) {

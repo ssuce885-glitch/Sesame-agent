@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +33,25 @@ func TestBuildInstructionsWithoutProjectState(t *testing.T) {
 	got := buildInstructions("You are Sesame.", " ")
 	if got != "You are Sesame." {
 		t.Fatalf("instructions = %q, want original system prompt", got)
+	}
+}
+
+func TestBuildInstructionsIncludesWorkspaceInstructions(t *testing.T) {
+	got := buildInstructionsWithWorkspace("You are Sesame.", "- Use Chinese replies.", "# Current Goal\nKeep V2 simple.")
+	if !strings.Contains(got, "You are Sesame.") {
+		t.Fatalf("instructions missing system prompt: %q", got)
+	}
+	if !strings.Contains(got, "Workspace Instructions (AGENTS.md):") {
+		t.Fatalf("instructions missing workspace instructions header: %q", got)
+	}
+	if !strings.Contains(got, "Use Chinese replies.") {
+		t.Fatalf("instructions missing workspace instructions content: %q", got)
+	}
+	if !strings.Contains(got, "user-maintained baseline rules") {
+		t.Fatalf("instructions missing workspace instructions guardrail: %q", got)
+	}
+	if !strings.Contains(got, "Project State:") {
+		t.Fatalf("instructions missing project state header: %q", got)
 	}
 }
 
@@ -143,6 +163,67 @@ func TestRunTurnSendsProjectStateInInstructions(t *testing.T) {
 	}
 	if !strings.Contains(req.Instructions, "Ship long project context.") {
 		t.Fatalf("instructions missing project state: %q", req.Instructions)
+	}
+}
+
+func TestRunTurnSendsWorkspaceInstructionsInInstructions(t *testing.T) {
+	s, err := v2store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(workspaceRoot+"/"+workspaceInstructionsFile, []byte("- Keep workspace baseline rules visible."), 0o644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	session := contracts.Session{
+		ID:                "session-agents",
+		WorkspaceRoot:     workspaceRoot,
+		SystemPrompt:      "Base prompt.",
+		PermissionProfile: "trusted_local",
+		State:             "idle",
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := s.Sessions().Create(ctx, session); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	turn := contracts.Turn{
+		ID:          "turn-agents",
+		SessionID:   session.ID,
+		Kind:        "user_message",
+		State:       "created",
+		UserMessage: "What next?",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := s.Turns().Create(ctx, turn); err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+
+	client := &captureClient{events: []model.StreamEvent{
+		{Kind: model.StreamEventTextDelta, TextDelta: "Done."},
+		{Kind: model.StreamEventMessageEnd},
+	}}
+	agent := New(client, emptyRegistry{}, s)
+	agent.SetProjectStateAutoUpdate(false)
+	if err := agent.RunTurn(ctx, contracts.TurnInput{
+		SessionID: session.ID,
+		TurnID:    turn.ID,
+		Messages:  []contracts.Message{{SessionID: session.ID, TurnID: turn.ID, Role: "user", Content: turn.UserMessage}},
+	}); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+
+	req := client.firstRequest()
+	if !strings.Contains(req.Instructions, "Workspace Instructions (AGENTS.md):") {
+		t.Fatalf("instructions missing workspace instructions header: %q", req.Instructions)
+	}
+	if !strings.Contains(req.Instructions, "Keep workspace baseline rules visible.") {
+		t.Fatalf("instructions missing workspace instructions content: %q", req.Instructions)
 	}
 }
 

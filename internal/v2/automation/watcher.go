@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -26,13 +28,28 @@ type WatcherResult struct {
 	SignalKind string `json:"signal_kind"`
 }
 
+type validationError struct {
+	message string
+}
+
+func (e validationError) Error() string {
+	return e.message
+}
+
+func newValidationError(format string, args ...any) error {
+	return validationError{message: fmt.Sprintf(format, args...)}
+}
+
+func IsValidationError(err error) bool {
+	var target validationError
+	return errors.As(err, &target)
+}
+
 func runWatcher(scriptPath string, workspaceRoot string) (*WatcherResult, error) {
-	scriptPath = strings.TrimSpace(scriptPath)
-	if scriptPath == "" {
-		return nil, fmt.Errorf("watcher path is required")
-	}
-	if !filepath.IsAbs(scriptPath) {
-		scriptPath = filepath.Join(workspaceRoot, scriptPath)
+	var err error
+	scriptPath, err = resolveWatcherPath(scriptPath, workspaceRoot, true)
+	if err != nil {
+		return nil, err
 	}
 
 	runCtx, cancel := context.WithTimeout(context.Background(), defaultWatcherTimeout)
@@ -73,6 +90,117 @@ func runWatcher(scriptPath string, workspaceRoot string) (*WatcherResult, error)
 		return nil, fmt.Errorf("invalid watcher status %q", result.Status)
 	}
 	return &result, nil
+}
+
+func resolveWatcherPath(scriptPath string, workspaceRoot string, requireExisting bool) (string, error) {
+	scriptPath = strings.TrimSpace(scriptPath)
+	if scriptPath == "" {
+		return "", newValidationError("watcher path is required")
+	}
+	root, err := watcherWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(scriptPath) {
+		scriptPath = filepath.Join(root, scriptPath)
+	}
+	scriptPath, err = filepath.Abs(scriptPath)
+	if err != nil {
+		return "", err
+	}
+	if err := ensureWatcherPathWithinWorkspace(root, scriptPath); err != nil {
+		return "", err
+	}
+
+	if _, err := os.Lstat(scriptPath); err != nil {
+		if !requireExisting && os.IsNotExist(err) {
+			return scriptPath, nil
+		}
+		return "", err
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	realPath, err := filepath.EvalSymlinks(scriptPath)
+	if err != nil {
+		return "", err
+	}
+	if err := ensureWatcherPathWithinWorkspace(realRoot, realPath); err != nil {
+		return "", err
+	}
+	return scriptPath, nil
+}
+
+func resolveRoleOwnedWatcherPath(scriptPath string, workspaceRoot string, roleID string, requireExisting bool) (string, error) {
+	resolved, err := resolveWatcherPath(scriptPath, workspaceRoot, requireExisting)
+	if err != nil {
+		return "", err
+	}
+	roleRoot, err := roleAutomationRoot(workspaceRoot, roleID)
+	if err != nil {
+		return "", err
+	}
+	if err := ensureRoleOwnedWatcherPath(roleRoot, resolved, roleID); err != nil {
+		return "", err
+	}
+
+	if _, err := os.Lstat(resolved); err != nil {
+		if !requireExisting && os.IsNotExist(err) {
+			return resolved, nil
+		}
+		return "", err
+	}
+	realRoleRoot, err := filepath.EvalSymlinks(roleRoot)
+	if err != nil {
+		return "", err
+	}
+	realPath, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		return "", err
+	}
+	if err := ensureRoleOwnedWatcherPath(realRoleRoot, realPath, roleID); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func watcherWorkspaceRoot(workspaceRoot string) (string, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return os.Getwd()
+	}
+	return filepath.Abs(workspaceRoot)
+}
+
+func roleAutomationRoot(workspaceRoot string, roleID string) (string, error) {
+	roleID = strings.TrimSpace(roleID)
+	if roleID == "" || roleID == "." || roleID == ".." || filepath.Clean(roleID) != roleID || strings.ContainsAny(roleID, `/\`) {
+		return "", newValidationError("automation owner role id is invalid")
+	}
+	root, err := watcherWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "roles", roleID, "automations"), nil
+}
+
+func ensureWatcherPathWithinWorkspace(root, candidate string) error {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return newValidationError("watcher path escapes workspace root")
+	}
+	return nil
+}
+
+func ensureRoleOwnedWatcherPath(root, candidate string, roleID string) error {
+	if err := ensureWatcherPathWithinWorkspace(root, candidate); err != nil {
+		return newValidationError("watcher path must be under roles/%s/automations", roleID)
+	}
+	return nil
 }
 
 type limitedBuffer struct {

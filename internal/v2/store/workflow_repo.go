@@ -208,6 +208,28 @@ WHERE id = ?`,
 	return requireAffected(result)
 }
 
+func (r *workflowRepo) ListRunning(ctx context.Context) ([]contracts.WorkflowRun, error) {
+	rows, err := r.execer().Query(`
+SELECT id, workflow_id, workspace_root, state, trigger_ref, dedupe_ref, task_ids, report_ids, approval_ids, trace, created_at, updated_at
+FROM v2_workflow_runs
+WHERE state = 'running'
+ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []contracts.WorkflowRun
+	for rows.Next() {
+		run, err := scanWorkflowRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
+}
+
 func (r *workflowRepo) ListRunsByWorkspace(ctx context.Context, workspaceRoot string, opts contracts.WorkflowRunListOptions) ([]contracts.WorkflowRun, error) {
 	query := `
 SELECT id, workflow_id, workspace_root, state, trigger_ref, dedupe_ref, task_ids, report_ids, approval_ids, trace, created_at, updated_at

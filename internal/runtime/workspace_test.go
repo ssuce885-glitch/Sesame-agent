@@ -13,7 +13,7 @@ func TestWithinWorkspaceRejectsSymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outsideRoot, filepath.Join(workspaceRoot, "outside")); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlink unavailable: %v", err)
 	}
 
 	err := WithinWorkspace(workspaceRoot, filepath.Join(workspaceRoot, "outside", "secret.txt"))
@@ -26,7 +26,7 @@ func TestWithinWorkspaceRejectsMissingPathUnderSymlinkEscape(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	outsideRoot := t.TempDir()
 	if err := os.Symlink(outsideRoot, filepath.Join(workspaceRoot, "outside")); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlink unavailable: %v", err)
 	}
 
 	err := WithinWorkspace(workspaceRoot, filepath.Join(workspaceRoot, "outside", "new.txt"))

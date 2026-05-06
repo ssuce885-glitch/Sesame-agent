@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,7 +14,10 @@ import (
 	"go-agent/internal/v2/contracts"
 )
 
-const automationStandardBehaviorSkill = "automation-standard-behavior"
+const (
+	automationStandardBehaviorSkill = "automation-standard-behavior"
+	automationNormalizerSkill       = "automation-normalizer"
+)
 
 type automationCreateSimpleTool struct{}
 type automationQueryTool struct{}
@@ -30,11 +34,11 @@ func NewAutomationQueryTool() contracts.Tool { return &automationQueryTool{} }
 func NewAutomationControlTool() contracts.Tool { return &automationControlTool{} }
 
 func (t *automationCreateSimpleTool) IsEnabled(execCtx contracts.ExecContext) bool {
-	return execCtx.RoleSpec != nil && execCtx.Automation != nil && hasActiveSkill(execCtx, automationStandardBehaviorSkill)
+	return execCtx.RoleSpec != nil && execCtx.Automation != nil && hasAutomationToolSkills(execCtx)
 }
 
 func (t *automationControlTool) IsEnabled(execCtx contracts.ExecContext) bool {
-	return execCtx.RoleSpec != nil && execCtx.Store != nil && execCtx.Automation != nil && hasActiveSkill(execCtx, automationStandardBehaviorSkill)
+	return execCtx.RoleSpec != nil && execCtx.Store != nil && execCtx.Automation != nil && hasAutomationToolSkills(execCtx)
 }
 
 func (t *automationCreateSimpleTool) Definition() contracts.ToolDefinition {
@@ -65,6 +69,9 @@ func (t *automationCreateSimpleTool) Execute(ctx context.Context, call contracts
 	if !hasActiveSkill(execCtx, automationStandardBehaviorSkill) {
 		return contracts.ToolResult{Output: "automation-standard-behavior skill is required", IsError: true}, nil
 	}
+	if !hasActiveSkill(execCtx, automationNormalizerSkill) {
+		return contracts.ToolResult{Output: "automation-normalizer skill is required", IsError: true}, nil
+	}
 	title, _ := call.Args["title"].(string)
 	title = strings.TrimSpace(title)
 	if title == "" {
@@ -79,6 +86,12 @@ func (t *automationCreateSimpleTool) Execute(ctx context.Context, call contracts
 	watcherPath = strings.TrimSpace(watcherPath)
 	if watcherPath == "" {
 		return contracts.ToolResult{Output: "watcher_path is required", IsError: true}, nil
+	}
+	if !roleOwnsWatcherPath(strings.TrimSpace(execCtx.RoleSpec.ID), watcherPath, strings.TrimSpace(execCtx.WorkspaceRoot)) {
+		return contracts.ToolResult{
+			Output:  fmt.Sprintf("watcher_path must be under roles/%s/automations", strings.TrimSpace(execCtx.RoleSpec.ID)),
+			IsError: true,
+		}, nil
 	}
 	watcherCron, _ := call.Args["watcher_cron"].(string)
 	watcherCron = strings.TrimSpace(watcherCron)
@@ -137,6 +150,9 @@ func (t *automationQueryTool) Execute(ctx context.Context, call contracts.ToolCa
 			if automation.ID != id {
 				continue
 			}
+			if !roleCanQueryAutomation(execCtx.RoleSpec, automation) {
+				return contracts.ToolResult{Output: fmt.Sprintf("automation %q not found", id), IsError: true}, nil
+			}
 			detail, err := automationDetailFor(ctx, automation, runLister)
 			if err != nil {
 				return contracts.ToolResult{}, err
@@ -153,6 +169,9 @@ func (t *automationQueryTool) Execute(ctx context.Context, call contracts.ToolCa
 
 	details := make([]automationDetail, 0, len(automations))
 	for _, automation := range automations {
+		if !roleCanQueryAutomation(execCtx.RoleSpec, automation) {
+			continue
+		}
 		detail, err := automationDetailFor(ctx, automation, runLister)
 		if err != nil {
 			return contracts.ToolResult{}, err
@@ -196,6 +215,9 @@ func (t *automationControlTool) Execute(ctx context.Context, call contracts.Tool
 	if !hasActiveSkill(execCtx, automationStandardBehaviorSkill) {
 		return contracts.ToolResult{Output: "automation-standard-behavior skill is required", IsError: true}, nil
 	}
+	if !hasActiveSkill(execCtx, automationNormalizerSkill) {
+		return contracts.ToolResult{Output: "automation-normalizer skill is required", IsError: true}, nil
+	}
 	id, _ := call.Args["id"].(string)
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -210,9 +232,12 @@ func (t *automationControlTool) Execute(ctx context.Context, call contracts.Tool
 	if err != nil {
 		return contracts.ToolResult{}, err
 	}
+	if !automationInExecutionWorkspace(automation, execCtx.WorkspaceRoot) {
+		return contracts.ToolResult{Output: fmt.Sprintf("automation %q not found", id), IsError: true}, nil
+	}
 	if !roleCanControlAutomation(execCtx.RoleSpec, automation) {
 		return contracts.ToolResult{
-			Output:  fmt.Sprintf("role %q cannot control automation %q owned by %q", strings.TrimSpace(execCtx.RoleSpec.ID), automation.ID, automation.Owner),
+			Output:  fmt.Sprintf("automation %q not found", id),
 			IsError: true,
 		}, nil
 	}
@@ -232,12 +257,61 @@ func (t *automationControlTool) Execute(ctx context.Context, call contracts.Tool
 	}
 }
 
+func roleOwnsWatcherPath(roleID, watcherPath, workspaceRoot string) bool {
+	roleID = strings.TrimSpace(roleID)
+	watcherPath = strings.TrimSpace(watcherPath)
+	if roleID == "" || watcherPath == "" {
+		return false
+	}
+	rel := watcherPath
+	if filepath.IsAbs(watcherPath) {
+		root, err := workspaceRootAbs(workspaceRoot)
+		if err != nil {
+			return false
+		}
+		path, err := filepath.Abs(watcherPath)
+		if err != nil {
+			return false
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return false
+		}
+		rel = relative
+	}
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	return strings.HasPrefix(rel, "roles/"+roleID+"/automations/")
+}
+
+func workspaceRootAbs(root string) (string, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return filepath.Abs(".")
+	}
+	return filepath.Abs(root)
+}
+
+func automationInExecutionWorkspace(automation contracts.Automation, workspaceRoot string) bool {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return false
+	}
+	return strings.TrimSpace(automation.WorkspaceRoot) == workspaceRoot
+}
+
 func roleCanControlAutomation(spec *contracts.RoleSpec, automation contracts.Automation) bool {
 	if spec == nil {
 		return false
 	}
 	labels := roleAutomationOwnershipLabels(spec)
 	return labels[strings.TrimSpace(automation.ID)] || labels[strings.TrimSpace(automation.Owner)]
+}
+
+func roleCanQueryAutomation(spec *contracts.RoleSpec, automation contracts.Automation) bool {
+	if spec == nil {
+		return true
+	}
+	return roleCanControlAutomation(spec, automation)
 }
 
 func roleAutomationOwnershipLabels(spec *contracts.RoleSpec) map[string]bool {
@@ -335,4 +409,8 @@ func hasActiveSkill(execCtx contracts.ExecContext, skill string) bool {
 		}
 	}
 	return false
+}
+
+func hasAutomationToolSkills(execCtx contracts.ExecContext) bool {
+	return hasActiveSkill(execCtx, automationStandardBehaviorSkill) && hasActiveSkill(execCtx, automationNormalizerSkill)
 }

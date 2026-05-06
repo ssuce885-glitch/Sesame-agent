@@ -38,12 +38,48 @@ func TestAutomationCreateSimpleRequiresRoleSkillAndSetsRoleOwner(t *testing.T) {
 	execCtx.ActiveSkills = []string{automationStandardBehaviorSkill}
 	result, err = tool.Execute(context.Background(), call, execCtx)
 	if err != nil {
-		t.Fatalf("Execute with skill returned error: %v", err)
+		t.Fatalf("Execute with missing normalizer skill returned error: %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "automation-normalizer skill is required") {
+		t.Fatalf("expected missing normalizer skill error, got %+v", result)
+	}
+
+	execCtx.ActiveSkills = automationToolSkills()
+	result, err = tool.Execute(context.Background(), call, execCtx)
+	if err != nil {
+		t.Fatalf("Execute with skills returned error: %v", err)
 	}
 	if result.IsError {
 		t.Fatalf("automation_create_simple failed: %s", result.Output)
 	}
 	if len(runtime.created) != 1 || runtime.created[0].Owner != "role:inbox" {
+		t.Fatalf("unexpected created automations: %+v", runtime.created)
+	}
+}
+
+func TestAutomationCreateSimpleRequiresRoleOwnedWatcherPath(t *testing.T) {
+	runtime := &fakeAutomationRuntime{}
+	tool := NewAutomationCreateSimpleTool()
+	result, err := tool.Execute(context.Background(), contracts.ToolCall{
+		Name: "automation_create_simple",
+		Args: map[string]any{
+			"title":        "Check inbox",
+			"goal":         "Find important updates.",
+			"watcher_path": "watchers/check.py",
+		},
+	}, contracts.ExecContext{
+		WorkspaceRoot: "/workspace",
+		Automation:    runtime,
+		RoleSpec:      &contracts.RoleSpec{ID: "inbox"},
+		ActiveSkills:  automationToolSkills(),
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "roles/inbox/automations") {
+		t.Fatalf("expected role-owned watcher path denial, got %+v", result)
+	}
+	if len(runtime.created) != 0 {
 		t.Fatalf("unexpected created automations: %+v", runtime.created)
 	}
 }
@@ -105,7 +141,7 @@ func TestAutomationControlRequiresRoleOwnership(t *testing.T) {
 		WorkspaceRoot:   "/workspace",
 		Store:           s,
 		Automation:      runtime,
-		ActiveSkills:    []string{automationStandardBehaviorSkill},
+		ActiveSkills:    automationToolSkills(),
 		RoleSpec:        &contracts.RoleSpec{ID: "owned_role", AutomationOwners: []string{"automation_by_id"}},
 		PermissionLevel: "workspace",
 	}
@@ -139,8 +175,68 @@ func TestAutomationControlRequiresRoleOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute other returned error: %v", err)
 	}
-	if !result.IsError || !strings.Contains(result.Output, "cannot control automation") {
-		t.Fatalf("expected ownership denial, got %+v", result)
+	if !result.IsError || !strings.Contains(result.Output, "not found") || strings.Contains(result.Output, "other_role") {
+		t.Fatalf("expected hidden ownership denial, got %+v", result)
+	}
+}
+
+func TestAutomationControlRejectsWorkspaceMismatch(t *testing.T) {
+	s, err := store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	now := time.Now().UTC()
+	if err := s.Automations().Create(context.Background(), contracts.Automation{
+		ID:            "automation_other_workspace",
+		WorkspaceRoot: "/other-workspace",
+		Title:         "Other workspace",
+		Goal:          "Should not be controlled from this workspace",
+		State:         "active",
+		Owner:         "role:owned_role",
+		WatcherPath:   "roles/owned_role/automations/watch.py",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("Create automation: %v", err)
+	}
+
+	runtime := &fakeAutomationRuntime{}
+	result, err := NewAutomationControlTool().Execute(context.Background(), contracts.ToolCall{
+		Name: "automation_control",
+		Args: map[string]any{"id": "automation_other_workspace", "action": "pause"},
+	}, contracts.ExecContext{
+		WorkspaceRoot: "/workspace",
+		Store:         s,
+		Automation:    runtime,
+		ActiveSkills:  automationToolSkills(),
+		RoleSpec:      &contracts.RoleSpec{ID: "owned_role"},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "not found") {
+		t.Fatalf("expected workspace mismatch denial, got %+v", result)
+	}
+	if len(runtime.paused) != 0 {
+		t.Fatalf("unexpected pause calls: %+v", runtime.paused)
+	}
+
+	result, err = NewAutomationControlTool().Execute(context.Background(), contracts.ToolCall{
+		Name: "automation_control",
+		Args: map[string]any{"id": "automation_other_workspace", "action": "pause"},
+	}, contracts.ExecContext{
+		Store:        s,
+		Automation:   runtime,
+		ActiveSkills: automationToolSkills(),
+		RoleSpec:     &contracts.RoleSpec{ID: "owned_role"},
+	})
+	if err != nil {
+		t.Fatalf("Execute without workspace returned error: %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "not found") {
+		t.Fatalf("expected missing workspace denial, got %+v", result)
 	}
 }
 
@@ -207,6 +303,86 @@ func TestAutomationQueryIncludesWorkflowFields(t *testing.T) {
 	}
 }
 
+func TestAutomationQueryFiltersRoleViewToOwnedAutomations(t *testing.T) {
+	s, err := store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	now := time.Now().UTC()
+	for _, automation := range []contracts.Automation{
+		{
+			ID:            "automation_owned",
+			WorkspaceRoot: "/workspace",
+			Title:         "Owned",
+			Goal:          "Owned automation",
+			State:         "active",
+			Owner:         "role:owned_role",
+			WatcherPath:   "roles/owned_role/automations/watch.py",
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:            "automation_other",
+			WorkspaceRoot: "/workspace",
+			Title:         "Other",
+			Goal:          "Other automation",
+			State:         "active",
+			Owner:         "role:other_role",
+			WatcherPath:   "roles/other_role/automations/watch.py",
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+	} {
+		if err := s.Automations().Create(context.Background(), automation); err != nil {
+			t.Fatalf("Create automation: %v", err)
+		}
+	}
+	if err := s.Automations().CreateRun(context.Background(), contracts.AutomationRun{
+		AutomationID: "automation_other",
+		DedupeKey:    "other-signal",
+		TaskID:       "task_other",
+		Status:       "needs_agent",
+		Summary:      "Other role detail",
+		CreatedAt:    now,
+	}); err != nil {
+		t.Fatalf("Create automation run: %v", err)
+	}
+
+	tool := NewAutomationQueryTool()
+	execCtx := contracts.ExecContext{
+		WorkspaceRoot: "/workspace",
+		Store:         s,
+		RoleSpec:      &contracts.RoleSpec{ID: "owned_role"},
+	}
+	result, err := tool.Execute(context.Background(), contracts.ToolCall{Name: "automation_query"}, execCtx)
+	if err != nil {
+		t.Fatalf("Execute list: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute list returned error result: %+v", result)
+	}
+	data, ok := result.Data.(automationQueryResult)
+	if !ok {
+		t.Fatalf("result.Data type = %T, want automationQueryResult", result.Data)
+	}
+	if len(data.Automations) != 1 || data.Automations[0].ID != "automation_owned" {
+		t.Fatalf("role query should only include owned automation, got %+v", data.Automations)
+	}
+
+	result, err = tool.Execute(context.Background(), contracts.ToolCall{
+		Name: "automation_query",
+		Args: map[string]any{"id": "automation_other"},
+	}, execCtx)
+	if err != nil {
+		t.Fatalf("Execute detail: %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "not found") {
+		t.Fatalf("expected hidden automation detail to look not found, got %+v", result)
+	}
+}
+
 type fakeAutomationRuntime struct {
 	created []contracts.Automation
 	paused  []string
@@ -226,4 +402,8 @@ func (f *fakeAutomationRuntime) Pause(_ context.Context, id string) error {
 func (f *fakeAutomationRuntime) Resume(_ context.Context, id string) error {
 	f.resumed = append(f.resumed, id)
 	return nil
+}
+
+func automationToolSkills() []string {
+	return []string{automationStandardBehaviorSkill, automationNormalizerSkill}
 }
