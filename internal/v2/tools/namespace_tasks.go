@@ -51,6 +51,9 @@ func (t *taskTraceTool) Execute(ctx context.Context, call contracts.ToolCall, ex
 	if err != nil {
 		return contracts.ToolResult{}, err
 	}
+	if !taskVisibleToExecContext(task, execCtx) {
+		return contracts.ToolResult{Output: fmt.Sprintf("task %q not found", taskID), IsError: true}, nil
+	}
 	messageLimit, err := intArg(call.Args, "message_limit", 40)
 	if err != nil {
 		return contracts.ToolResult{Output: err.Error(), IsError: true}, nil
@@ -77,6 +80,21 @@ func (t *taskTraceTool) Execute(ctx context.Context, call contracts.ToolCall, ex
 		return contracts.ToolResult{}, err
 	}
 	return contracts.ToolResult{Output: string(raw), Data: trace}, nil
+}
+
+func taskVisibleToExecContext(task contracts.Task, execCtx contracts.ExecContext) bool {
+	workspaceRoot := strings.TrimSpace(execCtx.WorkspaceRoot)
+	if execCtx.RoleSpec != nil && workspaceRoot == "" {
+		return false
+	}
+	if workspaceRoot != "" && strings.TrimSpace(task.WorkspaceRoot) != workspaceRoot {
+		return false
+	}
+	if execCtx.RoleSpec == nil {
+		return true
+	}
+	roleID := strings.TrimSpace(execCtx.RoleSpec.ID)
+	return roleID != "" && strings.TrimSpace(task.RoleID) == roleID
 }
 
 type taskTraceSummary struct {

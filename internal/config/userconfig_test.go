@@ -52,6 +52,9 @@ func TestUserConfigPatchRootResetVision(t *testing.T) {
 func TestLoadConfigVisionDefaults(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
 	t.Setenv("SESAME_VISION_PROVIDER", "")
 	t.Setenv("SESAME_VISION_API_KEY", "")
 	t.Setenv("SESAME_VISION_BASE_URL", "")

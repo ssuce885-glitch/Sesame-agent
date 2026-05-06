@@ -235,8 +235,8 @@ func TestAutomationRoutesIncludeWorkflowFields(t *testing.T) {
 	created := decodeJSON[contracts.Automation](t, handler, http.MethodPost, "/v2/automations", map[string]any{
 		"title":        "Watch docs",
 		"goal":         "Keep docs fresh",
-		"owner":        "main",
-		"watcher_path": "watcher.sh",
+		"owner":        "role:doc_writer",
+		"watcher_path": "roles/doc_writer/automations/watcher.sh",
 		"workflow_id":  "workflow-docs",
 	}, http.StatusCreated)
 	if created.ID == "" || created.WorkspaceRoot != workspaceRoot || created.WorkflowID != "workflow-docs" {
@@ -264,6 +264,33 @@ func TestAutomationRoutesIncludeWorkflowFields(t *testing.T) {
 	if len(runs) != 1 || runs[0].WorkflowRunID != "wfrun-1" || runs[0].TaskID != "" {
 		t.Fatalf("listed automation runs = %+v", runs)
 	}
+}
+
+func TestAutomationCreateRouteReturnsBadRequestForValidationError(t *testing.T) {
+	s, err := v2store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	handler := (&routes{
+		cfg: config.Config{
+			Paths: config.Paths{
+				WorkspaceRoot: workspaceRoot,
+				DataDir:       filepath.Join(workspaceRoot, ".sesame"),
+			},
+		},
+		store:             s,
+		automationService: automation.NewService(s, nil, nil),
+	}).handler()
+
+	decodeJSON[map[string]string](t, handler, http.MethodPost, "/v2/automations", map[string]any{
+		"title":        "Watch docs",
+		"goal":         "Keep docs fresh",
+		"owner":        "main",
+		"watcher_path": "roles/doc_writer/automations/watcher.sh",
+	}, http.StatusBadRequest)
 }
 
 func TestContextBlockRoutesCRUD(t *testing.T) {
@@ -751,6 +778,255 @@ func TestApprovalRoutesEnforceStateMachine(t *testing.T) {
 	fetched := decodeJSON[contracts.Approval](t, handler, http.MethodGet, "/v2/approvals/"+created.ID, nil, http.StatusOK)
 	if fetched.State != "approved" || fetched.RequestedAction != "deploy release" || fetched.DecidedBy != "operator" || !fetched.DecidedAt.Equal(approved.DecidedAt) {
 		t.Fatalf("fetched approval = %+v", fetched)
+	}
+}
+
+func TestApprovalUpdateLeavesWorkflowRunWaitingResumeWhenApproved(t *testing.T) {
+	ctx := context.Background()
+	s, err := v2store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	now := time.Now().UTC()
+	handler := (&routes{
+		cfg: config.Config{
+			Paths: config.Paths{
+				WorkspaceRoot: workspaceRoot,
+				DataDir:       filepath.Join(workspaceRoot, ".sesame"),
+			},
+		},
+		store:      s,
+		sessionMgr: &testSessionManager{},
+	}).handler()
+
+	workflow := contracts.Workflow{
+		ID:            "workflow-approval-approved",
+		WorkspaceRoot: workspaceRoot,
+		Name:          "Approval approved workflow",
+		Trigger:       "manual",
+		Steps:         `[{"kind":"approval","requested_action":"deploy release","summary":"Deploy to production"},{"kind":"role_task","role_id":"reviewer","prompt":"Would run after approval"}]`,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.Workflows().Create(ctx, workflow); err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+	run := contracts.WorkflowRun{
+		ID:            "run-approval-approved",
+		WorkflowID:    workflow.ID,
+		WorkspaceRoot: workspaceRoot,
+		State:         "waiting_approval",
+		ApprovalIDs:   `["approval-approved"]`,
+		Trace:         `[{"event":"approval_requested","state":"pending","approval_id":"approval-approved"}]`,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.Workflows().CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	approval := contracts.Approval{
+		ID:              "approval-approved",
+		WorkflowRunID:   run.ID,
+		WorkspaceRoot:   workspaceRoot,
+		RequestedAction: "deploy release",
+		State:           "pending",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := s.Workflows().CreateApproval(ctx, approval); err != nil {
+		t.Fatalf("create approval: %v", err)
+	}
+
+	updated := decodeJSON[contracts.Approval](t, handler, http.MethodPut, "/v2/approvals/"+approval.ID, map[string]any{
+		"state":      "approved",
+		"decided_by": "operator",
+	}, http.StatusOK)
+	if updated.State != "approved" || updated.DecidedBy != "operator" || updated.DecidedAt.IsZero() {
+		t.Fatalf("updated approval = %+v", updated)
+	}
+
+	gotRun, err := s.Workflows().GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if gotRun.State != "waiting_approval" {
+		t.Fatalf("workflow run state = %q, want waiting_approval", gotRun.State)
+	}
+	trace := decodeWorkflowRunTrace(t, gotRun.Trace)
+	if !hasWorkflowRunTraceState(trace, "approval_resolved", "approved") {
+		t.Fatalf("workflow run trace = %+v", trace)
+	}
+	if hasWorkflowRunTraceState(trace, "run_completed", "completed") {
+		t.Fatalf("approved workflow without resume should not be marked completed: %+v", trace)
+	}
+}
+
+func TestApprovalUpdateFailsWaitingWorkflowRunWhenRejected(t *testing.T) {
+	ctx := context.Background()
+	s, err := v2store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	now := time.Now().UTC()
+	handler := (&routes{
+		cfg: config.Config{
+			Paths: config.Paths{
+				WorkspaceRoot: workspaceRoot,
+				DataDir:       filepath.Join(workspaceRoot, ".sesame"),
+			},
+		},
+		store:      s,
+		sessionMgr: &testSessionManager{},
+	}).handler()
+
+	workflow := contracts.Workflow{
+		ID:            "workflow-approval-rejected",
+		WorkspaceRoot: workspaceRoot,
+		Name:          "Approval rejected workflow",
+		Trigger:       "manual",
+		Steps:         `[{"kind":"approval","requested_action":"deploy release","summary":"Deploy to production"}]`,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.Workflows().Create(ctx, workflow); err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+	run := contracts.WorkflowRun{
+		ID:            "run-approval-rejected",
+		WorkflowID:    workflow.ID,
+		WorkspaceRoot: workspaceRoot,
+		State:         "waiting_approval",
+		ApprovalIDs:   `["approval-rejected"]`,
+		Trace:         `[{"event":"approval_requested","state":"pending","approval_id":"approval-rejected"}]`,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.Workflows().CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	approval := contracts.Approval{
+		ID:              "approval-rejected",
+		WorkflowRunID:   run.ID,
+		WorkspaceRoot:   workspaceRoot,
+		RequestedAction: "deploy release",
+		State:           "pending",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := s.Workflows().CreateApproval(ctx, approval); err != nil {
+		t.Fatalf("create approval: %v", err)
+	}
+
+	updated := decodeJSON[contracts.Approval](t, handler, http.MethodPut, "/v2/approvals/"+approval.ID, map[string]any{
+		"state":      "rejected",
+		"decided_by": "operator",
+	}, http.StatusOK)
+	if updated.State != "rejected" || updated.DecidedBy != "operator" || updated.DecidedAt.IsZero() {
+		t.Fatalf("updated approval = %+v", updated)
+	}
+
+	gotRun, err := s.Workflows().GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if gotRun.State != "failed" {
+		t.Fatalf("workflow run state = %q, want failed", gotRun.State)
+	}
+	trace := decodeWorkflowRunTrace(t, gotRun.Trace)
+	if !hasWorkflowRunTraceState(trace, "approval_resolved", "rejected") {
+		t.Fatalf("workflow run trace = %+v", trace)
+	}
+	if !hasWorkflowRunTraceState(trace, "run_failed", "failed") {
+		t.Fatalf("workflow run trace = %+v", trace)
+	}
+}
+
+func TestApprovalUpdateFailsWaitingWorkflowRunWhenExpired(t *testing.T) {
+	ctx := context.Background()
+	s, err := v2store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	now := time.Now().UTC()
+	handler := (&routes{
+		cfg: config.Config{
+			Paths: config.Paths{
+				WorkspaceRoot: workspaceRoot,
+				DataDir:       filepath.Join(workspaceRoot, ".sesame"),
+			},
+		},
+		store:      s,
+		sessionMgr: &testSessionManager{},
+	}).handler()
+
+	workflow := contracts.Workflow{
+		ID:            "workflow-approval-expired",
+		WorkspaceRoot: workspaceRoot,
+		Name:          "Approval expired workflow",
+		Trigger:       "manual",
+		Steps:         `[{"kind":"approval","requested_action":"deploy release","summary":"Deploy to production"}]`,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.Workflows().Create(ctx, workflow); err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+	run := contracts.WorkflowRun{
+		ID:            "run-approval-expired",
+		WorkflowID:    workflow.ID,
+		WorkspaceRoot: workspaceRoot,
+		State:         "waiting_approval",
+		ApprovalIDs:   `["approval-expired"]`,
+		Trace:         `[{"event":"approval_requested","state":"pending","approval_id":"approval-expired"}]`,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.Workflows().CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	approval := contracts.Approval{
+		ID:              "approval-expired",
+		WorkflowRunID:   run.ID,
+		WorkspaceRoot:   workspaceRoot,
+		RequestedAction: "deploy release",
+		State:           "pending",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := s.Workflows().CreateApproval(ctx, approval); err != nil {
+		t.Fatalf("create approval: %v", err)
+	}
+
+	updated := decodeJSON[contracts.Approval](t, handler, http.MethodPut, "/v2/approvals/"+approval.ID, map[string]any{
+		"state":      "expired",
+		"decided_by": "operator",
+	}, http.StatusOK)
+	if updated.State != "expired" || updated.DecidedBy != "operator" || updated.DecidedAt.IsZero() {
+		t.Fatalf("updated approval = %+v", updated)
+	}
+
+	gotRun, err := s.Workflows().GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if gotRun.State != "failed" {
+		t.Fatalf("workflow run state = %q, want failed", gotRun.State)
+	}
+	trace := decodeWorkflowRunTrace(t, gotRun.Trace)
+	if !hasWorkflowRunTraceState(trace, "approval_resolved", "expired") {
+		t.Fatalf("workflow run trace = %+v", trace)
+	}
+	if !hasWorkflowRunTraceState(trace, "run_failed", "failed") {
+		t.Fatalf("workflow run trace = %+v", trace)
 	}
 }
 
@@ -1352,6 +1628,76 @@ func TestWorkflowTriggerRouteReturnsWaitingApprovalRunBody(t *testing.T) {
 	}
 }
 
+func TestWorkflowRunResumeRouteUsesWorkflowService(t *testing.T) {
+	ctx := context.Background()
+	s, err := v2store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	now := time.Now().UTC()
+	workflow := contracts.Workflow{
+		ID:            "workflow-resume-route",
+		WorkspaceRoot: workspaceRoot,
+		Name:          "Resume route workflow",
+		Trigger:       "manual",
+		Steps:         `[{"kind":"approval","requested_action":"deploy release"}]`,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.Workflows().Create(ctx, workflow); err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+	run := contracts.WorkflowRun{
+		ID:            "run-resume-route",
+		WorkflowID:    workflow.ID,
+		WorkspaceRoot: workspaceRoot,
+		State:         "waiting_approval",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.Workflows().CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	called := false
+	handler := (&routes{
+		cfg: config.Config{
+			Paths: config.Paths{
+				WorkspaceRoot: workspaceRoot,
+				DataDir:       filepath.Join(workspaceRoot, ".sesame"),
+			},
+		},
+		store: s,
+		workflowService: workflowTriggerServiceStub{
+			resumeFn: func(ctx context.Context, runID string) (contracts.WorkflowRun, error) {
+				called = true
+				if runID != run.ID {
+					t.Fatalf("resume run id = %q, want %q", runID, run.ID)
+				}
+				return contracts.WorkflowRun{
+					ID:            run.ID,
+					WorkflowID:    workflow.ID,
+					WorkspaceRoot: workspaceRoot,
+					State:         "completed",
+					CreatedAt:     now,
+					UpdatedAt:     time.Now().UTC(),
+				}, nil
+			},
+		},
+	}).handler()
+
+	resumed := decodeJSON[contracts.WorkflowRun](t, handler, http.MethodPost, "/v2/workflow_runs/"+run.ID+"/resume", nil, http.StatusOK)
+	if !called {
+		t.Fatal("workflow service Resume was not called")
+	}
+	if resumed.ID != run.ID || resumed.State != "completed" {
+		t.Fatalf("resumed run = %+v", resumed)
+	}
+}
+
 func TestWorkflowRoutesErrorMapping(t *testing.T) {
 	ctx := context.Background()
 	s, err := v2store.OpenInMemory()
@@ -1492,6 +1838,7 @@ type routeWorkflowTaskManager struct {
 
 type workflowTriggerServiceStub struct {
 	triggerFn func(ctx context.Context, workflow contracts.Workflow, input workflows.TriggerInput) (contracts.WorkflowRun, error)
+	resumeFn  func(ctx context.Context, runID string) (contracts.WorkflowRun, error)
 }
 
 func (s workflowTriggerServiceStub) Trigger(ctx context.Context, workflow contracts.Workflow, input workflows.TriggerInput) (contracts.WorkflowRun, error) {
@@ -1499,6 +1846,13 @@ func (s workflowTriggerServiceStub) Trigger(ctx context.Context, workflow contra
 		return contracts.WorkflowRun{}, nil
 	}
 	return s.triggerFn(ctx, workflow, input)
+}
+
+func (s workflowTriggerServiceStub) Resume(ctx context.Context, runID string) (contracts.WorkflowRun, error) {
+	if s.resumeFn == nil {
+		return contracts.WorkflowRun{}, nil
+	}
+	return s.resumeFn(ctx, runID)
 }
 
 func (m *routeWorkflowTaskManager) Create(_ context.Context, task contracts.Task) error {

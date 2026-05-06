@@ -135,8 +135,14 @@ func (t *roleCreateTool) Definition() contracts.ToolDefinition {
 	}
 }
 
+func (t *roleCreateTool) IsEnabled(execCtx contracts.ExecContext) bool {
+	return roleMutationToolsEnabled(execCtx)
+}
+
 func (t *roleCreateTool) Execute(ctx context.Context, call contracts.ToolCall, execCtx contracts.ExecContext) (contracts.ToolResult, error) {
-	_ = execCtx
+	if !t.IsEnabled(execCtx) {
+		return roleMutationDeniedResult(t.Definition().Name, t.Definition().Risk), nil
+	}
 	if t.service == nil {
 		return contracts.ToolResult{Output: "role service is required", IsError: true}, nil
 	}
@@ -168,8 +174,14 @@ func (t *roleUpdateTool) Definition() contracts.ToolDefinition {
 	}
 }
 
+func (t *roleUpdateTool) IsEnabled(execCtx contracts.ExecContext) bool {
+	return roleMutationToolsEnabled(execCtx)
+}
+
 func (t *roleUpdateTool) Execute(ctx context.Context, call contracts.ToolCall, execCtx contracts.ExecContext) (contracts.ToolResult, error) {
-	_ = execCtx
+	if !t.IsEnabled(execCtx) {
+		return roleMutationDeniedResult(t.Definition().Name, t.Definition().Risk), nil
+	}
 	if t.service == nil {
 		return contracts.ToolResult{Output: "role service is required", IsError: true}, nil
 	}
@@ -232,7 +244,14 @@ func (t *roleInstallTool) Definition() contracts.ToolDefinition {
 	}
 }
 
+func (t *roleInstallTool) IsEnabled(execCtx contracts.ExecContext) bool {
+	return roleMutationToolsEnabled(execCtx)
+}
+
 func (t *roleInstallTool) Execute(ctx context.Context, call contracts.ToolCall, execCtx contracts.ExecContext) (contracts.ToolResult, error) {
+	if !t.IsEnabled(execCtx) {
+		return roleMutationDeniedResult(t.Definition().Name, t.Definition().Risk), nil
+	}
 	if t.service == nil {
 		return contracts.ToolResult{Output: "role service is required", IsError: true}, nil
 	}
@@ -259,6 +278,18 @@ func (t *roleInstallTool) Execute(ctx context.Context, call contracts.ToolCall, 
 		return contracts.ToolResult{}, err
 	}
 	return contracts.ToolResult{Output: string(raw), Data: spec}, nil
+}
+
+func roleMutationToolsEnabled(execCtx contracts.ExecContext) bool {
+	return execCtx.RoleSpec == nil
+}
+
+func roleMutationDeniedResult(toolName, risk string) contracts.ToolResult {
+	return contracts.ToolResult{
+		Output:  fmt.Sprintf("%s is only available to the main parent session", toolName),
+		IsError: true,
+		Risk:    risk,
+	}
 }
 
 func (t *delegateToRoleTool) Definition() contracts.ToolDefinition {

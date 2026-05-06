@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	stdruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,8 @@ func (f fakeRoleService) Get(id string) (roles.RoleSpec, bool, error) {
 }
 
 func TestServiceAutomationLifecycle(t *testing.T) {
+	skipWindowsWatcherExecution(t)
+
 	ctx := context.Background()
 	s, err := store.OpenInMemory()
 	if err != nil {
@@ -43,7 +46,7 @@ func TestServiceAutomationLifecycle(t *testing.T) {
 
 	workspaceRoot := t.TempDir()
 	createAutomationSession(t, s, "main_session", workspaceRoot)
-	watcherPath := filepath.Join(workspaceRoot, "watcher.sh")
+	watcherPath := roleAutomationWatcherPath(workspaceRoot, "doc_writer")
 	writeWatcher(t, watcherPath, "docs-stale")
 
 	manager := tasks.NewManager(s, t.TempDir())
@@ -119,6 +122,8 @@ func TestServiceAutomationLifecycle(t *testing.T) {
 }
 
 func TestServiceAutomationTriggersWorkflowRunAsync(t *testing.T) {
+	skipWindowsWatcherExecution(t)
+
 	ctx := context.Background()
 	s, err := store.OpenInMemory()
 	if err != nil {
@@ -128,7 +133,7 @@ func TestServiceAutomationTriggersWorkflowRunAsync(t *testing.T) {
 
 	workspaceRoot := t.TempDir()
 	createAutomationSession(t, s, "main-session", workspaceRoot)
-	watcherPath := filepath.Join(workspaceRoot, "watcher.sh")
+	watcherPath := roleAutomationWatcherPath(workspaceRoot, "doc_writer")
 	writeWatcher(t, watcherPath, "docs-stale")
 	createWorkflowRecord(t, s, contracts.Workflow{
 		ID:            "workflow-docs",
@@ -261,6 +266,8 @@ func TestServiceAutomationTriggersWorkflowRunAsync(t *testing.T) {
 }
 
 func TestServiceAutomationWorkflowWorkspaceMismatchRecordsError(t *testing.T) {
+	skipWindowsWatcherExecution(t)
+
 	ctx := context.Background()
 	s, err := store.OpenInMemory()
 	if err != nil {
@@ -270,7 +277,7 @@ func TestServiceAutomationWorkflowWorkspaceMismatchRecordsError(t *testing.T) {
 
 	workspaceRoot := t.TempDir()
 	otherWorkspaceRoot := t.TempDir()
-	watcherPath := filepath.Join(workspaceRoot, "watcher.sh")
+	watcherPath := roleAutomationWatcherPath(workspaceRoot, "doc_writer")
 	writeWatcher(t, watcherPath, "docs-stale")
 	createWorkflowRecord(t, s, contracts.Workflow{
 		ID:            "workflow-other",
@@ -323,6 +330,8 @@ func TestServiceAutomationWorkflowWorkspaceMismatchRecordsError(t *testing.T) {
 }
 
 func TestServiceAutomationWorkflowRequiresTriggerService(t *testing.T) {
+	skipWindowsWatcherExecution(t)
+
 	ctx := context.Background()
 	s, err := store.OpenInMemory()
 	if err != nil {
@@ -331,7 +340,7 @@ func TestServiceAutomationWorkflowRequiresTriggerService(t *testing.T) {
 	defer s.Close()
 
 	workspaceRoot := t.TempDir()
-	watcherPath := filepath.Join(workspaceRoot, "watcher.sh")
+	watcherPath := roleAutomationWatcherPath(workspaceRoot, "doc_writer")
 	writeWatcher(t, watcherPath, "docs-stale")
 	createWorkflowRecord(t, s, contracts.Workflow{
 		ID:            "workflow-docs",
@@ -373,7 +382,111 @@ func TestServiceAutomationWorkflowRequiresTriggerService(t *testing.T) {
 	}
 }
 
+func TestServiceCreateRejectsWatcherPathOutsideWorkspace(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	otherRoot := t.TempDir()
+	service := NewService(s, nil, nil)
+
+	tests := []struct {
+		name        string
+		watcherPath string
+	}{
+		{name: "absolute outside workspace", watcherPath: filepath.Join(otherRoot, "watcher.sh")},
+		{name: "relative parent escape", watcherPath: filepath.Join("..", filepath.Base(otherRoot), "watcher.sh")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := service.Create(ctx, contracts.Automation{
+				ID:            "automation-" + strings.ReplaceAll(tt.name, " ", "-"),
+				WorkspaceRoot: workspaceRoot,
+				Title:         "Watch docs",
+				Goal:          "Fix stale docs",
+				Owner:         "role:doc_writer",
+				WatcherPath:   tt.watcherPath,
+				State:         "active",
+			})
+			if err == nil || !strings.Contains(err.Error(), "escapes workspace root") {
+				t.Fatalf("expected workspace escape error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestServiceCreateRejectsNonRoleOwner(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	service := NewService(s, nil, nil)
+	err = service.Create(ctx, contracts.Automation{
+		ID:            "automation-main-owner",
+		WorkspaceRoot: workspaceRoot,
+		Title:         "Watch docs",
+		Goal:          "Fix stale docs",
+		Owner:         "main",
+		WatcherPath:   "roles/doc_writer/automations/watch.sh",
+		State:         "active",
+	})
+	if err == nil || !strings.Contains(err.Error(), "automation owner must be a role") {
+		t.Fatalf("expected role owner error, got %v", err)
+	}
+}
+
+func TestServiceCreateRejectsRoleOwnedWatcherSymlinkEscape(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	ownedDir := filepath.Join(workspaceRoot, "roles", "doc_writer", "automations")
+	otherDir := filepath.Join(workspaceRoot, "roles", "other_role", "automations")
+	if err := os.MkdirAll(ownedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(otherDir, "watch.sh")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(ownedDir, "watch.sh")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	service := NewService(s, nil, nil)
+	err = service.Create(ctx, contracts.Automation{
+		ID:            "automation-symlink",
+		WorkspaceRoot: workspaceRoot,
+		Title:         "Watch docs",
+		Goal:          "Fix stale docs",
+		Owner:         "role:doc_writer",
+		WatcherPath:   filepath.Join("roles", "doc_writer", "automations", "watch.sh"),
+		State:         "active",
+	})
+	if err == nil || !strings.Contains(err.Error(), "roles/doc_writer/automations") {
+		t.Fatalf("expected role-owned realpath error, got %v", err)
+	}
+}
+
 func TestServiceAutomationReconcileRunRecordFailureDoesNotRetriggerWorkflow(t *testing.T) {
+	skipWindowsWatcherExecution(t)
+
 	ctx := context.Background()
 	baseStore, err := store.OpenInMemory()
 	if err != nil {
@@ -384,7 +497,7 @@ func TestServiceAutomationReconcileRunRecordFailureDoesNotRetriggerWorkflow(t *t
 	s := newAutomationRunFailureStore(baseStore, 1)
 	workspaceRoot := t.TempDir()
 	createAutomationSession(t, s, "main-session", workspaceRoot)
-	watcherPath := filepath.Join(workspaceRoot, "watcher.sh")
+	watcherPath := roleAutomationWatcherPath(workspaceRoot, "doc_writer")
 	writeWatcher(t, watcherPath, "docs-stale")
 	createWorkflowRecord(t, s, contracts.Workflow{
 		ID:            "workflow-docs",
@@ -497,9 +610,23 @@ func (fakeAgentRunner) Run(_ context.Context, task contracts.Task, _ tasks.Outpu
 
 func writeWatcher(t *testing.T, path string, dedupeKey string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	body := "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"needs_agent\",\"summary\":\"Docs are stale\",\"dedupe_key\":\"" + dedupeKey + "\",\"signal_kind\":\"docs\"}'\n"
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func roleAutomationWatcherPath(workspaceRoot, roleID string) string {
+	return filepath.Join(workspaceRoot, "roles", roleID, "automations", "watcher.sh")
+}
+
+func skipWindowsWatcherExecution(t *testing.T) {
+	t.Helper()
+	if stdruntime.GOOS == "windows" {
+		t.Skip("unix watcher script execution is not supported on Windows")
 	}
 }
 

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -186,6 +187,36 @@ func markInterrupted(ctx context.Context, s contracts.Store) error {
 			return err
 		}
 	}
+
+	runningTasks, err := s.Tasks().ListRunning(ctx)
+	if err != nil {
+		return err
+	}
+	for _, task := range runningTasks {
+		task.State = "failed"
+		task.Outcome = "failure"
+		task.FinalText = firstNonEmpty(task.FinalText, "Task interrupted because the daemon restarted.")
+		task.UpdatedAt = time.Now().UTC()
+		if err := s.Tasks().Update(ctx, task); err != nil {
+			return err
+		}
+	}
+
+	runningWorkflowRuns, err := s.Workflows().ListRunning(ctx)
+	if err != nil {
+		return err
+	}
+	for _, run := range runningWorkflowRuns {
+		run.State = "interrupted"
+		run.Trace = appendWorkflowRunTraceEvent(run.Trace, newWorkflowRunTraceEvent("run_interrupted", map[string]any{
+			"state":   "interrupted",
+			"message": "Workflow run interrupted because the daemon restarted.",
+		}))
+		run.UpdatedAt = time.Now().UTC()
+		if err := s.Workflows().UpdateRun(ctx, run); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -198,4 +229,49 @@ func registerExistingSessions(ctx context.Context, s contracts.Store, mgr contra
 		mgr.Register(session)
 	}
 	return nil
+}
+
+func appendWorkflowRunTraceEvent(raw string, event map[string]any) string {
+	trace := parseWorkflowRunTrace(raw)
+	trace = append(trace, event)
+	if len(trace) == 0 {
+		return "[]"
+	}
+	encoded, err := json.Marshal(trace)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+func newWorkflowRunTraceEvent(event string, fields map[string]any) map[string]any {
+	out := map[string]any{
+		"event": strings.TrimSpace(event),
+		"time":  time.Now().UTC(),
+	}
+	for key, value := range fields {
+		switch typed := value.(type) {
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				out[key] = strings.TrimSpace(typed)
+			}
+		case nil:
+			continue
+		default:
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func parseWorkflowRunTrace(raw string) []map[string]any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var trace []map[string]any
+	if err := json.Unmarshal([]byte(raw), &trace); err != nil {
+		return nil
+	}
+	return trace
 }

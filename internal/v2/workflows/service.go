@@ -104,10 +104,14 @@ type workflowStepDocument struct {
 }
 
 type workflowExecution struct {
-	run     contracts.WorkflowRun
-	steps   []workflowStep
-	trace   []workflowTraceEvent
-	created bool
+	run         contracts.WorkflowRun
+	steps       []workflowStep
+	trace       []workflowTraceEvent
+	taskIDs     []string
+	reportIDs   []string
+	approvalIDs []string
+	startIndex  int
+	created     bool
 }
 
 func NewService(store contracts.Store, taskManager TaskManager, defaultSessionID string) *Service {
@@ -155,6 +159,57 @@ func (s *Service) TriggerAsync(ctx context.Context, workflow contracts.Workflow,
 	auditCtx := context.WithoutCancel(ctx)
 	go s.runAsync(asyncCtx, auditCtx, cancel, execution)
 	return execution.run, nil
+}
+
+func (s *Service) Resume(ctx context.Context, runID string) (contracts.WorkflowRun, error) {
+	if s.store == nil || s.taskManager == nil {
+		return contracts.WorkflowRun{}, ErrUnavailable
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return contracts.WorkflowRun{}, fmt.Errorf("%w: workflow run id is required", ErrInvalidWorkflow)
+	}
+	run, err := s.loadRun(ctx, runID)
+	if err != nil {
+		return contracts.WorkflowRun{}, err
+	}
+	if strings.TrimSpace(run.State) != "waiting_approval" {
+		return contracts.WorkflowRun{}, fmt.Errorf("%w: workflow run %q is not waiting for approval", ErrInvalidWorkflow, run.ID)
+	}
+	workflow, err := s.store.Workflows().Get(ctx, strings.TrimSpace(run.WorkflowID))
+	if err != nil {
+		return contracts.WorkflowRun{}, err
+	}
+	if strings.TrimSpace(workflow.WorkspaceRoot) != strings.TrimSpace(run.WorkspaceRoot) {
+		return contracts.WorkflowRun{}, fmt.Errorf("%w: workflow run %q workspace mismatch", ErrInvalidWorkflow, run.ID)
+	}
+	steps, err := parseWorkflowSteps(workflow)
+	if err != nil {
+		return contracts.WorkflowRun{}, err
+	}
+	trace := parseStoredTrace(run.Trace)
+	approvalIDs := parseStoredStringSlice(run.ApprovalIDs)
+	resumeStep, approvalID, err := s.approvedResumePoint(ctx, run, trace, approvalIDs)
+	if err != nil {
+		return contracts.WorkflowRun{}, err
+	}
+	trace = append(trace, newTraceEvent("run_resumed", traceEventInput{
+		StepIndex:  resumeStep,
+		Kind:       "approval",
+		ApprovalID: approvalID,
+		State:      "running",
+		Message:    "workflow run resumed after approval",
+	}))
+	return s.executeRun(ctx, context.WithoutCancel(ctx), workflowExecution{
+		run:         run,
+		steps:       steps,
+		trace:       trace,
+		taskIDs:     parseStoredStringSlice(run.TaskIDs),
+		reportIDs:   parseStoredStringSlice(run.ReportIDs),
+		approvalIDs: approvalIDs,
+		startIndex:  resumeStep + 1,
+		created:     true,
+	})
 }
 
 func (s *Service) prepareExecution(ctx context.Context, workflow contracts.Workflow, input TriggerInput, mode executionMode) (workflowExecution, error) {
@@ -319,14 +374,19 @@ func (s *Service) executeRun(ctx, auditCtx context.Context, execution workflowEx
 	steps := execution.steps
 	trace := append([]workflowTraceEvent(nil), execution.trace...)
 	run.State = "running"
-	if err := s.persistRun(auditCtx, &run, nil, nil, trace); err != nil {
+	taskIDs := append([]string(nil), execution.taskIDs...)
+	reportIDs := append([]string(nil), execution.reportIDs...)
+	approvalIDs := append([]string(nil), execution.approvalIDs...)
+	if err := s.persistRun(auditCtx, &run, taskIDs, reportIDs, trace); err != nil {
 		return contracts.WorkflowRun{}, err
 	}
 
-	var taskIDs []string
-	var reportIDs []string
-	var approvalIDs []string
-	for i, step := range steps {
+	startIndex := execution.startIndex
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	for i := startIndex; i < len(steps); i++ {
+		step := steps[i]
 		trace = append(trace, newTraceEvent("step_started", traceEventInput{
 			StepIndex: i,
 			Kind:      step.Kind,
@@ -374,9 +434,9 @@ func (s *Service) executeRun(ctx, auditCtx context.Context, execution workflowEx
 					message:   "create workflow approval failed",
 				})
 			}
-				run = nextRun
-				return run, nil
-			}
+			run = nextRun
+			return run, nil
+		}
 
 		reportSessionID := s.defaultReportSessionID(auditCtx, run.WorkspaceRoot)
 		task := contracts.Task{
@@ -537,6 +597,34 @@ func (s *Service) executeRun(ctx, auditCtx context.Context, execution workflowEx
 		return contracts.WorkflowRun{}, err
 	}
 	return run, nil
+}
+
+func (s *Service) approvedResumePoint(ctx context.Context, run contracts.WorkflowRun, trace []workflowTraceEvent, approvalIDs []string) (int, string, error) {
+	if len(approvalIDs) == 0 {
+		return 0, "", fmt.Errorf("%w: workflow run %q has no approval to resume", ErrInvalidWorkflow, run.ID)
+	}
+	approvalID := strings.TrimSpace(approvalIDs[len(approvalIDs)-1])
+	if approvalID == "" {
+		return 0, "", fmt.Errorf("%w: workflow run %q has empty approval id", ErrInvalidWorkflow, run.ID)
+	}
+	approval, err := s.store.Workflows().GetApproval(ctx, approvalID)
+	if err != nil {
+		return 0, "", err
+	}
+	if strings.TrimSpace(approval.WorkflowRunID) != strings.TrimSpace(run.ID) {
+		return 0, "", fmt.Errorf("%w: approval %q does not belong to workflow run %q", ErrInvalidWorkflow, approval.ID, run.ID)
+	}
+	if strings.TrimSpace(approval.State) != "approved" {
+		return 0, "", fmt.Errorf("%w: approval %q is %q, not approved", ErrInvalidWorkflow, approval.ID, approval.State)
+	}
+	for i := len(trace) - 1; i >= 0; i-- {
+		event := trace[i]
+		if event.Event != "approval_requested" || strings.TrimSpace(event.ApprovalID) != approvalID || event.StepIndex == nil {
+			continue
+		}
+		return *event.StepIndex, approvalID, nil
+	}
+	return 0, "", fmt.Errorf("%w: workflow run %q approval step not found", ErrInvalidWorkflow, run.ID)
 }
 
 type runFailure struct {

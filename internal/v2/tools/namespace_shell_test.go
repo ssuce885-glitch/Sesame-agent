@@ -13,6 +13,8 @@ import (
 )
 
 func TestShellToolPolicyAllowedCommands(t *testing.T) {
+	skipWindowsUnixShellTest(t)
+
 	root := t.TempDir()
 	tool := NewShellTool()
 	roleSpec := &contracts.RoleSpec{
@@ -93,6 +95,8 @@ func TestShellToolPolicyRejectsShellMetacharacters(t *testing.T) {
 }
 
 func TestShellToolPolicyTimeoutOverride(t *testing.T) {
+	skipWindowsUnixShellTest(t)
+
 	root := t.TempDir()
 	tool := NewShellTool()
 	roleSpec := &contracts.RoleSpec{
@@ -118,6 +122,8 @@ func TestShellToolPolicyTimeoutOverride(t *testing.T) {
 }
 
 func TestShellToolPolicyOutputCapOverride(t *testing.T) {
+	skipWindowsUnixShellTest(t)
+
 	root := t.TempDir()
 	tool := NewShellTool()
 	roleSpec := &contracts.RoleSpec{
@@ -139,6 +145,13 @@ func TestShellToolPolicyOutputCapOverride(t *testing.T) {
 	}
 	if !result.IsError || !strings.Contains(result.Output, "truncated after 4 bytes") {
 		t.Fatalf("expected shell output truncation, got %+v", result)
+	}
+}
+
+func skipWindowsUnixShellTest(t *testing.T) {
+	t.Helper()
+	if stdruntime.GOOS == "windows" {
+		t.Skip("unix shell command execution is not supported on Windows")
 	}
 }
 
