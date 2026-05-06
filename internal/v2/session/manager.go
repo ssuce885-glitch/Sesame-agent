@@ -70,13 +70,21 @@ func (m *Manager) SubmitTurn(ctx context.Context, sessionID string, input contra
 	}
 
 	runInput := contracts.TurnInput{
-		SessionID: sessionID,
-		TurnID:    turn.ID,
-		TaskID:    input.TaskID,
-		Messages:  turnMessages(turn),
-		RoleSpec:  input.RoleSpec,
+		SessionID:            sessionID,
+		TurnID:               turn.ID,
+		TaskID:               input.TaskID,
+		InstructionConflicts: cloneInstructionConflicts(input.InstructionConflicts),
+		Messages:             turnMessages(turn),
+		RoleSpec:             input.RoleSpec,
 	}
 	return m.startTurn(ctx, sessionID, turn, runInput)
+}
+
+func cloneInstructionConflicts(conflicts []contracts.InstructionConflict) []contracts.InstructionConflict {
+	if len(conflicts) == 0 {
+		return nil
+	}
+	return append([]contracts.InstructionConflict(nil), conflicts...)
 }
 
 func (m *Manager) CancelTurn(sessionID, turnID string) bool {

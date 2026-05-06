@@ -40,7 +40,11 @@ internal/cli/daemons/
 .claude/
 .codex/
 .superpowers/
-.trellis/
+.trellis/*
+!.trellis/scripts/
+!.trellis/scripts/get_context.py
+!.trellis/spec/
+!.trellis/spec/**
 .worktrees/
 claude-code-skill-scrapling/
 

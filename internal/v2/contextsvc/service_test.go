@@ -79,6 +79,19 @@ func TestPreviewIncludesPromptAndContextBlocks(t *testing.T) {
 			CreatedAt:       now,
 			UpdatedAt:       now,
 		},
+		{
+			ID:              "ctx-role-only",
+			WorkspaceRoot:   workspaceRoot,
+			Type:            "note",
+			Owner:           "role:reviewer",
+			Visibility:      "role_only",
+			SourceRef:       "role_state:reviewer",
+			Summary:         "Reviewer-only context should not appear in main preview.",
+			Confidence:      1,
+			ImportanceScore: 1,
+			CreatedAt:       now,
+			UpdatedAt:       now.Add(time.Minute),
+		},
 	} {
 		if err := s.ContextBlocks().Create(ctx, block); err != nil {
 			t.Fatalf("create context block %s: %v", block.ID, err)
@@ -89,11 +102,26 @@ func TestPreviewIncludesPromptAndContextBlocks(t *testing.T) {
 		WorkspaceRoot: workspaceRoot,
 		Kind:          "decision",
 		Content:       "Memory remains available.",
+		Owner:         "workspace",
+		Visibility:    "workspace",
 		Confidence:    0.8,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}); err != nil {
 		t.Fatalf("create memory: %v", err)
+	}
+	if err := s.Memories().Create(ctx, contracts.Memory{
+		ID:            "memory-role-only",
+		WorkspaceRoot: workspaceRoot,
+		Kind:          "note",
+		Content:       "Reviewer-only note should not appear in main preview.",
+		Owner:         "role:reviewer",
+		Visibility:    "role_only",
+		Confidence:    1,
+		CreatedAt:     now,
+		UpdatedAt:     now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("create role-only memory: %v", err)
 	}
 	if err := s.Reports().Create(ctx, contracts.Report{
 		ID:         "report-1",
@@ -125,7 +153,9 @@ func TestPreviewIncludesPromptAndContextBlocks(t *testing.T) {
 	assertPreviewBlock(t, preview.Blocks, "workspace_instructions", "included")
 	assertPreviewBlock(t, preview.Blocks, "ctx-available", "available")
 	assertPreviewBlock(t, preview.Blocks, "ctx-expired", "excluded")
+	assertPreviewBlockMissing(t, preview.Blocks, "ctx-role-only")
 	assertPreviewBlock(t, preview.Blocks, "memory-1", "available")
+	assertPreviewBlockMissing(t, preview.Blocks, "memory-role-only")
 	assertPreviewBlock(t, preview.Blocks, "report-1", "available")
 	if countPreviewBlock(preview.Blocks, "system_prompt") != 1 {
 		t.Fatalf("system prompt block count = %d, blocks %+v", countPreviewBlock(preview.Blocks, "system_prompt"), preview.Blocks)
@@ -189,6 +219,15 @@ func assertPreviewBlock(t *testing.T, blocks []PreviewBlock, id, status string) 
 		}
 	}
 	t.Fatalf("missing block %s in %+v", id, blocks)
+}
+
+func assertPreviewBlockMissing(t *testing.T, blocks []PreviewBlock, id string) {
+	t.Helper()
+	for _, block := range blocks {
+		if block.ID == id {
+			t.Fatalf("block %s should not be visible in %+v", id, blocks)
+		}
+	}
 }
 
 func countPreviewBlock(blocks []PreviewBlock, id string) int {

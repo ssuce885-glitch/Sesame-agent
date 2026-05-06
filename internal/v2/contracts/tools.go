@@ -90,6 +90,7 @@ type ExecContext struct {
 	WorkspaceRoot   string            `json:"workspace_root"`
 	SessionID       string            `json:"session_id,omitempty"`
 	TurnID          string            `json:"turn_id,omitempty"`
+	TaskID          string            `json:"task_id,omitempty"`
 	PermissionLevel string            `json:"permission_level"`
 	ActiveSkills    []string          `json:"active_skills,omitempty"`
 	Store           Store             `json:"-"`

@@ -45,7 +45,7 @@ func TestUpdateProjectStateWritesSummary(t *testing.T) {
 	now := time.Now().UTC()
 	if err := s.ProjectStates().Upsert(ctx, contracts.ProjectState{
 		WorkspaceRoot: "/workspace",
-		Summary:       "# Current Goal\nKeep V2 simple.",
+		Summary:       "# Workspace Objectives\nKeep V2 simple.",
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}); err != nil {
@@ -53,20 +53,24 @@ func TestUpdateProjectStateWritesSummary(t *testing.T) {
 	}
 
 	nextSummary := strings.Join([]string{
-		"# Current Goal",
-		"Ship long project context.",
-		"# Current State",
-		"Project State is auto-updated after turns.",
-		"# Key Decisions",
-		"Use one compact document instead of V1 context layers.",
-		"# Open Threads",
+		"# Workspace Objectives",
+		"Ship long-running workspace runtime context.",
+		"# Role Workstreams",
+		"`researcher`: idle; no open loops.",
+		"# Active Automations",
 		"",
-		"# Changed Files",
+		"# Active Workflow Runs",
+		"",
+		"# Workspace Open Loops",
+		"",
+		"# Recent Material Outcomes",
+		"Workspace Runtime State is auto-updated after turns.",
+		"# Runtime Health",
+		"All tests passed.",
+		"# Watchpoints",
+		"",
+		"# Important Artifacts",
 		"internal/v2/agent/project_state_update.go",
-		"# Validation",
-		"go test ./internal/v2/agent",
-		"# User Preferences",
-		"Keep concepts lean.",
 	}, "\n")
 	client := &captureClient{events: []model.StreamEvent{
 		{Kind: model.StreamEventTextDelta, TextDelta: nextSummary},
@@ -80,7 +84,7 @@ func TestUpdateProjectStateWritesSummary(t *testing.T) {
 		TurnID:    "turn-1",
 	}, "/workspace", []contracts.Message{
 		{Role: "user", Content: "继续补业务"},
-		{Role: "assistant", Content: "已补 Project State 自动更新。"},
+		{Role: "assistant", Content: "已补 Workspace Runtime State 自动更新。"},
 	})
 	if err != nil {
 		t.Fatalf("updateProjectState: %v", err)
@@ -101,7 +105,7 @@ func TestUpdateProjectStateWritesSummary(t *testing.T) {
 	}
 
 	req := client.firstRequest()
-	if !strings.Contains(req.Instructions, "compact Project State") {
+	if !strings.Contains(req.Instructions, "compact Workspace Runtime State") {
 		t.Fatalf("request instructions missing updater role: %q", req.Instructions)
 	}
 	if !strings.Contains(req.Items[0].Text, "Keep V2 simple.") {
@@ -114,7 +118,7 @@ func TestUpdateProjectStateWritesSummary(t *testing.T) {
 
 func TestShouldUpdateProjectStateUsesDeltaThresholds(t *testing.T) {
 	current := contracts.ProjectState{
-		Summary:      "# Current Goal\nKeep current.",
+		Summary:      "# Workspace Objectives\nKeep current.",
 		SourceTurnID: "turn-2",
 	}
 	tokenText := func(tokens int) string {
@@ -239,7 +243,7 @@ func TestRunTurnSkipsProjectStateUpdateForSmallRecentTurn(t *testing.T) {
 	}
 	if err := s.ProjectStates().Upsert(ctx, contracts.ProjectState{
 		WorkspaceRoot:   session.WorkspaceRoot,
-		Summary:         "# Current Goal\nAlready current.",
+		Summary:         "# Workspace Objectives\nAlready current.",
 		SourceSessionID: session.ID,
 		SourceTurnID:    "turn-0",
 		CreatedAt:       now,
@@ -276,5 +280,64 @@ func TestRunTurnSkipsProjectStateUpdateForSmallRecentTurn(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if got := client.requestCount(); got != 1 {
 		t.Fatalf("request count = %d, want only main turn request", got)
+	}
+}
+
+func TestRunTurnSkipsWorkspaceRuntimeStateUpdateForRoleTurn(t *testing.T) {
+	s, err := v2store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	session := contracts.Session{
+		ID:                "role-session-project-state-skip",
+		WorkspaceRoot:     "/workspace",
+		SystemPrompt:      "Role prompt.",
+		PermissionProfile: "trusted_local",
+		State:             "idle",
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := s.Sessions().Create(ctx, session); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	turn := contracts.Turn{
+		ID:          "turn-role-project-state-skip",
+		SessionID:   session.ID,
+		Kind:        "user_message",
+		State:       "created",
+		UserMessage: "Role-only detail should stay out of workspace runtime state.",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := s.Turns().Create(ctx, turn); err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+
+	client := &captureClient{events: []model.StreamEvent{
+		{Kind: model.StreamEventTextDelta, TextDelta: "Done."},
+		{Kind: model.StreamEventMessageEnd},
+	}}
+	a := New(client, emptyRegistry{}, s)
+	if err := a.RunTurn(ctx, contracts.TurnInput{
+		SessionID: session.ID,
+		TurnID:    turn.ID,
+		Messages:  []contracts.Message{{SessionID: session.ID, TurnID: turn.ID, Role: "user", Content: turn.UserMessage}},
+		RoleSpec:  &contracts.RoleSpec{ID: "reviewer"},
+	}); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if got := client.requestCount(); got != 1 {
+		t.Fatalf("request count = %d, want only role turn request", got)
+	}
+	if _, ok, err := s.ProjectStates().Get(ctx, "/workspace"); err != nil {
+		t.Fatalf("get project state: %v", err)
+	} else if ok {
+		t.Fatal("role turn should not create workspace runtime state")
 	}
 }

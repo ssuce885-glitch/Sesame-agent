@@ -27,6 +27,14 @@ func (s *Service) Remember(ctx context.Context, m contracts.Memory) error {
 	if m.Kind == "" {
 		m.Kind = "note"
 	}
+	m.Owner = strings.TrimSpace(m.Owner)
+	if m.Owner == "" {
+		m.Owner = "workspace"
+	}
+	m.Visibility = strings.TrimSpace(m.Visibility)
+	if m.Visibility == "" {
+		m.Visibility = "workspace"
+	}
 	if m.Confidence == 0 {
 		m.Confidence = 1
 	}
@@ -58,12 +66,12 @@ func (s *Service) Forget(ctx context.Context, id string) error {
 }
 
 // ScoreMemory calculates a relevance score for a memory.
-// score = confidence * recency_weight
+// score = (confidence + importance_score) * recency_weight
 // recency_weight = 1.0 / (1.0 + age_days/30)  // half-life ~30 days
 func (s *Service) ScoreMemory(m contracts.Memory) float64 {
 	ageDays := time.Since(m.UpdatedAt).Hours() / 24
 	recencyWeight := 1.0 / (1.0 + ageDays/30.0)
-	return m.Confidence * recencyWeight
+	return (m.Confidence + m.ImportanceScore) * recencyWeight
 }
 
 // Cleanup removes low-score memories when the workspace exceeds maxCount.

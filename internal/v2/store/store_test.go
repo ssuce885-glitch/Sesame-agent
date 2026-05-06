@@ -32,6 +32,7 @@ func TestOpenInMemory(t *testing.T) {
 		"v2_memories",
 		"v2_settings",
 		"v2_project_state",
+		"v2_role_runtime_states",
 		"v2_context_blocks",
 		"v2_workflows",
 		"v2_workflow_runs",

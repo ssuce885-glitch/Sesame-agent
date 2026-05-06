@@ -26,6 +26,7 @@ type Store struct {
 	memories    *memoryRepo
 	settings    *settingRepo
 	project     *projectStateRepo
+	roleStates  *roleRuntimeStateRepo
 	contexts    *contextBlockRepo
 	workflows   *workflowRepo
 }
@@ -75,6 +76,7 @@ func Open(dsn string) (*Store, error) {
 	s.memories = &memoryRepo{db: db}
 	s.settings = &settingRepo{db: db}
 	s.project = &projectStateRepo{db: db}
+	s.roleStates = &roleRuntimeStateRepo{db: db}
 	s.contexts = &contextBlockRepo{db: db}
 	s.workflows = &workflowRepo{db: db}
 	return s, nil
@@ -107,8 +109,9 @@ func (s *Store) Settings() contracts.SettingRepository       { return s.settings
 func (s *Store) ProjectStates() contracts.ProjectStateRepository {
 	return s.project
 }
-func (s *Store) ContextBlocks() contracts.ContextBlockRepository { return s.contexts }
-func (s *Store) Workflows() contracts.WorkflowRepository         { return s.workflows }
+func (s *Store) RoleRuntimeStates() contracts.RoleRuntimeStateRepository { return s.roleStates }
+func (s *Store) ContextBlocks() contracts.ContextBlockRepository         { return s.contexts }
+func (s *Store) Workflows() contracts.WorkflowRepository                 { return s.workflows }
 
 // WithTx runs fn in a transaction. If fn returns an error, the transaction is rolled back.
 func (s *Store) WithTx(ctx context.Context, fn func(tx contracts.Store) error) error {
@@ -127,6 +130,7 @@ func (s *Store) WithTx(ctx context.Context, fn func(tx contracts.Store) error) e
 	txStore.memories = &memoryRepo{db: s.db, tx: tx}
 	txStore.settings = &settingRepo{db: s.db, tx: tx}
 	txStore.project = &projectStateRepo{db: s.db, tx: tx}
+	txStore.roleStates = &roleRuntimeStateRepo{db: s.db, tx: tx}
 	txStore.contexts = &contextBlockRepo{db: s.db, tx: tx}
 	txStore.workflows = &workflowRepo{db: s.db, tx: tx}
 
