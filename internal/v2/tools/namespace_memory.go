@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go-agent/internal/types"
+	"go-agent/internal/v2/contextasm"
 	"go-agent/internal/v2/contracts"
 )
 
@@ -59,12 +60,15 @@ func (t *memoryWriteTool) Execute(ctx context.Context, call contracts.ToolCall, 
 	}
 	source, _ := call.Args["source"].(string)
 	now := time.Now().UTC()
+	owner, visibility := defaultMemoryScope(execCtx)
 	memory := contracts.Memory{
 		ID:            types.NewID("memory"),
 		WorkspaceRoot: strings.TrimSpace(execCtx.WorkspaceRoot),
 		Kind:          kind,
 		Content:       content,
 		Source:        strings.TrimSpace(source),
+		Owner:         owner,
+		Visibility:    visibility,
 		Confidence:    1,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -104,21 +108,31 @@ func (t *recallArchiveTool) Execute(ctx context.Context, call contracts.ToolCall
 	if limit <= 0 {
 		limit = 10
 	}
-	memories, err := execCtx.Store.Memories().Search(ctx, strings.TrimSpace(execCtx.WorkspaceRoot), query, limit)
+	memories, err := execCtx.Store.Memories().Search(ctx, strings.TrimSpace(execCtx.WorkspaceRoot), query, 0)
 	if err != nil {
 		return contracts.ToolResult{}, err
+	}
+	memories, err = visibleMemories(execCtx, memories)
+	if err != nil {
+		return contracts.ToolResult{}, err
+	}
+	if len(memories) > limit {
+		memories = memories[:limit]
 	}
 	out := make([]memoryResult, 0, len(memories))
 	for _, memory := range memories {
 		out = append(out, memoryResult{
-			ID:            memory.ID,
-			WorkspaceRoot: memory.WorkspaceRoot,
-			Kind:          memory.Kind,
-			Content:       memory.Content,
-			Source:        memory.Source,
-			Confidence:    memory.Confidence,
-			CreatedAt:     memory.CreatedAt,
-			UpdatedAt:     memory.UpdatedAt,
+			ID:              memory.ID,
+			WorkspaceRoot:   memory.WorkspaceRoot,
+			Kind:            memory.Kind,
+			Content:         memory.Content,
+			Source:          memory.Source,
+			Owner:           memory.Owner,
+			Visibility:      memory.Visibility,
+			Confidence:      memory.Confidence,
+			ImportanceScore: memory.ImportanceScore,
+			CreatedAt:       memory.CreatedAt,
+			UpdatedAt:       memory.UpdatedAt,
 		})
 	}
 	raw, err := json.Marshal(out)
@@ -156,18 +170,31 @@ func (t *loadContextTool) Execute(ctx context.Context, call contracts.ToolCall, 
 	if err != nil {
 		return contracts.ToolResult{}, err
 	}
+	if strings.TrimSpace(memory.WorkspaceRoot) != strings.TrimSpace(execCtx.WorkspaceRoot) {
+		return contracts.ToolResult{}, fmt.Errorf("memory or archive reference %q not found", referenceID)
+	}
+	visible, err := memoryVisibleToExecContext(execCtx, memory)
+	if err != nil {
+		return contracts.ToolResult{}, err
+	}
+	if !visible {
+		return contracts.ToolResult{}, fmt.Errorf("memory or archive reference %q not found", referenceID)
+	}
 	return contracts.ToolResult{Output: memory.Content, Data: memory}, nil
 }
 
 type memoryResult struct {
-	ID            string    `json:"id"`
-	WorkspaceRoot string    `json:"workspace_root"`
-	Kind          string    `json:"kind"`
-	Content       string    `json:"content"`
-	Source        string    `json:"source,omitempty"`
-	Confidence    float64   `json:"confidence"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID              string    `json:"id"`
+	WorkspaceRoot   string    `json:"workspace_root"`
+	Kind            string    `json:"kind"`
+	Content         string    `json:"content"`
+	Source          string    `json:"source,omitempty"`
+	Owner           string    `json:"owner,omitempty"`
+	Visibility      string    `json:"visibility,omitempty"`
+	Confidence      float64   `json:"confidence"`
+	ImportanceScore float64   `json:"importance_score,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func validMemoryKind(kind string) bool {
@@ -177,4 +204,65 @@ func validMemoryKind(kind string) bool {
 	default:
 		return false
 	}
+}
+
+func defaultMemoryScope(execCtx contracts.ExecContext) (string, string) {
+	if execCtx.RoleSpec != nil && strings.TrimSpace(execCtx.RoleSpec.ID) != "" {
+		return "role:" + strings.TrimSpace(execCtx.RoleSpec.ID), "role_shared"
+	}
+	return "main_session", "workspace"
+}
+
+func visibleMemories(execCtx contracts.ExecContext, memories []contracts.Memory) ([]contracts.Memory, error) {
+	if len(memories) == 0 {
+		return []contracts.Memory{}, nil
+	}
+	out := make([]contracts.Memory, 0, len(memories))
+	for _, memory := range memories {
+		visible, err := memoryVisibleToExecContext(execCtx, memory)
+		if err != nil {
+			return nil, err
+		}
+		if visible {
+			out = append(out, memory)
+		}
+	}
+	return out, nil
+}
+
+func memoryVisibleToExecContext(execCtx contracts.ExecContext, memory contracts.Memory) (bool, error) {
+	scope := memoryExecutionScope(execCtx)
+	block := contextasm.SourceBlock{
+		ID:         memory.ID,
+		Type:       firstNonEmptyMemory(memory.Kind, "memory"),
+		Owner:      firstNonEmptyMemory(memory.Owner, "workspace"),
+		Visibility: firstNonEmptyMemory(memory.Visibility, "workspace"),
+		Content:    firstNonEmptyMemory(memory.Content, "memory"),
+		SourceRefs: []contextasm.SourceRef{{Ref: firstNonEmptyMemory(memory.Source, "memory:"+memory.ID)}},
+	}
+	return contextasm.IsVisibleToScope(scope, block)
+}
+
+func memoryExecutionScope(execCtx contracts.ExecContext) contextasm.ExecutionScope {
+	taskID := strings.TrimSpace(execCtx.TaskID)
+	roleID := ""
+	if execCtx.RoleSpec != nil {
+		roleID = strings.TrimSpace(execCtx.RoleSpec.ID)
+	}
+	if taskID != "" {
+		return contextasm.ExecutionScope{Kind: contextasm.ScopeTask, RoleID: roleID, TaskID: taskID}
+	}
+	if roleID != "" {
+		return contextasm.ExecutionScope{Kind: contextasm.ScopeRole, RoleID: roleID}
+	}
+	return contextasm.ExecutionScope{Kind: contextasm.ScopeMain}
+}
+
+func firstNonEmptyMemory(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

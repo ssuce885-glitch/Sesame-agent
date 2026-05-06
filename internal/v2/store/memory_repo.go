@@ -17,23 +17,27 @@ var _ contracts.MemoryRepository = (*memoryRepo)(nil)
 func (r *memoryRepo) execer() execer { return repoExec(r.db, r.tx) }
 
 func (r *memoryRepo) Create(ctx context.Context, m contracts.Memory) error {
+	m = normalizeMemory(m)
 	_, err := r.execer().Exec(`
-INSERT INTO v2_memories (id, workspace_root, kind, content, source, confidence, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO v2_memories (id, workspace_root, kind, content, source, owner, visibility, confidence, importance_score, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	workspace_root = excluded.workspace_root,
 	kind = excluded.kind,
 	content = excluded.content,
 	source = excluded.source,
+	owner = excluded.owner,
+	visibility = excluded.visibility,
 	confidence = excluded.confidence,
+	importance_score = excluded.importance_score,
 	updated_at = excluded.updated_at`,
-		m.ID, m.WorkspaceRoot, m.Kind, m.Content, m.Source, m.Confidence, timeString(m.CreatedAt), timeString(m.UpdatedAt))
+		m.ID, m.WorkspaceRoot, m.Kind, m.Content, m.Source, m.Owner, m.Visibility, m.Confidence, m.ImportanceScore, timeString(m.CreatedAt), timeString(m.UpdatedAt))
 	return err
 }
 
 func (r *memoryRepo) Get(ctx context.Context, id string) (contracts.Memory, error) {
 	return scanMemory(r.execer().QueryRow(`
-SELECT id, workspace_root, kind, content, source, confidence, created_at, updated_at
+SELECT id, workspace_root, kind, content, source, owner, visibility, confidence, importance_score, created_at, updated_at
 FROM v2_memories WHERE id = ?`, id))
 }
 
@@ -46,7 +50,7 @@ func (r *memoryRepo) Search(ctx context.Context, workspaceRoot, query string, li
 		match := ftsMatchQuery(query)
 		if match != "" {
 			sqlQuery := `
-SELECT id, workspace_root, kind, content, source, confidence, created_at, updated_at
+SELECT id, workspace_root, kind, content, source, owner, visibility, confidence, importance_score, created_at, updated_at
 FROM v2_memories
 WHERE workspace_root = ? AND rowid IN (
 	SELECT rowid FROM v2_memories_fts WHERE v2_memories_fts MATCH ?
@@ -62,7 +66,7 @@ ORDER BY updated_at DESC`
 	}
 
 	sqlQuery := `
-SELECT id, workspace_root, kind, content, source, confidence, created_at, updated_at
+SELECT id, workspace_root, kind, content, source, owner, visibility, confidence, importance_score, created_at, updated_at
 FROM v2_memories
 WHERE workspace_root = ? AND (content LIKE ? OR kind LIKE ? OR source LIKE ?)
 ORDER BY updated_at DESC`
@@ -82,7 +86,7 @@ func (r *memoryRepo) Delete(ctx context.Context, id string) error {
 
 func (r *memoryRepo) ListByWorkspace(ctx context.Context, workspaceRoot string, limit int) ([]contracts.Memory, error) {
 	sqlQuery := `
-SELECT id, workspace_root, kind, content, source, confidence, created_at, updated_at
+SELECT id, workspace_root, kind, content, source, owner, visibility, confidence, importance_score, created_at, updated_at
 FROM v2_memories
 WHERE workspace_root = ?
 ORDER BY updated_at DESC`
@@ -145,7 +149,7 @@ func scanMemory(row interface {
 }) (contracts.Memory, error) {
 	var m contracts.Memory
 	var createdAt, updatedAt string
-	err := row.Scan(&m.ID, &m.WorkspaceRoot, &m.Kind, &m.Content, &m.Source, &m.Confidence, &createdAt, &updatedAt)
+	err := row.Scan(&m.ID, &m.WorkspaceRoot, &m.Kind, &m.Content, &m.Source, &m.Owner, &m.Visibility, &m.Confidence, &m.ImportanceScore, &createdAt, &updatedAt)
 	if err != nil {
 		return contracts.Memory{}, err
 	}
@@ -157,5 +161,27 @@ func scanMemory(row interface {
 	if err != nil {
 		return contracts.Memory{}, err
 	}
-	return m, nil
+	return normalizeMemory(m), nil
+}
+
+func normalizeMemory(m contracts.Memory) contracts.Memory {
+	m.ID = strings.TrimSpace(m.ID)
+	m.WorkspaceRoot = strings.TrimSpace(m.WorkspaceRoot)
+	m.Kind = strings.TrimSpace(m.Kind)
+	if m.Kind == "" {
+		m.Kind = "note"
+	}
+	m.Source = strings.TrimSpace(m.Source)
+	m.Owner = strings.TrimSpace(m.Owner)
+	if m.Owner == "" {
+		m.Owner = "workspace"
+	}
+	m.Visibility = strings.TrimSpace(m.Visibility)
+	if m.Visibility == "" {
+		m.Visibility = "workspace"
+	}
+	if m.Confidence == 0 {
+		m.Confidence = 1
+	}
+	return m
 }

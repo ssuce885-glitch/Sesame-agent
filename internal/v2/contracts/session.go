@@ -12,11 +12,12 @@ type SessionManager interface {
 }
 
 type SubmitTurnInput struct {
-	Turn                Turn         `json:"turn"`
-	TaskID              string       `json:"task_id,omitempty"`
-	TaskObserver        TaskObserver `json:"-"`
-	ActivatedSkillNames []string     `json:"activated_skill_names,omitempty"`
-	RoleSpec            *RoleSpec    `json:"role_spec,omitempty"`
+	Turn                 Turn                  `json:"turn"`
+	TaskID               string                `json:"task_id,omitempty"`
+	InstructionConflicts []InstructionConflict `json:"instruction_conflicts,omitempty"`
+	TaskObserver         TaskObserver          `json:"-"`
+	ActivatedSkillNames  []string              `json:"activated_skill_names,omitempty"`
+	RoleSpec             *RoleSpec             `json:"role_spec,omitempty"`
 }
 
 type TaskObserver interface {

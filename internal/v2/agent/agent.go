@@ -90,17 +90,41 @@ func (a *Agent) RunTurn(ctx context.Context, input contracts.TurnInput) error {
 	if err != nil {
 		return fmt.Errorf("load workspace instructions: %w", err)
 	}
-	if projectState, ok, err := a.store.ProjectStates().Get(ctx, session.WorkspaceRoot); err != nil {
-		return fmt.Errorf("load project state: %w", err)
-	} else if ok {
-		systemPrompt = buildInstructionsWithWorkspace(systemPrompt, workspaceInstructions, projectState.Summary)
-	} else if strings.TrimSpace(workspaceInstructions) != "" {
-		systemPrompt = buildInstructionsWithWorkspace(systemPrompt, workspaceInstructions, "")
+	roleID := ""
+	if roleSpec != nil {
+		roleID = strings.TrimSpace(roleSpec.ID)
+	}
+	workspaceStateSummary := ""
+	roleStateSummary := ""
+	if roleID != "" {
+		roleState, ok, err := a.store.RoleRuntimeStates().Get(ctx, session.WorkspaceRoot, roleID)
+		if err != nil {
+			return fmt.Errorf("load role runtime state: %w", err)
+		}
+		if ok {
+			roleStateSummary = roleState.Summary
+		}
+	} else {
+		projectState, ok, err := a.store.ProjectStates().Get(ctx, session.WorkspaceRoot)
+		if err != nil {
+			return fmt.Errorf("load project state: %w", err)
+		}
+		if ok {
+			workspaceStateSummary = projectState.Summary
+		}
+	}
+	if workspaceStateSummary != "" || roleStateSummary != "" || strings.TrimSpace(workspaceInstructions) != "" {
+		systemPrompt = buildInstructionsWithRuntimeState(systemPrompt, workspaceInstructions, workspaceStateSummary, roleStateSummary)
+	}
+	instructionConflicts := normalizeInstructionConflicts(input.InstructionConflicts)
+	if len(instructionConflicts) > 0 {
+		systemPrompt = appendInstructionConflicts(systemPrompt, instructionConflicts)
 	}
 	baseExecCtx := contracts.ExecContext{
 		WorkspaceRoot:   session.WorkspaceRoot,
 		SessionID:       input.SessionID,
 		TurnID:          input.TurnID,
+		TaskID:          input.TaskID,
 		PermissionLevel: session.PermissionProfile,
 		Store:           a.store,
 		Automation:      a.automationService,
@@ -127,6 +151,11 @@ func (a *Agent) RunTurn(ctx context.Context, input contracts.TurnInput) error {
 	}
 	if err := a.emit(ctx, input, "turn_started", map[string]any{"turn_id": input.TurnID}); err != nil {
 		return err
+	}
+	if len(instructionConflicts) > 0 {
+		if err := a.emit(ctx, input, "instruction_conflicts_detected", map[string]any{"conflicts": instructionConflicts}); err != nil {
+			return err
+		}
 	}
 
 	prior, err := a.store.Messages().List(ctx, input.SessionID, contracts.MessageListOptions{})
@@ -203,7 +232,9 @@ func (a *Agent) RunTurn(ctx context.Context, input contracts.TurnInput) error {
 			if err := a.emit(ctx, input, "turn_completed", map[string]any{"turn_id": input.TurnID}); err != nil {
 				return err
 			}
-			a.scheduleProjectStateUpdate(ctx, input, session.WorkspaceRoot, prior, turnMessages)
+			if roleID == "" {
+				a.scheduleProjectStateUpdate(ctx, input, session.WorkspaceRoot, prior, turnMessages)
+			}
 			return nil
 		}
 

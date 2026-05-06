@@ -27,6 +27,8 @@ var List = []Migration{
 	Migration010,
 	Migration011,
 	Migration012,
+	Migration013,
+	Migration014,
 }
 
 func init() {

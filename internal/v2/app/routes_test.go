@@ -211,6 +211,63 @@ func TestContextPreviewIncludesPromptAndAvailableBlocks(t *testing.T) {
 	}
 }
 
+func TestMemorySearchRouteFiltersMainInvisibleMemories(t *testing.T) {
+	ctx := context.Background()
+	s, err := v2store.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	defer s.Close()
+
+	workspaceRoot := t.TempDir()
+	now := time.Now().UTC()
+	for _, memory := range []contracts.Memory{
+		{
+			ID:            "memory-workspace",
+			WorkspaceRoot: workspaceRoot,
+			Kind:          "note",
+			Content:       "shared route memory",
+			Owner:         "workspace",
+			Visibility:    "workspace",
+			Confidence:    1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:            "memory-role-only",
+			WorkspaceRoot: workspaceRoot,
+			Kind:          "note",
+			Content:       "role only route memory",
+			Owner:         "role:reviewer",
+			Visibility:    "role_only",
+			Confidence:    1,
+			CreatedAt:     now,
+			UpdatedAt:     now.Add(time.Minute),
+		},
+	} {
+		if err := s.Memories().Create(ctx, memory); err != nil {
+			t.Fatalf("create memory %s: %v", memory.ID, err)
+		}
+	}
+
+	handler := (&routes{
+		cfg: config.Config{
+			PermissionProfile: "workspace",
+			Paths: config.Paths{
+				WorkspaceRoot: workspaceRoot,
+				DataDir:       filepath.Join(workspaceRoot, ".sesame"),
+			},
+		},
+		store:         s,
+		memoryService: memory.NewService(s),
+	}).handler()
+
+	memories := decodeJSON[[]contracts.Memory](t, handler, http.MethodGet, "/v2/memory?q=route%20memory", nil, http.StatusOK)
+	if len(memories) != 1 || memories[0].ID != "memory-workspace" {
+		t.Fatalf("memories = %+v, want only main-visible workspace memory", memories)
+	}
+}
+
 func TestAutomationRoutesIncludeWorkflowFields(t *testing.T) {
 	ctx := context.Background()
 	s, err := v2store.OpenInMemory()

@@ -93,6 +93,13 @@ type ProjectStateRepository interface {
 	Delete(ctx context.Context, workspaceRoot string) error
 }
 
+// RoleRuntimeStateRepository stores the compact current state for one role in a workspace.
+type RoleRuntimeStateRepository interface {
+	Get(ctx context.Context, workspaceRoot, roleID string) (RoleRuntimeState, bool, error)
+	Upsert(ctx context.Context, state RoleRuntimeState) error
+	Delete(ctx context.Context, workspaceRoot, roleID string) error
+}
+
 // ContextBlockListOptions controls context block listing.
 type ContextBlockListOptions struct {
 	Owner      string

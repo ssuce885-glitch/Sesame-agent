@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"go-agent/internal/config"
 	automationpkg "go-agent/internal/v2/automation"
+	"go-agent/internal/v2/contextasm"
 	"go-agent/internal/v2/contextsvc"
 	"go-agent/internal/v2/contracts"
 	"go-agent/internal/v2/memory"
@@ -136,9 +138,10 @@ func (r *routes) handleSessions(w http.ResponseWriter, req *http.Request) {
 
 func (r *routes) handleTurns(w http.ResponseWriter, req *http.Request) {
 	var body struct {
-		SessionID string `json:"session_id"`
-		Message   string `json:"message"`
-		Kind      string `json:"kind"`
+		SessionID            string                          `json:"session_id"`
+		Message              string                          `json:"message"`
+		Kind                 string                          `json:"kind"`
+		InstructionConflicts []contracts.InstructionConflict `json:"instruction_conflicts"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
@@ -165,7 +168,10 @@ func (r *routes) handleTurns(w http.ResponseWriter, req *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, err)
 		return
 	}
-	submittedID, err := r.sessionMgr.SubmitTurn(req.Context(), sessionID, contracts.SubmitTurnInput{Turn: turn})
+	submittedID, err := r.sessionMgr.SubmitTurn(req.Context(), sessionID, contracts.SubmitTurnInput{
+		Turn:                 turn,
+		InstructionConflicts: body.InstructionConflicts,
+	})
 	if err != nil {
 		_ = r.store.Turns().UpdateState(context.WithoutCancel(req.Context()), turn.ID, "failed")
 		writeJSONError(w, http.StatusNotFound, err)
@@ -522,15 +528,48 @@ func (r *routes) handleCreateMemory(w http.ResponseWriter, req *http.Request) {
 func (r *routes) handleSearchMemory(w http.ResponseWriter, req *http.Request) {
 	workspaceRoot := firstNonEmpty(req.URL.Query().Get("workspace_root"), r.cfg.Paths.WorkspaceRoot)
 	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
-	memories, err := r.memoryService.Recall(req.Context(), workspaceRoot, req.URL.Query().Get("q"), limit)
+	if limit <= 0 {
+		limit = 50
+	}
+	memories, err := r.store.Memories().Search(req.Context(), strings.TrimSpace(workspaceRoot), req.URL.Query().Get("q"), 0)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err)
 		return
 	}
+	sort.SliceStable(memories, func(i, j int) bool {
+		return r.memoryService.ScoreMemory(memories[i]) > r.memoryService.ScoreMemory(memories[j])
+	})
+	filtered := make([]contracts.Memory, 0, len(memories))
+	for _, memory := range memories {
+		visible, err := memoryVisibleToMain(memory)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !visible {
+			continue
+		}
+		filtered = append(filtered, memory)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+	memories = filtered
 	if memories == nil {
 		memories = []contracts.Memory{}
 	}
 	writeJSON(w, http.StatusOK, memories)
+}
+
+func memoryVisibleToMain(memory contracts.Memory) (bool, error) {
+	return contextasm.IsVisibleToScope(contextasm.ExecutionScope{Kind: contextasm.ScopeMain}, contextasm.SourceBlock{
+		ID:         memory.ID,
+		Type:       firstNonEmpty(memory.Kind, "memory"),
+		Owner:      firstNonEmpty(memory.Owner, "workspace"),
+		Visibility: firstNonEmpty(memory.Visibility, "workspace"),
+		Content:    firstNonEmpty(memory.Content, "memory"),
+		SourceRefs: []contextasm.SourceRef{{Ref: firstNonEmpty(memory.Source, "memory:"+memory.ID)}},
+	})
 }
 
 func (r *routes) handleDeleteMemory(w http.ResponseWriter, req *http.Request) {

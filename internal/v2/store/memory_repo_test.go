@@ -17,14 +17,17 @@ func TestMemoryRepositoryCRUD(t *testing.T) {
 
 	now := time.Now().UTC()
 	memory := contracts.Memory{
-		ID:            "memory-1",
-		WorkspaceRoot: "/workspace",
-		Kind:          "decision",
-		Content:       "Use LIKE search.",
-		Source:        "test",
-		Confidence:    0.9,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:              "memory-1",
+		WorkspaceRoot:   "/workspace",
+		Kind:            "decision",
+		Content:         "Use LIKE search.",
+		Source:          "test",
+		Owner:           "role:researcher",
+		Visibility:      "role_shared",
+		Confidence:      0.9,
+		ImportanceScore: 0.7,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	if err := s.Memories().Create(ctx, memory); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -34,7 +37,7 @@ func TestMemoryRepositoryCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.ID != memory.ID || got.Kind != "decision" {
+	if got.ID != memory.ID || got.Kind != "decision" || got.Owner != "role:researcher" || got.Visibility != "role_shared" || got.ImportanceScore != 0.7 {
 		t.Fatalf("unexpected memory: %+v", got)
 	}
 

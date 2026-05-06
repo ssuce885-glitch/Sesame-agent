@@ -22,22 +22,35 @@ type Store interface {
 	Memories() MemoryRepository
 	Settings() SettingRepository
 	ProjectStates() ProjectStateRepository
+	RoleRuntimeStates() RoleRuntimeStateRepository
 	ContextBlocks() ContextBlockRepository
 	Workflows() WorkflowRepository
 	WithTx(ctx context.Context, fn func(tx Store) error) error
 }
 
 type TurnInput struct {
-	SessionID string    `json:"session_id"`
-	TurnID    string    `json:"turn_id"`
-	Messages  []Message `json:"messages,omitempty"`
-	TaskID    string    `json:"task_id,omitempty"` // optional
-	Sink      EventSink `json:"-"`
-	RoleSpec  *RoleSpec `json:"role_spec,omitempty"` // optional
+	SessionID            string                `json:"session_id"`
+	TurnID               string                `json:"turn_id"`
+	Messages             []Message             `json:"messages,omitempty"`
+	TaskID               string                `json:"task_id,omitempty"` // optional
+	InstructionConflicts []InstructionConflict `json:"instruction_conflicts,omitempty"`
+	Sink                 EventSink             `json:"-"`
+	RoleSpec             *RoleSpec             `json:"role_spec,omitempty"` // optional
 }
 
 type EventSink interface {
 	Emit(ctx context.Context, event Event) error
+}
+
+// InstructionConflict is a runtime-supplied marker that the current turn or
+// task prompt temporarily overrides durable workspace instructions.
+type InstructionConflict struct {
+	DurableSource       string `json:"durable_source"`
+	OverrideSource      string `json:"override_source"`
+	Subject             string `json:"subject"`
+	Resolution          string `json:"resolution"`
+	SuggestAgentsUpdate bool   `json:"suggest_agents_update"`
+	Note                string `json:"note,omitempty"`
 }
 
 // Message is the single append-only conversation item type. Compaction markers,

@@ -149,11 +149,12 @@ func projectStateDeltaTokensSinceTurn(priorMessages, turnMessages []contracts.Me
 
 func projectStateUpdateInstructions() string {
 	return strings.Join([]string{
-		"You update a compact Project State document for a long-running local workspace.",
+		"You update a compact Workspace Runtime State document for a long-running local workspace.",
 		"Return only Markdown. Do not explain your process.",
-		"Preserve still-valid goals, decisions, constraints, artifacts, resources, validation results, and open threads.",
+		"Preserve active objectives, role workstreams, automations, workflow runs, open loops, material outcomes, runtime health, watchpoints, and important artifacts.",
 		"Remove stale information when the new turn clearly supersedes it.",
-		"Keep the document concise enough to include in future model instructions.",
+		"Do not add user preferences, durable policy, or new rules; those belong in AGENTS.md or scoped context blocks.",
+		"Keep the document concise enough to include in future model instructions as a dashboard, not as authority.",
 	}, "\n")
 }
 
@@ -163,38 +164,44 @@ func projectStateUpdatePrompt(currentSummary, turnTranscript string) string {
 		currentSummary = defaultProjectStateTemplate()
 	}
 	return strings.Join([]string{
-		"Current Project State:",
+		"Current Workspace Runtime State:",
 		currentSummary,
 		"",
 		"Latest Turn Transcript:",
 		turnTranscript,
 		"",
-		"Update Project State with these exact sections:",
-		"# Current Goal",
-		"# Current State",
-		"# Key Decisions",
-		"# Open Threads",
-		"# Artifacts And Resources",
-		"# Validation",
-		"# User Preferences",
+		"Update Workspace Runtime State with these exact sections:",
+		"# Workspace Objectives",
+		"# Role Workstreams",
+		"# Active Automations",
+		"# Active Workflow Runs",
+		"# Workspace Open Loops",
+		"# Recent Material Outcomes",
+		"# Runtime Health",
+		"# Watchpoints",
+		"# Important Artifacts",
 	}, "\n")
 }
 
 func defaultProjectStateTemplate() string {
 	return strings.Join([]string{
-		"# Current Goal",
+		"# Workspace Objectives",
 		"",
-		"# Current State",
+		"# Role Workstreams",
 		"",
-		"# Key Decisions",
+		"# Active Automations",
 		"",
-		"# Open Threads",
+		"# Active Workflow Runs",
 		"",
-		"# Artifacts And Resources",
+		"# Workspace Open Loops",
 		"",
-		"# Validation",
+		"# Recent Material Outcomes",
 		"",
-		"# User Preferences",
+		"# Runtime Health",
+		"",
+		"# Watchpoints",
+		"",
+		"# Important Artifacts",
 	}, "\n")
 }
 

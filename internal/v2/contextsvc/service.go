@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go-agent/internal/v2/agent"
+	"go-agent/internal/v2/contextasm"
 	"go-agent/internal/v2/contracts"
 )
 
@@ -165,7 +166,7 @@ func (s *Service) Preview(ctx context.Context, input PreviewInput) (PreviewRespo
 			Visibility:      "global",
 			SourceRef:       "project_state:" + session.WorkspaceRoot,
 			Status:          "included",
-			Title:           "Project State",
+			Title:           "Workspace Runtime State",
 			Summary:         previewText(projectState.Summary),
 			ImportanceScore: 1,
 			UpdatedAt:       formatTime(projectState.UpdatedAt),
@@ -269,13 +270,27 @@ func (s *Service) DeleteBlock(ctx context.Context, id string) error {
 }
 
 func (s *Service) contextIndexBlocks(ctx context.Context, workspaceRoot string, limit int) ([]PreviewBlock, error) {
-	contextBlocks, err := s.store.ContextBlocks().ListByWorkspace(ctx, workspaceRoot, contracts.ContextBlockListOptions{Limit: limit})
+	fetchLimit := limit
+	if limit > 0 {
+		fetchLimit = 0
+	}
+	contextBlocks, err := s.store.ContextBlocks().ListByWorkspace(ctx, workspaceRoot, contracts.ContextBlockListOptions{Limit: fetchLimit})
 	if err != nil {
 		return nil, err
 	}
 	now := s.now()
 	blocks := make([]PreviewBlock, 0, len(contextBlocks))
 	for _, block := range contextBlocks {
+		visible, err := contextBlockVisibleToPreview(block)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			continue
+		}
+		if limit > 0 && len(blocks) >= limit {
+			break
+		}
 		status := "available"
 		reason := "ContextBlock is indexed workspace context. It is visible to preview but not automatically injected until context selection is enabled."
 		if block.ExpiresAt != nil && !block.ExpiresAt.After(now) {
@@ -299,34 +314,70 @@ func (s *Service) contextIndexBlocks(ctx context.Context, workspaceRoot string, 
 	return blocks, nil
 }
 
+func contextBlockVisibleToPreview(block contracts.ContextBlock) (bool, error) {
+	return contextasm.IsVisibleToScope(contextasm.ExecutionScope{Kind: contextasm.ScopeMain}, contextasm.SourceBlock{
+		ID:         block.ID,
+		Type:       firstNonEmpty(block.Type, "fact"),
+		Owner:      firstNonEmpty(block.Owner, "workspace"),
+		Visibility: firstNonEmpty(block.Visibility, "global"),
+		Content:    firstNonEmpty(block.Summary, firstNonEmpty(block.Evidence, "context block")),
+		SourceRefs: []contextasm.SourceRef{{Ref: firstNonEmpty(block.SourceRef, "context_block:"+block.ID)}},
+	})
+}
+
 func (s *Service) memoryBlocks(ctx context.Context, workspaceRoot string, limit int) ([]PreviewBlock, error) {
 	var memories []contracts.Memory
 	var err error
+	fetchLimit := limit
+	if limit > 0 {
+		fetchLimit = 0
+	}
 	if s.memory != nil {
-		memories, err = s.memory.Recall(ctx, workspaceRoot, "", limit)
+		memories, err = s.memory.Recall(ctx, workspaceRoot, "", fetchLimit)
 	} else {
-		memories, err = s.store.Memories().ListByWorkspace(ctx, workspaceRoot, limit)
+		memories, err = s.store.Memories().ListByWorkspace(ctx, workspaceRoot, fetchLimit)
 	}
 	if err != nil {
 		return nil, err
 	}
 	blocks := make([]PreviewBlock, 0, len(memories))
 	for _, memory := range memories {
+		visible, err := memoryVisibleToPreview(memory)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			continue
+		}
+		if limit > 0 && len(blocks) >= limit {
+			break
+		}
 		blocks = append(blocks, PreviewBlock{
 			ID:              memory.ID,
 			Type:            "memory",
-			Owner:           "workspace",
-			Visibility:      "global",
+			Owner:           firstNonEmpty(memory.Owner, "workspace"),
+			Visibility:      firstNonEmpty(memory.Visibility, "workspace"),
 			SourceRef:       firstNonEmpty(memory.Source, "memory:"+memory.ID),
 			Status:          "available",
 			Reason:          "Memory is durable workspace context but is not injected into the prompt unless selected by a later context policy or tool flow.",
 			Title:           memory.Kind,
 			Summary:         previewText(memory.Content),
-			ImportanceScore: memory.Confidence,
+			ImportanceScore: memory.Confidence + memory.ImportanceScore,
 			UpdatedAt:       formatTime(memory.UpdatedAt),
 		})
 	}
 	return blocks, nil
+}
+
+func memoryVisibleToPreview(memory contracts.Memory) (bool, error) {
+	return contextasm.IsVisibleToScope(contextasm.ExecutionScope{Kind: contextasm.ScopeMain}, contextasm.SourceBlock{
+		ID:         memory.ID,
+		Type:       firstNonEmpty(memory.Kind, "memory"),
+		Owner:      firstNonEmpty(memory.Owner, "workspace"),
+		Visibility: firstNonEmpty(memory.Visibility, "workspace"),
+		Content:    firstNonEmpty(memory.Content, "memory"),
+		SourceRefs: []contextasm.SourceRef{{Ref: firstNonEmpty(memory.Source, "memory:"+memory.ID)}},
+	})
 }
 
 func (s *Service) reportBlocks(ctx context.Context, sessionID string, limit int) ([]PreviewBlock, error) {
