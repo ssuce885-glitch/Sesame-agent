@@ -1,9 +1,18 @@
 package agent
 
 import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"go-agent/internal/v2/contracts"
+)
+
+const (
+	workspaceInstructionsFile     = "AGENTS.md"
+	maxWorkspaceInstructionsBytes = 64 * 1024
 )
 
 // BuildContext returns messages to send to the model.
@@ -47,9 +56,16 @@ func buildContext(systemPrompt string, prior []contracts.Message, turn []contrac
 
 // BuildInstructions combines the base system prompt with workspace project state.
 func BuildInstructions(systemPrompt, projectState string) string {
+	return BuildInstructionsWithWorkspace(systemPrompt, "", projectState)
+}
+
+// BuildInstructionsWithWorkspace combines the base system prompt with
+// user-maintained workspace instructions and workspace project state.
+func BuildInstructionsWithWorkspace(systemPrompt, workspaceInstructions, projectState string) string {
 	systemPrompt = strings.TrimSpace(systemPrompt)
+	workspaceInstructions = strings.TrimSpace(workspaceInstructions)
 	projectState = strings.TrimSpace(projectState)
-	if projectState == "" {
+	if workspaceInstructions == "" && projectState == "" {
 		return systemPrompt
 	}
 	var b strings.Builder
@@ -57,14 +73,55 @@ func BuildInstructions(systemPrompt, projectState string) string {
 		b.WriteString(systemPrompt)
 		b.WriteString("\n\n")
 	}
-	b.WriteString("Project State:\n")
-	b.WriteString(projectState)
-	b.WriteString("\n\nUse Project State as the compact source of truth for long-running workspace goals, decisions, open threads, artifacts, and validation status. Do not treat it as a user request by itself.")
+	if workspaceInstructions != "" {
+		b.WriteString("Workspace Instructions (AGENTS.md):\n")
+		b.WriteString(workspaceInstructions)
+		b.WriteString("\n\nUse Workspace Instructions as user-maintained baseline rules for this workspace. Do not treat them as a new user request by themselves.")
+		if projectState != "" {
+			b.WriteString("\n\n")
+		}
+	}
+	if projectState != "" {
+		b.WriteString("Project State:\n")
+		b.WriteString(projectState)
+		b.WriteString("\n\nUse Project State as the compact source of truth for long-running workspace goals, decisions, open threads, artifacts, and validation status. Do not treat it as a user request by itself.")
+	}
 	return b.String()
 }
 
 func buildInstructions(systemPrompt, projectState string) string {
 	return BuildInstructions(systemPrompt, projectState)
+}
+
+func buildInstructionsWithWorkspace(systemPrompt, workspaceInstructions, projectState string) string {
+	return BuildInstructionsWithWorkspace(systemPrompt, workspaceInstructions, projectState)
+}
+
+func LoadWorkspaceInstructions(workspaceRoot string) (string, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return "", nil
+	}
+	path := filepath.Join(workspaceRoot, workspaceInstructionsFile)
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("open %s: %w", workspaceInstructionsFile, err)
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, maxWorkspaceInstructionsBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", workspaceInstructionsFile, err)
+	}
+	content := strings.TrimSpace(strings.ToValidUTF8(string(data), ""))
+	if len(data) <= maxWorkspaceInstructionsBytes {
+		return content, nil
+	}
+	truncated := strings.ToValidUTF8(string(data[:maxWorkspaceInstructionsBytes]), "")
+	return strings.TrimSpace(truncated) + "\n\n[Workspace instructions truncated by runtime.]", nil
 }
 
 func reverseMessages(messages []contracts.Message) {

@@ -2,6 +2,7 @@ package contextsvc
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -18,7 +19,10 @@ func TestPreviewIncludesPromptAndContextBlocks(t *testing.T) {
 	defer s.Close()
 
 	now := time.Date(2026, 5, 4, 8, 0, 0, 0, time.UTC)
-	workspaceRoot := "/workspace"
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(workspaceRoot+"/AGENTS.md", []byte("- Keep baseline visible in preview."), 0o644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
 	session := contracts.Session{
 		ID:                "session-ctx",
 		WorkspaceRoot:     workspaceRoot,
@@ -118,6 +122,7 @@ func TestPreviewIncludesPromptAndContextBlocks(t *testing.T) {
 		t.Fatalf("preview = %+v", preview)
 	}
 	assertPreviewBlock(t, preview.Blocks, "project_state", "included")
+	assertPreviewBlock(t, preview.Blocks, "workspace_instructions", "included")
 	assertPreviewBlock(t, preview.Blocks, "ctx-available", "available")
 	assertPreviewBlock(t, preview.Blocks, "ctx-expired", "excluded")
 	assertPreviewBlock(t, preview.Blocks, "memory-1", "available")

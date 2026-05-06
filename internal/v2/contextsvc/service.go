@@ -107,7 +107,11 @@ func (s *Service) Preview(ctx context.Context, input PreviewInput) (PreviewRespo
 	if err != nil {
 		return PreviewResponse{}, fmt.Errorf("load project state: %w", err)
 	}
-	instructions := agent.BuildInstructions(systemPrompt, projectState.Summary)
+	workspaceInstructions, err := agent.LoadWorkspaceInstructions(session.WorkspaceRoot)
+	if err != nil {
+		return PreviewResponse{}, fmt.Errorf("load workspace instructions: %w", err)
+	}
+	instructions := agent.BuildInstructionsWithWorkspace(systemPrompt, workspaceInstructions, projectState.Summary)
 
 	messages, err := s.store.Messages().List(ctx, sessionID, contracts.MessageListOptions{})
 	if err != nil {
@@ -139,6 +143,19 @@ func (s *Service) Preview(ctx context.Context, input PreviewInput) (PreviewRespo
 				Summary:    previewText(msg.Content),
 			})
 		}
+	}
+	if strings.TrimSpace(workspaceInstructions) != "" {
+		blocks = append(blocks, PreviewBlock{
+			ID:              "workspace_instructions",
+			Type:            "constraint",
+			Owner:           "workspace",
+			Visibility:      "global",
+			SourceRef:       "file:AGENTS.md",
+			Status:          "included",
+			Title:           "Workspace Instructions",
+			Summary:         previewText(workspaceInstructions),
+			ImportanceScore: 1,
+		})
 	}
 	if hasProjectState && strings.TrimSpace(projectState.Summary) != "" {
 		blocks = append(blocks, PreviewBlock{
