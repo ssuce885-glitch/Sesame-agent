@@ -198,6 +198,15 @@ Sesame is actively evolving toward a more explicit workspace runtime model:
 
 The project is already usable for local operational workflows, but the architecture is still being tightened and simplified.
 
+### Context System Progress
+
+Recent context work added `AGENTS.md` injection, Workspace Runtime State, Role Runtime State, instruction conflict handling, conversation compaction, tool-result micro-compaction, and owner / visibility / scope filtering for Memory and ContextBlock sources.
+
+The active design work is to move Memory and ContextBlock from searchable / previewable sources into automatic context selection, make Context Preview and real prompt assembly share one Context Package, record dropped-context reasons, and add a stronger final token-budget gate before model requests.
+
+For the concise TODO list, see
+[`docs/context-system-todo.zh-CN.md`](docs/context-system-todo.zh-CN.md).
+
 ## Roadmap
 
 For the detailed V2 direction, see

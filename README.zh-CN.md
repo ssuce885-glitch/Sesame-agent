@@ -220,6 +220,14 @@ Sesame 正在继续收敛到更明确的 workspace runtime 模型：
 
 项目已经可以用于本地运维类工作流，但整体架构仍在继续收紧和简化。
 
+### 上下文系统进展
+
+近期上下文系统已经完成了 `AGENTS.md` 注入、Workspace Runtime State、Role Runtime State、instruction conflict、conversation compaction、tool result micro-compaction，以及 Memory / ContextBlock 的 owner、visibility、scope 过滤模型。
+
+正在讨论和推进的重点是：让 Memory / ContextBlock 从“可写、可查、可 preview”进入自动选择注入链路；让 Context Preview 与真实 prompt assembly 使用同一套 Context Package；为未注入上下文记录 dropped reason；并加强最终模型请求前的 token budget gate。
+
+简版 TODO 见 [`docs/context-system-todo.zh-CN.md`](docs/context-system-todo.zh-CN.md)。
+
 ## 路线图
 
 详细 V2 方向见 [`docs/v2-roadmap-context-workflow.zh-CN.md`](docs/v2-roadmap-context-workflow.zh-CN.md)。
